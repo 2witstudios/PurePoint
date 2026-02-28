@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build
+dist/
+build/
+*.o
+*.a
+*.dylib
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Claude Code
+.claude/

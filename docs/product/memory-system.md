@@ -1,0 +1,48 @@
+# Memory System
+
+**Maturity: SEED** | ID Prefix: MEM
+
+## Purpose
+
+Hierarchical memory for agents: per-agent, per-worktree, per-session, and per-project knowledge. Agents accumulate context that persists across restarts and sessions.
+
+## Conceptual Model
+
+The daemon acts as the context assembler (the "librarian"). The memory system isn't just per-agent state — it's the daemon's ability to assemble the right knowledge for each task. Two layers:
+
+**Spec Library** — Design docs, architecture decisions, process rules. Lives in `docs/` as markdown files. The daemon draws from this library when assembling context for agents.
+
+**Runtime Memory** — Per-agent, per-worktree, per-session state that accumulates during execution.
+
+```
+Context assembly flow:
+  1. Task arrives (spawn, swarm, cron, send)
+  2. Daemon classifies task → identifies relevant domains
+  3. Daemon pulls specs from docs/ + runtime memory from SQLite
+  4. Daemon formats context for the specific agent type
+  5. Agent receives assembled context — never navigates for it
+
+Memory scopes:
+  project  — cross-session knowledge (patterns, conventions)
+  session  — decisions and outcomes within a work session
+  worktree — context for work in a specific worktree
+  agent    — individual agent's accumulated context
+
+Spec library: docs/ directory (markdown files, git-versioned)
+Runtime storage: memory table in SQLite (scope, scope_id, key, value)
+```
+
+Agents receive context — they don't navigate for it. The daemon handles the mapping from task to relevant knowledge.
+
+## Open Questions
+
+? [MEM-001] How should the daemon decide what runtime memory to include?
+Per-agent memory grows over time. Should the daemon include all memory for a scope, use recency-based selection, or let agents request specific memory keys? What about memory size limits to avoid overwhelming agent context windows?
+
+? [MEM-002] Should agents be able to write back to the spec library?
+Currently agents edit files directly. Should the daemon mediate spec updates (e.g., agent proposes a spec change, daemon validates and commits)? Or is direct file editing sufficient?
+
+## Interfaces
+
+gRPC RPCs: Get/SetMemory (Tier 2)
+Storage: memory table
