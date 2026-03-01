@@ -22,6 +22,31 @@ Project
   Project memory (cross-session knowledge)
 ```
 
+## Research Notes
+
+**Manifest shape (proven in ppg-cli):** The `.pu/manifest.json` file is the source of truth for workspace state:
+```
+ManifestModel:
+  version: Int
+  projectRoot: String
+  sessionName: String
+  worktrees: [String: WorktreeEntry]
+  agents: [String: AgentEntry]?  (root-level agents)
+  createdAt: String
+  updatedAt: String
+
+WorktreeEntry:
+  id, name, path, branch, baseBranch, status, tmuxWindow: String
+  agents: [String: AgentEntry]
+  createdAt: String
+  mergedAt: String?
+
+AgentEntry:
+  id, name, agentType, status, tmuxTarget, prompt, startedAt: String
+  completedAt, error, sessionId: String?
+  exitCode: Int?
+```
+
 ## Open Questions
 
 ? [DM-001] Should sessions be explicit user-created boundaries, or implicit based on time gaps in activity?

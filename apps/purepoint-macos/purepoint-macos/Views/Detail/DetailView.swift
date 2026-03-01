@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DetailView: View {
     let selection: SidebarSelection?
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         Group {
@@ -28,45 +29,37 @@ struct DetailView: View {
 
     @ViewBuilder
     private func selectedContent(_ selection: SidebarSelection) -> some View {
+        switch selection {
+        case .agent(let id):
+            if let agent = appState.agent(byId: id) {
+                TerminalContainerView(agent: agent, sessionName: appState.sessionName)
+            } else {
+                placeholderView(icon: "cpu", title: "Agent not found")
+            }
+
+        case .nav(let item):
+            placeholderView(icon: item.icon, title: item.title)
+
+        case .worktree(let id):
+            let wt = appState.worktrees.first { $0.id == id }
+            placeholderView(icon: "arrow.triangle.branch", title: wt?.branch ?? "Worktree")
+
+        case .terminal(let id):
+            placeholderView(icon: "terminal", title: id)
+
+        case .project:
+            placeholderView(icon: "folder.fill", title: appState.projectName)
+        }
+    }
+
+    private func placeholderView(icon: String, title: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: icon(for: selection))
+            Image(systemName: icon)
                 .font(.system(size: 40))
                 .foregroundStyle(PurePointTheme.secondaryText)
-            Text(title(for: selection))
+            Text(title)
                 .font(.title3)
                 .foregroundStyle(PurePointTheme.primaryText)
         }
     }
-
-    private func icon(for selection: SidebarSelection) -> String {
-        switch selection {
-        case .nav(let item):      item.icon
-        case .project:            "folder.fill"
-        case .worktree:           "arrow.triangle.branch"
-        case .agent:              "cpu"
-        case .terminal:           "terminal"
-        }
-    }
-
-    private func title(for selection: SidebarSelection) -> String {
-        switch selection {
-        case .nav(let item):      item.title
-        case .project(let id):    MockData.projects.first { $0.id == id }?.name ?? "Project"
-        case .worktree(let id):   MockData.projects.flatMap(\.worktrees).first { $0.id == id }?.branch ?? "Worktree"
-        case .agent(let id):      MockData.projects.flatMap(\.worktrees).flatMap(\.agents).first { $0.id == id }?.name ?? "Agent"
-        case .terminal(let id):   MockData.projects.flatMap(\.worktrees).flatMap(\.terminals).first { $0.id == id }?.name ?? "Terminal"
-        }
-    }
-}
-
-#Preview("Empty") {
-    DetailView(selection: nil)
-        .frame(width: 500, height: 400)
-        .preferredColorScheme(.dark)
-}
-
-#Preview("Selected") {
-    DetailView(selection: .nav(.dashboard))
-        .frame(width: 500, height: 400)
-        .preferredColorScheme(.dark)
 }

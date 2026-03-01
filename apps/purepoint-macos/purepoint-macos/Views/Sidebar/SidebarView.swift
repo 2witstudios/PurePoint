@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SidebarView: View {
+    // Two selection bindings: `selection` (parent-owned, includes nav items) and
+    // `treeSelection` (List-owned, tree items only). Synchronized via onChange handlers.
     @Binding var selection: SidebarSelection?
     @State private var treeSelection: SidebarSelection?
 
@@ -11,10 +13,7 @@ struct SidebarView: View {
             Divider()
                 .padding(.horizontal, PurePointTheme.padding)
 
-            ProjectTreeSection(
-                projects: MockData.projects,
-                selection: $treeSelection
-            )
+            ProjectTreeSection(selection: $treeSelection)
 
             SidebarFooter()
         }
@@ -24,16 +23,9 @@ struct SidebarView: View {
             }
         }
         .onChange(of: selection) { _, newValue in
-            // When a nav button is tapped, clear the tree's selection highlight
             if case .nav = newValue {
                 treeSelection = nil
             }
         }
     }
-}
-
-#Preview {
-    SidebarView(selection: .constant(.nav(.dashboard)))
-        .frame(width: 240, height: 500)
-        .preferredColorScheme(.dark)
 }

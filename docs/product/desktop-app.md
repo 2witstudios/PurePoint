@@ -1,31 +1,30 @@
 # Desktop App
 
-**Maturity: SEED** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`
+**Maturity: DECIDED** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`
 
 ## Purpose
 
-The desktop application — primary visual interface for managing agents, viewing output, editing configurations, and monitoring project state. A client to the daemon.
+The desktop application — primary visual interface for managing agents, viewing output, and monitoring project state. Reads workspace state from `.pu/manifest.json` and connects to agent terminals via tmux grouped sessions.
 
 ## Conceptual Model
 
 ```
 Desktop App
-  Daemon connection (API client)
+  Manifest file watcher (.pu/manifest.json)
   Sidebar (project tree: worktrees → agents)
-    Real-time tree updates from daemon
-  Content area (tab-based views)
-    Dashboard (activity overview, agent status)
-    Terminal views (live agent output)
-    Pane Grid (multiple terminals in split layout)
-    Editors (swarms, prompts, schedules, config)
-  Command Palette
-  Settings
+    Live updates from manifest file changes
+  Content area
+    Terminal views (SwiftTerm → tmux grouped session)
+    Terminal view cache (hide/show, LRU eviction)
+    Pane Grid (split layout, up to 6 terminals)
+    Dashboard (agent status summary)
+  Project picker (folder browser, recent projects)
 ```
 
-## Open Questions
+## Decisions
 
-? [APP-001] Should the desktop app support multiple simultaneous project connections, or one project at a time?
+! [APP-001] One project at a time initially. Recent projects stored in UserDefaults for quick switching.
 
-? [APP-002] How should the app handle daemon disconnection — auto-reconnect, show an error overlay, or gracefully degrade to read-only?
+! [APP-002] No daemon. Graceful degradation when manifest doesn't exist — sidebar shows empty state, project picker available.
 
-? [APP-003] What platform(s) should the desktop app target initially?
+! [APP-003] macOS only. Native SwiftUI + AppKit bridges.

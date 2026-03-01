@@ -13,6 +13,10 @@ Agent process → output capture → storage → stream to client
                                          → summary generation
 ```
 
+## Research Notes
+
+**No-daemon phase:** In the initial no-daemon architecture, SwiftTerm's grouped tmux session IS the output viewer — there is no separate capture layer. The terminal view connects directly to the agent's tmux session via `tmux new-session -t {session}`, displaying live output with full terminal emulation (colors, cursor positioning, alternate screen buffer). Output capture/storage will be added when the daemon is implemented.
+
 ## Open Questions
 
 ? [OUT-001] How should output chunking work — fixed-size chunks, line-based, or semantic boundaries (e.g., tool call boundaries)?

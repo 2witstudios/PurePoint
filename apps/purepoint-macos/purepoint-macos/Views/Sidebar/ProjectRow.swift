@@ -1,11 +1,11 @@
 import SwiftUI
 
 struct ProjectRow: View {
-    let project: MockProject
+    let name: String
 
     var body: some View {
         Label {
-            Text(project.name)
+            Text(name)
                 .font(PurePointTheme.treeFont)
                 .fontWeight(.semibold)
         } icon: {
@@ -13,10 +13,4 @@ struct ProjectRow: View {
                 .foregroundStyle(.secondary)
         }
     }
-}
-
-#Preview {
-    ProjectRow(project: MockData.project)
-        .padding()
-        .preferredColorScheme(.dark)
 }

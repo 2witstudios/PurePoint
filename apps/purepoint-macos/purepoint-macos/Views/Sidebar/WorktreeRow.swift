@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WorktreeRow: View {
-    let worktree: MockWorktree
+    let worktree: WorktreeModel
 
     var body: some View {
         Label {
@@ -25,10 +25,4 @@ struct WorktreeRow: View {
                 .foregroundStyle(.secondary)
         }
     }
-}
-
-#Preview {
-    WorktreeRow(worktree: MockData.project.worktrees[0])
-        .padding()
-        .preferredColorScheme(.dark)
 }

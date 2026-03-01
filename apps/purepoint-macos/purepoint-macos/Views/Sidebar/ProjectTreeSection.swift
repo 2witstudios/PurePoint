@@ -1,36 +1,30 @@
 import SwiftUI
 
 struct ProjectTreeSection: View {
-    let projects: [MockProject]
+    @Environment(AppState.self) private var appState
     @Binding var selection: SidebarSelection?
-    @State private var expandedProjects: Set<String>
-    @State private var expandedWorktrees: Set<String>
-
-    init(projects: [MockProject], selection: Binding<SidebarSelection?>) {
-        self.projects = projects
-        self._selection = selection
-        // Start with all projects and worktrees expanded
-        self._expandedProjects = State(initialValue: Set(projects.map(\.id)))
-        self._expandedWorktrees = State(initialValue: Set(projects.flatMap(\.worktrees).map(\.id)))
-    }
+    @State private var expandedWorktrees: Set<String> = []
+    @State private var didInitialExpand = false
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(projects) { project in
+            if appState.isLoaded {
                 DisclosureGroup(
-                    isExpanded: binding(for: project.id, in: $expandedProjects)
+                    isExpanded: .constant(true)
                 ) {
-                    ForEach(project.worktrees) { worktree in
+                    // Root agents (not in any worktree)
+                    ForEach(appState.rootAgents) { agent in
+                        AgentRow(agent: agent)
+                            .tag(SidebarSelection.agent(agent.id))
+                    }
+
+                    ForEach(appState.worktrees) { worktree in
                         DisclosureGroup(
-                            isExpanded: binding(for: worktree.id, in: $expandedWorktrees)
+                            isExpanded: binding(for: worktree.id)
                         ) {
                             ForEach(worktree.agents) { agent in
                                 AgentRow(agent: agent)
                                     .tag(SidebarSelection.agent(agent.id))
-                            }
-                            ForEach(worktree.terminals) { terminal in
-                                TerminalRow(terminal: terminal)
-                                    .tag(SidebarSelection.terminal(terminal.id))
                             }
                         } label: {
                             WorktreeRow(worktree: worktree)
@@ -38,33 +32,33 @@ struct ProjectTreeSection: View {
                         .tag(SidebarSelection.worktree(worktree.id))
                     }
                 } label: {
-                    ProjectRow(project: project)
+                    ProjectRow(name: appState.projectName)
                 }
-                .tag(SidebarSelection.project(project.id))
+            } else {
+                Text("No project open")
+                    .font(PurePointTheme.smallFont)
+                    .foregroundStyle(PurePointTheme.tertiaryText)
             }
         }
         .listStyle(.sidebar)
+        .onChange(of: appState.worktrees) { _, newValue in
+            if !didInitialExpand {
+                didInitialExpand = true
+                expandedWorktrees = Set(newValue.map(\.id))
+            }
+        }
     }
 
-    private func binding(for id: String, in set: Binding<Set<String>>) -> Binding<Bool> {
+    private func binding(for id: String) -> Binding<Bool> {
         Binding(
-            get: { set.wrappedValue.contains(id) },
+            get: { expandedWorktrees.contains(id) },
             set: { isExpanded in
                 if isExpanded {
-                    set.wrappedValue.insert(id)
+                    expandedWorktrees.insert(id)
                 } else {
-                    set.wrappedValue.remove(id)
+                    expandedWorktrees.remove(id)
                 }
             }
         )
     }
-}
-
-#Preview {
-    ProjectTreeSection(
-        projects: MockData.projects,
-        selection: .constant(nil)
-    )
-    .frame(width: 240, height: 300)
-    .preferredColorScheme(.dark)
 }

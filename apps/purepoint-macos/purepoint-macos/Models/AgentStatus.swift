@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum AgentStatus: String, CaseIterable {
+enum AgentStatus: String, CaseIterable, Codable, Sendable {
     case running
     case completed
     case failed
@@ -18,6 +18,13 @@ enum AgentStatus: String, CaseIterable {
         case .spawning:  .yellow
         case .waiting:   .gray
         case .lost:      .gray
+        }
+    }
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed, .killed: true
+        default: false
         }
     }
 }
