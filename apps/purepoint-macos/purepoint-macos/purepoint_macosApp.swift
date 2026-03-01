@@ -15,5 +15,6 @@ struct purepoint_macosApp: App {
             width: PurePointTheme.windowDefaultWidth,
             height: PurePointTheme.windowDefaultHeight
         )
+        .windowToolbarStyle(.unified(showsTitle: true))
     }
 }
