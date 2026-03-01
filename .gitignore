@@ -4,6 +4,11 @@
 .LSOverride
 ._*
 
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
 # Editors
 *.swp
 *.swo
