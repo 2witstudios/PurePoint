@@ -4,7 +4,23 @@
 
 ## Purpose
 
-PurePoint.app — the macOS desktop application. Primary visual interface for managing agents, viewing output, editing configurations, and monitoring project state. Swift/AppKit, talks to daemon via gRPC.
+The desktop application — primary visual interface for managing agents, viewing output, editing configurations, and monitoring project state. A client to the daemon.
+
+## Conceptual Model
+
+```
+Desktop App
+  Daemon connection (API client)
+  Sidebar (project tree: worktrees → agents)
+    Real-time tree updates from daemon
+  Content area (tab-based views)
+    Dashboard (activity overview, agent status)
+    Terminal views (live agent output)
+    Pane Grid (multiple terminals in split layout)
+    Editors (swarms, prompts, schedules, config)
+  Command Palette
+  Settings
+```
 
 ## Open Questions
 
@@ -12,23 +28,4 @@ PurePoint.app — the macOS desktop application. Primary visual interface for ma
 
 ? [APP-002] How should the app handle daemon disconnection — auto-reconnect, show an error overlay, or gracefully degrade to read-only?
 
-## Conceptual Model
-
-```
-PurePoint.app
-  Daemon connection (gRPC client)
-  Sidebar (project tree: worktrees → agents)
-    Subscribes to WatchProject for real-time tree updates
-  Content area (tab-based views)
-    Home Dashboard (commit heatmap, agent status cards)
-      Subscribes to WatchProject stream (replaces manifest polling)
-    Terminal views (SwiftTerm)
-      Consume StreamOutput gRPC stream (replaces local process spawning)
-    Pane Grid (recursive binary split, up to 6 panes)
-      Split (horizontal | vertical)
-        TerminalPane (connected to agent via StreamOutput)
-        Split → TerminalPane...
-    Editors (swarms, prompts, schedules, config)
-  Command Palette
-  Settings
-```
+? [APP-003] What platform(s) should the desktop app target initially?

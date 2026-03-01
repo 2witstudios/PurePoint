@@ -4,14 +4,14 @@
 
 ## Purpose
 
-Higher-order agent workflows: swarm templates that spawn multiple agents with predefined configurations, agent templates for reusable spawn configs, and prompt templates for common tasks.
+Higher-order agent workflows: swarm definitions that spawn multiple agents with predefined configurations, agent templates for reusable spawn configs, and prompt templates for common tasks.
 
 ## Conceptual Model
 
 ```
-Template: { name, agentType, defaultPrompt, flags }
-Swarm: { name, description, agents: [{ template, prompt, vars }] }
-Prompt: { name, content (markdown) }
+Template: reusable agent spawn configuration (type, default prompt, flags)
+Swarm: named multi-agent workflow (which templates, what prompts, what variables)
+Prompt: reusable prompt content with variable substitution
 ```
 
 ## Open Questions

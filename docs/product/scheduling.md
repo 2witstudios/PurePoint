@@ -4,13 +4,12 @@
 
 ## Purpose
 
-Scheduled agent execution: cron-like scheduling that spawns agents at defined intervals. One approach: integrate the scheduler directly into the daemon rather than running it as a separate process.
+Scheduled agent execution: recurring or time-based task spawning. A nightly security review, a weekly dependency audit — results waiting when you check in.
 
 ## Conceptual Model
 
 ```
-Schedule { name, cronExpression, command, enabled, lastRun, nextRun }
-Daemon integrates scheduler directly (no separate process)
+Schedule: named recurring task (timing, command, enabled/disabled, run history)
 ```
 
 ## Open Questions
@@ -18,3 +17,5 @@ Daemon integrates scheduler directly (no separate process)
 ? [SCHED-001] How should scheduled task failures be handled — retry with backoff, notify the user, or just log and skip?
 
 ? [SCHED-002] Should schedules support dependencies between tasks (e.g., run security review only after dependency audit completes)?
+
+? [SCHED-003] Should the scheduler be part of the daemon or a separate process?

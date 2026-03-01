@@ -4,20 +4,22 @@
 
 ## Context
 
-PurePoint is a Rust workspace with multiple crates. The crate structure determines compilation boundaries, API surfaces between modules, and how the daemon, CLI, and proto definitions relate to each other. Getting the boundaries right affects build times, testability, and how cleanly domain logic separates from transport and infrastructure.
+PurePoint's codebase needs a clear module/package structure. The structure determines compilation boundaries, API surfaces between modules, and how the daemon, CLI, and API definitions relate to each other. Getting the boundaries right affects build times, testability, and how cleanly domain logic separates from transport and infrastructure.
 
 ## Open Questions
 
-? [MOD-001] What is the right crate granularity?
-One approach proposes 4 crates: `pu-proto`, `pu-core`, `pu-daemon`, `pu-cli`. Should `pu-core` be further split? E.g., `pu-db` (SQLite layer), `pu-tmux` (tmux operations), `pu-git` (worktree management), `pu-agent` (agent lifecycle). More crates = better compilation parallelism and clearer APIs, but more ceremony and cross-crate dependency management.
+? [MOD-001] What is the right module granularity?
+How many separate packages/crates/modules? A few large ones (core, daemon, cli) or many small ones (db, process-management, git, agent)? More modules = better parallelism and clearer APIs, but more ceremony and dependency management.
 
-? [MOD-002] Where should proto definitions live?
-Options: `proto/` at workspace root, inside `pu-proto` crate, or in a separate repo (for sharing with Swift). If proto files are in the workspace, both the Rust build (tonic-build) and Swift build (grpc-swift-protobuf) need access. Should proto compilation happen at build time (build.rs) or be pre-generated and checked in?
+? [MOD-002] Where should API definitions live?
+Options: in the main repo, in a separate package, or in a separate repo (for sharing across languages). How should API schema compilation work — at build time or pre-generated?
+
+? [MOD-003] What language should PurePoint be built in?
+Options: Rust, Go, TypeScript, Python, or a mix. Trade-offs: performance, ecosystem, development speed, cross-compilation, team familiarity.
 
 ## Design Directions
 
-- Cargo workspace at repository root
-- Proto definitions accessible to both Rust and Swift build systems
-- `pu-cli` and `pu-daemon` as separate binaries
-- `pu-core` with no dependency on gRPC/tonic (pure domain logic)
-- Support for both debug (fast iteration) and release (optimized) profiles
+- CLI and daemon as separate binaries
+- Core domain logic with no dependency on transport/API layer
+- API definitions accessible to all client implementations
+- Support for both fast iteration (debug) and optimized (release) builds

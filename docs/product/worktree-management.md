@@ -9,7 +9,7 @@ Git worktree creation, tracking, merging, and cleanup. Each unit of work gets an
 ## Conceptual Model
 
 ```
-WorktreeStatus: active → merging → merged | failed | cleaned
+Worktree lifecycle: active → merging → merged | failed | cleaned
 Branch naming: pu/{worktree-name}
 Location: {project_root}/.pu/worktrees/{name}/
 ```
@@ -19,10 +19,3 @@ Location: {project_root}/.pu/worktrees/{name}/
 ? [WT-001] How should worktree cleanup be triggered — on agent completion, on explicit user command, or on a TTL basis?
 
 ? [WT-002] Should worktrees support shared access (multiple agents in one worktree) or strictly one-agent-per-worktree?
-
-## Interfaces
-
-```
-WorktreeEntry { id, name, path, branch, baseBranch, status, tmuxWindow, prUrl, agents, createdAt, mergedAt }
-WorktreeStatus = active | merging | merged | failed | cleaned
-```

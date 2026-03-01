@@ -133,7 +133,7 @@ Before implementing code:
 5. If the spec page maturity is SEED or EXPLORING, STOP — the spec needs research before implementation. See `docs/process/spec-advancement/rules.md` to advance it.
 
 To find domain dependencies and cross-references:
-6. Read `docs/product/cross-reference-matrix.md` — maps every domain to its architecture pages, gRPC RPCs, DB tables, CLI commands, and UI views
+6. Read `docs/product/cross-reference-matrix.md` — maps every domain to its architecture pages, API operations, stored data, CLI commands, and desktop views
 
 Before doing TDD:
 7. Read `docs/process/tdd/rules.md` for TDD process
@@ -207,7 +207,7 @@ The conductor (human or orchestrating agent) must:
 
 NOTE: The manual reading protocol above is temporary. PurePoint's daemon will handle context assembly automatically once implemented. The daemon will:
 1. Classify incoming tasks to identify relevant domains
-2. Pull specs from `docs/` + runtime memory from SQLite
+2. Pull specs from `docs/` + runtime memory from storage
 3. Format and inject context per agent type
 4. Agents receive context — they never navigate for it
 

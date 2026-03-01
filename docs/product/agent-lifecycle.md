@@ -10,11 +10,11 @@ The complete lifecycle of an AI agent from spawn to completion: creation, monito
 
 ```
 States: created → running → idle → exited | gone
-  created: worktree ready, tmux pane opened, command not yet sent
+  created: worktree ready, process host opened, command not yet sent
   running: agent process active, producing output
-  idle: agent waiting for input (shell prompt detected)
-  exited: agent process terminated (has exit code)
-  gone: tmux pane disappeared (crash or manual close)
+  idle: agent waiting for input
+  exited: agent process terminated
+  gone: process host disappeared (crash or manual close)
 ```
 
 ## Open Questions
@@ -22,11 +22,3 @@ States: created → running → idle → exited | gone
 ? [AL-001] How should idle detection work — shell prompt pattern matching, output timeout, or process state inspection?
 
 ? [AL-002] Should agents support pause/resume, or only the full lifecycle (spawn → running → exited)?
-
-## Interfaces
-
-```
-AgentEntry { id, name, agentType, status, tmuxTarget, prompt, exitCode, sessionId, startedAt, updatedAt }
-AgentStatus = running | idle | exited | gone
-AgentType = claude | codex | opencode | terminal
-```

@@ -4,34 +4,34 @@
 
 ## Context
 
-PurePoint manages AI coding agents (Claude, Codex, OpenCode, terminal) that run in isolated environments. Each agent needs its own workspace (git worktree), a process host (tmux pane or PTY), lifecycle management (spawn, monitor, detect completion), and output capture for streaming to clients. The execution model determines how agents interact with the system and how clients observe them.
+PurePoint manages AI coding agents that run in isolated environments. Each agent needs its own workspace (git worktree), a process host, lifecycle management (spawn, monitor, detect completion), and output capture for streaming to clients. The execution model determines how agents interact with the system and how clients observe them.
 
 ## Open Questions
 
-? [AGENT-001] Should agents run in tmux managed by the daemon, or in daemon-managed PTYs?
-tmux provides persistence (agents survive daemon crash), multiplexing, and user attachment. But it adds a dependency and complexity. Daemon-managed PTYs give full control but lose persistence. Hybrid: use tmux for persistence but capture output via daemon PTY proxy?
+? [AGENT-001] How should agent processes be hosted?
+Options include terminal multiplexers (tmux, zellij), daemon-managed PTYs, containers, or direct process spawning. Trade-offs: persistence (surviving daemon crashes), multiplexing, user attachment, dependency complexity.
 
 ? [AGENT-002] How should real-time output capture work?
-For streaming to the dashboard, the daemon needs continuous output. Options: poll `capture-pane` on interval, use tmux pipe-pane to a named pipe, create a PTY pair where daemon is the master, or use process substitution. Each has latency/completeness tradeoffs.
+For streaming to clients, the daemon needs continuous output. Options depend on the hosting model — polling, pipe-based capture, PTY pairs, or process substitution. Each has latency and completeness trade-offs.
 
-? [AGENT-003] Should there be a cloud/remote execution model?
-One approach is local-only execution. Should PurePoint support spawning agents on remote machines or cloud instances? This would require SSH tunneling or a remote daemon. Not needed for v1 but architecture decisions now could make it easier or harder later.
+? [AGENT-003] Should there be a remote execution model?
+Should PurePoint support spawning agents on remote machines? Not needed initially, but architecture decisions now could make it easier or harder later.
 
 ? [AGENT-004] How should crash vs clean exit be detected?
-Pattern-matching pane output is fragile — it depends on shell prompt format and agent-specific output patterns. Better options: monitor the child process PID directly, use tmux's `remain-on-exit` + `pane_dead` format, or wrap agents in a thin supervisor script that writes exit status to a known location.
+Detecting agent state reliably. Options: monitor child process PID directly, use process host features, or wrap agents in a supervisor.
 
 ? [AGENT-005] How should context be injected into agent prompts?
-The daemon assembles context (specs, memory, project state) for each agent task. How does this context reach the agent? Options: prepend to the user prompt text, generate a separate system message, write a temporary CLAUDE.md in the worktree, set environment variables, pipe via stdin, or a combination. Different agent types may need different injection methods.
+The daemon assembles context (specs, memory, project state) for each agent task. How does this context reach the agent? Options: prepend to prompt, generate a system message, write a config file in the worktree, environment variables, stdin, or a combination.
 
 ? [AGENT-006] Should context assembly be configurable per-agent-type?
-Claude Code reads CLAUDE.md, Codex reads different formats, terminal agents need different context than coding agents. Should the daemon have pluggable context formatters per agent type? Or should all agents receive context the same way and handle it themselves?
+Different agent types may need different context formats and injection methods. Should the daemon have pluggable context formatters, or should all agents receive context the same way?
 
 ## Design Directions
 
-- Support for multiple agent types: claude, codex, opencode, terminal
-- Agent output capture for dashboard streaming and log retrieval
-- Agent completion detection (exit code, running/idle/exited/gone states)
-- Input delivery to running agents (for prompts, follow-up commands)
+- Support for multiple agent types
+- Agent output capture for streaming and log retrieval
+- Agent completion detection (exit code, state transitions)
+- Input delivery to running agents
 - Agent crash handling without corrupting daemon state
 
 ## Related

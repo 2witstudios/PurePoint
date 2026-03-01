@@ -6,14 +6,11 @@ An agent-first coding workspace. IDEs were built for humans writing code — Pur
 
 See `vision.md` for the full product vision. See `CONTEXT.md` for identity and naming.
 
-## Tech Stack
+## Key Conventions
 
-- **Engine**: Rust (tokio async runtime, tonic gRPC, SQLite)
-- **Desktop**: Swift/AppKit (macOS), terminal UI (Linux)
-- **CLI**: `pu` command → gRPC to daemon
+- **CLI**: `pu` command
 - **Config dir**: `.pu/`
 - **Branch naming**: `pu/{name}`
-- **Crates**: pu-core (domain logic), pu-daemon (gRPC server), pu-cli (thin client), pu-proto (protobuf)
 
 ## Reading Protocol
 
@@ -23,12 +20,12 @@ All specs live in `docs/` as markdown. Read what you need for the task at hand:
 |---|---|
 | Any PurePoint work (first time) | `docs/spec-system.md` — conventions, maturity levels, protocols |
 | Implementing code | `docs/product/{domain}.md` + its listed Dependencies |
-| TDD | `docs/process/tdd/rules.md` + `docs/process/tdd/per-language/{rust\|swift\|ts-js}.md` |
+| TDD | `docs/process/tdd/rules.md` + `docs/process/tdd/per-language/{lang}.md` |
 | Code review | `docs/process/code-review/rules.md` |
 | Greenfield module | `docs/process/greenfield/rules.md` |
 | Advancing a spec | `docs/process/spec-advancement/rules.md` |
 | Task planning | `docs/process/task-planning/rules.md` |
-| Finding dependencies | `docs/product/cross-reference-matrix.md` — maps domains to architecture, RPCs, tables, commands |
+| Finding dependencies | `docs/product/cross-reference-matrix.md` — maps domains to architecture, API ops, stored data, commands |
 
 **Maturity gate**: If a product/architecture spec is at SEED or EXPLORING maturity, it needs research before implementation. See the spec advancement process to advance it.
 

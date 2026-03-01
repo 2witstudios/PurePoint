@@ -8,29 +8,29 @@ PurePoint coordinates AI coding agents, worktrees, and project state across mult
 
 ## Open Questions
 
-? [DAEMON-001] Should we use launchd or a PID-file for process supervision?
-launchd is macOS-native and handles restart-on-crash, but requires a plist and is platform-specific. PID-file is simpler and cross-platform but means we handle our own crash recovery. The daemon needs to auto-start when CLI or app needs it.
+? [DAEMON-001] How should the daemon process be supervised?
+Options include OS-native supervision (launchd on macOS, systemd on Linux), a PID-file with self-managed recovery, or a wrapper process. The daemon needs to auto-start when CLI or app needs it. Trade-offs: platform-specificity vs simplicity vs crash recovery.
 
 ? [DAEMON-002] How should the daemon handle multi-project state?
-The daemon needs a global registry of all known projects, plus per-project state. Should this be a single global SQLite DB, separate per-project DBs, or a hybrid? How does the daemon discover projects — explicit registration, or scan for .pu/ directories?
+The daemon needs a global registry of all known projects, plus per-project state. Should this be a single global store, separate per-project stores, or a hybrid? How does the daemon discover projects — explicit registration, or scan for `.pu/` directories?
 
 ? [DAEMON-003] What is the crash recovery model?
-If the daemon crashes, agents may still be running in tmux. On restart, the daemon needs to reconcile its state with reality (running tmux sessions, existing worktrees). The current implementation includes recovery logic that re-scans tmux — should this be automatic on daemon startup?
+If the daemon crashes, agents may still be running. On restart, the daemon needs to reconcile its state with reality. Should this be automatic on daemon startup?
 
-? [DAEMON-004] What tokio runtime configuration is appropriate?
-Multi-threaded vs current-thread runtime. How many worker threads. Whether to use tokio::spawn for agent monitoring or a dedicated watcher task. How to handle blocking operations (tmux commands, git operations) without blocking the async runtime.
+? [DAEMON-004] What runtime model is appropriate?
+Async vs threaded. How to handle blocking operations (process management, git operations) without blocking the event loop. What concurrency model serves the daemon's needs.
 
 ? [DAEMON-005] What is the health and liveness model?
-How do clients know the daemon is healthy? Health RPC, Unix socket probe, PID file + process check? How does the daemon signal degraded state (e.g., tmux server crashed but daemon is up)? What metrics should Health expose (uptime, project count, agent count, memory usage)?
+How do clients know the daemon is healthy? How does the daemon signal degraded state? What metrics should be exposed?
 
 ? [DAEMON-006] How should the daemon classify incoming tasks for context assembly?
-The daemon is the context assembler — every spawn/swarm/cron/send should automatically inject relevant specs and knowledge into agent prompts. How does the daemon decide what context is relevant? Options: keyword matching against spec file names/tags, LLM classification of the task description, explicit tags in the spawn command (e.g., `pu spawn --context tdd,architecture`), or template-defined context maps where swarm/prompt templates declare their context needs.
+The daemon is the context assembler — every task should automatically inject relevant specs and knowledge into agent prompts. How does the daemon decide what context is relevant? Options: keyword matching, task classification, explicit tags in spawn commands, or template-defined context maps.
 
 ## Design Directions
 
-- macOS (primary) and Linux (future)
+- Primary platform: macOS. Future: Linux.
 - Auto-start when CLI or app needs it and it's not running
-- Graceful shutdown (SIGTERM) with resource cleanup
+- Graceful shutdown with resource cleanup
 - No root/sudo requirement
 - Support for multiple projects simultaneously
 

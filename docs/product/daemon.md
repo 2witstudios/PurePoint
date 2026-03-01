@@ -4,21 +4,18 @@
 
 ## Purpose
 
-The long-running Rust background process that owns all state and operations. Manages tmux sessions, git worktrees, agent processes, scheduling, and the gRPC server. Single source of truth for the entire system.
+The long-running background process that owns all state and operations. Manages agent processes, worktrees, scheduling, and serves the API. Single source of truth for the entire system.
 
 ## Conceptual Model
 
 ```
-Daemon (tokio async runtime)
-  gRPC Server (tonic)
-    Unix socket listener (local clients)
-    TCP listener (remote clients, future)
-  Project Manager
-    Per-project state (SQLite DB)
-    Agent monitor (watches tmux panes)
-    Worktree tracker
-  Scheduler (cron)
-  Output Capturer (streams pane output)
+Daemon
+  API Server (clients connect to request operations)
+  Project Manager (per-project state)
+  Agent Monitor (watches agent processes)
+  Worktree Tracker
+  Scheduler (timed/recurring tasks)
+  Output Capturer (streams agent output to clients)
   Event Bus (internal pub/sub for state changes)
 ```
 
@@ -27,7 +24,3 @@ Daemon (tokio async runtime)
 ? [DMN-001] Should the daemon support multiple concurrent projects, or one daemon instance per project?
 
 ? [DMN-002] How should the daemon handle version mismatches between CLI and daemon (e.g., after an update)?
-
-## Interfaces
-
-See Architecture/IPC & API for gRPC service definitions.
