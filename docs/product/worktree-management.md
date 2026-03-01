@@ -1,6 +1,6 @@
 # Worktree Management
 
-**Maturity: SEED** | ID Prefix: WT
+**Maturity: SEED** | ID Prefix: WT | Dependencies: none
 
 ## Purpose
 
@@ -13,6 +13,12 @@ WorktreeStatus: active → merging → merged | failed | cleaned
 Branch naming: pu/{worktree-name}
 Location: {project_root}/.pu/worktrees/{name}/
 ```
+
+## Open Questions
+
+? [WT-001] How should worktree cleanup be triggered — on agent completion, on explicit user command, or on a TTL basis?
+
+? [WT-002] Should worktrees support shared access (multiple agents in one worktree) or strictly one-agent-per-worktree?
 
 ## Interfaces
 

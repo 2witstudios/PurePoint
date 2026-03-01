@@ -56,11 +56,36 @@ Imperative instructions for planning and executing task epics.
 2. Archive the epic file
 3. Remove from active plan
 
-## Constraints
+## Execution Modes
 
-- Never attempt multiple tasks simultaneously
-- Each task should be completable in ~50 lines of code or less
-- Tasks should be independent — completing one shouldn't break others
-- Avoid breaking changes unless explicitly requested (open/closed principle)
+### Supervised Mode (default)
+
+Human-in-the-loop execution. Use when:
+- Spec maturity is below SPECIFIED
+- Working on novel or ambiguous requirements
+- Single-agent sessions with direct human oversight
+
+Rules:
+- Complete only the current task before proceeding
+- Get explicit user approval between tasks
 - If a task reveals new information, pause and re-plan
 - If blocked or uncertain, ask rather than assume
+
+### Autonomous Mode
+
+Agent operates without human checkpoints. Use when:
+- Spec maturity is SPECIFIED (all requirements, interfaces, and edge cases defined)
+- Operating within a swarm or parallel agent execution
+- A conductor agent is coordinating the work
+
+Rules:
+- Follow the spec's Given/should requirements as success criteria
+- Validate against rubrics (TDD rubric, code review rubric, design rubric) — these are the quality gates
+- On completion, report results to the conductor or commit directly
+- On failure or ambiguity, stop and report — don't guess
+
+## Constraints
+
+- Tasks should be independent — completing one shouldn't break others
+- Avoid breaking changes unless explicitly requested (open/closed principle)
+- Task quality is bounded by rubrics and success criteria, not line count

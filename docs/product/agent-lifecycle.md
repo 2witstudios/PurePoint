@@ -1,6 +1,6 @@
 # Agent Lifecycle
 
-**Maturity: SEED** | ID Prefix: AL
+**Maturity: SEED** | ID Prefix: AL | Dependencies: `architecture/agent-execution.md`
 
 ## Purpose
 
@@ -16,6 +16,12 @@ States: created → running → idle → exited | gone
   exited: agent process terminated (has exit code)
   gone: tmux pane disappeared (crash or manual close)
 ```
+
+## Open Questions
+
+? [AL-001] How should idle detection work — shell prompt pattern matching, output timeout, or process state inspection?
+
+? [AL-002] Should agents support pause/resume, or only the full lifecycle (spawn → running → exited)?
 
 ## Interfaces
 

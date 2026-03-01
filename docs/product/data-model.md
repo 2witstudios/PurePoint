@@ -1,6 +1,6 @@
 # Data Model
 
-**Maturity: SEED** | ID Prefix: DM
+**Maturity: SEED** | ID Prefix: DM | Dependencies: none (defines types used by all other domains)
 
 ## Purpose
 
@@ -21,6 +21,12 @@ Project
     Session memory (decisions, outcomes, patterns)
   Project memory (cross-session knowledge)
 ```
+
+## Open Questions
+
+? [DM-001] Should sessions be explicit user-created boundaries, or implicit based on time gaps in activity?
+
+? [DM-002] How should the data model handle agent re-use across worktrees — new AgentEntry per worktree, or a single AgentEntry that moves?
 
 ## Interfaces
 

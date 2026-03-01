@@ -16,19 +16,60 @@ How we work. Each process domain has three layers:
 - **Rules** — WHAT to do. Imperative instructions agents follow.
 - **Rubric** — HOW to evaluate quality. Scoring criteria for review.
 
-Current process domains: TDD, Code Review, Greenfield, Product Discovery, Task Planning, Requirements
+| Domain | Philosophy | Rules | Rubric |
+|---|---|---|---|
+| TDD | Yes | Yes | Yes |
+| Code Review | Yes | Yes | Yes |
+| Greenfield | Yes | Yes | — |
+| Product Discovery | Yes | Yes | — |
+| Task Planning | Yes | Yes | — |
+| Requirements | Yes | Yes | — |
+| Spec Advancement | — | Yes | — |
+
+TDD rules have per-language supplements: `per-language/{rust|swift|ts-js}.md`
 
 ### Architecture (ADR)
 Technical decisions about how PurePoint is built. Each page follows the ADR template:
-- Context, Open Questions, Decisions, Design Directions, Research Notes
+- **Context** — Why this decision matters
+- **Open Questions** — Unresolved design questions (`? [DOMAIN-NNN]`)
+- **Decisions** — Resolved questions (`! [DOMAIN-NNN]`)
+- **Design Directions** — Candidate approaches and trade-offs
+- **Research Notes** — Findings, benchmarks, prototypes
 
-Architecture domains: Daemon Engine, IPC & API, Storage, Agent Execution, Desktop App Integration, Distribution, Module Structure
+| Domain | ID Prefix | Maturity |
+|---|---|---|
+| Daemon Engine | DAEMON | SEED |
+| IPC & API | IPC | SEED |
+| Storage | STORE | SEED |
+| Agent Execution | AGENT | SEED |
+| Desktop App Integration | DESK | SEED |
+| Distribution | DIST | SEED |
+| Module Structure | MOD | SEED |
 
 ### Product (Domain Spec)
 What PurePoint does. Each domain captures behavior, requirements, and interfaces:
-- Purpose, Conceptual Model, Open Questions, Requirements, Sum Sheet, Interfaces, Edge Cases
+- **Purpose** — What this domain is responsible for
+- **Conceptual Model** — Key abstractions and relationships
+- **Open Questions** — Unresolved design questions
+- **Requirements** — Functional requirements (Given X, should Y)
+- **Sum Sheet** — Concise prop-logic summary
+- **Interfaces** — API surface, data structures, config
+- **Edge Cases** — Known edge cases and how to handle them
 
-Product domains: Data Model, CLI, Daemon, Agent Lifecycle, Worktree Management, Orchestration, Scheduling, Output & Streaming, Memory System, Recovery & Resilience, Desktop App, Configuration
+| Domain | ID Prefix | Maturity |
+|---|---|---|
+| Data Model | DM | SEED |
+| CLI | CLI | SEED |
+| Daemon | DMN | SEED |
+| Agent Lifecycle | AL | SEED |
+| Worktree Management | WT | SEED |
+| Orchestration | ORCH | SEED |
+| Scheduling | SCHED | SEED |
+| Output & Streaming | OUT | SEED |
+| Memory System | MEM | SEED |
+| Recovery & Resilience | REC | SEED |
+| Desktop App | APP | SEED |
+| Configuration | CFG | SEED |
 
 ### Reference (Inventory)
 Reference material for existing codebases and PurePoint CLI commands.
@@ -47,6 +88,18 @@ Every Architecture and Product page has a maturity level:
 | CONVERGING | Down to 1-2 options per question | Team/author picks a direction |
 | DECIDED | All questions resolved with ! decisions | Spec writing begins |
 | SPECIFIED | Full requirements, sum sheets, interfaces | Ready for implementation |
+
+### Minimum Content per Maturity Level
+
+| Level | Required Sections |
+|---|---|
+| SEED | Purpose, Conceptual Model, at least 2 Open Questions |
+| EXPLORING | All SEED content + Research Notes with findings for each open question |
+| CONVERGING | All EXPLORING content + each question narrowed to 1-2 options with trade-offs |
+| DECIDED | All CONVERGING content + all `?` converted to `!` with rationale |
+| SPECIFIED | All DECIDED content + Requirements (Given/should), Interfaces, Edge Cases |
+
+Use this checklist to verify a spec is ready to advance to the next level. Specs missing required sections for their current level should be backfilled before advancing.
 
 ## Conventions
 
@@ -74,24 +127,30 @@ Before starting ANY work on PurePoint:
 1. Read this page (Spec System) to learn conventions — first time only
 
 Before implementing code:
-2. Read `docs/product/{relevant domain}.md` for what to build
-3. Read any `docs/architecture/` pages linked as dependencies
+2. Read `docs/product/{relevant domain}.md` for what to build — check the Dependencies field in the header for required architecture pages
+3. Read the architecture pages listed in Dependencies
 4. Read `docs/reference/` pages for existing implementation context
-5. If the spec page maturity is SEED or EXPLORING, STOP — the spec needs research before implementation
+5. If the spec page maturity is SEED or EXPLORING, STOP — the spec needs research before implementation. See `docs/process/spec-advancement/rules.md` to advance it.
+
+To find domain dependencies and cross-references:
+6. Read `docs/product/cross-reference-matrix.md` — maps every domain to its architecture pages, gRPC RPCs, DB tables, CLI commands, and UI views
 
 Before doing TDD:
-6. Read `docs/process/tdd/rules.md` for TDD process
-7. Read `docs/process/tdd/per-language/{rust|swift|ts-js}.md` for language-specific conventions
+7. Read `docs/process/tdd/rules.md` for TDD process
+8. Read `docs/process/tdd/per-language/{rust|swift|ts-js}.md` for language-specific conventions
 
 Before code review:
-8. Read `docs/process/code-review/rules.md` for review process
-9. Read `docs/process/code-review/rubric.md` for quality scoring
+9. Read `docs/process/code-review/rules.md` for review process
+10. Read `docs/process/code-review/rubric.md` for quality scoring
+
+Before advancing a spec:
+11. Read `docs/process/spec-advancement/rules.md`
 
 Before product discovery:
-10. Read `docs/process/product-discovery/rules.md`
+12. Read `docs/process/product-discovery/rules.md`
 
 Before greenfield module creation:
-11. Read `docs/process/greenfield/rules.md`
+13. Read `docs/process/greenfield/rules.md`
 
 ## Agent Writing Protocol
 
@@ -114,6 +173,35 @@ When an agent discovers new information during work:
 2. Is it a new question about architecture/product? → Add as new ? [DOMAIN-NNN]
 3. Is it a process improvement or convention? → Write to relevant Process/ page
 4. Is it transient/session-specific? → Keep local
+
+## Agent Communication Protocol (Parallel Execution)
+
+When multiple agents work in parallel (swarms, worktrees), they must coordinate to avoid conflicts.
+
+### Rules
+
+1. **One agent per spec** — never assign two agents to advance or modify the same spec file concurrently
+2. **Report, don't write** — during parallel execution, agents report findings to the conductor rather than writing directly to shared spec files. The conductor aggregates and applies changes.
+3. **Structured findings** — agents report using this format:
+
+```markdown
+## Finding: {brief title}
+- **Agent**: {agent ID or worktree name}
+- **Spec**: {target spec file path}
+- **Type**: research-note | new-question | decision-proposal | edge-case
+- **Content**: {the actual finding}
+```
+
+4. **Divide by question, not by file** — when multiple agents research the same domain, the conductor assigns specific open questions to each agent, not entire files
+5. **Dependency awareness** — before finalizing work, check whether specs you depend on are also being modified by another agent. If so, coordinate through the conductor before committing.
+
+### Conductor Responsibilities
+
+The conductor (human or orchestrating agent) must:
+- Assign non-overlapping work units to each agent
+- Aggregate findings and resolve conflicts before writing to specs
+- Gate spec advancements on consistency with dependent specs
+- Merge worktree branches in dependency order
 
 ## Future: Daemon Context Assembly
 

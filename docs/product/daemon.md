@@ -1,6 +1,6 @@
 # Daemon
 
-**Maturity: SEED** | ID Prefix: DMN
+**Maturity: SEED** | ID Prefix: DMN | Dependencies: `architecture/daemon-engine.md`, `architecture/ipc-api.md`
 
 ## Purpose
 
@@ -21,6 +21,12 @@ Daemon (tokio async runtime)
   Output Capturer (streams pane output)
   Event Bus (internal pub/sub for state changes)
 ```
+
+## Open Questions
+
+? [DMN-001] Should the daemon support multiple concurrent projects, or one daemon instance per project?
+
+? [DMN-002] How should the daemon handle version mismatches between CLI and daemon (e.g., after an update)?
 
 ## Interfaces
 

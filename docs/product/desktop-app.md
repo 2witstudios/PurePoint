@@ -1,10 +1,16 @@
 # Desktop App
 
-**Maturity: SEED** | ID Prefix: APP
+**Maturity: SEED** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`
 
 ## Purpose
 
 PurePoint.app — the macOS desktop application. Primary visual interface for managing agents, viewing output, editing configurations, and monitoring project state. Swift/AppKit, talks to daemon via gRPC.
+
+## Open Questions
+
+? [APP-001] Should the desktop app support multiple simultaneous project connections, or one project at a time?
+
+? [APP-002] How should the app handle daemon disconnection — auto-reconnect, show an error overlay, or gracefully degrade to read-only?
 
 ## Conceptual Model
 

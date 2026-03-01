@@ -1,6 +1,6 @@
 # CLI
 
-**Maturity: SEED** | ID Prefix: CLI
+**Maturity: SEED** | ID Prefix: CLI | Dependencies: all Tier 1 RPCs (see `architecture/ipc-api.md`)
 
 ## Purpose
 
@@ -17,6 +17,14 @@ User types: pu {command} [args] [--flags]
   CLI formats response for terminal
   CLI exits with appropriate code
 ```
+
+## Open Questions
+
+? [CLI-001] How should the CLI handle daemon auto-start failures — retry, suggest manual start, or exit with an actionable error?
+
+? [CLI-002] Should `--json` output follow a standard format (JSON-RPC, JSON Lines) or a custom schema?
+
+## Interaction Model
 
 Special behaviors:
 - Auto-starts daemon if not running

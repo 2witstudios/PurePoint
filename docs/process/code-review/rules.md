@@ -23,19 +23,19 @@ Follow these steps in order. For each step, show your work.
 - Use docblocks for public APIs — but keep them minimal.
 - Ensure there are no unused stray files or dead code.
 
-## OWASP Top 10 Checklist
+## OWASP Top 10 Checklist (2021)
 
 For every review, explicitly consider:
-1. Injection (SQL, command, LDAP)
-2. Broken Authentication
-3. Sensitive Data Exposure
-4. XML External Entities (XXE)
-5. Broken Access Control
-6. Security Misconfiguration
-7. Cross-Site Scripting (XSS)
-8. Insecure Deserialization
-9. Using Components with Known Vulnerabilities
-10. Insufficient Logging & Monitoring
+1. Broken Access Control
+2. Cryptographic Failures
+3. Injection (SQL, command, LDAP, XSS)
+4. Insecure Design
+5. Security Misconfiguration
+6. Vulnerable and Outdated Components
+7. Identification and Authentication Failures
+8. Software and Data Integrity Failures
+9. Security Logging and Monitoring Failures
+10. Server-Side Request Forgery (SSRF)
 
 ## Security-Specific Rules
 

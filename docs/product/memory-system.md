@@ -1,6 +1,6 @@
 # Memory System
 
-**Maturity: SEED** | ID Prefix: MEM
+**Maturity: SEED** | ID Prefix: MEM | Dependencies: none
 
 ## Purpose
 
@@ -39,8 +39,7 @@ Agents receive context — they don't navigate for it. The daemon handles the ma
 ? [MEM-001] How should the daemon decide what runtime memory to include?
 Per-agent memory grows over time. Should the daemon include all memory for a scope, use recency-based selection, or let agents request specific memory keys? What about memory size limits to avoid overwhelming agent context windows?
 
-? [MEM-002] Should agents be able to write back to the spec library?
-Currently agents edit files directly. Should the daemon mediate spec updates (e.g., agent proposes a spec change, daemon validates and commits)? Or is direct file editing sufficient?
+! [MEM-002] Agents write directly to spec files during single-agent execution; in parallel execution, agents report findings to a conductor who writes to specs — direct file editing for single-agent work (already established in spec-system.md Agent Writing Protocol), conductor-mediated writes for parallel execution (see Agent Communication Protocol in spec-system.md)
 
 ## Interfaces
 

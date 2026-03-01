@@ -38,6 +38,6 @@ describe('createAccount', () => {
 
 - Colocate tests with source: `agent.ts` → `agent.test.ts` in same directory
 - Use `describe` for unit under test name, `test` for category
-- Avoid the `it` wrapper (conflicts with assert style)
-- When testing state logic, always use selectors — never read directly from state objects
+- Avoid the `it` wrapper — conflicts with the Riteway assert function's `given`/`should` description style
+- When testing app state logic, always use selectors to read state — never read directly from state objects
 - Don't test types/shapes — redundant with TypeScript type checking

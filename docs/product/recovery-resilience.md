@@ -1,6 +1,6 @@
 # Recovery & Resilience
 
-**Maturity: SEED** | ID Prefix: REC
+**Maturity: SEED** | ID Prefix: REC | Dependencies: `architecture/daemon-engine.md`
 
 ## Purpose
 
@@ -15,6 +15,12 @@ Daemon restarts → reconcile DB with tmux reality
   For unknown tmux panes: adopt or ignore
   Update DB to match actual state
 ```
+
+## Open Questions
+
+? [REC-001] How should the daemon handle tmux panes it doesn't recognize during recovery — adopt them, ignore them, or prompt the user?
+
+? [REC-002] Should recovery be automatic on daemon restart, or require an explicit `pu recover` command?
 
 ## Interfaces
 
