@@ -28,6 +28,11 @@ enum DaemonLifecycle {
             return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
         }()
 
+        // Remove stale socket so new daemon can bind
+        let socketPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pu/daemon.sock").path
+        try? FileManager.default.removeItem(atPath: socketPath)
+
         try process.run()
 
         // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s)

@@ -257,6 +257,11 @@ nonisolated final class DaemonClient: @unchecked Sendable {
                 case .failed(let err):
                     resumed = true
                     cont.resume(throwing: err)
+                case .waiting(let err):
+                    // Stale socket: file exists but no listener — fail fast
+                    connection.cancel()
+                    resumed = true
+                    cont.resume(throwing: err)
                 case .cancelled:
                     resumed = true
                     cont.resume(throwing: DaemonClientError.cancelled)
