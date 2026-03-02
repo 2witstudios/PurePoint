@@ -3,7 +3,6 @@ import SwiftUI
 /// SwiftUI wrapper that hosts a cached terminal view for the selected agent.
 struct TerminalContainerView: NSViewRepresentable {
     let agent: AgentModel
-    let sessionName: String
     @Environment(TerminalViewCache.self) private var viewCache
 
     func makeNSView(context: Context) -> NSView {
@@ -11,7 +10,7 @@ struct TerminalContainerView: NSViewRepresentable {
         container.wantsLayer = true
         container.layer?.backgroundColor = TerminalTheme.background.cgColor
 
-        let termView = viewCache.terminalView(for: agent, sessionName: sessionName)
+        let termView = viewCache.terminalView(for: agent)
         termView.translatesAutoresizingMaskIntoConstraints = false
         termView.isHidden = false
         container.addSubview(termView)
@@ -27,7 +26,7 @@ struct TerminalContainerView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        let termView = viewCache.terminalView(for: agent, sessionName: sessionName)
+        let termView = viewCache.terminalView(for: agent)
 
         // Hide all current subviews
         for sub in nsView.subviews {

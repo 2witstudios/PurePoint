@@ -31,7 +31,7 @@ struct DetailView: View {
         switch selection {
         case .agent(let id):
             if let agent = appState.agent(byId: id) {
-                TerminalContainerView(agent: agent, sessionName: appState.sessionName)
+                TerminalContainerView(agent: agent)
             } else {
                 placeholderView(icon: "cpu", title: "Agent not found")
             }

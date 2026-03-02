@@ -6,28 +6,40 @@ final class AppState {
     var worktrees: [WorktreeModel] = []
     var rootAgents: [AgentModel] = []
     var projectRoot: String = ""
-    var sessionName: String = ""
     var projectName: String { URL(fileURLWithPath: projectRoot).lastPathComponent }
     var isLoaded: Bool { !projectRoot.isEmpty }
+    var daemonError: String?
 
     private let service: any WorkspaceService
     private var manifestWatcher: ManifestWatcher?
 
-    init(service: any WorkspaceService = TmuxWorkspaceService()) {
+    init(service: any WorkspaceService = DaemonWorkspaceService()) {
         self.service = service
     }
 
     func openProject(_ root: String) {
         projectRoot = root
-
-        // Initial load
-        refresh()
-
-        // Watch for manifest changes
-        let manifestPath = service.manifestPath(projectRoot: root)
+        daemonError = nil
         manifestWatcher?.stop()
-        manifestWatcher = ManifestWatcher(path: manifestPath) { [weak self] in
-            self?.refresh()
+        manifestWatcher = nil
+
+        // Ensure daemon is running, then start watching and load workspace
+        let svc = service
+        Task {
+            do {
+                try await DaemonLifecycle.ensureDaemon()
+            } catch {
+                self.daemonError = error.localizedDescription
+            }
+
+            // Start manifest watcher after daemon is ready (avoids transient errors
+            // from querying the daemon before it's healthy).
+            let manifestPath = svc.manifestPath(projectRoot: root)
+            self.manifestWatcher = ManifestWatcher(path: manifestPath) { [weak self] in
+                self?.refresh()
+            }
+
+            self.refresh()
         }
     }
 
@@ -36,13 +48,14 @@ final class AppState {
         let root = projectRoot
         let svc = service
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let snapshot = try? svc.loadWorkspace(projectRoot: root) else { return }
-            DispatchQueue.main.async {
-                guard let self, self.projectRoot == root else { return }
+        Task {
+            do {
+                let snapshot = try await svc.loadWorkspace(projectRoot: root)
+                guard self.projectRoot == root else { return }
                 self.worktrees = snapshot.worktrees
                 self.rootAgents = snapshot.rootAgents
-                self.sessionName = snapshot.sessionName
+            } catch {
+                self.daemonError = error.localizedDescription
             }
         }
     }

@@ -1,14 +1,15 @@
 import AppKit
 import SwiftTerm
 
-/// Wraps a LocalProcessTerminalView and intercepts scroll-wheel events to forward
+/// Wraps a TerminalView and intercepts scroll-wheel events to forward
 /// them as mouse wheel escape sequences when the alternate screen buffer is active.
 ///
 /// Without this, SwiftTerm's scrollWheel silently drops scroll events on the
-/// alternate buffer (tmux, vim, less, etc.) because canScroll returns false when
+/// alternate buffer (vim, less, etc.) because canScroll returns false when
 /// isCurrentBufferAlternate.
-class ScrollableTerminal: NSView {
-    let terminalView: LocalProcessTerminalView
+class ScrollableTerminal: NSView, TerminalViewDelegate {
+    let terminalView: TerminalView
+    var attachSession: DaemonAttachSession?
 
     private var scrollMonitor: Any?
     private var accumulatedDelta: CGFloat = 0
@@ -18,8 +19,8 @@ class ScrollableTerminal: NSView {
     private var tornDown = false
     private static let pixelsPerScrollTick: CGFloat = 30
 
-    init(frame: NSRect, terminalView: LocalProcessTerminalView? = nil) {
-        self.terminalView = terminalView ?? LocalProcessTerminalView(frame: frame)
+    init(frame: NSRect, terminalView: TerminalView? = nil) {
+        self.terminalView = terminalView ?? TerminalView(frame: frame)
         super.init(frame: frame)
 
         self.terminalView.translatesAutoresizingMaskIntoConstraints = false
@@ -31,8 +32,10 @@ class ScrollableTerminal: NSView {
             self.terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
+        // Set ourselves as the terminal delegate for input/resize events
+        self.terminalView.terminalDelegate = self
+
         // Disable mouse reporting so click/drag does native text selection.
-        // Scroll-wheel forwarding to tmux is handled separately.
         self.terminalView.allowMouseReporting = false
 
         // Apply theme
@@ -61,18 +64,33 @@ class ScrollableTerminal: NSView {
             NSEvent.removeMonitor(scrollMonitor)
             self.scrollMonitor = nil
         }
-        terminalView.process?.terminate()
+        let session = attachSession
+        Task { await session?.stop() }
     }
 
-    var process: LocalProcess? { terminalView.process }
+    // MARK: - TerminalViewDelegate
 
-    func startProcess(executable: String, args: [String], environment: [String]?, execName: String?) {
-        terminalView.startProcess(executable: executable, args: args, environment: environment, execName: execName)
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        let session = attachSession
+        let inputData = Data(data)
+        Task { await session?.sendInput(inputData) }
     }
 
-    func send(txt: String) {
-        terminalView.send(txt: txt)
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        let session = attachSession
+        Task { await session?.sendResize(cols: newCols, rows: newRows) }
     }
+
+    func setTerminalTitle(source: TerminalView, title: String) {}
+    func scrolled(source: TerminalView, position: Double) {}
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func clipboardCopy(source: TerminalView, content: Data) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(content, forType: .string)
+    }
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+
+    // MARK: - Theme
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -121,7 +139,9 @@ class ScrollableTerminal: NSView {
             return false
         }
         let escaped = urls.map { shellEscape($0.path) }.joined(separator: " ")
-        terminalView.send(txt: escaped)
+        let session = attachSession
+        let inputData = Data(escaped.utf8)
+        Task { await session?.sendInput(inputData) }
         return true
     }
 

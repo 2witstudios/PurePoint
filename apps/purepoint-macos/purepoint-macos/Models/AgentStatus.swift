@@ -2,6 +2,7 @@ import SwiftUI
 
 enum AgentStatus: String, CaseIterable, Codable, Sendable {
     case running
+    case idle
     case completed
     case failed
     case killed
@@ -12,6 +13,7 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
     var color: Color {
         switch self {
         case .running:   .green
+        case .idle:      .mint
         case .completed: .blue
         case .failed:    .red
         case .killed:    .orange
@@ -23,7 +25,7 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
 
     var isTerminal: Bool {
         switch self {
-        case .completed, .failed, .killed: true
+        case .completed, .failed, .killed, .lost: true
         default: false
         }
     }

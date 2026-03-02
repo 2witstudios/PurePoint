@@ -26,14 +26,14 @@ final class TerminalViewCache {
     }
 
     /// Get or create a terminal view for an agent.
-    func terminalView(for agent: AgentModel, sessionName: String) -> TerminalPaneNSView {
+    func terminalView(for agent: AgentModel) -> TerminalPaneNSView {
         lastAccess[agent.id] = Date()
 
         if let existing = views[agent.id] {
             return existing
         }
 
-        let view = TerminalPaneNSView(agent: agent, sessionName: sessionName)
+        let view = TerminalPaneNSView(agent: agent)
         views[agent.id] = view
         return view
     }

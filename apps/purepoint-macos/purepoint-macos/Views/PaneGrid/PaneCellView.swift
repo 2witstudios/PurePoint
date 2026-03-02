@@ -11,7 +11,7 @@ struct PaneCellView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if let agentId, let agent = appState.agent(byId: agentId) {
-                TerminalContainerView(agent: agent, sessionName: appState.sessionName)
+                TerminalContainerView(agent: agent)
             } else {
                 placeholderView
             }

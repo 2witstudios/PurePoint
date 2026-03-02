@@ -60,7 +60,7 @@ enum TerminalTheme {
         return makeColor(red: r, green: g, blue: b)
     }
 
-    static func apply(to terminalView: LocalProcessTerminalView, appearance: NSAppearance) {
+    static func apply(to terminalView: TerminalView, appearance: NSAppearance) {
         let bg = background
         let fg = foreground
         let term = terminalView.getTerminal()
@@ -73,7 +73,6 @@ enum TerminalTheme {
         terminalView.installColors(ansiPalette(for: appearance))
         terminalView.layer?.backgroundColor = bg.cgColor
 
-        terminalView.colorChanged(source: term, idx: nil)
         term.refresh(startRow: 0, endRow: term.rows - 1)
         terminalView.needsDisplay = true
         terminalView.font = terminalView.font
