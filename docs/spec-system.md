@@ -26,7 +26,7 @@ How we work. Each process domain has three layers:
 | Requirements | Yes | Yes | — |
 | Spec Advancement | — | Yes | — |
 
-TDD rules have per-language supplements: `per-language/{rust|swift|ts-js}.md`
+TDD rules have per-language supplements: `per-language/{rust|swift}.md`
 
 ### Architecture (ADR)
 Technical decisions about how PurePoint is built. Each page follows the ADR template:
@@ -137,7 +137,7 @@ To find domain dependencies and cross-references:
 
 Before doing TDD:
 7. Read `docs/process/tdd/rules.md` for TDD process
-8. Read `docs/process/tdd/per-language/{rust|swift|ts-js}.md` for language-specific conventions
+8. Read `docs/process/tdd/per-language/{rust|swift}.md` for language-specific conventions
 
 Before code review:
 9. Read `docs/process/code-review/rules.md` for review process

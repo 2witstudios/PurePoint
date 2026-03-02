@@ -4,20 +4,20 @@
 
 ## Context
 
-The desktop app provides the primary visual interface — project tree sidebar, terminal views for agents, pane grid layout, dashboard, and configuration editors. Initially operates without a daemon, reading manifest.json directly and talking to tmux. Service abstracted behind a protocol for future daemon swap.
+The desktop app provides the primary visual interface — project tree sidebar, terminal views for agents, pane grid layout, dashboard, and configuration editors. Connects to the daemon for workspace state and agent terminal streaming via IPC.
 
 ## Decisions
 
-! [DESK-001] Direct tmux commands + manifest.json file watching. App reads `.pu/manifest.json` for workspace state, uses tmux grouped sessions for terminal display. Service abstracted behind `WorkspaceService` protocol for future daemon swap — when the daemon is implemented, a `DaemonWorkspaceService` replaces `TmuxWorkspaceService` without changing any view code.
+! [DESK-001] Daemon-based architecture. `DaemonWorkspaceService` reads workspace state via daemon IPC (Unix socket). Terminal views connect to agent PTYs via the `Attach`/`Output` protocol — the daemon streams live output and accepts input without the app needing direct process access. Service abstracted behind `WorkspaceService` protocol so view code is decoupled from the communication layer.
 
-! [DESK-002] No daemon initially. App reads `.pu/manifest.json` directly and communicates with tmux via shell commands. The daemon will be a future addition.
+! [DESK-002] Daemon is the communication layer. App connects to the daemon's Unix socket for all workspace operations (status, spawn, kill, logs). No direct process management or shell commands.
 
-! [DESK-003] N/A initially. Tmux sessions persist independently of the desktop app. The app attaches/detaches viewers without affecting agent processes.
+! [DESK-003] Daemon manages agent process lifecycle. The app attaches/detaches terminal viewers via IPC without affecting agent processes — the daemon owns the PTY master fds and keeps agents running regardless of app state.
 
 ! [DESK-004] Native macOS. SwiftUI as primary framework + NSViewRepresentable bridges for SwiftTerm terminal views. AppKit only where SwiftUI lacks capability (NSSplitView for programmatic ratio control, NSEvent monitoring for scroll interception).
 
 ## Design Directions
 
 - WorkspaceService protocol as abstraction boundary
-- Graceful degradation when manifest doesn't exist
+- Graceful degradation when daemon is unreachable
 - File watching with debounce for live updates

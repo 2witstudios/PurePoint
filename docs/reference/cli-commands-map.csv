@@ -1,9 +1,9 @@
-Command,gRPC RPC,Tier,Notes
+Command,IPC Request,Tier,Notes
 pu init,Init,1,Creates .pu/ directory and pu.db
 pu spawn,Spawn,1,Most complex command — worktree + agents
-pu status,Status,1,Refreshes from tmux; returns full state
+pu status,Status,1,Returns full workspace state from daemon
 pu kill,Kill,1,Stop agents; optionally remove worktrees
-pu attach,Attach,1,Returns tmux target for client to exec into
+pu attach,Attach,1,Enters interactive attach mode via daemon IPC
 pu logs,Logs,1,One-shot pane output capture
 pu aggregate,Aggregate,1,Collect result files from agents
 pu merge,Merge,1,Squash/no-ff merge worktree back to base
@@ -16,7 +16,7 @@ pu diff,Diff,1,Show diff for a worktree
 pu pr,(local + gh),-,Creates GH PR — may stay client-side
 pu reset,Reset,1,Kill all; remove all worktrees
 pu clean,Clean,1,Remove terminal-state worktrees
-pu send,Send,1,Send input to agent's tmux pane
+pu send,Send,1,Send input to agent's PTY via daemon
 pu wait,Wait,1,Long-poll until agents complete
 pu worktree create,WorktreeCreate,1,Standalone worktree without agents
 pu ui,(local),-,Opens PurePoint.app

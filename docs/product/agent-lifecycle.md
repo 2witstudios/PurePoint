@@ -32,9 +32,9 @@ Non-terminal states: Spawning, Running, Idle.
 
 **Effective status is computed live, not stored.** The manifest stores the last-known status, but `effective_status()` computes the real status from PTY state (exit code from `waitpid` watch channel, output buffer idle time, prompt detection). This means status reported via `pu status` reflects the actual current state, not a stale manifest snapshot.
 
-**Status from manifest (macOS app):** The desktop app reads status from the `status` field in `.pu/manifest.json` agent entries, polled via manifest file watching (DispatchSource on file changes with 300ms debounce). The daemon writes updated status to manifest on state changes.
+**Status from daemon (macOS app):** The desktop app queries status from the daemon via IPC (`status` request → `status_report` response). A manifest file watcher triggers re-queries on file changes (300ms debounce), but the data source is the daemon, not the manifest file directly.
 
-**Terminal connection (macOS app):** Each agent entry contains a `tmuxTarget` field (format: `session:window` or `session:window.pane`) used to create grouped tmux sessions for terminal display. The daemon's native PTY path does not use tmux — it streams output via the IPC `Attach`/`Output` protocol instead.
+**Terminal connection (macOS app):** The daemon streams output via the IPC `Attach`/`Output` protocol. The desktop app connects via `DaemonWorkspaceService`, which issues an `Attach` request for the agent and receives `Output` messages with live PTY data. Multiple viewers can attach to the same agent simultaneously.
 
 ## Open Questions
 

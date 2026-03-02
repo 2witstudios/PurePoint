@@ -4,17 +4,17 @@
 
 ## Purpose
 
-The desktop application — primary visual interface for managing agents, viewing output, and monitoring project state. Reads workspace state from `.pu/manifest.json` and connects to agent terminals via tmux grouped sessions.
+The desktop application — primary visual interface for managing agents, viewing output, and monitoring project state. Reads workspace state from the daemon via IPC and connects to agent terminals via the daemon's attach protocol.
 
 ## Conceptual Model
 
 ```
 Desktop App
-  Manifest file watcher (.pu/manifest.json)
+  Manifest file watcher (triggers daemon refresh)
   Sidebar (project tree: worktrees → agents)
-    Live updates from manifest file changes
+    Live updates via daemon status queries
   Content area
-    Terminal views (SwiftTerm → tmux grouped session)
+    Terminal views (SwiftTerm → daemon attach/output)
     Terminal view cache (hide/show, LRU eviction)
     Pane Grid (split layout, up to 6 terminals)
     Dashboard (agent status summary)
@@ -25,6 +25,6 @@ Desktop App
 
 ! [APP-001] One project at a time initially. Recent projects stored in UserDefaults for quick switching.
 
-! [APP-002] No daemon. Graceful degradation when manifest doesn't exist — sidebar shows empty state, project picker available.
+! [APP-002] Daemon required. Auto-started on project open via `DaemonLifecycle`. Graceful degradation when daemon is unreachable — sidebar shows empty state, project picker available.
 
 ! [APP-003] macOS only. Native SwiftUI + AppKit bridges.

@@ -20,7 +20,7 @@ Swift-specific TDD conventions for PurePoint.app (macOS desktop application).
 func testGivenNewProjectShouldShowInSidebar() {
     // given
     let project = Project(path: "/tmp/test-repo")
-    let sidebar = SidebarViewController()
+    let sidebar = SidebarView()
     
     // when
     sidebar.addProject(project)
@@ -34,18 +34,18 @@ func testGivenNewProjectShouldShowInSidebar() {
 ## SwiftTerm Testing
 
 - Terminal views are hard to unit test — focus on the data layer
-- Test gRPC client logic separately from UI
-- Mock the gRPC channel for client tests
-- Use XCTest expectations for async gRPC operations
+- Test `DaemonClient` JSON serialization/deserialization separately from UI
+- Mock the Unix socket connection for client tests
+- Use XCTest expectations for async IPC operations
 
 ## UI Testing
 
 - Use XCUITest for critical user journeys only (expensive to maintain)
 - Prefer testing view models and controllers over views directly
-- Mock DashboardSession and PPGService in view controller tests
+- Mock WorkspaceService protocol and DaemonClient in view model tests
 
-## gRPC Client Testing
+## Daemon Client Testing
 
-- Use grpc-swift's test utilities for mock servers
-- Test request serialization and response handling
-- Test error handling paths (connection lost, timeout, invalid response)
+- Test NDJSON request/response serialization (encode request → JSON line, decode response → typed struct)
+- Test attach-mode streaming (partial reads, multiple messages per chunk, connection drop mid-stream)
+- Test error paths (connection lost, timeout, JSON parse error). No external dependencies — the protocol is plain JSON over Unix socket

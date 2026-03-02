@@ -42,7 +42,7 @@ Rules:
 ## Mocking Strategy
 
 - Prefer trait-based dependency injection over mocking frameworks
-- Define traits for external dependencies (tmux, git, filesystem, SQLite)
+- Define traits for external dependencies (daemon client, git, filesystem, SQLite)
 - Implement test doubles as simple structs implementing the trait
 - Use `mockall` crate only when trait-based DI is impractical
 - For integration tests, use real dependencies (actual SQLite, actual git repos in temp dirs)
@@ -52,7 +52,7 @@ Rules:
 - Use `tempdir` (via `tempfile` crate) for filesystem tests
 - Each test creates its own SQLite database (in-memory or temp file)
 - No shared global state — no `lazy_static` test fixtures
-- Use `#[serial]` from `serial_test` crate only when testing global resources (e.g., tmux server)
+- Use `#[serial]` from `serial_test` crate only when testing global resources (e.g., daemon socket)
 
 ## Async Tests
 

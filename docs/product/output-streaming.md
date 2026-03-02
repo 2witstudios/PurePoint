@@ -27,8 +27,6 @@ Agent process → PTY master fd → reader task (spawn_blocking, 4096-byte chunk
 
 **Prompt detection (`looks_like_shell_prompt`):** Reads last 256 bytes, converts to UTF-8 lossy, strips trailing `\n`/`\r`, checks if result ends with `"$ "`, `"% "`, `"# "`, or `"> "`. Used by `agent_monitor::effective_status()` for idle detection.
 
-**No-daemon phase (macOS app):** SwiftTerm's grouped tmux session IS the output viewer — there is no separate capture layer. The terminal view connects directly to the agent's tmux session via `tmux new-session -t {session}`, displaying live output with full terminal emulation (colors, cursor positioning, alternate screen buffer).
-
 ## Open Questions
 
 ? [OUT-001] How should output chunking work — fixed-size chunks, line-based, or semantic boundaries (e.g., tool call boundaries)?

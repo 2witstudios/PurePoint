@@ -1,82 +1,82 @@
 # Swift App Inventory
 
-Source map of the macOS desktop app (`PPG CLI/PPG CLI/`).
+Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 
 ## App Lifecycle
 
 | File | Purpose |
 |---|---|
-| AppDelegate.swift | App lifecycle, window management, menu bar |
-| main.swift | App entry point |
+| purepoint_macosApp.swift | SwiftUI app entry point |
+| ContentView.swift | Root content view (sidebar + detail layout) |
 
-## Core Services
-
-| File | Purpose |
-|---|---|
-| PPGService.swift | Bridge to CLI — shells out for mutations (spawn, kill, merge, etc.) |
-| DashboardSession.swift | Dashboard session management, direct tmux calls, state persistence |
-| ShellUtils.swift | Shell command execution utilities |
-| AppSettingsManager.swift | User preferences and settings persistence |
-
-## Views — Dashboard
+## Services
 
 | File | Purpose |
 |---|---|
-| HomeDashboardView.swift | Home dashboard with commit heatmap, agent status cards, recent commits |
-| ContentTabViewController.swift | Tab-based content area (home, terminal, grid, swarms, prompts, schedules, config) |
-| DashboardSplitViewController.swift | NSSplitViewController for sidebar + content layout |
-
-## Views — Sidebar
-
-| File | Purpose |
-|---|---|
-| SidebarViewController.swift | NSOutlineView sidebar tree, manifest watching, context menus |
-| ProjectPickerViewController.swift | Multi-project selector (Cmd+1-9) |
-
-## Views — Terminal
-
-| File | Purpose |
-|---|---|
-| TerminalPane.swift | SwiftTerm terminal pane wrapper |
-| ScrollableTerminalView.swift | Scrollable terminal container |
-| PaneGridController.swift | Pane grid system (recursive binary split, up to 6 panes, draggable dividers) |
-
-## Views — Editors
-
-| File | Purpose |
-|---|---|
-| SwarmsView.swift | Swarm CRUD editor (.pu/swarms/*.yaml) |
-| PromptsView.swift | Prompt/template editor with syntax highlighting |
-| SchedulesView.swift | Schedules calendar view (day/week/month) |
-| AgentConfigView.swift | Agent configuration editor |
-| ClaudeMdEditorView.swift | CLAUDE.md file editor |
-| SkillsView.swift | Skills browser and editor |
-| PpgAgentsView.swift | Agent management view |
-
-## Views — UI Components
-
-| File | Purpose |
-|---|---|
-| CommandPalettePanel.swift | Command palette with fuzzy search |
-| CommitHeatmapView.swift | Git commit activity heatmap visualization |
-| SyntaxHighlighter.swift | Code syntax highlighting for editors |
-
-## Configuration
-
-| File | Purpose |
-|---|---|
-| SettingsViewController.swift | Settings UI (refresh interval, terminal font, shell path, appearance) |
-| SetupViewController.swift | First-run setup flow |
-| KeybindingManager.swift | Keyboard shortcut management |
-| UpdaterManager.swift | Sparkle auto-update integration |
+| DaemonClient.swift | NDJSON-over-Unix-socket client for daemon IPC |
+| DaemonLifecycle.swift | Daemon auto-start, health check, graceful shutdown |
+| DaemonWorkspaceService.swift | WorkspaceService implementation backed by daemon IPC |
+| DaemonAttachSession.swift | Streaming attach session for live PTY output |
+| WorkspaceService.swift | Protocol defining workspace operations |
+| ManifestWatcher.swift | DispatchSource file watcher on .pu/manifest.json (triggers daemon refresh) |
+| ShellUtilities.swift | Shell command execution utilities |
 
 ## Models
 
 | File | Purpose |
 |---|---|
-| Models.swift | Data models (mirrors manifest.ts types) |
-| AgentVariant.swift | Agent type definitions (claude, codex, opencode, terminal) |
-| Theme.swift | Appearance theme definitions |
-| CronParser.swift | Cron expression parsing |
+| AgentStatus.swift | Agent status enum (Spawning, Running, Idle, Completed, Failed, Killed, Lost) |
+| ManifestModel.swift | Manifest JSON decoding (mirrors pu-core Rust types) |
+| SidebarItem.swift | Sidebar tree item model |
+| WorkspaceModel.swift | Workspace state model |
+
+## State
+
+| File | Purpose |
+|---|---|
+| AppState.swift | Global app state (ObservableObject) |
+| GridState.swift | Pane grid layout state |
+
+## Views — Terminal
+
+| File | Purpose |
+|---|---|
+| TerminalPaneView.swift | SwiftTerm terminal pane wrapper |
+| ScrollableTerminal.swift | Scrollable terminal container |
+| TerminalContainerView.swift | Terminal container with toolbar and status |
+| TerminalViewCache.swift | Terminal view cache (hide/show, LRU eviction) |
+
+## Views — Pane Grid
+
+| File | Purpose |
+|---|---|
+| PaneGridView.swift | Pane grid system (split layout, up to 6 terminals) |
+| PaneSplitNode.swift | Recursive binary split node |
+| PaneCellView.swift | Individual pane cell in grid |
+| NSSplitViewRepresentable.swift | AppKit NSSplitView bridge for SwiftUI |
+| GridLayoutPersistence.swift | Grid layout save/restore |
+
+## Views — Sidebar
+
+| File | Purpose |
+|---|---|
+| SidebarView.swift | Sidebar tree view (projects → worktrees → agents) |
+| AgentRow.swift | Agent row in sidebar |
+| WorktreeRow.swift | Worktree row in sidebar |
+| ProjectRow.swift | Project row in sidebar |
+| SidebarFooter.swift | Sidebar footer (project picker, settings) |
+
+## Views — Detail
+
+| File | Purpose |
+|---|---|
+| DetailView.swift | Detail content area (terminal, dashboard) |
+
+## Theme
+
+| File | Purpose |
+|---|---|
+| PurePointTheme.swift | App-wide theme definitions |
+| TerminalTheme.swift | Terminal color scheme and font settings |
 
 ## Total: 32 Swift files

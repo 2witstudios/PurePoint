@@ -63,7 +63,7 @@ AgentEntry:
 
 **Agent lookup:** `Manifest::find_agent(id)` searches root agents first, then worktree agents. Returns `AgentLocation::Root(&AgentEntry)` or `AgentLocation::Worktree { worktree, agent }`. `Manifest::all_agents()` flattens root + all worktree agents into `Vec<&AgentEntry>`.
 
-**Manifest shape (proven in ppg-cli):** The `.pu/manifest.json` file is the source of truth for workspace state. The Rust types mirror the Swift `ManifestModel` from the macOS app, with camelCase serialization for compatibility.
+**Manifest shape (proven in the original TypeScript CLI):** The `.pu/manifest.json` file is the source of truth for workspace state. The Rust types mirror the Swift `ManifestModel` from the macOS app, with camelCase serialization for compatibility.
 
 ## Open Questions
 
