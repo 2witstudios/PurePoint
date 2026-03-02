@@ -17,6 +17,9 @@ struct purepoint_macosApp: App {
                 .onAppear {
                     openProjectFromArguments()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.shutdown()
+                }
         }
         .defaultSize(
             width: PurePointTheme.windowDefaultWidth,

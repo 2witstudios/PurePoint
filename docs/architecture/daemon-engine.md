@@ -12,6 +12,8 @@ PurePoint coordinates AI coding agents, worktrees, and project state across mult
 
 ! [DAEMON-004] Tokio async runtime with `spawn_blocking` for filesystem and process ops — the daemon is I/O-bound (IPC, PTY reads, file writes), making async the natural fit. Blocking operations (PTY `read`/`write`/`ioctl`, `waitpid`, filesystem) run in `spawn_blocking` to avoid blocking the event loop. Implemented in `pu-engine/src/main.rs` (tokio main), `pu-engine/src/pty_manager.rs` (spawn_blocking for PTY I/O and waitpid).
 
+! [DAEMON-007] Daemon is a separate subprocess, not an in-process library. Evaluated UniFFI (Rust-as-static-library with generated Swift bindings) but rejected: crash isolation requires process boundary (PTY/process crash must not take down the UI), the `pu` CLI also connects to the daemon (shared service, not UI-scoped), and all IPC code (DaemonClient, DaemonAttachSession, streaming protocol) is already built and tested. The subprocess model with embedded binary in the app bundle preserves all these properties.
+
 ! [DAEMON-005] `Request::Health` returns `Response::HealthReport` with PID, uptime seconds, protocol version, project list, and agent count — lightweight liveness check used by CLI auto-start and `pu health` command. Implemented in `pu-core/src/protocol.rs` (`HealthReport` variant).
 
 ## Open Questions
@@ -32,7 +34,8 @@ The daemon is the context assembler — every task should automatically inject r
 - Graceful shutdown with resource cleanup (SIGTERM/SIGINT handled, PID file + socket cleaned up)
 - No root/sudo requirement
 - Support for multiple projects simultaneously
-- Managed mode (`--managed` flag) for when CLI controls the socket path; skips PID file
+- Managed mode (`--managed` flag): launched by the macOS app as an embedded subprocess. Skips PID file. App sends Shutdown on quit. Agents stop, state saved to manifest for restore.
+- Standalone mode (default): launched by CLI or manually. Writes PID file. Agents persist across CLI sessions.
 
 ## Research Notes
 

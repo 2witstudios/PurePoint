@@ -6,10 +6,10 @@ import Foundation
 /// views after 30s idle.
 @Observable
 final class TerminalViewCache {
-    private var views: [String: TerminalPaneNSView] = [:]
-    private var lastAccess: [String: Date] = [:]
-    private var visibleAgentId: String?
-    private var evictionTimer: Timer?
+    @ObservationIgnored private var views: [String: TerminalPaneNSView] = [:]
+    @ObservationIgnored private var lastAccess: [String: Date] = [:]
+    @ObservationIgnored private var visibleAgentId: String?
+    @ObservationIgnored private var evictionTimer: Timer?
     private static let evictionDelay: TimeInterval = 30
 
     init() {

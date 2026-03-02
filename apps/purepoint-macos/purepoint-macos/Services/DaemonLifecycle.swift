@@ -16,7 +16,7 @@ enum DaemonLifecycle {
         // Launch daemon
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = []
+        process.arguments = ["--managed"]
         process.standardOutput = FileHandle.nullDevice
 
         // Redirect stderr to log file for diagnostics
@@ -51,7 +51,15 @@ enum DaemonLifecycle {
     }
 
     private static func findBinary() -> String? {
-        // Search PATH
+        // 1. Check app bundle (production path)
+        if let bundlePath = Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("pu-engine").path,
+           FileManager.default.isExecutableFile(atPath: bundlePath) {
+            return bundlePath
+        }
+
+        // 2. Search PATH (standalone/development)
         let pathEnv = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/local/bin:/usr/bin:/bin"
         for dir in pathEnv.split(separator: ":") {
             let candidate = "\(dir)/pu-engine"
@@ -60,7 +68,7 @@ enum DaemonLifecycle {
             }
         }
 
-        // Check cargo bin directory (development fallback)
+        // 3. Cargo bin (development fallback)
         let devPath = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.cargo/bin/pu-engine"
         if FileManager.default.isExecutableFile(atPath: devPath) {
             return devPath

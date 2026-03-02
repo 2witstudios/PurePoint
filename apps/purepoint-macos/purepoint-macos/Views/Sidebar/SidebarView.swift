@@ -35,12 +35,20 @@ struct SidebarView: View {
                                         .tag(SidebarSelection.agent(agent.id))
                                 }
                             } label: {
-                                WorktreeRow(worktree: worktree)
+                                WorktreeRow(
+                                    worktree: worktree,
+                                    onAddAgent: { showCommandPalette(for: .worktree(worktree.id)) },
+                                    onAddTerminal: {
+                                        appState.createAgent(variant: .terminal, prompt: nil, selection: .worktree(worktree.id))
+                                    }
+                                )
                             }
                             .tag(SidebarSelection.worktree(worktree.id))
                         }
                     } label: {
-                        ProjectRow(name: appState.projectName)
+                        ProjectRow(name: appState.projectName) {
+                            showCommandPalette(for: .project(appState.projectName))
+                        }
                     }
                 } else {
                     Text("No project open")
@@ -51,7 +59,7 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            SidebarFooter()
+            SidebarFooter(selection: selection)
         }
         .onChange(of: appState.worktrees) { _, newValue in
             let currentIds = Set(newValue.map(\.id))
@@ -75,5 +83,12 @@ struct SidebarView: View {
                 }
             }
         )
+    }
+
+    private func showCommandPalette(for selection: SidebarSelection) {
+        let state = appState
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
+            state.createAgent(variant: variant, prompt: prompt, selection: selection)
+        }
     }
 }

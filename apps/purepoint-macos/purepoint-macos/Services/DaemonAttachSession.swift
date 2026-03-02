@@ -8,7 +8,6 @@ import SwiftTerm
 actor DaemonAttachSession {
     let agentId: String
     private weak var terminalView: TerminalView?
-    private var streamTask: Task<Void, Never>?
     private var connection: NWConnection?
     private var stopped = false
 
@@ -37,7 +36,11 @@ actor DaemonAttachSession {
                 // Connection lost — attempt reconnect with backoff
                 retries += 1
                 guard !stopped, retries <= maxRetries else { break }
-                try? await Task.sleep(nanoseconds: backoff)
+                do {
+                    try await Task.sleep(nanoseconds: backoff)
+                } catch {
+                    break // CancellationError — exit immediately
+                }
                 backoff = min(backoff * 2, maxBackoff)
             }
         }
@@ -58,8 +61,6 @@ actor DaemonAttachSession {
     /// Stop the attach session.
     func stop() {
         stopped = true
-        streamTask?.cancel()
-        streamTask = nil
         connection?.cancel()
         connection = nil
     }

@@ -3,12 +3,37 @@ import Network
 
 // MARK: - Protocol types matching crates/pu-core/src/protocol.rs
 
-enum DaemonRequest: Encodable {
+nonisolated enum KillTarget: Encodable {
+    case agent(String)
+    case worktree(String)
+    case all
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .agent(let id):
+            var container = encoder.container(keyedBy: DynamicCodingKey.self)
+            try container.encode(id, forKey: .key("agent"))
+        case .worktree(let id):
+            var container = encoder.container(keyedBy: DynamicCodingKey.self)
+            try container.encode(id, forKey: .key("worktree"))
+        case .all:
+            var container = encoder.singleValueContainer()
+            try container.encode("all")
+        }
+    }
+}
+
+nonisolated enum DaemonRequest: Encodable {
     case health
+    case initProject(projectRoot: String)
     case status(projectRoot: String, agentId: String? = nil)
     case attach(agentId: String)
     case input(agentId: String, data: Data)
     case resize(agentId: String, cols: Int, rows: Int)
+    case spawn(projectRoot: String, prompt: String, agent: String = "claude",
+               name: String? = nil, base: String? = nil, root: Bool = false,
+               worktree: String? = nil)
+    case kill(projectRoot: String, target: KillTarget)
     case shutdown
 
     func encode(to encoder: Encoder) throws {
@@ -16,6 +41,9 @@ enum DaemonRequest: Encodable {
         switch self {
         case .health:
             try container.encode("health", forKey: .key("type"))
+        case .initProject(let projectRoot):
+            try container.encode("init", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
         case .status(let projectRoot, let agentId):
             try container.encode("status", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -32,17 +60,33 @@ enum DaemonRequest: Encodable {
             try container.encode(agentId, forKey: .key("agent_id"))
             try container.encode(cols, forKey: .key("cols"))
             try container.encode(rows, forKey: .key("rows"))
+        case .spawn(let projectRoot, let prompt, let agent, let name, let base, let root, let worktree):
+            try container.encode("spawn", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(prompt, forKey: .key("prompt"))
+            try container.encode(agent, forKey: .key("agent"))
+            if let name { try container.encode(name, forKey: .key("name")) }
+            if let base { try container.encode(base, forKey: .key("base")) }
+            if root { try container.encode(root, forKey: .key("root")) }
+            if let worktree { try container.encode(worktree, forKey: .key("worktree")) }
+        case .kill(let projectRoot, let target):
+            try container.encode("kill", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(target, forKey: .key("target"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
     }
 }
 
-enum DaemonResponse: Decodable {
+nonisolated enum DaemonResponse: Decodable {
     case healthReport(pid: Int, uptimeSeconds: Int, protocolVersion: Int, agentCount: Int)
+    case initResult(created: Bool)
     case statusReport(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
     case attachReady(bufferedBytes: Int)
     case output(agentId: String, data: Data)
+    case spawnResult(worktreeId: String?, agentId: String, status: String)
+    case killResult(killed: [String])
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -61,6 +105,9 @@ enum DaemonResponse: Decodable {
             let p = try HealthReportPayload(from: decoder)
             self = .healthReport(pid: p.pid, uptimeSeconds: p.uptimeSeconds,
                                  protocolVersion: p.protocolVersion, agentCount: p.agentCount)
+        case "init_result":
+            let p = try InitResultPayload(from: decoder)
+            self = .initResult(created: p.created)
         case "status_report":
             let p = try StatusReportPayload(from: decoder)
             self = .statusReport(worktrees: p.worktrees, agents: p.agents)
@@ -70,6 +117,12 @@ enum DaemonResponse: Decodable {
         case "output":
             let p = try OutputPayload(from: decoder)
             self = .output(agentId: p.agentId, data: Data(hexString: p.data))
+        case "spawn_result":
+            let p = try SpawnResultPayload(from: decoder)
+            self = .spawnResult(worktreeId: p.worktreeId, agentId: p.agentId, status: p.status)
+        case "kill_result":
+            let p = try KillResultPayload(from: decoder)
+            self = .killResult(killed: p.killed)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -101,6 +154,10 @@ struct AgentStatusReport: Decodable {
 }
 
 // MARK: - Response payload helpers
+
+private struct InitResultPayload: Decodable {
+    let created: Bool
+}
 
 private struct HealthReportPayload: Decodable {
     let pid: Int
@@ -139,6 +196,22 @@ private struct OutputPayload: Decodable {
     }
 }
 
+private struct SpawnResultPayload: Decodable {
+    let worktreeId: String?
+    let agentId: String
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case worktreeId = "worktree_id"
+        case agentId = "agent_id"
+        case status
+    }
+}
+
+private struct KillResultPayload: Decodable {
+    let killed: [String]
+}
+
 private struct ErrorPayload: Decodable {
     let code: String
     let message: String
@@ -146,7 +219,7 @@ private struct ErrorPayload: Decodable {
 
 // MARK: - DaemonClient
 
-final class DaemonClient: @unchecked Sendable {
+nonisolated final class DaemonClient: @unchecked Sendable {
     static let connectionQueue = DispatchQueue(label: "purepoint.daemon.connection")
     private let socketPath: String
 
@@ -168,7 +241,7 @@ final class DaemonClient: @unchecked Sendable {
 
     /// Connect to the daemon and return the connection + a line reader.
     func connect() async throws -> (NWConnection, DaemonLineReader) {
-        let params = NWParameters()
+        let params = NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
         let endpoint = NWEndpoint.unix(path: socketPath)
         let connection = NWConnection(to: endpoint, using: params)
 
@@ -232,7 +305,7 @@ final class DaemonClient: @unchecked Sendable {
 
 // MARK: - Line reader
 
-final class DaemonLineReader: @unchecked Sendable {
+nonisolated final class DaemonLineReader: @unchecked Sendable {
     private let connection: NWConnection
     private var buffer = Data()
     private var scanOffset = 0

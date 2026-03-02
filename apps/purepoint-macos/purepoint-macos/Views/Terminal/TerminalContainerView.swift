@@ -28,6 +28,11 @@ struct TerminalContainerView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         let termView = viewCache.terminalView(for: agent)
 
+        // Already showing the correct agent — nothing to do
+        if termView.superview === nsView && !termView.isHidden {
+            return
+        }
+
         // Hide all current subviews
         for sub in nsView.subviews {
             sub.isHidden = true

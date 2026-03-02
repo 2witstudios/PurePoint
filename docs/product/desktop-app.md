@@ -25,6 +25,6 @@ Desktop App
 
 ! [APP-001] One project at a time initially. Recent projects stored in UserDefaults for quick switching.
 
-! [APP-002] Daemon required. Auto-started on project open via `DaemonLifecycle`. Graceful degradation when daemon is unreachable — sidebar shows empty state, project picker available.
+! [APP-002] Daemon required. Auto-started on project open via `DaemonLifecycle` with `--managed` flag. On app quit, sends `Request::Shutdown` to stop the daemon and all agents. Graceful degradation when daemon is unreachable — sidebar shows empty state, project picker available.
 
 ! [APP-003] macOS only. Native SwiftUI + AppKit bridges.

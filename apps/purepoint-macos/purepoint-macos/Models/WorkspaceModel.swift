@@ -1,6 +1,6 @@
 import Foundation
 
-struct WorktreeModel: Identifiable, Equatable {
+nonisolated struct WorktreeModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let path: String
@@ -13,7 +13,7 @@ struct WorktreeModel: Identifiable, Equatable {
     }
 }
 
-struct AgentModel: Identifiable, Equatable {
+nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let agentType: String

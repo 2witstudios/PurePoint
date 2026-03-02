@@ -12,7 +12,7 @@ The desktop app provides the primary visual interface — project tree sidebar, 
 
 ! [DESK-002] Daemon is the communication layer. App connects to the daemon's Unix socket for all workspace operations (status, spawn, kill, logs). No direct process management or shell commands.
 
-! [DESK-003] Daemon manages agent process lifecycle. The app attaches/detaches terminal viewers via IPC without affecting agent processes — the daemon owns the PTY master fds and keeps agents running regardless of app state.
+! [DESK-003] App-managed daemon lifecycle. The app launches the daemon with `--managed` on startup and sends `Request::Shutdown` on quit — all agents stop and their state is saved to the manifest for restore on next launch. In standalone CLI mode (without `--managed`), the daemon writes a PID file and agents persist independently. The daemon owns the PTY master fds in both modes; the app only attaches/detaches terminal viewers via IPC.
 
 ! [DESK-004] Native macOS. SwiftUI as primary framework + NSViewRepresentable bridges for SwiftTerm terminal views. AppKit only where SwiftUI lacks capability (NSSplitView for programmatic ratio control, NSEvent monitoring for scroll interception).
 

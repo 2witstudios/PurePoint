@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct SidebarFooter: View {
+    @Environment(AppState.self) private var appState
+    let selection: SidebarSelection?
+
     var body: some View {
         VStack(spacing: 0) {
             Divider()
@@ -21,7 +24,7 @@ struct SidebarFooter: View {
                 Spacer()
 
                 Button {
-                    // No-op
+                    showCommandPalette()
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: "plus")
@@ -36,9 +39,18 @@ struct SidebarFooter: View {
             .frame(height: PurePointTheme.footerHeight)
         }
     }
+
+    private func showCommandPalette() {
+        let state = appState
+        let sel = selection
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
+            state.createAgent(variant: variant, prompt: prompt, selection: sel)
+        }
+    }
 }
 
 #Preview {
-    SidebarFooter()
+    SidebarFooter(selection: nil)
         .frame(width: 240)
+        .environment(AppState())
 }

@@ -39,3 +39,5 @@ Non-terminal states: Spawning, Running, Idle.
 ## Open Questions
 
 ? [AL-002] Should agents support pause/resume, or only the full lifecycle (spawn → running → exited)?
+
+**App quit behavior:** When the macOS app quits, it sends `Request::Shutdown` to the daemon. The daemon kills all agent processes and exits. Agent state (command, worktree, last status) is persisted in the manifest. On next app launch, agents can be re-spawned from the saved state. Standalone CLI mode does not auto-shutdown — agents persist until explicitly killed or the daemon is stopped.

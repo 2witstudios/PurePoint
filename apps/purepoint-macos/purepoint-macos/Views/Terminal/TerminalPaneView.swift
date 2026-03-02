@@ -25,6 +25,7 @@ struct TerminalPaneView: NSViewRepresentable {
 class TerminalPaneNSView: NSView {
     let agent: AgentModel
     private(set) var terminal: ScrollableTerminal?
+    private var attachTask: Task<Void, Never>?
     private var attachStarted = false
     private var terminalInstalled = false
 
@@ -81,7 +82,7 @@ class TerminalPaneNSView: NSView {
         let session = DaemonAttachSession(agentId: agent.id, terminalView: tv.terminalView)
         tv.attachSession = session
 
-        Task {
+        attachTask = Task {
             await session.start()
         }
     }
@@ -92,6 +93,8 @@ class TerminalPaneNSView: NSView {
     }
 
     func tearDown() {
+        attachTask?.cancel()
+        attachTask = nil
         terminal?.tearDown()
     }
 }
