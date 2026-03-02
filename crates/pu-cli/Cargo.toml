@@ -1,0 +1,24 @@
+[package]
+name = "pu-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pu-core = { path = "../pu-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+owo-colors = "4"
+which = "7"
+
+[[bin]]
+name = "pu"
+path = "src/main.rs"
+
+[dev-dependencies]
+pu-engine = { path = "../pu-engine" }
+tempfile = "3"
