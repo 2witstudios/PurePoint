@@ -1,6 +1,6 @@
 # CLI
 
-**Maturity: SEED** | ID Prefix: CLI | Dependencies: `architecture/ipc-api.md`
+**Maturity: DECIDED** | ID Prefix: CLI | Dependencies: `architecture/ipc-api.md`
 
 ## Purpose
 
@@ -10,11 +10,11 @@ The `pu` command-line tool. A thin client that sends requests to the daemon and 
 
 ```
 User types: pu {command} [args] [--flags]
-  CLI parses args
-  CLI connects to daemon
-  CLI sends request
-  Daemon processes and responds
-  CLI formats response for terminal
+  CLI parses args (clap)
+  CLI ensures daemon is running (auto-start if needed)
+  CLI connects to Unix socket (~/.pu/daemon.sock)
+  CLI sends JSON request, reads JSON response
+  CLI formats response for terminal (or raw JSON with --json)
   CLI exits with appropriate code
 ```
 
@@ -23,8 +23,26 @@ Key behaviors:
 - Machine-readable output mode for conductor agents
 - Ability to attach directly to an agent's terminal session
 
-## Open Questions
+## Decisions
 
-? [CLI-001] How should the CLI handle daemon auto-start failures — retry, suggest manual start, or exit with an actionable error?
+! [CLI-001] Auto-start polls 30x100ms (3s timeout), exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health, then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. Polls `Request::Health` every 100ms up to 30 attempts. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
-? [CLI-002] Should machine-readable output follow a standard format (JSON-RPC, JSON Lines) or a custom schema?
+! [CLI-002] `--json` flag on `status` command outputs raw JSON response — provides machine-readable output for conductor agents and scripts. Currently on `status` only (not a global flag). Implemented in `pu-cli/src/main.rs` (status command handler).
+
+## Implemented Commands
+
+| Command | Args/Flags | Description |
+|---|---|---|
+| `pu init` | — | Register current project with daemon |
+| `pu spawn <prompt>` | `--agent`, `--name`, `--base`, `--root`, `--worktree` | Spawn an agent (in worktree or root) |
+| `pu status` | `--agent <id>`, `--json` | Show project/agent status |
+| `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive) | Kill agent(s) |
+| `pu logs <agent_id>` | `--tail <n>` (default 500) | Tail agent output buffer |
+| `pu attach <agent_id>` | — | Interactive PTY attach to agent |
+| `pu health` | — | Check daemon health |
+
+## Research Notes
+
+**Client implementation (`pu-cli/src/client.rs`):** Connects to Unix socket, writes `{json}\n`, reads one newline-terminated response. 30-second request timeout. `ConnectionRefused`/`NotFound` errors converted to `DaemonNotRunning` error type.
+
+**Daemon discovery:** Socket path resolved from `pu_core::paths::daemon_socket_path()` → `~/.pu/daemon.sock`. No environment variable override currently.

@@ -38,13 +38,13 @@ Technical decisions about how PurePoint is built. Each page follows the ADR temp
 
 | Domain | ID Prefix | Maturity |
 |---|---|---|
-| Daemon Engine | DAEMON | SEED |
-| IPC & API | IPC | SEED |
+| Daemon Engine | DAEMON | CONVERGING |
+| IPC & API | IPC | CONVERGING |
 | Storage | STORE | SEED |
-| Agent Execution | AGENT | SEED |
-| Desktop App Integration | DESK | SEED |
+| Agent Execution | AGENT | CONVERGING |
+| Desktop App Integration | DESK | DECIDED |
 | Distribution | DIST | SEED |
-| Module Structure | MOD | SEED |
+| Module Structure | MOD | DECIDED |
 
 ### Product (Domain Spec)
 What PurePoint does. Each domain captures behavior, requirements, and interfaces:
@@ -58,17 +58,17 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 
 | Domain | ID Prefix | Maturity |
 |---|---|---|
-| Data Model | DM | SEED |
-| CLI | CLI | SEED |
-| Daemon | DMN | SEED |
-| Agent Lifecycle | AL | SEED |
+| Data Model | DM | EXPLORING |
+| CLI | CLI | DECIDED |
+| Daemon | DMN | EXPLORING |
+| Agent Lifecycle | AL | CONVERGING |
 | Worktree Management | WT | SEED |
 | Orchestration | ORCH | SEED |
 | Scheduling | SCHED | SEED |
-| Output & Streaming | OUT | SEED |
+| Output & Streaming | OUT | EXPLORING |
 | Memory System | MEM | SEED |
 | Recovery & Resilience | REC | SEED |
-| Desktop App | APP | SEED |
+| Desktop App | APP | DECIDED |
 | Configuration | CFG | SEED |
 
 ### Reference (Inventory)

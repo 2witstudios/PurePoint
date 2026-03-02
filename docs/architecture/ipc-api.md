@@ -1,32 +1,39 @@
 # IPC & API
 
-**Maturity: SEED**
+**Maturity: CONVERGING**
 
 ## Context
 
 All PurePoint clients (CLI, desktop app, future mobile/web) need a structured way to communicate with the daemon. The API must support both simple request/response patterns (spawn an agent, kill a process) and real-time streaming (live agent output, state change notifications). Local clients need low-latency access; remote clients need network transport.
 
+## Decisions
+
+! [IPC-001] Newline-delimited JSON over Unix domain socket (`~/.pu/daemon.sock`) — simplest option that works, no code generation or schema compilation needed, debuggable with standard tools. 1MB max message size (`MAX_MESSAGE_SIZE`), 64-connection semaphore (`MAX_CONNECTIONS`). Stale socket file removed before bind. Tagged union encoding: `#[serde(tag = "type", rename_all = "snake_case")]` on Request/Response enums. Binary data (PTY I/O) hex-encoded within JSON. Implemented in `pu-engine/src/ipc_server.rs` (server), `pu-cli/src/client.rs` (client), `pu-core/src/protocol.rs` (types).
+
+! [IPC-002] Daemon captures PTY output into a 1MB circular buffer per agent (`OutputBuffer` in `pu-engine/src/output_buffer.rs`). Reader task runs in `spawn_blocking`, reading 4096-byte chunks from the PTY master fd. Clients retrieve output via `Request::Logs { agent_id, tail }` for the last N bytes, or `Request::Attach { agent_id }` for interactive mode (returns buffered bytes, then streams live output; `Request::Input` sends keystrokes back). No direct client-to-agent connection needed.
+
+! [IPC-005] Synchronous request-response — each request gets exactly one response on the same connection. `Spawn` returns immediately with agent/worktree IDs and initial status; clients poll via `Status` to track progress. Multiple request-response cycles supported per connection (loop until EOF). Long-running ops never block the connection. Implemented in `pu-engine/src/ipc_server.rs` (connection handler loop).
+
 ## Open Questions
 
-? [IPC-001] What IPC/API protocol should PurePoint use?
-Options include gRPC, Cap'n Proto, JSON-RPC over Unix socket, REST/HTTP, custom binary protocol. Trade-offs: typed schemas, streaming support, code generation for multiple languages, ecosystem maturity, complexity.
-
-? [IPC-002] How should terminal output streaming work through the daemon?
-Agents produce continuous output. How does raw terminal output get from the agent process to the daemon to the client? Options: daemon captures output and streams via API, client connects directly to agent process, or a hybrid.
-
 ? [IPC-003] Should the API be split into tiers or kept as one service?
-Simple operations (spawn, kill, status) vs complex streaming (live output, state changes). Separate services could run with different configurations. One service is simpler but mixes patterns.
+Simple operations (spawn, kill, status) vs complex streaming (live output, state changes). Currently a single service handling both patterns. Separate services could run with different configurations. One service is simpler but mixes patterns. (Current implementation is single-service; question still valid for scaling.)
 
 ? [IPC-004] What authentication model for remote connections?
-Local connections can be authenticated by OS file permissions. Remote connections need auth. Options: certificate-based, bearer token, API key. How lightweight can this be for a local-first tool?
-
-? [IPC-005] How should long-running operations be handled?
-Some operations take time (merge with conflicts, large spawn). Should these be synchronous, async with polling, or streaming with progress updates?
+Local connections are authenticated by OS file permissions on the Unix socket. Remote connections need auth. Options: certificate-based, bearer token, API key. How lightweight can this be for a local-first tool? (Not yet implemented — local-only for now.)
 
 ## Design Directions
 
-- Local and remote transport support
-- Real-time streaming for live updates
-- Client code generation for multiple languages
-- Concurrent client support
-- Backwards-compatible API once stabilized
+- Local transport: Unix domain socket (implemented)
+- Remote transport: future consideration (see IPC-004)
+- Real-time streaming via attach mode (PTY bytes forwarded to client)
+- Concurrent client support via semaphore-limited connection pool
+- Backwards-compatible API once stabilized (protocol version in health report)
+
+## Research Notes
+
+**Protocol details (from `pu-core/src/protocol.rs`):** `PROTOCOL_VERSION = 1`. Request variants: `Health`, `Init`, `Spawn`, `Status`, `Kill`, `Logs`, `Attach`, `Input`, `Resize`, `Shutdown`. Response variants: `HealthReport`, `InitResult`, `SpawnResult`, `StatusReport`, `AgentStatus`, `KillResult`, `LogsResult`, `AttachReady`, `Output`, `Ok`, `ShuttingDown`, `Error`. `KillTarget` enum supports `Agent(id)`, `Worktree(id)`, or `All`.
+
+**Error handling:** Parse errors return `Response::Error { code: "PARSE_ERROR", message }` without closing the connection, allowing retry on the same connection.
+
+**Client timeout:** CLI uses a 30-second request timeout (`pu-cli/src/client.rs`).
