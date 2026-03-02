@@ -1,17 +1,21 @@
 use std::collections::VecDeque;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
+
+use tokio::sync::Notify;
 
 const DEFAULT_CAPACITY: usize = 1024 * 1024; // 1MB
 
 pub struct OutputBuffer {
     inner: RwLock<BufferInner>,
+    notify: Arc<Notify>,
 }
 
 struct BufferInner {
     data: VecDeque<u8>,
     capacity: usize,
     last_write: Instant,
+    total_written: usize,
 }
 
 impl Default for OutputBuffer {
@@ -31,19 +35,57 @@ impl OutputBuffer {
                 data: VecDeque::new(),
                 capacity,
                 last_write: Instant::now(),
+                total_written: 0,
             }),
+            notify: Arc::new(Notify::new()),
         }
     }
 
     pub fn write(&self, bytes: &[u8]) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.data.extend(bytes);
+        inner.total_written += bytes.len();
         // Trim from front if over capacity — O(excess) with VecDeque
         if inner.data.len() > inner.capacity {
             let excess = inner.data.len() - inner.capacity;
             inner.data.drain(..excess);
         }
         inner.last_write = Instant::now();
+        drop(inner);
+        self.notify.notify_waiters();
+    }
+
+    /// Read bytes written since `offset`. Returns `(bytes, new_offset)`.
+    /// Uses read lock + as_slices to avoid blocking concurrent readers.
+    pub fn read_from(&self, offset: usize) -> (Vec<u8>, usize) {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let total = inner.total_written;
+        if offset >= total {
+            return (vec![], total);
+        }
+        let wanted = total - offset;
+        let available = inner.data.len();
+        let can_provide = wanted.min(available);
+        let skip = available - can_provide;
+        let (a, b) = inner.data.as_slices();
+        let mut bytes = Vec::with_capacity(can_provide);
+        if skip < a.len() {
+            bytes.extend_from_slice(&a[skip..]);
+            bytes.extend_from_slice(b);
+        } else {
+            bytes.extend_from_slice(&b[skip - a.len()..]);
+        }
+        (bytes, total)
+    }
+
+    /// Get an Arc<Notify> clone for subscribing to write notifications.
+    pub fn subscribe_notify(&self) -> Arc<Notify> {
+        self.notify.clone()
+    }
+
+    /// Current total bytes written (monotonic offset).
+    pub fn current_offset(&self) -> usize {
+        self.inner.read().unwrap_or_else(|e| e.into_inner()).total_written
     }
 
     pub fn len(&self) -> usize {
@@ -226,5 +268,96 @@ mod tests {
         }
 
         assert!(buf.len() > 0);
+    }
+
+    // --- Streaming / notification tests ---
+
+    #[tokio::test]
+    async fn given_write_should_notify_waiters() {
+        let buf = Arc::new(OutputBuffer::new());
+        let notify = buf.subscribe_notify();
+        let buf2 = buf.clone();
+        let handle = tokio::spawn(async move {
+            notify.notified().await;
+            true
+        });
+        // Small yield to ensure the waiter is registered
+        tokio::task::yield_now().await;
+        buf2.write(b"ping");
+        let notified = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            handle,
+        )
+        .await
+        .expect("timeout")
+        .expect("join");
+        assert!(notified);
+    }
+
+    #[test]
+    fn given_write_should_increment_total_written() {
+        let buf = OutputBuffer::new();
+        assert_eq!(buf.current_offset(), 0);
+        buf.write(b"hello");
+        assert_eq!(buf.current_offset(), 5);
+        buf.write(b"world");
+        assert_eq!(buf.current_offset(), 10);
+    }
+
+    #[test]
+    fn given_read_from_zero_should_return_all_bytes() {
+        let buf = OutputBuffer::new();
+        buf.write(b"abcdef");
+        let (data, offset) = buf.read_from(0);
+        assert_eq!(data, b"abcdef");
+        assert_eq!(offset, 6);
+    }
+
+    #[test]
+    fn given_read_from_offset_should_return_only_new_bytes() {
+        let buf = OutputBuffer::new();
+        buf.write(b"abc");
+        let (_, off1) = buf.read_from(0);
+        buf.write(b"def");
+        let (data, off2) = buf.read_from(off1);
+        assert_eq!(data, b"def");
+        assert_eq!(off2, 6);
+    }
+
+    #[test]
+    fn given_read_from_beyond_total_should_return_empty() {
+        let buf = OutputBuffer::new();
+        buf.write(b"abc");
+        let (data, offset) = buf.read_from(100);
+        assert!(data.is_empty());
+        assert_eq!(offset, 3);
+    }
+
+    #[test]
+    fn given_current_offset_should_match_total_written() {
+        let buf = OutputBuffer::new();
+        buf.write(b"12345");
+        buf.write(b"67890");
+        assert_eq!(buf.current_offset(), 10);
+    }
+
+    #[test]
+    fn given_buffer_wraps_capacity_should_return_available_from_offset() {
+        let buf = OutputBuffer::with_capacity(10);
+        buf.write(b"12345"); // total_written = 5, data = [1,2,3,4,5]
+        buf.write(b"67890"); // total_written = 10, data = [1,2,3,4,5,6,7,8,9,0]
+        buf.write(b"abc");   // total_written = 13, data trimmed to last 10: [4,5,6,7,8,9,0,a,b,c]
+
+        // Reading from offset 5 wants bytes 5..13 = 8 bytes, but buffer only has 10 chars
+        // starting from total_written - data.len() = 13 - 10 = 3
+        // So offset 5 means we want from position 5, buffer starts at 3, so skip = 5 - 3 = 2
+        let (data, new_off) = buf.read_from(5);
+        assert_eq!(new_off, 13);
+        assert_eq!(data, b"67890abc");
+
+        // Reading from offset 0 can only return what's in the buffer (10 bytes from position 3)
+        let (data, _) = buf.read_from(0);
+        assert_eq!(data.len(), 10);
+        assert_eq!(data, b"4567890abc");
     }
 }

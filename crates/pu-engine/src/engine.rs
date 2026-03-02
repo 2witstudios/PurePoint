@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,6 +15,7 @@ use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeS
 
 use crate::agent_monitor;
 use crate::git;
+use crate::output_buffer::OutputBuffer;
 use crate::pty_manager::{AgentHandle, NativePtyHost, SpawnConfig};
 
 pub struct Engine {
@@ -526,6 +528,27 @@ impl Engine {
         }
     }
 
+    /// Write data to a PTY fd via the pty host (avoids duplicating unsafe write logic).
+    pub async fn write_to_pty(&self, fd: &Arc<OwnedFd>, data: &[u8]) -> Result<(), std::io::Error> {
+        self.pty_host.write_to_fd(fd, data).await
+    }
+
+    /// Resize a PTY fd via the pty host (avoids duplicating unsafe ioctl logic).
+    pub async fn resize_pty(&self, fd: &Arc<OwnedFd>, cols: u16, rows: u16) -> Result<(), std::io::Error> {
+        self.pty_host.resize_fd(fd, cols, rows).await
+    }
+
+    /// Return the output buffer and master PTY fd for an agent, if it has an active session.
+    pub async fn get_attach_handles(
+        &self,
+        agent_id: &str,
+    ) -> Option<(Arc<OutputBuffer>, Arc<OwnedFd>)> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .get(agent_id)
+            .map(|h| (h.output_buffer.clone(), h.master_fd()))
+    }
+
     // --- Helpers ---
 
     async fn rollback_worktree(&self, root_path: &Path, worktree_id: Option<&str>) {
@@ -554,5 +577,30 @@ impl Engine {
         tokio::task::spawn_blocking(move || manifest::read_manifest(Path::new(&pr)))
             .await
             .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::init_and_spawn;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_spawned_agent_should_return_attach_handles() {
+        let (engine, agent_id, _tmp) = init_and_spawn().await;
+
+        let handles = engine.get_attach_handles(&agent_id).await;
+        assert!(handles.is_some(), "expected attach handles for spawned agent");
+
+        let (buffer, _fd) = handles.unwrap();
+        // Buffer exists and has a valid offset
+        let _ = buffer.current_offset();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_unknown_agent_should_return_none() {
+        let engine = Engine::new();
+        let handles = engine.get_attach_handles("ag-nonexistent").await;
+        assert!(handles.is_none());
     }
 }

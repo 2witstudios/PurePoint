@@ -6,3 +6,6 @@ pub mod git;
 pub mod ipc_server;
 pub mod output_buffer;
 pub mod pty_manager;
+
+#[cfg(test)]
+pub(crate) mod test_helpers;
