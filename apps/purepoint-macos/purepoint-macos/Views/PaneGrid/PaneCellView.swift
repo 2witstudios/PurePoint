@@ -36,10 +36,9 @@ struct PaneCellView: View {
         VStack(spacing: 8) {
             Text("Empty Pane")
                 .font(.title3)
-                .foregroundStyle(PurePointTheme.tertiaryText)
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(PurePointTheme.contentBackground)
     }
 }
 

@@ -13,17 +13,16 @@ struct DetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(PurePointTheme.contentBackground)
     }
 
     private var placeholderContent: some View {
         VStack(spacing: 12) {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 40))
-                .foregroundStyle(PurePointTheme.tertiaryText)
+                .foregroundStyle(.tertiary)
             Text("Select an item")
                 .font(.title3)
-                .foregroundStyle(PurePointTheme.secondaryText)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -56,10 +55,10 @@ struct DetailView: View {
         VStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 40))
-                .foregroundStyle(PurePointTheme.secondaryText)
+                .foregroundStyle(.secondary)
             Text(title)
                 .font(.title3)
-                .foregroundStyle(PurePointTheme.primaryText)
+                .foregroundStyle(.primary)
         }
     }
 }

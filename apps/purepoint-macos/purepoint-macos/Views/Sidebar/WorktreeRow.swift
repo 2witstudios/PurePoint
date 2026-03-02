@@ -14,10 +14,10 @@ struct WorktreeRow: View {
                 if worktree.agents.count > 0 {
                     Text("\(worktree.agents.count)")
                         .font(PurePointTheme.smallFont)
-                        .foregroundStyle(PurePointTheme.secondaryText)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(PurePointTheme.badgeBackground, in: Capsule())
+                        .background(.quaternary, in: Capsule())
                 }
             }
         } icon: {

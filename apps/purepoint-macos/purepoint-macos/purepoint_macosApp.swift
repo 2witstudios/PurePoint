@@ -10,7 +10,6 @@ struct purepoint_macosApp: App {
             ContentView()
                 .environment(appState)
                 .environment(viewCache)
-                .preferredColorScheme(.dark)
                 .frame(
                     minWidth: PurePointTheme.windowMinWidth,
                     minHeight: PurePointTheme.windowMinHeight

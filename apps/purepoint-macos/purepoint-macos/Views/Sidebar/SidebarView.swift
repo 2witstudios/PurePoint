@@ -1,31 +1,79 @@
 import SwiftUI
 
 struct SidebarView: View {
-    // Two selection bindings: `selection` (parent-owned, includes nav items) and
-    // `treeSelection` (List-owned, tree items only). Synchronized via onChange handlers.
     @Binding var selection: SidebarSelection?
-    @State private var treeSelection: SidebarSelection?
+    @Environment(AppState.self) private var appState
+    @State private var expandedWorktrees: Set<String> = []
+    @State private var didInitialExpand = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            NavButtonsSection(selection: $selection)
+        List(selection: $selection) {
+            Section {
+                ForEach(SidebarNavItem.allCases) { item in
+                    Label(item.title, systemImage: item.icon)
+                        .font(PurePointTheme.navFont)
+                        .tag(SidebarSelection.nav(item))
+                }
+            }
 
-            Divider()
-                .padding(.horizontal, PurePointTheme.padding)
+            Section {
+                if appState.isLoaded {
+                    DisclosureGroup(
+                        isExpanded: .constant(true)
+                    ) {
+                        ForEach(appState.rootAgents) { agent in
+                            AgentRow(agent: agent)
+                                .tag(SidebarSelection.agent(agent.id))
+                        }
 
-            ProjectTreeSection(selection: $treeSelection)
-
+                        ForEach(appState.worktrees) { worktree in
+                            DisclosureGroup(
+                                isExpanded: binding(for: worktree.id)
+                            ) {
+                                ForEach(worktree.agents) { agent in
+                                    AgentRow(agent: agent)
+                                        .tag(SidebarSelection.agent(agent.id))
+                                }
+                            } label: {
+                                WorktreeRow(worktree: worktree)
+                            }
+                            .tag(SidebarSelection.worktree(worktree.id))
+                        }
+                    } label: {
+                        ProjectRow(name: appState.projectName)
+                    }
+                } else {
+                    Text("No project open")
+                        .font(PurePointTheme.smallFont)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
             SidebarFooter()
         }
-        .onChange(of: treeSelection) { _, newValue in
-            if newValue != nil {
-                selection = newValue
+        .onChange(of: appState.worktrees) { _, newValue in
+            let currentIds = Set(newValue.map(\.id))
+            if !didInitialExpand {
+                didInitialExpand = true
+                expandedWorktrees = currentIds
+            } else {
+                expandedWorktrees.formIntersection(currentIds)
             }
         }
-        .onChange(of: selection) { _, newValue in
-            if case .nav = newValue {
-                treeSelection = nil
+    }
+
+    private func binding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedWorktrees.contains(id) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedWorktrees.insert(id)
+                } else {
+                    expandedWorktrees.remove(id)
+                }
             }
-        }
+        )
     }
 }

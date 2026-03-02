@@ -16,7 +16,7 @@ struct SidebarFooter: View {
 
                 Text("Settings")
                     .font(PurePointTheme.smallFont)
-                    .foregroundStyle(PurePointTheme.secondaryText)
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
@@ -41,5 +41,4 @@ struct SidebarFooter: View {
 #Preview {
     SidebarFooter()
         .frame(width: 240)
-        .preferredColorScheme(.dark)
 }

@@ -16,6 +16,5 @@ struct ContentView: View {
             DetailView(selection: selection)
         }
         .navigationTitle("PurePoint")
-        .background(WindowConfigurator())
     }
 }
