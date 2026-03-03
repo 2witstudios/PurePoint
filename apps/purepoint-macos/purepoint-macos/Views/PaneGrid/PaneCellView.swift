@@ -84,43 +84,44 @@ private struct HoverOverlay: View {
     @Environment(GridState.self) private var gridState
 
     var body: some View {
-        HStack {
-            Spacer()
-            if isHovered {
-                HStack(spacing: 4) {
-                    if gridState.canSplit(axis: .vertical) {
-                        overlayButton(icon: "rectangle.split.1x2", tooltip: "Split Right") {
-                            gridState.focusedLeafId = leafId
-                            gridState.splitFocused(axis: .vertical)
-                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
-                        }
-                    }
-                    if gridState.canSplit(axis: .horizontal) {
-                        overlayButton(icon: "rectangle.split.2x1", tooltip: "Split Below") {
-                            gridState.focusedLeafId = leafId
-                            gridState.splitFocused(axis: .horizontal)
-                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
-                        }
-                    }
-                    if gridState.leafCount > 1 {
-                        overlayButton(icon: "xmark", tooltip: "Close Pane") {
-                            gridState.focusedLeafId = leafId
-                            gridState.closeFocused()
-                        }
-                    }
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
+                    isHovered = hovering
                 }
-                .padding(6)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
-                .padding(8)
-                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
-                isHovered = hovering
+            .overlay(alignment: .topTrailing) {
+                if isHovered {
+                    HStack(spacing: 4) {
+                        if gridState.canSplit(axis: .vertical) {
+                            overlayButton(icon: "rectangle.split.1x2", tooltip: "Split Right") {
+                                gridState.focusedLeafId = leafId
+                                gridState.splitFocused(axis: .vertical)
+                                gridState.pendingPaletteLeafId = gridState.focusedLeafId
+                            }
+                        }
+                        if gridState.canSplit(axis: .horizontal) {
+                            overlayButton(icon: "rectangle.split.2x1", tooltip: "Split Below") {
+                                gridState.focusedLeafId = leafId
+                                gridState.splitFocused(axis: .horizontal)
+                                gridState.pendingPaletteLeafId = gridState.focusedLeafId
+                            }
+                        }
+                        if gridState.leafCount > 1 {
+                            overlayButton(icon: "xmark", tooltip: "Close Pane") {
+                                gridState.focusedLeafId = leafId
+                                gridState.closeFocused()
+                            }
+                        }
+                    }
+                    .padding(6)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(8)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                }
             }
-        }
     }
 
     private func overlayButton(icon: String, tooltip: String, action: @escaping () -> Void) -> some View {

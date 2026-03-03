@@ -108,6 +108,24 @@ indirect enum PaneSplitNode: Equatable {
         }
     }
 
+    /// Update the ratio for a split identified by its first child's first leaf ID.
+    func settingRatio(_ newRatio: CGFloat, forSplitIdentifiedByFirstLeaf targetLeafId: Int) -> PaneSplitNode {
+        switch self {
+        case .leaf:
+            return self
+        case .split(let axis, let ratio, let first, let second):
+            if first.allLeafIds.first == targetLeafId {
+                return .split(axis: axis, ratio: newRatio, first: first, second: second)
+            }
+            return .split(
+                axis: axis,
+                ratio: ratio,
+                first: first.settingRatio(newRatio, forSplitIdentifiedByFirstLeaf: targetLeafId),
+                second: second.settingRatio(newRatio, forSplitIdentifiedByFirstLeaf: targetLeafId)
+            )
+        }
+    }
+
     /// Set the agent for a specific leaf.
     func settingAgent(_ agentId: String?, forLeafId targetId: Int) -> PaneSplitNode {
         switch self {
@@ -122,6 +140,64 @@ indirect enum PaneSplitNode: Equatable {
                 first: first.settingAgent(agentId, forLeafId: targetId),
                 second: second.settingAgent(agentId, forLeafId: targetId)
             )
+        }
+    }
+
+    // MARK: - Spatial Navigation
+
+    /// Find the nearest leaf in the given direction from the specified leaf.
+    /// Walks up the tree to find the nearest ancestor split matching the axis,
+    /// then descends into the opposite child's nearest leaf.
+    func findAdjacentLeaf(from leafId: Int, axis: Axis, forward: Bool) -> Int? {
+        // Build path from root to the target leaf
+        guard let path = pathTo(leafId: leafId) else { return nil }
+
+        // Walk backwards through path to find nearest split matching the requested axis
+        for i in stride(from: path.count - 1, through: 0, by: -1) {
+            let step = path[i]
+            guard case .split(let splitAxis, _, let first, let second) = step.node,
+                  splitAxis == axis else { continue }
+
+            let isInFirst = step.wentFirst
+            // If forward and in first child, go to second's nearest leaf (front edge)
+            // If backward and in second child, go to first's nearest leaf (back edge)
+            if forward && isInFirst {
+                return second.allLeafIds.first
+            } else if !forward && !isInFirst {
+                return first.allLeafIds.last
+            }
+        }
+        return nil
+    }
+
+    /// Find the first leaf in the sibling subtree of the given leaf.
+    /// Used for smarter focus after close — focuses the pane that fills the vacated space.
+    func siblingLeafId(of leafId: Int) -> Int? {
+        guard let path = pathTo(leafId: leafId), !path.isEmpty else { return nil }
+        let lastStep = path.last!
+        guard case .split(_, _, let first, let second) = lastStep.node else { return nil }
+        let sibling = lastStep.wentFirst ? second : first
+        return sibling.allLeafIds.first
+    }
+
+    private struct PathStep {
+        let node: PaneSplitNode
+        let wentFirst: Bool // true if we descended into 'first' child
+    }
+
+    /// Build the path from root to the leaf with the given ID.
+    private func pathTo(leafId: Int) -> [PathStep]? {
+        switch self {
+        case .leaf(let id, _):
+            return id == leafId ? [] : nil
+        case .split(_, _, let first, let second):
+            if let subpath = first.pathTo(leafId: leafId) {
+                return [PathStep(node: self, wentFirst: true)] + subpath
+            }
+            if let subpath = second.pathTo(leafId: leafId) {
+                return [PathStep(node: self, wentFirst: false)] + subpath
+            }
+            return nil
         }
     }
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Recursively renders a PaneSplitNode tree as nested split views.
+/// Recursively renders a PaneSplitNode tree as nested draggable split views.
 struct PaneGridView: View {
     @Environment(GridState.self) private var gridState
 
@@ -21,23 +21,14 @@ struct PaneGridView: View {
             )
 
         case .split(let axis, let ratio, let first, let second):
+            let splitId = first.allLeafIds.first ?? 0
             return AnyView(
-                GeometryReader { geo in
-                    if axis == .vertical {
-                        HStack(spacing: 1) {
-                            nodeView(first)
-                                .frame(width: geo.size.width * ratio)
-                            Divider()
-                            nodeView(second)
-                        }
-                    } else {
-                        VStack(spacing: 1) {
-                            nodeView(first)
-                                .frame(height: geo.size.height * ratio)
-                            Divider()
-                            nodeView(second)
-                        }
-                    }
+                DraggableSplit(axis: axis, ratio: ratio, onRatioChanged: { newRatio in
+                    gridState.updateRatio(newRatio, forSplitIdentifiedByFirstLeaf: splitId)
+                }) {
+                    nodeView(first)
+                } second: {
+                    nodeView(second)
                 }
             )
         }

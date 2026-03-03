@@ -3,10 +3,13 @@ import SwiftUI
 struct DetailView: View {
     let selection: SidebarSelection?
     @Environment(AppState.self) private var appState
+    @Environment(GridState.self) private var gridState
 
     var body: some View {
         Group {
-            if let selection {
+            if gridState.isActive {
+                PaneGridView()
+            } else if let selection {
                 selectedContent(selection)
             } else {
                 placeholderContent

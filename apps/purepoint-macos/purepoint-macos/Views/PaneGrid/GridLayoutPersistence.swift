@@ -25,6 +25,18 @@ final class GridLayoutNode: Codable, Sendable {
     }
 }
 
+/// Top-level persisted grid state including ownership.
+struct PersistedGridLayout: Codable {
+    let ownerAgentId: String?
+    let tree: GridLayoutNode
+}
+
+/// Result of loading a persisted grid.
+struct RestoredGrid {
+    let root: PaneSplitNode
+    let ownerAgentId: String?
+}
+
 enum GridLayoutPersistence {
     private static func filePath(projectRoot: String) -> String {
         (projectRoot as NSString)
@@ -32,21 +44,32 @@ enum GridLayoutPersistence {
             .appending("/grid-layout.json")
     }
 
-    static func save(_ node: PaneSplitNode, projectRoot: String) {
-        let layout = node.toLayoutNode()
-        guard let data = try? JSONEncoder().encode(layout) else { return }
+    static func save(_ node: PaneSplitNode, ownerAgentId: String?, projectRoot: String) {
+        let persisted = PersistedGridLayout(ownerAgentId: ownerAgentId, tree: node.toLayoutNode())
+        guard let data = try? JSONEncoder().encode(persisted) else { return }
         let path = filePath(projectRoot: projectRoot)
         try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
-    static func load(projectRoot: String) -> PaneSplitNode? {
+    static func load(projectRoot: String) -> RestoredGrid? {
         let path = filePath(projectRoot: projectRoot)
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let layout = try? JSONDecoder().decode(GridLayoutNode.self, from: data) else {
-            return nil
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+
+        // Try new format first (with ownerAgentId)
+        if let persisted = try? JSONDecoder().decode(PersistedGridLayout.self, from: data) {
+            var nextId = 0
+            let root = PaneSplitNode.fromLayoutNode(persisted.tree, nextId: &nextId)
+            return RestoredGrid(root: root, ownerAgentId: persisted.ownerAgentId)
         }
-        var nextId = 0
-        return PaneSplitNode.fromLayoutNode(layout, nextId: &nextId)
+
+        // Fall back to legacy format (bare GridLayoutNode)
+        if let layout = try? JSONDecoder().decode(GridLayoutNode.self, from: data) {
+            var nextId = 0
+            let root = PaneSplitNode.fromLayoutNode(layout, nextId: &nextId)
+            return RestoredGrid(root: root, ownerAgentId: nil)
+        }
+
+        return nil
     }
 
     static func clear(projectRoot: String) {

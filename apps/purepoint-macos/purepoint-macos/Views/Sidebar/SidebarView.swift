@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
+    @Environment(GridState.self) private var gridState
     @State private var expandedWorktrees: Set<String> = []
     @State private var didInitialExpand = false
 
@@ -21,8 +22,8 @@ struct SidebarView: View {
                     DisclosureGroup(
                         isExpanded: .constant(true)
                     ) {
-                        ForEach(appState.rootAgents) { agent in
-                            AgentRow(agent: agent)
+                        ForEach(visibleRootAgents) { agent in
+                            AgentRow(agent: agent, isGridOwner: agent.id == gridState.ownerAgentId)
                                 .tag(SidebarSelection.agent(agent.id))
                         }
 
@@ -30,8 +31,8 @@ struct SidebarView: View {
                             DisclosureGroup(
                                 isExpanded: binding(for: worktree.id)
                             ) {
-                                ForEach(worktree.agents) { agent in
-                                    AgentRow(agent: agent)
+                                ForEach(visibleAgents(in: worktree)) { agent in
+                                    AgentRow(agent: agent, isGridOwner: agent.id == gridState.ownerAgentId)
                                         .tag(SidebarSelection.agent(agent.id))
                                 }
                             } label: {
@@ -70,6 +71,18 @@ struct SidebarView: View {
                 expandedWorktrees.formIntersection(currentIds)
             }
         }
+    }
+
+    /// Root agents visible in the sidebar (excludes grid children).
+    private var visibleRootAgents: [AgentModel] {
+        let hidden = gridState.childAgentIds
+        return appState.rootAgents.filter { !hidden.contains($0.id) }
+    }
+
+    /// Worktree agents visible in the sidebar (excludes grid children).
+    private func visibleAgents(in worktree: WorktreeModel) -> [AgentModel] {
+        let hidden = gridState.childAgentIds
+        return worktree.agents.filter { !hidden.contains($0.id) }
     }
 
     private func binding(for id: String) -> Binding<Bool> {

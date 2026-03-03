@@ -23,6 +23,70 @@ nonisolated enum KillTarget: Encodable {
     }
 }
 
+/// Grid command payload matching Rust GridCommand.
+nonisolated enum GridCommandPayload: Codable {
+    case split(leafId: Int?, axis: String)
+    case close(leafId: Int?)
+    case focus(leafId: Int?, direction: String?)
+    case setAgent(leafId: UInt32, agentId: String)
+    case getLayout
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case leafId = "leaf_id"
+        case axis
+        case direction
+        case agentId = "agent_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let action = try container.decode(String.self, forKey: .action)
+        switch action {
+        case "split":
+            let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
+            let axis = try container.decodeIfPresent(String.self, forKey: .axis) ?? "v"
+            self = .split(leafId: leafId, axis: axis)
+        case "close":
+            let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
+            self = .close(leafId: leafId)
+        case "focus":
+            let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
+            let direction = try container.decodeIfPresent(String.self, forKey: .direction)
+            self = .focus(leafId: leafId, direction: direction)
+        case "set_agent":
+            let leafId = try container.decode(UInt32.self, forKey: .leafId)
+            let agentId = try container.decode(String.self, forKey: .agentId)
+            self = .setAgent(leafId: leafId, agentId: agentId)
+        default:
+            self = .getLayout
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        switch self {
+        case .split(let leafId, let axis):
+            try container.encode("split", forKey: .key("action"))
+            if let leafId { try container.encode(leafId, forKey: .key("leaf_id")) }
+            try container.encode(axis, forKey: .key("axis"))
+        case .close(let leafId):
+            try container.encode("close", forKey: .key("action"))
+            if let leafId { try container.encode(leafId, forKey: .key("leaf_id")) }
+        case .focus(let leafId, let direction):
+            try container.encode("focus", forKey: .key("action"))
+            if let leafId { try container.encode(leafId, forKey: .key("leaf_id")) }
+            if let direction { try container.encode(direction, forKey: .key("direction")) }
+        case .setAgent(let leafId, let agentId):
+            try container.encode("set_agent", forKey: .key("action"))
+            try container.encode(leafId, forKey: .key("leaf_id"))
+            try container.encode(agentId, forKey: .key("agent_id"))
+        case .getLayout:
+            try container.encode("get_layout", forKey: .key("action"))
+        }
+    }
+}
+
 nonisolated enum DaemonRequest: Encodable {
     case health
     case initProject(projectRoot: String)
@@ -34,6 +98,8 @@ nonisolated enum DaemonRequest: Encodable {
                name: String? = nil, base: String? = nil, root: Bool = false,
                worktree: String? = nil)
     case kill(projectRoot: String, target: KillTarget)
+    case subscribeGrid(projectRoot: String)
+    case gridCommand(projectRoot: String, command: GridCommandPayload)
     case shutdown
 
     func encode(to encoder: Encoder) throws {
@@ -73,6 +139,13 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("kill", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(target, forKey: .key("target"))
+        case .subscribeGrid(let projectRoot):
+            try container.encode("subscribe_grid", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .gridCommand(let projectRoot, let command):
+            try container.encode("grid_command", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(command, forKey: .key("command"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
@@ -87,6 +160,9 @@ nonisolated enum DaemonResponse: Decodable {
     case output(agentId: String, data: Data)
     case spawnResult(worktreeId: String?, agentId: String, status: String)
     case killResult(killed: [String])
+    case gridSubscribed
+    case gridLayout(layout: Data)
+    case gridEvent(projectRoot: String, command: GridCommandPayload)
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -123,6 +199,14 @@ nonisolated enum DaemonResponse: Decodable {
         case "kill_result":
             let p = try KillResultPayload(from: decoder)
             self = .killResult(killed: p.killed)
+        case "grid_subscribed":
+            self = .gridSubscribed
+        case "grid_layout":
+            let p = try GridLayoutPayload(from: decoder)
+            self = .gridLayout(layout: p.layoutData)
+        case "grid_event":
+            let p = try GridEventPayload(from: decoder)
+            self = .gridEvent(projectRoot: p.projectRoot, command: p.command)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -229,6 +313,70 @@ private struct KillResultPayload: Decodable {
 private struct ErrorPayload: Decodable {
     let code: String
     let message: String
+}
+
+private struct GridLayoutPayload: Decodable {
+    let layout: AnyCodable
+
+    var layoutData: Data {
+        (try? JSONEncoder().encode(layout)) ?? Data()
+    }
+
+    enum CodingKeys: String, CodingKey { case layout }
+}
+
+/// Minimal wrapper so we can round-trip arbitrary JSON.
+private struct AnyCodable: Codable {
+    let value: Any
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let dict = try? container.decode([String: AnyCodable].self) {
+            value = dict.mapValues(\.value)
+        } else if let arr = try? container.decode([AnyCodable].self) {
+            value = arr.map(\.value)
+        } else if let str = try? container.decode(String.self) {
+            value = str
+        } else if let num = try? container.decode(Double.self) {
+            value = num
+        } else if let bool = try? container.decode(Bool.self) {
+            value = bool
+        } else if container.decodeNil() {
+            value = NSNull()
+        } else {
+            value = NSNull()
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let dict as [String: Any]:
+            try container.encode(dict.mapValues { AnyCodable(value: $0) })
+        case let arr as [Any]:
+            try container.encode(arr.map { AnyCodable(value: $0) })
+        case let str as String:
+            try container.encode(str)
+        case let num as Double:
+            try container.encode(num)
+        case let bool as Bool:
+            try container.encode(bool)
+        default:
+            try container.encodeNil()
+        }
+    }
+
+    init(value: Any) { self.value = value }
+}
+
+private struct GridEventPayload: Decodable {
+    let projectRoot: String
+    let command: GridCommandPayload
+
+    enum CodingKeys: String, CodingKey {
+        case projectRoot = "project_root"
+        case command
+    }
 }
 
 // MARK: - DaemonClient

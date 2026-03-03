@@ -8,13 +8,13 @@ import Foundation
 final class TerminalViewCache {
     @ObservationIgnored private var views: [String: TerminalPaneNSView] = [:]
     @ObservationIgnored private var lastAccess: [String: Date] = [:]
-    @ObservationIgnored private var visibleAgentId: String?
+    @ObservationIgnored private var visibleAgentIds: Set<String> = []
     @ObservationIgnored private var evictionTimer: Timer?
     private static let evictionDelay: TimeInterval = 30
 
     init() {
         evictionTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            self?.evictStale(visibleId: self?.visibleAgentId)
+            self?.evictStale(visibleIds: self?.visibleAgentIds ?? [])
         }
     }
 
@@ -38,13 +38,21 @@ final class TerminalViewCache {
         return view
     }
 
-    /// Show the terminal for a given agent, hiding all others.
-    func show(agentId: String) {
-        visibleAgentId = agentId
-        lastAccess[agentId] = Date()
-        for (id, view) in views {
-            view.isHidden = (id != agentId)
+    /// Show terminals for multiple agents (grid mode), hiding all others.
+    func showMultiple(agentIds: Set<String>) {
+        visibleAgentIds = agentIds
+        let now = Date()
+        for id in agentIds {
+            lastAccess[id] = now
         }
+        for (id, view) in views {
+            view.isHidden = !agentIds.contains(id)
+        }
+    }
+
+    /// Show the terminal for a single agent, hiding all others.
+    func show(agentId: String) {
+        showMultiple(agentIds: [agentId])
     }
 
     /// Hide all terminal views.
@@ -72,12 +80,12 @@ final class TerminalViewCache {
 
     /// Evict terminal views for completed/killed/failed agents that haven't
     /// been viewed in evictionDelay seconds and are not currently visible.
-    private func evictStale(visibleId: String? = nil) {
+    private func evictStale(visibleIds: Set<String> = []) {
         let now = Date()
         var toEvict: [String] = []
 
         for (id, view) in views {
-            guard id != visibleId else { continue }
+            guard !visibleIds.contains(id) else { continue }
             guard view.agent.status.isTerminal else { continue }
             guard let access = lastAccess[id],
                   now.timeIntervalSince(access) > Self.evictionDelay else { continue }
