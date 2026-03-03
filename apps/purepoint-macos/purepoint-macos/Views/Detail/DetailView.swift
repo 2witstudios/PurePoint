@@ -35,7 +35,7 @@ struct DetailView: View {
         case .agent(let id):
             if let agent = appState.agent(byId: id) {
                 ZStack(alignment: .topTrailing) {
-                    TerminalContainerView(agent: agent)
+                    TerminalContainerView(agent: agent, isFocused: appState.pendingFocusAgentId == id)
                     SinglePaneSplitOverlay(agentId: id)
                 }
             } else {

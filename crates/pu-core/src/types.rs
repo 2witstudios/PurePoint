@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -60,7 +61,7 @@ pub struct WorktreeEntry {
     pub branch: String,
     pub base_branch: Option<String>,
     pub status: WorktreeStatus,
-    pub agents: HashMap<String, AgentEntry>,
+    pub agents: IndexMap<String, AgentEntry>,
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_at: Option<DateTime<Utc>>,
@@ -71,9 +72,9 @@ pub struct WorktreeEntry {
 pub struct Manifest {
     pub version: u32,
     pub project_root: String,
-    pub worktrees: HashMap<String, WorktreeEntry>,
+    pub worktrees: IndexMap<String, WorktreeEntry>,
     #[serde(default)]
-    pub agents: HashMap<String, AgentEntry>,
+    pub agents: IndexMap<String, AgentEntry>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -84,8 +85,8 @@ impl Manifest {
         Self {
             version: 1,
             project_root,
-            worktrees: HashMap::new(),
-            agents: HashMap::new(),
+            worktrees: IndexMap::new(),
+            agents: IndexMap::new(),
             created_at: now,
             updated_at: now,
         }
@@ -323,7 +324,7 @@ mod tests {
 
     #[test]
     fn given_worktree_entry_should_round_trip_json() {
-        let mut agents = std::collections::HashMap::new();
+        let mut agents = IndexMap::new();
         agents.insert(
             "ag-1".to_string(),
             AgentEntry {
@@ -395,7 +396,7 @@ mod tests {
     #[test]
     fn given_manifest_with_worktree_agent_should_find_by_id() {
         let mut m = Manifest::new("/test".into());
-        let mut agents = std::collections::HashMap::new();
+        let mut agents = IndexMap::new();
         agents.insert(
             "ag-2".to_string(),
             AgentEntry {
@@ -450,7 +451,7 @@ mod tests {
             session_id: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
-        let mut wt_agents = std::collections::HashMap::new();
+        let mut wt_agents = IndexMap::new();
         wt_agents.insert("ag-wt".to_string(), make_agent("ag-wt"));
         m.worktrees.insert(
             "wt-1".into(),

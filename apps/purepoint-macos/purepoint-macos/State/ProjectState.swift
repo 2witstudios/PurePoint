@@ -179,8 +179,13 @@ final class ProjectState: Identifiable {
                     projectRoot: root, prompt: prompt ?? "", agent: variant.id,
                     root: spawnRoot, worktree: spawnWorktree
                 ))
-                if case .error(_, let message) = response {
+                switch response {
+                case .spawnResult(_, let agentId, _):
+                    self.appState?.pendingSelectAgentId = agentId
+                case .error(_, let message):
                     self.appState?.daemonError = message
+                default:
+                    break
                 }
             } catch {
                 self.appState?.daemonError = error.localizedDescription

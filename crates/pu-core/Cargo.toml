@@ -13,6 +13,7 @@ chrono = { workspace = true }
 nanoid = "0.4"
 rand = "0.8"
 uuid = { workspace = true }
+indexmap = { workspace = true }
 fs4 = "0.12"
 
 [dev-dependencies]

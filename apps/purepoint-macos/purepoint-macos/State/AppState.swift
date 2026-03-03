@@ -10,6 +10,8 @@ final class AppState {
     var selectedAgentId: String?
     var activeProjectRoot: String?
     var daemonError: String?
+    var pendingSelectAgentId: String?
+    var pendingFocusAgentId: String?
 
     weak var gridState: GridState?
 

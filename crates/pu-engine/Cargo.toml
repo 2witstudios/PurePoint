@@ -10,6 +10,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+indexmap = { workspace = true }
 tokio = { workspace = true }
 nix = { version = "0.29", features = ["term", "signal", "process", "fs"] }
 libc = "0.2"

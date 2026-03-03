@@ -229,6 +229,7 @@ struct AgentStatusReport: Decodable {
     let exitCode: Int?
     let idleSeconds: Int?
     let worktreeId: String?
+    let startedAt: String?
 
     private enum CodingKeys: String, CodingKey {
         case id, name, status, pid
@@ -236,6 +237,7 @@ struct AgentStatusReport: Decodable {
         case exitCode = "exit_code"
         case idleSeconds = "idle_seconds"
         case worktreeId = "worktree_id"
+        case startedAt = "started_at"
     }
 
     init(from decoder: Decoder) throws {
@@ -248,6 +250,7 @@ struct AgentStatusReport: Decodable {
         exitCode = try container.decodeIfPresent(Int.self, forKey: .exitCode)
         idleSeconds = try container.decodeIfPresent(Int.self, forKey: .idleSeconds)
         worktreeId = try container.decodeIfPresent(String.self, forKey: .worktreeId)
+        startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
     }
 }
 

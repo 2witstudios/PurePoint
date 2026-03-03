@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
@@ -199,6 +200,7 @@ pub struct AgentStatusReport {
     pub exit_code: Option<i32>,
     pub idle_seconds: Option<u64>,
     pub worktree_id: Option<String>,
+    pub started_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

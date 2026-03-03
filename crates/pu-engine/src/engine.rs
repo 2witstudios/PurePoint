@@ -11,6 +11,7 @@ use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
 use pu_core::protocol::{AgentStatusReport, GridCommand, KillTarget, Request, Response, PROTOCOL_VERSION};
+use indexmap::IndexMap;
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 
 use crate::agent_monitor;
@@ -185,6 +186,7 @@ impl Engine {
                         exit_code,
                         idle_seconds,
                         worktree_id: wt_id,
+                        started_at: agent.started_at,
                     })
                 }
                 None => Self::agent_not_found(id),
@@ -192,7 +194,7 @@ impl Engine {
         } else {
             // Compute live status for all agents (root + worktree)
             let sessions = self.sessions.lock().await;
-            let agents = m
+            let mut agents: Vec<AgentStatusReport> = m
                 .agents
                 .values()
                 .map(|a| {
@@ -207,9 +209,11 @@ impl Engine {
                         exit_code,
                         idle_seconds,
                         worktree_id: None,
+                        started_at: a.started_at,
                     }
                 })
                 .collect();
+            agents.sort_by_key(|a| a.started_at);
             let worktrees: Vec<WorktreeEntry> = m
                 .worktrees
                 .into_values()
@@ -434,7 +438,7 @@ impl Engine {
                         branch: format!("pu/{agent_name}"),
                         base_branch: Some(base_branch.clone()),
                         status: WorktreeStatus::Active,
-                        agents: HashMap::new(),
+                        agents: IndexMap::new(),
                         created_at: chrono::Utc::now(),
                         merged_at: None,
                     }
@@ -528,9 +532,9 @@ impl Engine {
         tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
                 for id in &killed_ids {
-                    m.agents.remove(id);
+                    m.agents.shift_remove(id);
                     for wt in m.worktrees.values_mut() {
-                        wt.agents.remove(id);
+                        wt.agents.shift_remove(id);
                     }
                 }
                 m

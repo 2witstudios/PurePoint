@@ -21,7 +21,7 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                     agentType: report.agentType,
                     status: AgentStatus(rawValue: report.status) ?? .lost,
                     prompt: "",
-                    startedAt: "",
+                    startedAt: report.startedAt ?? "",
                     sessionId: nil
                 )
             }

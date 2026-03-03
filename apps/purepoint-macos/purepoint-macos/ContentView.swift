@@ -26,6 +26,15 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: appState.daemonError)
+        .onChange(of: appState.pendingSelectAgentId) { _, agentId in
+            guard let agentId else { return }
+            appState.pendingSelectAgentId = nil
+            appState.pendingFocusAgentId = agentId
+            selection = .agent(agentId)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                appState.pendingFocusAgentId = nil
+            }
+        }
         .onChange(of: selection) { _, newValue in
             // Track active project for Cmd+N routing
             switch newValue {

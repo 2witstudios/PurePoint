@@ -19,3 +19,4 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
+indexmap = { version = "2", features = ["serde"] }
