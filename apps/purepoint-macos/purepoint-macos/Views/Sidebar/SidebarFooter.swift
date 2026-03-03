@@ -10,7 +10,7 @@ struct SidebarFooter: View {
 
             HStack {
                 Button {
-                    // No-op
+                    appState.showSettings = true
                 } label: {
                     Image(systemName: "gear")
                         .foregroundStyle(.secondary)
@@ -56,8 +56,8 @@ struct SidebarFooter: View {
     private func showCommandPalette() {
         guard let project = activeProject else { return }
         let sel = selection
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
-            project.createAgent(variant: variant, prompt: prompt, selection: sel)
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt, name in
+            project.createAgent(variant: variant, prompt: prompt, name: name, selection: sel)
         }
     }
 }

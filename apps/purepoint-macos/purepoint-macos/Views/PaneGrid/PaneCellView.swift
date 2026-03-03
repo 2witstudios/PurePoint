@@ -71,7 +71,7 @@ private struct PanePlaceholderView: View {
         let state = appState
         let gs = gridState
         let lid = leafId
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt, _ in
             let project = state.projectState(forRoot: gs.projectRoot ?? "")
             project?.spawnAgentForPane(variant: variant, prompt: prompt, leafId: lid, gridState: gs)
         }

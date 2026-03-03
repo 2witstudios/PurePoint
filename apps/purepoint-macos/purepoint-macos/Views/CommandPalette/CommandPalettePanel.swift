@@ -73,20 +73,20 @@ class CommandPalettePanel: NSPanel {
     static func show(
         relativeTo window: NSWindow?,
         variants: [AgentVariant] = AgentVariant.allVariants,
-        onSelect: @escaping (AgentVariant, String?) -> Void
+        onSelect: @escaping (AgentVariant, String?, String?) -> Void
     ) -> CommandPalettePanel {
         let panel = CommandPalettePanel()
         guard let vc = panel.contentViewController as? CommandPaletteViewController else {
             return panel
         }
-        vc.availableVariants = variants
-        vc.onSelect = { variant, prompt in
+        vc.onSelect = { variant, prompt, name in
             panel.dismiss()
-            onSelect(variant, prompt)
+            onSelect(variant, prompt, name)
         }
         vc.onDismiss = {
             panel.dismiss()
         }
+        vc.setVariants(variants)
         panel.showRelativeTo(window: window)
         return panel
     }
@@ -96,7 +96,7 @@ class CommandPalettePanel: NSPanel {
 
 class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTextViewDelegate {
 
-    var onSelect: ((AgentVariant, String?) -> Void)?
+    var onSelect: ((AgentVariant, String?, String?) -> Void)?
     var onDismiss: (() -> Void)?
 
     private enum Phase {
@@ -118,14 +118,19 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private let promptHeader = NSStackView()
     private let promptHeaderIcon = NSImageView()
     private let promptHeaderLabel = NSTextField(labelWithString: "")
+    private let nameLabel = NSTextField(labelWithString: "Name")
+    private let nameField = NSTextField()
+    private let slugPreview = NSTextField(labelWithString: "")
     private let promptScrollView = NSScrollView()
     private let promptTextView = NSTextView()
     private let promptHint = NSTextField(labelWithString: "Enter to submit · Shift+Enter for newline")
     private var promptHeightConstraint: NSLayoutConstraint!
+    private var nameFieldConstraints: [NSLayoutConstraint] = []
 
     // Shared
     private let containerView = NSVisualEffectView()
     private let separatorView = NSBox()
+    private var promptScrollTopConstraint: NSLayoutConstraint?
 
     override func loadView() {
         let wrapper = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 380))
@@ -241,6 +246,27 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHeader.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(promptHeader)
 
+        nameLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        nameLabel.textColor = .secondaryLabelColor
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(nameLabel)
+
+        nameField.placeholderString = "e.g., fix-auth-bug"
+        nameField.isBordered = true
+        nameField.isBezeled = true
+        nameField.bezelStyle = .roundedBezel
+        nameField.focusRingType = .default
+        nameField.font = .systemFont(ofSize: 14)
+        nameField.textColor = .labelColor
+        nameField.delegate = self
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(nameField)
+
+        slugPreview.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        slugPreview.textColor = .tertiaryLabelColor
+        slugPreview.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(slugPreview)
+
         promptTextView.isEditable = true
         promptTextView.isRichText = false
         promptTextView.allowsUndo = true
@@ -275,12 +301,25 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
         promptHeightConstraint = promptScrollView.heightAnchor.constraint(equalToConstant: 60)
 
+        nameFieldConstraints = [
+            nameLabel.topAnchor.constraint(equalTo: promptHeader.bottomAnchor, constant: 12),
+            nameLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+
+            nameField.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
+            nameField.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+            nameField.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+            nameField.heightAnchor.constraint(equalToConstant: 24),
+
+            slugPreview.topAnchor.constraint(equalTo: nameField.bottomAnchor, constant: 4),
+            slugPreview.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+            slugPreview.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+        ]
+
         NSLayoutConstraint.activate([
             promptHeader.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 16),
             promptHeader.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
             promptHeader.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
 
-            promptScrollView.topAnchor.constraint(equalTo: promptHeader.bottomAnchor, constant: 16),
             promptScrollView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
             promptScrollView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
             promptHeightConstraint,
@@ -289,6 +328,17 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
             promptHint.topAnchor.constraint(equalTo: promptScrollView.bottomAnchor, constant: 12),
             promptHint.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
         ])
+    }
+
+    // MARK: - Configuration
+
+    func setVariants(_ variants: [AgentVariant]) {
+        availableVariants = variants
+        filteredVariants = variants
+        selectedIndex = 0
+        tableView.reloadData()
+        updateHighlight()
+        resizePanel(rowCount: filteredVariants.count)
     }
 
     // MARK: - Phase Transitions
@@ -306,6 +356,11 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHeader.isHidden = true
         promptScrollView.isHidden = true
         promptHint.isHidden = true
+        nameLabel.isHidden = true
+        nameField.isHidden = true
+        slugPreview.isHidden = true
+        NSLayoutConstraint.deactivate(nameFieldConstraints)
+        promptScrollTopConstraint?.isActive = false
 
         tableView.reloadData()
         updateHighlight()
@@ -332,13 +387,31 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptTextView.string = ""
         promptTextView.setPlaceholder(variant.promptPlaceholder)
 
+        let showName = variant.kind == .worktree
+        nameLabel.isHidden = !showName
+        nameField.isHidden = !showName
+        slugPreview.isHidden = !showName
+        nameField.stringValue = ""
+        slugPreview.stringValue = ""
+
+        // Swap the dynamic top constraint for promptScrollView
+        promptScrollTopConstraint?.isActive = false
+        if showName {
+            NSLayoutConstraint.activate(nameFieldConstraints)
+            promptScrollTopConstraint = promptScrollView.topAnchor.constraint(equalTo: slugPreview.bottomAnchor, constant: 12)
+        } else {
+            NSLayoutConstraint.deactivate(nameFieldConstraints)
+            promptScrollTopConstraint = promptScrollView.topAnchor.constraint(equalTo: promptHeader.bottomAnchor, constant: 16)
+        }
+        promptScrollTopConstraint?.isActive = true
+
         promptHeader.isHidden = false
         promptScrollView.isHidden = false
         promptHint.isHidden = false
 
         promptHeightConstraint.constant = 60
 
-        let panelHeight: CGFloat = 170
+        let panelHeight: CGFloat = showName ? 260 : 170
         if let panel = view.window as? CommandPalettePanel {
             var frame = panel.frame
             let dy = frame.height - panelHeight
@@ -348,7 +421,11 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         }
 
         DispatchQueue.main.async { [weak self] in
-            self?.view.window?.makeFirstResponder(self?.promptTextView)
+            if showName {
+                self?.view.window?.makeFirstResponder(self?.nameField)
+            } else {
+                self?.view.window?.makeFirstResponder(self?.promptTextView)
+            }
         }
     }
 
@@ -412,7 +489,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private func submitPrompt() {
         guard case .prompt(let variant) = phase else { return }
         let prompt = promptTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        onSelect?(variant, prompt.isEmpty ? nil : prompt)
+        let name = nameField.isHidden ? nil : nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        onSelect?(variant, prompt.isEmpty ? nil : prompt, name?.isEmpty == true ? nil : name)
     }
 
     func handleEscape() {
@@ -435,13 +513,22 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     // MARK: - NSTextFieldDelegate
 
     func controlTextDidChange(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField, field === searchField else { return }
-        filterVariants(query: field.stringValue)
+        guard let field = obj.object as? NSTextField else { return }
+        if field === searchField {
+            filterVariants(query: field.stringValue)
+        } else if field === nameField {
+            updateSlugPreview()
+        }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === searchField else { return false }
-        return handleSearchFieldCommand(commandSelector)
+        if control === searchField {
+            return handleSearchFieldCommand(commandSelector)
+        }
+        if control === nameField {
+            return handleNameFieldCommand(commandSelector)
+        }
+        return false
     }
 
     // MARK: - NSTextViewDelegate
@@ -493,6 +580,44 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         default:
             return false
         }
+    }
+
+    private func handleNameFieldCommand(_ sel: Selector) -> Bool {
+        switch sel {
+        case #selector(NSResponder.insertNewline(_:)),
+             #selector(NSResponder.insertTab(_:)):
+            view.window?.makeFirstResponder(promptTextView)
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            handleEscape()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func updateSlugPreview() {
+        let raw = nameField.stringValue
+        let slug = Self.normalizeWorktreeName(raw)
+        slugPreview.stringValue = slug.isEmpty ? "" : "pu/\(slug)"
+    }
+
+    static func normalizeWorktreeName(_ input: String) -> String {
+        let lowered = input.lowercased()
+        var result = ""
+        for ch in lowered {
+            if ch.isASCII && (ch.isLetter || ch.isNumber) {
+                result.append(ch)
+            } else if ch.isWhitespace || ch == "_" {
+                result.append("-")
+            }
+        }
+        // Collapse consecutive hyphens
+        while result.contains("--") {
+            result = result.replacingOccurrences(of: "--", with: "-")
+        }
+        // Trim leading/trailing hyphens
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
     private func adjustPromptHeight() {

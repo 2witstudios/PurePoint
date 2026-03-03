@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
+        @Bindable var appState = appState
+
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selection: $selection)
                 .navigationSplitViewColumnWidth(
@@ -26,6 +28,20 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: appState.daemonError)
+        .overlay {
+            if appState.showSettings {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture { appState.showSettings = false }
+
+                SettingsView()
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+                    .onExitCommand { appState.showSettings = false }
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: appState.showSettings)
         .onChange(of: appState.pendingSelectAgentId) { _, agentId in
             guard let agentId else { return }
             appState.pendingSelectAgentId = nil

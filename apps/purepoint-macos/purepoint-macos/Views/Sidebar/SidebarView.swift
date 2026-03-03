@@ -49,7 +49,7 @@ struct SidebarView: View {
                             }
                         } label: {
                             ProjectRow(name: project.projectName) {
-                                showCommandPalette(for: project, selection: nil)
+                                showCommandPalette(for: project, selection: nil, includeWorktree: true)
                             }
                         }
                         .tag(SidebarSelection.project(project.projectRoot))
@@ -127,9 +127,10 @@ struct SidebarView: View {
         )
     }
 
-    private func showCommandPalette(for project: ProjectState, selection: SidebarSelection?) {
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
-            project.createAgent(variant: variant, prompt: prompt, selection: selection)
+    private func showCommandPalette(for project: ProjectState, selection: SidebarSelection?, includeWorktree: Bool = false) {
+        let variants = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, variants: variants) { variant, prompt, name in
+            project.createAgent(variant: variant, prompt: prompt, name: name, selection: selection)
         }
     }
 }

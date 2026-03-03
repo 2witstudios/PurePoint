@@ -8,7 +8,7 @@ struct AgentVariant: Identifiable {
     let promptPlaceholder: String
     let kind: Kind
 
-    enum Kind { case agent, terminal }
+    enum Kind { case agent, terminal, worktree }
 
     // MARK: - Built-in Variants
 
@@ -48,5 +48,15 @@ struct AgentVariant: Identifiable {
         kind: .terminal
     )
 
+    static let worktree = AgentVariant(
+        id: "claude",
+        displayName: "Worktree",
+        icon: "arrow.triangle.branch",
+        subtitle: "Isolated branch with agent",
+        promptPlaceholder: "Enter prompt...",
+        kind: .worktree
+    )
+
     static let allVariants: [AgentVariant] = [claude, codex, opencode, terminal]
+    static let variantsWithWorktree: [AgentVariant] = allVariants + [worktree]
 }

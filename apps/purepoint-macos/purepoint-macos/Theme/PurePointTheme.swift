@@ -19,6 +19,11 @@ enum PurePointTheme {
     static let windowDefaultWidth: CGFloat = 1000
     static let windowDefaultHeight: CGFloat = 700
 
+    // MARK: - Settings
+    static let settingsWidth: CGFloat = 680
+    static let settingsHeight: CGFloat = 480
+    static let settingsSidebarWidth: CGFloat = 180
+
     // MARK: - Fonts
     static let navFont = Font.system(size: 12, weight: .medium)
     static let treeFont = Font.system(size: 12)

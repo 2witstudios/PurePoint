@@ -42,6 +42,41 @@ pub fn root_agent_name() -> String {
     format!("{first} {last}")
 }
 
+/// Normalize a user-provided name into a git-branch-compatible slug.
+///
+/// - Lowercases
+/// - Replaces whitespace/underscores with hyphens
+/// - Strips anything not `[a-z0-9-]`
+/// - Collapses consecutive hyphens
+/// - Trims leading/trailing hyphens
+pub fn normalize_worktree_name(input: &str) -> String {
+    let lowered = input.to_lowercase();
+    let mut result = String::with_capacity(lowered.len());
+    for ch in lowered.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            result.push(ch);
+        } else if ch.is_whitespace() || ch == '_' {
+            result.push('-');
+        }
+        // else: strip
+    }
+    // Collapse consecutive hyphens
+    let mut collapsed = String::with_capacity(result.len());
+    let mut prev_hyphen = false;
+    for ch in result.chars() {
+        if ch == '-' {
+            if !prev_hyphen {
+                collapsed.push('-');
+            }
+            prev_hyphen = true;
+        } else {
+            collapsed.push(ch);
+            prev_hyphen = false;
+        }
+    }
+    collapsed.trim_matches('-').to_string()
+}
+
 /// Generate a name for worktree agents by mashing up All-NBA names across all positions.
 pub fn worktree_agent_name() -> String {
     const NBA_FIRSTS: &[&str] = &[
@@ -138,5 +173,50 @@ mod tests {
         assert_eq!(parts.len(), 2, "expected 'First Last', got {name}");
         assert!(!parts[0].is_empty());
         assert!(!parts[1].is_empty());
+    }
+
+    #[test]
+    fn given_normal_input_should_normalize_to_slug() {
+        assert_eq!(normalize_worktree_name("Fix Auth Bug"), "fix-auth-bug");
+    }
+
+    #[test]
+    fn given_special_chars_should_strip_them() {
+        assert_eq!(normalize_worktree_name("Fix Auth Bug!!"), "fix-auth-bug");
+    }
+
+    #[test]
+    fn given_underscores_should_replace_with_hyphens() {
+        assert_eq!(normalize_worktree_name("fix_auth_bug"), "fix-auth-bug");
+    }
+
+    #[test]
+    fn given_mixed_case_should_lowercase() {
+        assert_eq!(normalize_worktree_name("MyFeature"), "myfeature");
+    }
+
+    #[test]
+    fn given_consecutive_spaces_should_collapse_hyphens() {
+        assert_eq!(normalize_worktree_name("fix   auth   bug"), "fix-auth-bug");
+    }
+
+    #[test]
+    fn given_leading_trailing_hyphens_should_trim() {
+        assert_eq!(normalize_worktree_name("--fix-bug--"), "fix-bug");
+    }
+
+    #[test]
+    fn given_empty_input_should_return_empty() {
+        assert_eq!(normalize_worktree_name(""), "");
+    }
+
+    #[test]
+    fn given_only_special_chars_should_return_empty() {
+        assert_eq!(normalize_worktree_name("!!!"), "");
+    }
+
+    #[test]
+    fn given_already_valid_slug_should_pass_through() {
+        assert_eq!(normalize_worktree_name("fix-auth-bug"), "fix-auth-bug");
     }
 }
