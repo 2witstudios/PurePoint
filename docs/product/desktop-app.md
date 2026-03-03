@@ -23,7 +23,8 @@ Desktop App
 
 ## Decisions
 
-! [APP-001] One project at a time initially. Recent projects stored in UserDefaults for quick switching.
+? [APP-001] How should multi-project support work?
+Current implementation opens one project at a time with recent projects in UserDefaults for quick switching, but this was not a deliberate design constraint. Options: tabs (like ppg-cli), separate windows (more macOS-native), or unified sidebar with project grouping. Daemon already supports multi-project via `project_root` parameter.
 
 ! [APP-002] Daemon required. Auto-started on project open via `DaemonLifecycle` with `--managed` flag. On app quit, sends `Request::Shutdown` to stop the daemon and all agents. Graceful degradation when daemon is unreachable — sidebar shows empty state, project picker available.
 
