@@ -27,5 +27,5 @@ enum SidebarSelection: Hashable {
     case agent(String)
     case terminal(String)
     case worktree(String)
-    case project(String)
+    case project(String)    // projectRoot path
 }

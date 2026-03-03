@@ -27,6 +27,18 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: appState.daemonError)
         .onChange(of: selection) { _, newValue in
+            // Track active project for Cmd+N routing
+            switch newValue {
+            case .agent(let id):
+                appState.activeProjectRoot = appState.projectState(forAgentId: id)?.projectRoot
+            case .worktree(let id):
+                appState.activeProjectRoot = appState.projectState(forWorktreeId: id)?.projectRoot
+            case .project(let root):
+                appState.activeProjectRoot = root
+            default:
+                break // keep last known project
+            }
+
             guard case .agent(let agentId) = newValue else {
                 // Non-agent selection (nav items, worktrees): suspend grid if active
                 if gridState.isActive { gridState.suspend() }

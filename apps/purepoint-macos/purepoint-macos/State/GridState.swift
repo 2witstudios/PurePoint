@@ -26,6 +26,10 @@ final class GridState {
     /// Set after a UI-initiated split to auto-open the command palette in the new pane.
     var pendingPaletteLeafId: Int?
 
+    /// Leaf IDs with in-flight spawn requests. Used by ProjectState.refresh() to eagerly
+    /// assign new agents to grid leaves before they appear in rootAgents (sidebar leak fix).
+    var pendingSpawnLeafIds: Set<Int> = []
+
     // MARK: - Queries
 
     var leafCount: Int { root.leafCount }

@@ -40,11 +40,24 @@ struct SidebarFooter: View {
         }
     }
 
+    private var activeProject: ProjectState? {
+        switch selection {
+        case .agent(let id):
+            return appState.projectState(forAgentId: id)
+        case .worktree(let id):
+            return appState.projectState(forWorktreeId: id)
+        case .project(let root):
+            return appState.projectState(forRoot: root)
+        default:
+            return appState.projects.first
+        }
+    }
+
     private func showCommandPalette() {
-        let state = appState
+        guard let project = activeProject else { return }
         let sel = selection
         CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
-            state.createAgent(variant: variant, prompt: prompt, selection: sel)
+            project.createAgent(variant: variant, prompt: prompt, selection: sel)
         }
     }
 }

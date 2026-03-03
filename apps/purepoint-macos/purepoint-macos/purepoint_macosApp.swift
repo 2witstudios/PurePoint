@@ -30,8 +30,14 @@ struct purepoint_macosApp: App {
         )
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
-            CommandGroup(after: .newItem) {
-                Button("Open Project...") {
+            CommandGroup(replacing: .newItem) {
+                Button("New Agent\u{2026}") {
+                    showNewAgentPalette()
+                }
+                .keyboardShortcut("n")
+                .disabled(appState.projects.isEmpty)
+
+                Button("Open Project\u{2026}") {
                     openProjectWithPicker()
                 }
                 .keyboardShortcut("o")
@@ -91,16 +97,27 @@ struct purepoint_macosApp: App {
         for (i, arg) in args.enumerated() {
             if arg == "--project-root", i + 1 < args.count {
                 let path = args[i + 1]
-                UserDefaults.standard.set(path, forKey: "PurePointLastProject")
                 appState.openProject(path)
                 return
             }
         }
 
-        // Try last opened project from UserDefaults
-        if let lastProject = UserDefaults.standard.string(forKey: "PurePointLastProject"),
-           FileManager.default.fileExists(atPath: lastProject) {
-            appState.openProject(lastProject)
+        // Restore saved projects from UserDefaults
+        appState.restoreProjects()
+    }
+
+    // MARK: - Command Palette
+
+    private func showNewAgentPalette() {
+        let project: ProjectState?
+        if let root = appState.activeProjectRoot {
+            project = appState.projectState(forRoot: root)
+        } else {
+            project = appState.projects.first
+        }
+        guard let project else { return }
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
+            project.createAgent(variant: variant, prompt: prompt, selection: nil)
         }
     }
 
@@ -123,7 +140,9 @@ struct purepoint_macosApp: App {
         if gridState.isActive {
             gridState.splitFocused(axis: axis)
         } else if let agentId = appState.selectedAgentId {
-            gridState.projectRoot = appState.projectRoot
+            if let project = appState.projectState(forAgentId: agentId) {
+                gridState.projectRoot = project.projectRoot
+            }
             gridState.enterGridMode(agentId: agentId, axis: axis)
         }
         gridState.pendingPaletteLeafId = gridState.focusedLeafId
@@ -137,9 +156,7 @@ struct purepoint_macosApp: App {
         panel.message = "Choose a project directory"
 
         if panel.runModal() == .OK, let url = panel.url {
-            let path = url.path
-            UserDefaults.standard.set(path, forKey: "PurePointLastProject")
-            appState.openProject(path)
+            appState.openProject(url.path)
         }
     }
 }

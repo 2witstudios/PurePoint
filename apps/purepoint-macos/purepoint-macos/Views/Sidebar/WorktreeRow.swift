@@ -50,7 +50,7 @@ struct WorktreeRow: View {
             titleVisibility: .visible
         ) {
             Button("Kill All", role: .destructive) {
-                appState.killWorktreeAgents(worktree.id)
+                appState.projectState(forWorktreeId: worktree.id)?.killWorktreeAgents(worktree.id)
             }
         }
     }

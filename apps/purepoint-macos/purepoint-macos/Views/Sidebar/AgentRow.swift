@@ -38,7 +38,7 @@ struct AgentRow: View {
             titleVisibility: .visible
         ) {
             Button("Kill", role: .destructive) {
-                appState.killAgent(agent.id)
+                appState.projectState(forAgentId: agent.id)?.killAgent(agent.id)
             }
         }
     }
