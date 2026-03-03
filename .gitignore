@@ -48,3 +48,6 @@ build/
 .ppg/agent-prompts/
 .ppg/swarms/
 .ppg/conductor-context.md
+
+# PurePoint runtime
+.pu/
