@@ -73,6 +73,53 @@ enum Commands {
     },
     /// Check daemon health
     Health,
+    /// Control the pane grid layout
+    Grid {
+        #[command(subcommand)]
+        action: GridAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum GridAction {
+    /// Show current grid layout
+    Show {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Split a pane
+    Split {
+        /// Axis: v (vertical/left-right) or h (horizontal/top-bottom)
+        #[arg(long, default_value = "v")]
+        axis: String,
+        /// Leaf ID to split (default: focused pane)
+        #[arg(long)]
+        leaf: Option<u32>,
+    },
+    /// Close a pane
+    Close {
+        /// Leaf ID to close (default: focused pane)
+        #[arg(long)]
+        leaf: Option<u32>,
+    },
+    /// Move focus to another pane
+    Focus {
+        /// Direction: up, down, left, right
+        #[arg(long)]
+        direction: Option<String>,
+        /// Focus specific leaf ID
+        #[arg(long)]
+        leaf: Option<u32>,
+    },
+    /// Assign an agent to a pane
+    Assign {
+        /// Agent ID
+        agent_id: String,
+        /// Leaf ID (default: focused pane)
+        #[arg(long)]
+        leaf: Option<u32>,
+    },
 }
 
 #[tokio::main]
@@ -98,6 +145,7 @@ async fn main() {
         Commands::Attach { agent_id } => commands::attach::run(&socket, &agent_id).await,
         Commands::Logs { agent_id, tail } => commands::logs::run(&socket, &agent_id, tail).await,
         Commands::Health => commands::health::run(&socket).await,
+        Commands::Grid { action } => commands::grid::run(&socket, action).await,
     };
 
     if let Err(e) = result {

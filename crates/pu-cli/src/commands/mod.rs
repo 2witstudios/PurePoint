@@ -1,4 +1,5 @@
 pub mod attach;
+pub mod grid;
 pub mod health;
 pub mod init;
 pub mod kill;

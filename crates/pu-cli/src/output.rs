@@ -106,5 +106,14 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::AttachReady { buffered_bytes } => {
             println!("Attached ({buffered_bytes} bytes buffered)");
         }
+        Response::GridSubscribed => {
+            println!("Grid subscription active");
+        }
+        Response::GridLayout { layout } => {
+            println!("{}", serde_json::to_string_pretty(layout).unwrap());
+        }
+        Response::GridEvent { project_root, command } => {
+            println!("Grid event for {project_root}: {command:?}");
+        }
     }
 }
