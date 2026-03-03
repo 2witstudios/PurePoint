@@ -12,6 +12,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     var attachSession: DaemonAttachSession?
 
     private var scrollMonitor: Any?
+    private var lastKnownTerminalViewSize: CGSize = .zero
     private var accumulatedDelta: CGFloat = 0
     private var lastScrollDirection: Bool?
     private var lastScrollLocation: NSPoint = .zero
@@ -54,6 +55,16 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit { tearDown() }
+
+    override func layout() {
+        super.layout()
+        let currentSize = terminalView.frame.size
+        guard currentSize != lastKnownTerminalViewSize,
+              currentSize.width > 1,
+              currentSize.height > 1 else { return }
+        lastKnownTerminalViewSize = currentSize
+        terminalView.setFrameSize(currentSize)
+    }
 
     func tearDown() {
         guard !tornDown else { return }

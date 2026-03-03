@@ -139,6 +139,7 @@ nonisolated enum DaemonResponse: Decodable {
 struct AgentStatusReport: Decodable {
     let id: String
     let name: String
+    let agentType: String
     let status: String
     let pid: Int?
     let exitCode: Int?
@@ -147,9 +148,22 @@ struct AgentStatusReport: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, status, pid
+        case agentType = "agent_type"
         case exitCode = "exit_code"
         case idleSeconds = "idle_seconds"
         case worktreeId = "worktree_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        agentType = try container.decodeIfPresent(String.self, forKey: .agentType) ?? "unknown"
+        status = try container.decode(String.self, forKey: .status)
+        pid = try container.decodeIfPresent(Int.self, forKey: .pid)
+        exitCode = try container.decodeIfPresent(Int.self, forKey: .exitCode)
+        idleSeconds = try container.decodeIfPresent(Int.self, forKey: .idleSeconds)
+        worktreeId = try container.decodeIfPresent(String.self, forKey: .worktreeId)
     }
 }
 
@@ -303,6 +317,8 @@ nonisolated final class DaemonClient: @unchecked Sendable {
         do {
             return try JSONDecoder().decode(DaemonResponse.self, from: data)
         } catch {
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
+            print("[DaemonClient] parse error: \(error)\n  raw: \(preview)")
             return .unknown(type: "parse_error")
         }
     }

@@ -148,6 +148,7 @@ pub enum Response {
 pub struct AgentStatusReport {
     pub id: String,
     pub name: String,
+    pub agent_type: String,
     pub status: AgentStatus,
     pub pid: Option<u32>,
     pub exit_code: Option<i32>,

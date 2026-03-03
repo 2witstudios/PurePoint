@@ -55,7 +55,15 @@ enum DaemonLifecycle {
         }
     }
 
-    private static func findBinary() -> String? {
+    /// Restart the daemon by sending shutdown, waiting briefly, then re-launching.
+    static func restartDaemon() async throws {
+        let client = DaemonClient()
+        _ = try? await client.send(.shutdown)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        try await ensureDaemon()
+    }
+
+    static func findBinary() -> String? {
         // 1. Check app bundle (production path)
         if let bundlePath = Bundle.main.executableURL?
             .deletingLastPathComponent()

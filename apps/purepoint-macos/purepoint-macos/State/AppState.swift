@@ -13,6 +13,7 @@ final class AppState {
 
     private let service: any WorkspaceService
     private var manifestWatcher: ManifestWatcher?
+    private var binaryWatcher: ManifestWatcher?
     private var refreshTask: Task<Void, Never>?
     private var openProjectTask: Task<Void, Never>?
 
@@ -62,6 +63,13 @@ final class AppState {
             let manifestPath = svc.manifestPath(projectRoot: root)
             self.manifestWatcher = ManifestWatcher(path: manifestPath) { [weak self] in
                 self?.refresh()
+            }
+
+            // Watch the daemon binary for changes (auto-restart on rebuild)
+            if let binPath = DaemonLifecycle.findBinary() {
+                self.binaryWatcher = ManifestWatcher(path: binPath) { [weak self] in
+                    self?.restartDaemonAndRefresh()
+                }
             }
 
             self.refresh()
@@ -181,12 +189,25 @@ final class AppState {
         }
     }
 
+    private func restartDaemonAndRefresh() {
+        Task {
+            do {
+                try await DaemonLifecycle.restartDaemon()
+                self.refresh()
+            } catch {
+                self.daemonError = error.localizedDescription
+            }
+        }
+    }
+
     /// Shut down the daemon and stop watching. Called on app termination.
     func shutdown() {
         openProjectTask?.cancel()
         refreshTask?.cancel()
         manifestWatcher?.stop()
         manifestWatcher = nil
+        binaryWatcher?.stop()
+        binaryWatcher = nil
         Task {
             let client = DaemonClient()
             _ = try? await client.send(.shutdown)

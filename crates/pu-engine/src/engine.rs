@@ -170,6 +170,7 @@ impl Engine {
                     Response::AgentStatus(AgentStatusReport {
                         id: agent.id.clone(),
                         name: agent.name.clone(),
+                        agent_type: agent.agent_type.clone(),
                         status,
                         pid: agent.pid,
                         exit_code,
@@ -191,6 +192,7 @@ impl Engine {
                     AgentStatusReport {
                         id: a.id.clone(),
                         name: a.name.clone(),
+                        agent_type: a.agent_type.clone(),
                         status,
                         pid: a.pid,
                         exit_code,
@@ -278,7 +280,13 @@ impl Engine {
         };
 
         let agent_id = pu_core::id::agent_id();
-        let agent_name = name.unwrap_or_else(|| agent_id.clone());
+        let agent_name = name.unwrap_or_else(|| {
+            if root || worktree.is_some() {
+                pu_core::id::root_agent_name()
+            } else {
+                pu_core::id::worktree_agent_name()
+            }
+        });
         let base_branch = base.unwrap_or_else(|| "HEAD".into());
 
         // Build command with prompt

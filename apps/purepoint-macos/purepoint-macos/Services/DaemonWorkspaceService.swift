@@ -18,7 +18,7 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                 AgentModel(
                     id: report.id,
                     name: report.name,
-                    agentType: "claude",
+                    agentType: report.agentType,
                     status: AgentStatus(rawValue: report.status) ?? .lost,
                     prompt: "",
                     startedAt: "",
@@ -29,7 +29,7 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
         case .error(_, let message):
             throw DaemonWorkspaceError.daemonError(message)
         default:
-            throw DaemonWorkspaceError.unexpectedResponse
+            throw DaemonWorkspaceError.unexpectedResponse("\(response)")
         }
     }
 
@@ -53,12 +53,12 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
 
 enum DaemonWorkspaceError: Error, LocalizedError {
     case daemonError(String)
-    case unexpectedResponse
+    case unexpectedResponse(String)
 
     var errorDescription: String? {
         switch self {
         case .daemonError(let msg): msg
-        case .unexpectedResponse: "Unexpected response from daemon"
+        case .unexpectedResponse(let detail): "Unexpected response from daemon: \(detail)"
         }
     }
 }
