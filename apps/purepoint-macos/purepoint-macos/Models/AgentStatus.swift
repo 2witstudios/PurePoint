@@ -9,6 +9,7 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
     case spawning
     case waiting
     case lost
+    case suspended
 
     var color: Color {
         switch self {
@@ -20,6 +21,7 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
         case .spawning:  .yellow
         case .waiting:   .gray
         case .lost:      .gray
+        case .suspended: .orange
         }
     }
 

@@ -60,6 +60,14 @@ pub enum Request {
         project_root: String,
         target: KillTarget,
     },
+    Suspend {
+        project_root: String,
+        target: SuspendTarget,
+    },
+    Resume {
+        project_root: String,
+        agent_id: String,
+    },
     Logs {
         agent_id: String,
         #[serde(default = "default_tail")]
@@ -135,6 +143,13 @@ pub enum KillTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuspendTarget {
+    Agent(String),
+    All,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     HealthReport {
@@ -160,6 +175,13 @@ pub enum Response {
     KillResult {
         killed: Vec<String>,
         exit_codes: std::collections::HashMap<String, Option<i32>>,
+    },
+    SuspendResult {
+        suspended: Vec<String>,
+    },
+    ResumeResult {
+        agent_id: String,
+        status: AgentStatus,
     },
     LogsResult {
         agent_id: String,
@@ -201,6 +223,10 @@ pub struct AgentStatusReport {
     pub idle_seconds: Option<u64>,
     pub worktree_id: Option<String>,
     pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 #[cfg(test)]
@@ -514,5 +540,97 @@ mod tests {
             }
             _ => panic!("expected GridEvent"),
         }
+    }
+
+    // --- Suspend/Resume round-trips ---
+
+    #[test]
+    fn given_suspend_request_with_all_target_should_round_trip() {
+        let req = Request::Suspend {
+            project_root: "/test".into(),
+            target: SuspendTarget::All,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Suspend { project_root, target } => {
+                assert_eq!(project_root, "/test");
+                assert!(matches!(target, SuspendTarget::All));
+            }
+            _ => panic!("expected Suspend"),
+        }
+    }
+
+    #[test]
+    fn given_suspend_request_with_agent_target_should_round_trip() {
+        let req = Request::Suspend {
+            project_root: "/test".into(),
+            target: SuspendTarget::Agent("ag-abc".into()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Suspend { target: SuspendTarget::Agent(id), .. } => {
+                assert_eq!(id, "ag-abc");
+            }
+            _ => panic!("expected Suspend with Agent target"),
+        }
+    }
+
+    #[test]
+    fn given_resume_request_should_round_trip() {
+        let req = Request::Resume {
+            project_root: "/test".into(),
+            agent_id: "ag-abc".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Resume { project_root, agent_id } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(agent_id, "ag-abc");
+            }
+            _ => panic!("expected Resume"),
+        }
+    }
+
+    #[test]
+    fn given_suspend_result_should_round_trip() {
+        let resp = Response::SuspendResult {
+            suspended: vec!["ag-abc".into(), "ag-def".into()],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::SuspendResult { suspended } => {
+                assert_eq!(suspended, vec!["ag-abc", "ag-def"]);
+            }
+            _ => panic!("expected SuspendResult"),
+        }
+    }
+
+    #[test]
+    fn given_resume_result_should_round_trip() {
+        let resp = Response::ResumeResult {
+            agent_id: "ag-abc".into(),
+            status: crate::types::AgentStatus::Running,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::ResumeResult { agent_id, status } => {
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(status, crate::types::AgentStatus::Running);
+            }
+            _ => panic!("expected ResumeResult"),
+        }
+    }
+
+    #[test]
+    fn given_suspend_target_all_should_round_trip() {
+        let target = SuspendTarget::All;
+        let json = serde_json::to_string(&target).unwrap();
+        let parsed: SuspendTarget = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, SuspendTarget::All));
     }
 }

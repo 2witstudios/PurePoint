@@ -16,7 +16,7 @@ enum DaemonLifecycle {
         // Launch daemon
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = ["--managed"]
+        process.arguments = []
         process.standardOutput = FileHandle.nullDevice
 
         // Redirect stderr to log file for diagnostics
@@ -28,7 +28,10 @@ enum DaemonLifecycle {
             return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
         }()
 
-        // Remove stale socket so new daemon can bind
+        // Remove stale PID file and socket so new daemon can bind
+        let pidPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pu/daemon.pid").path
+        try? FileManager.default.removeItem(atPath: pidPath)
         let socketPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".pu/daemon.sock").path
         try? FileManager.default.removeItem(atPath: socketPath)

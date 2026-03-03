@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct purepoint_macosApp: App {
     @State private var appState = AppState()
+    @State private var settingsState = SettingsState()
     @State private var viewCache = TerminalViewCache()
     @State private var gridState = GridState()
 
@@ -10,8 +11,10 @@ struct purepoint_macosApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
+                .environment(settingsState)
                 .environment(viewCache)
                 .environment(gridState)
+                .preferredColorScheme(settingsState.appearance.colorScheme)
                 .frame(
                     minWidth: PurePointTheme.windowMinWidth,
                     minHeight: PurePointTheme.windowMinHeight
@@ -21,7 +24,7 @@ struct purepoint_macosApp: App {
                     openProjectFromArguments()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    appState.shutdown()
+                    appState.shutdownWithSuspend()
                 }
         }
         .defaultSize(
@@ -41,6 +44,13 @@ struct purepoint_macosApp: App {
                     openProjectWithPicker()
                 }
                 .keyboardShortcut("o")
+            }
+
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings\u{2026}") {
+                    appState.showSettings = true
+                }
+                .keyboardShortcut(",")
             }
 
             CommandMenu("Panes") {
@@ -104,6 +114,12 @@ struct purepoint_macosApp: App {
 
         // Restore saved projects from UserDefaults
         appState.restoreProjects()
+
+        // Restore selected agent after projects have loaded
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            appState.restoreSelectedAgent()
+        }
     }
 
     // MARK: - Command Palette
@@ -116,8 +132,8 @@ struct purepoint_macosApp: App {
             project = appState.projects.first
         }
         guard let project else { return }
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
-            project.createAgent(variant: variant, prompt: prompt, selection: nil)
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, variants: AgentVariant.variantsWithWorktree) { variant, prompt, name in
+            project.createAgent(variant: variant, prompt: prompt, name: name, selection: nil)
         }
     }
 

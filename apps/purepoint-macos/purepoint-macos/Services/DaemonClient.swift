@@ -23,6 +23,22 @@ nonisolated enum KillTarget: Encodable {
     }
 }
 
+nonisolated enum SuspendTarget: Encodable {
+    case agent(String)
+    case all
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .agent(let id):
+            var container = encoder.container(keyedBy: DynamicCodingKey.self)
+            try container.encode(id, forKey: .key("agent"))
+        case .all:
+            var container = encoder.singleValueContainer()
+            try container.encode("all")
+        }
+    }
+}
+
 /// Grid command payload matching Rust GridCommand.
 nonisolated enum GridCommandPayload: Codable {
     case split(leafId: Int?, axis: String)
@@ -98,6 +114,8 @@ nonisolated enum DaemonRequest: Encodable {
                name: String? = nil, base: String? = nil, root: Bool = false,
                worktree: String? = nil)
     case kill(projectRoot: String, target: KillTarget)
+    case suspend(projectRoot: String, target: SuspendTarget)
+    case resume(projectRoot: String, agentId: String)
     case subscribeGrid(projectRoot: String)
     case gridCommand(projectRoot: String, command: GridCommandPayload)
     case shutdown
@@ -139,6 +157,14 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("kill", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(target, forKey: .key("target"))
+        case .suspend(let projectRoot, let target):
+            try container.encode("suspend", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(target, forKey: .key("target"))
+        case .resume(let projectRoot, let agentId):
+            try container.encode("resume", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(agentId, forKey: .key("agent_id"))
         case .subscribeGrid(let projectRoot):
             try container.encode("subscribe_grid", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -160,6 +186,8 @@ nonisolated enum DaemonResponse: Decodable {
     case output(agentId: String, data: Data)
     case spawnResult(worktreeId: String?, agentId: String, status: String)
     case killResult(killed: [String])
+    case suspendResult(suspended: [String])
+    case resumeResult(agentId: String, status: String)
     case gridSubscribed
     case gridLayout(layout: Data)
     case gridEvent(projectRoot: String, command: GridCommandPayload)
@@ -199,6 +227,12 @@ nonisolated enum DaemonResponse: Decodable {
         case "kill_result":
             let p = try KillResultPayload(from: decoder)
             self = .killResult(killed: p.killed)
+        case "suspend_result":
+            let p = try SuspendResultPayload(from: decoder)
+            self = .suspendResult(suspended: p.suspended)
+        case "resume_result":
+            let p = try ResumeResultPayload(from: decoder)
+            self = .resumeResult(agentId: p.agentId, status: p.status)
         case "grid_subscribed":
             self = .gridSubscribed
         case "grid_layout":
@@ -230,14 +264,17 @@ struct AgentStatusReport: Decodable {
     let idleSeconds: Int?
     let worktreeId: String?
     let startedAt: String?
+    let sessionId: String?
+    let prompt: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, status, pid
+        case id, name, status, pid, prompt
         case agentType = "agent_type"
         case exitCode = "exit_code"
         case idleSeconds = "idle_seconds"
         case worktreeId = "worktree_id"
         case startedAt = "started_at"
+        case sessionId = "session_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -251,6 +288,8 @@ struct AgentStatusReport: Decodable {
         idleSeconds = try container.decodeIfPresent(Int.self, forKey: .idleSeconds)
         worktreeId = try container.decodeIfPresent(String.self, forKey: .worktreeId)
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
     }
 }
 
@@ -311,6 +350,20 @@ private struct SpawnResultPayload: Decodable {
 
 private struct KillResultPayload: Decodable {
     let killed: [String]
+}
+
+private struct SuspendResultPayload: Decodable {
+    let suspended: [String]
+}
+
+private struct ResumeResultPayload: Decodable {
+    let agentId: String
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case agentId = "agent_id"
+        case status
+    }
 }
 
 private struct ErrorPayload: Decodable {

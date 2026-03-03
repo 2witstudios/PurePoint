@@ -73,6 +73,9 @@ final class ProjectState: Identifiable {
 
             self.startGridSubscription()
             self.refresh()
+            // Resume suspended agents after initial data load
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            self.resumeSuspendedAgents()
         }
     }
 
@@ -149,27 +152,33 @@ final class ProjectState: Identifiable {
 
     // MARK: - Agent Operations
 
-    func createAgent(variant: AgentVariant, prompt: String?, selection: SidebarSelection?) {
+    func createAgent(variant: AgentVariant, prompt: String?, name: String? = nil, selection: SidebarSelection?) {
         let root = projectRoot
 
         let spawnRoot: Bool
         let spawnWorktree: String?
 
-        switch selection {
-        case .worktree(let id):
+        if variant.kind == .worktree {
+            // Create a NEW worktree: root=false, worktree=nil triggers daemon worktree creation
             spawnRoot = false
-            spawnWorktree = id
-        case .agent(let id):
-            if let wtId = worktreeId(forAgentId: id) {
+            spawnWorktree = nil
+        } else {
+            switch selection {
+            case .worktree(let id):
                 spawnRoot = false
-                spawnWorktree = wtId
-            } else {
+                spawnWorktree = id
+            case .agent(let id):
+                if let wtId = worktreeId(forAgentId: id) {
+                    spawnRoot = false
+                    spawnWorktree = wtId
+                } else {
+                    spawnRoot = true
+                    spawnWorktree = nil
+                }
+            case nil, .nav, .project, .terminal:
                 spawnRoot = true
                 spawnWorktree = nil
             }
-        case nil, .nav, .project, .terminal:
-            spawnRoot = true
-            spawnWorktree = nil
         }
 
         Task {
@@ -177,7 +186,7 @@ final class ProjectState: Identifiable {
                 let client = DaemonClient()
                 let response = try await client.send(.spawn(
                     projectRoot: root, prompt: prompt ?? "", agent: variant.id,
-                    root: spawnRoot, worktree: spawnWorktree
+                    name: name, root: spawnRoot, worktree: spawnWorktree
                 ))
                 switch response {
                 case .spawnResult(_, let agentId, _):
@@ -243,6 +252,24 @@ final class ProjectState: Identifiable {
                 if case .error(_, let message) = response { self.appState?.daemonError = message }
             } catch {
                 self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Resume
+
+    private func resumeSuspendedAgents() {
+        let suspended = allAgents.filter { $0.status == .suspended }
+        guard !suspended.isEmpty else { return }
+        let root = projectRoot
+
+        for agent in suspended {
+            Task {
+                let client = DaemonClient()
+                let response = try? await client.send(.resume(projectRoot: root, agentId: agent.id))
+                if case .error(_, let msg) = response {
+                    self.appState?.daemonError = "Resume failed for \(agent.displayName): \(msg)"
+                }
             }
         }
     }

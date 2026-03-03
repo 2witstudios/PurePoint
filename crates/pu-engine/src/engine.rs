@@ -10,7 +10,7 @@ use pu_core::config;
 use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
-use pu_core::protocol::{AgentStatusReport, GridCommand, KillTarget, Request, Response, PROTOCOL_VERSION};
+use pu_core::protocol::{AgentStatusReport, GridCommand, KillTarget, Request, Response, SuspendTarget, PROTOCOL_VERSION};
 use indexmap::IndexMap;
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 
@@ -78,6 +78,12 @@ impl Engine {
             }
             Request::Kill { project_root, target } => {
                 self.handle_kill(&project_root, target).await
+            }
+            Request::Suspend { project_root, target } => {
+                self.handle_suspend(&project_root, target).await
+            }
+            Request::Resume { project_root, agent_id } => {
+                self.handle_resume(&project_root, &agent_id).await
             }
             Request::Logs { agent_id, tail } => self.handle_logs(&agent_id, tail).await,
             Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
@@ -187,6 +193,8 @@ impl Engine {
                         idle_seconds,
                         worktree_id: wt_id,
                         started_at: agent.started_at,
+                        session_id: agent.session_id.clone(),
+                        prompt: agent.prompt.clone(),
                     })
                 }
                 None => Self::agent_not_found(id),
@@ -210,6 +218,8 @@ impl Engine {
                         idle_seconds,
                         worktree_id: None,
                         started_at: a.started_at,
+                        session_id: a.session_id.clone(),
+                        prompt: a.prompt.clone(),
                     }
                 })
                 .collect();
@@ -293,13 +303,30 @@ impl Engine {
         };
 
         let agent_id = pu_core::id::agent_id();
-        let agent_name = name.unwrap_or_else(|| {
-            if root || worktree.is_some() {
-                pu_core::id::root_agent_name()
-            } else {
-                pu_core::id::worktree_agent_name()
+        let creating_new_worktree = !root && worktree.is_none();
+        let agent_name = if creating_new_worktree {
+            // Worktree spawns require a user-provided name (becomes the branch slug)
+            let raw = match name {
+                Some(n) => n,
+                None => {
+                    return Response::Error {
+                        code: "INVALID_ARGUMENT".into(),
+                        message: "worktree spawn requires a name".into(),
+                    };
+                }
+            };
+            let normalized = pu_core::id::normalize_worktree_name(&raw);
+            if normalized.is_empty() {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: "worktree spawn requires a name".into(),
+                };
             }
-        });
+            normalized
+        } else {
+            // Root agents and existing-worktree agents get auto-generated names
+            name.unwrap_or_else(|| pu_core::id::root_agent_name())
+        };
         let base_branch = base.unwrap_or_else(|| "HEAD".into());
 
         // Build command with prompt
@@ -374,6 +401,18 @@ impl Engine {
                     message: format!("failed to create worktree: {e}"),
                 };
             }
+
+            // Copy env files (e.g., .env, .env.local) into new worktree
+            for env_file in &cfg.env_files {
+                let src = root_path.join(env_file);
+                if src.exists() {
+                    let dst = wt_path.join(env_file);
+                    if let Err(e) = tokio::fs::copy(&src, &dst).await {
+                        tracing::warn!("failed to copy {env_file} to worktree: {e}");
+                    }
+                }
+            }
+
             (wt_path.to_string_lossy().to_string(), Some(wt_id))
         };
 
@@ -423,6 +462,7 @@ impl Engine {
             error: None,
             pid: Some(pid),
             session_id,
+            suspended_at: None,
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -545,6 +585,244 @@ impl Engine {
         .ok();
 
         Response::KillResult { killed, exit_codes }
+    }
+
+    async fn handle_suspend(&self, project_root: &str, target: SuspendTarget) -> Response {
+        let m = match Self::read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        // Collect suspendable agents — must be Running/Idle/Spawning.
+        // Skip already-Suspended and terminal statuses.
+        let agent_ids: Vec<String> = match &target {
+            SuspendTarget::Agent(id) => {
+                match m.find_agent(id) {
+                    Some(loc) => {
+                        let agent = match loc {
+                            pu_core::types::AgentLocation::Root(a) => a,
+                            pu_core::types::AgentLocation::Worktree { agent, .. } => agent,
+                        };
+                        if agent.status.is_terminal() || agent.status == AgentStatus::Suspended {
+                            return Response::SuspendResult { suspended: vec![] };
+                        }
+                        vec![id.clone()]
+                    }
+                    None => return Self::agent_not_found(id),
+                }
+            }
+            SuspendTarget::All => {
+                m.all_agents()
+                    .into_iter()
+                    .filter(|a| !a.status.is_terminal() && a.status != AgentStatus::Suspended)
+                    .map(|a| a.id.clone())
+                    .collect()
+            }
+        };
+
+        if agent_ids.is_empty() {
+            return Response::SuspendResult { suspended: vec![] };
+        }
+
+        // Extract handles from session map, then drop lock before killing
+        let handles_to_kill: Vec<(String, AgentHandle)> = {
+            let mut sessions = self.sessions.lock().await;
+            agent_ids
+                .iter()
+                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
+                .collect()
+        };
+
+        for (_id, handle) in &handles_to_kill {
+            self.pty_host
+                .kill(handle, Duration::from_secs(5))
+                .await
+                .ok();
+        }
+
+        // Update manifest: mark as Suspended, clear pid, set suspended_at.
+        // completed_at stays None — this agent is paused, not finished.
+        let suspended = agent_ids.clone();
+        let suspended_ids = suspended.clone();
+        let pr = project_root.to_string();
+        tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
+                let now = chrono::Utc::now();
+                for id in &suspended_ids {
+                    if let Some(agent) = m.find_agent_mut(id) {
+                        agent.status = AgentStatus::Suspended;
+                        agent.pid = None;
+                        agent.suspended_at = Some(now);
+                    }
+                }
+                m
+            })
+            .ok();
+        })
+        .await
+        .ok();
+
+        Response::SuspendResult { suspended }
+    }
+
+    async fn handle_resume(&self, project_root: &str, agent_id: &str) -> Response {
+        let root_path = Path::new(project_root);
+
+        // 1. Read manifest, find the suspended agent
+        let m = match Self::read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let (agent_entry, _worktree_id, cwd) = match m.find_agent(agent_id) {
+            Some(pu_core::types::AgentLocation::Root(a)) => {
+                (a.clone(), None::<String>, project_root.to_string())
+            }
+            Some(pu_core::types::AgentLocation::Worktree { worktree, agent }) => {
+                (agent.clone(), Some(worktree.id.clone()), worktree.path.clone())
+            }
+            None => return Self::agent_not_found(agent_id),
+        };
+
+        if agent_entry.status != AgentStatus::Suspended {
+            return Response::Error {
+                code: "INVALID_STATE".into(),
+                message: "agent is not suspended".into(),
+            };
+        }
+
+        // 2. Load agent config
+        let cfg = match config::load_config_strict(root_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    code: "CONFIG_ERROR".into(),
+                    message: format!("failed to load config: {e}"),
+                };
+            }
+        };
+        let agent_cfg = match config::resolve_agent(&cfg, &agent_entry.agent_type) {
+            Some(c) => c.clone(),
+            None => {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: format!("unknown agent type: {}", agent_entry.agent_type),
+                };
+            }
+        };
+
+        // 3. Construct resume command based on agent type
+        let (command, args, session_id) = match self.build_resume_command(
+            &agent_entry.agent_type,
+            &agent_cfg,
+            agent_entry.session_id.as_deref(),
+        ) {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+
+        // 4. Spawn PTY process
+        let spawn_config = SpawnConfig {
+            command,
+            args,
+            cwd,
+            env: vec![
+                ("PATH".into(), self.login_path.clone()),
+                ("TERM".into(), "xterm-256color".into()),
+                ("COLORTERM".into(), "truecolor".into()),
+            ],
+            env_remove: vec!["CLAUDECODE".into()],
+            cols: 120,
+            rows: 40,
+        };
+
+        let handle = match self.pty_host.spawn(spawn_config).await {
+            Ok(h) => h,
+            Err(e) => {
+                return Response::Error {
+                    code: "RESUME_FAILED".into(),
+                    message: format!("failed to spawn process: {e}"),
+                };
+            }
+        };
+
+        let pid = handle.pid;
+
+        // 5. Update manifest: Suspended → Running, new PID
+        let aid = agent_id.to_string();
+        let sid = session_id.clone();
+        manifest::update_manifest(root_path, move |mut m| {
+            if let Some(agent) = m.find_agent_mut(&aid) {
+                agent.status = AgentStatus::Running;
+                agent.pid = Some(pid);
+                agent.completed_at = None;
+                agent.suspended_at = None;
+                if let Some(ref s) = sid {
+                    agent.session_id = Some(s.clone());
+                }
+            }
+            m
+        })
+        .ok();
+
+        // 6. Store handle in session map
+        self.sessions
+            .lock()
+            .await
+            .insert(agent_id.to_string(), handle);
+
+        Response::ResumeResult {
+            agent_id: agent_id.to_string(),
+            status: AgentStatus::Running,
+        }
+    }
+
+    /// Construct the resume command for a given agent type.
+    /// Returns Ok((command, args, session_id)) or Err(Response) on failure.
+    fn build_resume_command(
+        &self,
+        agent_type: &str,
+        agent_cfg: &pu_core::types::AgentConfig,
+        session_id: Option<&str>,
+    ) -> Result<(String, Vec<String>, Option<String>), Response> {
+        match agent_type {
+            "claude" => {
+                let sid = session_id
+                    .ok_or_else(|| Response::Error {
+                        code: "RESUME_FAILED".into(),
+                        message: "cannot resume Claude agent: no session_id preserved".into(),
+                    })?;
+                let args = vec![
+                    "--dangerously-skip-permissions".into(),
+                    "--resume".into(),
+                    sid.to_string(),
+                ];
+                Ok(("claude".into(), args, Some(sid.to_string())))
+            }
+            "codex" => {
+                let args = vec!["resume".into(), "--last".into(), "--full-auto".into()];
+                Ok(("codex".into(), args, None))
+            }
+            "opencode" => {
+                let args = vec!["--continue".into()];
+                Ok(("opencode".into(), args, None))
+            }
+            _ => {
+                // Terminal / unknown: fresh shell in same directory
+                let mut cmd_parts: Vec<String> = agent_cfg
+                    .command
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect();
+                let command = cmd_parts.remove(0);
+                let command = if command == "shell" {
+                    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+                } else {
+                    command
+                };
+                Ok((command, cmd_parts, None))
+            }
+        }
     }
 
     async fn handle_logs(&self, agent_id: &str, tail: usize) -> Response {
@@ -691,6 +969,7 @@ impl Engine {
 
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
     /// Called once per project on the first status request after daemon (re)start.
+    /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
         let m = match manifest::read_manifest(root) {

@@ -13,6 +13,7 @@ pub enum AgentStatus {
     Failed,
     Killed,
     Lost,
+    Suspended,
 }
 
 impl AgentStatus {
@@ -50,6 +51,8 @@ pub struct AgentEntry {
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspended_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +113,18 @@ impl Manifest {
             agents.extend(wt.agents.values());
         }
         agents
+    }
+
+    pub fn find_agent_mut(&mut self, id: &str) -> Option<&mut AgentEntry> {
+        if let Some(agent) = self.agents.get_mut(id) {
+            return Some(agent);
+        }
+        for wt in self.worktrees.values_mut() {
+            if let Some(agent) = wt.agents.get_mut(id) {
+                return Some(agent);
+            }
+        }
+        None
     }
 }
 
@@ -235,6 +250,7 @@ mod tests {
             AgentStatus::Failed,
             AgentStatus::Killed,
             AgentStatus::Lost,
+            AgentStatus::Suspended,
         ];
         for status in statuses {
             let json = serde_json::to_string(&status).unwrap();
@@ -256,6 +272,7 @@ mod tests {
         assert!(!AgentStatus::Spawning.is_terminal());
         assert!(!AgentStatus::Running.is_terminal());
         assert!(!AgentStatus::Idle.is_terminal());
+        assert!(!AgentStatus::Suspended.is_terminal());
     }
 
     // --- WorktreeStatus ---
@@ -292,6 +309,7 @@ mod tests {
             error: None,
             pid: Some(1234),
             session_id: None,
+            suspended_at: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -339,6 +357,7 @@ mod tests {
                 error: None,
                 pid: None,
                 session_id: None,
+                suspended_at: None,
             },
         );
         let entry = WorktreeEntry {
@@ -387,6 +406,7 @@ mod tests {
                 error: None,
                 pid: None,
                 session_id: None,
+                suspended_at: None,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -411,6 +431,7 @@ mod tests {
                 error: None,
                 pid: None,
                 session_id: None,
+                suspended_at: None,
             },
         );
         m.worktrees.insert(
@@ -449,6 +470,7 @@ mod tests {
             error: None,
             pid: None,
             session_id: None,
+            suspended_at: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();

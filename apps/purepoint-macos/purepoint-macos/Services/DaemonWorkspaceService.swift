@@ -20,9 +20,9 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                     name: report.name,
                     agentType: report.agentType,
                     status: AgentStatus(rawValue: report.status) ?? .lost,
-                    prompt: "",
+                    prompt: report.prompt ?? "",
                     startedAt: report.startedAt ?? "",
-                    sessionId: nil
+                    sessionId: report.sessionId
                 )
             }
             return WorkspaceSnapshot(worktrees: worktreeModels, rootAgents: rootAgents)

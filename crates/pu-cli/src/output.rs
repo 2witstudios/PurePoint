@@ -11,6 +11,7 @@ fn status_colored(status: AgentStatus) -> String {
         AgentStatus::Failed => "failed".red().to_string(),
         AgentStatus::Killed => "killed".red().to_string(),
         AgentStatus::Lost => "lost".red().dimmed().to_string(),
+        AgentStatus::Suspended => "suspended".yellow().dimmed().to_string(),
     }
 }
 
@@ -88,6 +89,12 @@ pub fn print_response(response: &Response, json_mode: bool) {
         }
         Response::KillResult { killed, .. } => {
             println!("Killed {} agent(s)", killed.len());
+        }
+        Response::SuspendResult { suspended } => {
+            println!("Suspended {} agent(s)", suspended.len());
+        }
+        Response::ResumeResult { agent_id, status } => {
+            println!("Resumed agent {} ({})", agent_id.bold(), status_colored(*status));
         }
         Response::LogsResult { agent_id, data } => {
             println!("{}", format!("--- Logs for {agent_id} ---").dimmed());

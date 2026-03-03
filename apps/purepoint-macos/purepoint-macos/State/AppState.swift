@@ -10,6 +10,7 @@ final class AppState {
     var selectedAgentId: String?
     var activeProjectRoot: String?
     var daemonError: String?
+    var showSettings = false
     var pendingSelectAgentId: String?
     var pendingFocusAgentId: String?
 
@@ -91,15 +92,44 @@ final class AppState {
 
     // MARK: - Lifecycle
 
-    func shutdown() {
+    /// Synchronously suspend all agents and shut down daemon.
+    /// Must complete before the process exits — uses DispatchSemaphore to block.
+    func shutdownWithSuspend() {
+        persistSelectedAgent()
+
         for project in projects {
             project.stopWatching()
         }
         binaryWatcher?.stop()
         binaryWatcher = nil
-        Task {
+
+        // Block until daemon RPCs complete (macOS terminates shortly after willTerminate)
+        let projectRoots = projects.map(\.projectRoot)
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
             let client = DaemonClient()
+            for root in projectRoots {
+                _ = try? await client.send(.suspend(projectRoot: root, target: .all))
+            }
             _ = try? await client.send(.shutdown)
+            semaphore.signal()
+        }
+        // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
+        _ = semaphore.wait(timeout: .now() + 5.0)
+    }
+
+    // MARK: - Selection Persistence
+
+    private static let selectedAgentKey = "PurePointSelectedAgentId"
+
+    private func persistSelectedAgent() {
+        UserDefaults.standard.set(selectedAgentId, forKey: Self.selectedAgentKey)
+    }
+
+    func restoreSelectedAgent() {
+        if let savedId = UserDefaults.standard.string(forKey: Self.selectedAgentKey),
+           agent(byId: savedId) != nil {
+            selectedAgentId = savedId
         }
     }
 
