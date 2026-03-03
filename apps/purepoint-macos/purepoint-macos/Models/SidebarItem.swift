@@ -29,3 +29,29 @@ enum SidebarSelection: Hashable {
     case worktree(String)
     case project(String)    // projectRoot path
 }
+
+// MARK: - SidebarNode (NSOutlineView reference-type wrapper)
+
+class SidebarNode {
+    enum Kind {
+        case project(ProjectState)
+        case worktree(WorktreeModel)
+        case agent(AgentModel)
+    }
+
+    let kind: Kind
+    var children: [SidebarNode] = []
+
+    init(kind: Kind, children: [SidebarNode] = []) {
+        self.kind = kind
+        self.children = children
+    }
+
+    var id: String {
+        switch kind {
+        case .project(let p): return p.projectRoot
+        case .worktree(let w): return w.id
+        case .agent(let a): return a.id
+        }
+    }
+}

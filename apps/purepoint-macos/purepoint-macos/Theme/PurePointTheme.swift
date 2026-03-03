@@ -3,6 +3,7 @@ import SwiftUI
 enum PurePointTheme {
     // MARK: - Spacing
     static let navRowHeight: CGFloat = 26
+    static let sidebarRowHeight: CGFloat = 24
     static let statusDotSize: CGFloat = 6
     static let padding: CGFloat = 8
     static let footerHeight: CGFloat = 36

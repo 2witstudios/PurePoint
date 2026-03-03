@@ -25,6 +25,20 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    var nsColor: NSColor {
+        switch self {
+        case .running:   .systemGreen
+        case .idle:      .systemMint
+        case .completed: .systemBlue
+        case .failed:    .systemRed
+        case .killed:    .systemOrange
+        case .spawning:  .systemYellow
+        case .waiting:   .systemGray
+        case .lost:      .systemGray
+        case .suspended: .systemOrange
+        }
+    }
+
     var isTerminal: Bool {
         switch self {
         case .completed, .failed, .killed, .lost: true
