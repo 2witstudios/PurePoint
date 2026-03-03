@@ -46,14 +46,21 @@ struct DetailView: View {
             placeholderView(icon: item.icon, title: item.title)
 
         case .worktree(let id):
-            let wt = appState.worktrees.first { $0.id == id }
-            placeholderView(icon: "arrow.triangle.branch", title: wt?.branch ?? "Worktree")
+            if let wt = appState.projectState(forWorktreeId: id)?.worktrees.first(where: { $0.id == id }) {
+                WorktreeDetailView(worktree: wt)
+            } else {
+                placeholderView(icon: "arrow.triangle.branch", title: "Worktree not found")
+            }
 
         case .terminal(let id):
             placeholderView(icon: "terminal", title: id)
 
-        case .project:
-            placeholderView(icon: "folder.fill", title: appState.projectName)
+        case .project(let root):
+            if let project = appState.projectState(forRoot: root) {
+                ProjectDetailView(project: project)
+            } else {
+                placeholderView(icon: "folder.fill", title: "Project")
+            }
         }
     }
 
@@ -105,7 +112,9 @@ private struct SinglePaneSplitOverlay: View {
     }
 
     private func enterGrid(axis: PaneSplitNode.Axis) {
-        gridState.projectRoot = appState.projectRoot
+        if let project = appState.projectState(forAgentId: agentId) {
+            gridState.projectRoot = project.projectRoot
+        }
         gridState.enterGridMode(agentId: agentId, axis: axis)
         gridState.pendingPaletteLeafId = gridState.focusedLeafId
     }
