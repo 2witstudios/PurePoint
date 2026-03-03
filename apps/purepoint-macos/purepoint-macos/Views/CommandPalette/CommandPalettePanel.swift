@@ -212,6 +212,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = false
         scrollView.drawsBackground = false
+        scrollView.verticalScrollElasticity = .none
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(scrollView)
 
@@ -451,11 +452,26 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         if q.isEmpty {
             filteredVariants = availableVariants
         } else {
-            filteredVariants = availableVariants.filter {
-                $0.displayName.lowercased().contains(q) ||
-                $0.subtitle.lowercased().contains(q) ||
-                $0.id.lowercased().contains(q)
-            }
+            filteredVariants = availableVariants
+                .compactMap { variant -> (AgentVariant, Int)? in
+                    let name = variant.displayName.lowercased()
+                    let id = variant.id.lowercased()
+                    let sub = variant.subtitle.lowercased()
+
+                    let score: Int
+                    if name.hasPrefix(q) || id.hasPrefix(q) {
+                        score = 100
+                    } else if name.contains(q) || id.contains(q) {
+                        score = 50
+                    } else if sub.contains(q) {
+                        score = 10
+                    } else {
+                        return nil
+                    }
+                    return (variant, score)
+                }
+                .sorted { $0.1 > $1.1 }
+                .map(\.0)
         }
         selectedIndex = filteredVariants.isEmpty ? -1 : 0
         tableView.reloadData()
