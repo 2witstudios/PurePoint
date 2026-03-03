@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ pub struct Engine {
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
     login_path: String,
+    reaped_projects: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl Engine {
@@ -32,6 +33,7 @@ impl Engine {
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_path: Self::resolve_login_path().await,
+            reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -135,6 +137,19 @@ impl Engine {
     }
 
     async fn handle_status(&self, project_root: &str, agent_id: Option<&str>) -> Response {
+        // On first status call per project, reap agents whose PIDs are dead.
+        // This handles daemon restarts where the manifest has stale Running entries.
+        let should_reap = {
+            let mut reaped = self.reaped_projects.lock().unwrap();
+            reaped.insert(project_root.to_string())
+        }; // MutexGuard dropped here — before any .await
+        if should_reap {
+            let pr = project_root.to_string();
+            tokio::task::spawn_blocking(move || Self::reap_stale_agents(&pr))
+                .await
+                .ok();
+        }
+
         let m = match Self::read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
@@ -489,22 +504,16 @@ impl Engine {
             exit_codes.insert(id.clone(), state.and_then(|s| s.exit_code));
         }
 
-        // Update manifest to mark agents as killed (off async runtime)
-        let killed: Vec<String> = exit_codes.keys().cloned().collect();
+        // Update manifest: remove all targeted agents (off async runtime)
+        let killed = agent_ids.clone();
         let killed_ids = killed.clone();
         let pr = project_root.to_string();
         tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
                 for id in &killed_ids {
-                    if let Some(agent) = m.agents.get_mut(id) {
-                        agent.status = AgentStatus::Killed;
-                        agent.completed_at = Some(chrono::Utc::now());
-                    }
+                    m.agents.remove(id);
                     for wt in m.worktrees.values_mut() {
-                        if let Some(agent) = wt.agents.get_mut(id) {
-                            agent.status = AgentStatus::Killed;
-                            agent.completed_at = Some(chrono::Utc::now());
-                        }
+                        wt.agents.remove(id);
                     }
                 }
                 m
@@ -600,6 +609,56 @@ impl Engine {
     }
 
     // --- Helpers ---
+
+    fn is_pid_alive(pid: u32) -> bool {
+        // kill(pid, 0) checks if the process exists without sending a signal
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
+    /// Called once per project on the first status request after daemon (re)start.
+    fn reap_stale_agents(project_root: &str) {
+        let root = Path::new(project_root);
+        let m = match manifest::read_manifest(root) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        let needs_reap = |agent: &AgentEntry| -> bool {
+            matches!(agent.status, AgentStatus::Running | AgentStatus::Idle)
+                && agent.pid.map_or(true, |pid| !Self::is_pid_alive(pid))
+        };
+
+        let has_stale = m.agents.values().any(|a| needs_reap(a))
+            || m.worktrees.values().any(|wt| wt.agents.values().any(|a| needs_reap(a)));
+
+        if !has_stale {
+            return;
+        }
+
+        manifest::update_manifest(root, move |mut m| {
+            for agent in m.agents.values_mut() {
+                if matches!(agent.status, AgentStatus::Running | AgentStatus::Idle)
+                    && agent.pid.map_or(true, |pid| !Self::is_pid_alive(pid))
+                {
+                    agent.status = AgentStatus::Lost;
+                    agent.completed_at = Some(chrono::Utc::now());
+                }
+            }
+            for wt in m.worktrees.values_mut() {
+                for agent in wt.agents.values_mut() {
+                    if matches!(agent.status, AgentStatus::Running | AgentStatus::Idle)
+                        && agent.pid.map_or(true, |pid| !Self::is_pid_alive(pid))
+                    {
+                        agent.status = AgentStatus::Lost;
+                        agent.completed_at = Some(chrono::Utc::now());
+                    }
+                }
+            }
+            m
+        })
+        .ok();
+    }
 
     async fn rollback_worktree(&self, root_path: &Path, worktree_id: Option<&str>) {
         if let Some(wt_id) = worktree_id {

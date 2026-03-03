@@ -123,7 +123,7 @@ impl IpcServer {
                     // Enter streaming sub-loop for attach
                     if let Some(agent_id) = attach_agent_id {
                         if !matches!(response, Response::AttachReady { .. }) {
-                            continue;
+                            break; // Close connection on failed attach to free semaphore permit
                         }
                         Self::handle_attach_stream(
                             &mut reader,
