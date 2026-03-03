@@ -41,6 +41,7 @@ build/
 .claude/
 
 # Point Guard
+.ppg/
 .ppg/results/
 .ppg/logs/
 .ppg/manifest.json
