@@ -1,4 +1,5 @@
 use nanoid::nanoid;
+use uuid::Uuid;
 
 const ALPHABET: &[char] = &[
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r',
@@ -16,7 +17,7 @@ pub fn agent_id() -> String {
 }
 
 pub fn session_id() -> String {
-    format!("ses-{}", nanoid!(ID_LEN, ALPHABET))
+    Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]
@@ -50,16 +51,12 @@ mod tests {
     }
 
     #[test]
-    fn given_session_id_should_start_with_ses_prefix() {
+    fn given_session_id_should_be_valid_uuid() {
         let id = session_id();
-        assert!(id.starts_with("ses-"), "expected ses- prefix, got {id}");
-    }
-
-    #[test]
-    fn given_session_id_should_have_correct_length() {
-        // ses- (4) + 8 chars = 12
-        let id = session_id();
-        assert_eq!(id.len(), 12);
+        assert!(
+            Uuid::parse_str(&id).is_ok(),
+            "expected valid UUID, got {id}"
+        );
     }
 
     #[test]

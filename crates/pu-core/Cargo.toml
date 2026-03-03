@@ -11,6 +11,7 @@ serde_yml = "0.0.12"
 thiserror = { workspace = true }
 chrono = { workspace = true }
 nanoid = "0.4"
+uuid = { workspace = true }
 fs4 = "0.12"
 
 [dev-dependencies]
