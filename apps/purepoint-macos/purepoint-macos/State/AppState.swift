@@ -11,11 +11,20 @@ final class AppState {
     var isLoaded: Bool { !projectRoot.isEmpty }
     var daemonError: String?
 
+    /// The agent ID currently selected in the sidebar (for single-pane display).
+    /// Written by ContentView's onChange(of: selection), read by app-level commands.
+    var selectedAgentId: String?
+
+    /// Set by the app entry point for grid subscription wiring and restore.
+    weak var gridState: GridState?
+
     private let service: any WorkspaceService
     private var manifestWatcher: ManifestWatcher?
     private var binaryWatcher: ManifestWatcher?
     private var refreshTask: Task<Void, Never>?
     private var openProjectTask: Task<Void, Never>?
+    private var gridSubscription: DaemonGridSubscription?
+    private var gridSubscriptionTask: Task<Void, Never>?
 
     init(service: any WorkspaceService = DaemonWorkspaceService()) {
         self.service = service
@@ -71,6 +80,12 @@ final class AppState {
                     self?.restartDaemonAndRefresh()
                 }
             }
+
+            // Restore grid layout if one was saved
+            self.gridState?.restore(projectRoot: root)
+
+            // Start grid subscription
+            self.startGridSubscription(projectRoot: root)
 
             self.refresh()
         }
@@ -163,6 +178,29 @@ final class AppState {
         }
     }
 
+    func spawnAgentForPane(variant: AgentVariant, prompt: String?, leafId: Int, gridState: GridState) {
+        guard !projectRoot.isEmpty else { return }
+        Task {
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(.spawn(
+                    projectRoot: projectRoot, prompt: prompt ?? "", agent: variant.id,
+                    root: true, worktree: nil
+                ))
+                switch response {
+                case .spawnResult(_, let agentId, _):
+                    gridState.setAgent(agentId, forLeafId: leafId)
+                case .error(_, let message):
+                    self.daemonError = message
+                default:
+                    break
+                }
+            } catch {
+                self.daemonError = error.localizedDescription
+            }
+        }
+    }
+
     func killAgent(_ agentId: String) {
         guard !projectRoot.isEmpty else { return }
         Task {
@@ -189,6 +227,15 @@ final class AppState {
         }
     }
 
+    private func startGridSubscription(projectRoot: String) {
+        gridSubscriptionTask?.cancel()
+        Task { await gridSubscription?.stop() }
+        guard let gs = gridState else { return }
+        let sub = DaemonGridSubscription(projectRoot: projectRoot, gridState: gs)
+        gridSubscription = sub
+        gridSubscriptionTask = Task { await sub.start() }
+    }
+
     private func restartDaemonAndRefresh() {
         Task {
             do {
@@ -204,6 +251,8 @@ final class AppState {
     func shutdown() {
         openProjectTask?.cancel()
         refreshTask?.cancel()
+        gridSubscriptionTask?.cancel()
+        Task { await gridSubscription?.stop() }
         manifestWatcher?.stop()
         manifestWatcher = nil
         binaryWatcher?.stop()

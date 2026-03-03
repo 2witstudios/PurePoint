@@ -11,9 +11,9 @@ struct PaneCellView: View {
     var body: some View {
         ZStack(alignment: .top) {
             if let agentId, let agent = appState.agent(byId: agentId) {
-                TerminalContainerView(agent: agent)
+                TerminalContainerView(agent: agent, isFocused: isFocused)
             } else {
-                placeholderView
+                PanePlaceholderView(leafId: leafId)
             }
 
             // Focus indicator bar
@@ -31,14 +31,49 @@ struct PaneCellView: View {
             gridState.focusedLeafId = leafId
         }
     }
+}
 
-    private var placeholderView: some View {
-        VStack(spacing: 8) {
+/// Placeholder shown in empty panes — opens command palette to spawn a new agent.
+private struct PanePlaceholderView: View {
+    let leafId: Int
+    @Environment(AppState.self) private var appState
+    @Environment(GridState.self) private var gridState
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "rectangle.dashed")
+                .font(.system(size: 32))
+                .foregroundStyle(.quaternary)
             Text("Empty Pane")
                 .font(.title3)
                 .foregroundStyle(.tertiary)
+            Text("Spawn a new agent")
+                .font(.caption)
+                .foregroundStyle(.quaternary)
+            Button("New Agent\u{2026}") {
+                openCommandPalette()
+            }
+            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            if gridState.pendingPaletteLeafId == leafId {
+                gridState.pendingPaletteLeafId = nil
+                // Defer so the view is laid out before the panel appears
+                DispatchQueue.main.async {
+                    openCommandPalette()
+                }
+            }
+        }
+    }
+
+    private func openCommandPalette() {
+        let state = appState
+        let gs = gridState
+        let lid = leafId
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt in
+            state.spawnAgentForPane(variant: variant, prompt: prompt, leafId: lid, gridState: gs)
+        }
     }
 }
 
@@ -55,25 +90,37 @@ private struct HoverOverlay: View {
                 HStack(spacing: 4) {
                     if gridState.canSplit(axis: .vertical) {
                         overlayButton(icon: "rectangle.split.1x2", tooltip: "Split Right") {
+                            gridState.focusedLeafId = leafId
                             gridState.splitFocused(axis: .vertical)
+                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
                         }
                     }
                     if gridState.canSplit(axis: .horizontal) {
                         overlayButton(icon: "rectangle.split.2x1", tooltip: "Split Below") {
+                            gridState.focusedLeafId = leafId
                             gridState.splitFocused(axis: .horizontal)
+                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
                         }
                     }
-                    overlayButton(icon: "xmark", tooltip: "Close Pane") {
-                        gridState.closeFocused()
+                    if gridState.leafCount > 1 {
+                        overlayButton(icon: "xmark", tooltip: "Close Pane") {
+                            gridState.focusedLeafId = leafId
+                            gridState.closeFocused()
+                        }
                     }
                 }
                 .padding(6)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
                 .padding(8)
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .onHover { isHovered = $0 }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
+                isHovered = hovering
+            }
+        }
     }
 
     private func overlayButton(icon: String, tooltip: String, action: @escaping () -> Void) -> some View {

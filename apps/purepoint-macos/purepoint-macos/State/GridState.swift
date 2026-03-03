@@ -7,14 +7,24 @@ final class GridState {
     var focusedLeafId: Int
     var isActive: Bool = false
 
+    /// Project root for persistence. Set when grid is restored or first used.
+    var projectRoot: String?
+
     /// Instance-scoped ID counter (not static — avoids the ppg-cli global state bug).
     private var nextLeafId: Int
+    @ObservationIgnored private var saveWorkItem: DispatchWorkItem?
 
     init() {
         self.root = .leaf(id: 0, agentId: nil)
         self.focusedLeafId = 0
         self.nextLeafId = 1
     }
+
+    /// The agent ID that owns this grid. Shown in sidebar; clicking restores grid.
+    var ownerAgentId: String?
+
+    /// Set after a UI-initiated split to auto-open the command palette in the new pane.
+    var pendingPaletteLeafId: Int?
 
     // MARK: - Queries
 
@@ -24,70 +34,179 @@ final class GridState {
         root.canSplit(axis: axis)
     }
 
+    /// Agent IDs in grid panes OTHER than the owner. Hidden from sidebar.
+    var childAgentIds: Set<String> {
+        let all = Set(root.allLeafIds.compactMap { root.agentId(forLeafId: $0) })
+        guard let owner = ownerAgentId else { return all }
+        return all.subtracting([owner])
+    }
+
     // MARK: - Mutations
 
-    func setInitialAgent(_ agentId: String) {
-        root = root.settingAgent(agentId, forLeafId: focusedLeafId)
+    /// Enter grid mode from single-pane view. The current agent becomes the grid owner.
+    func enterGridMode(agentId: String, axis: PaneSplitNode.Axis) {
+        root = .leaf(id: 0, agentId: agentId)
+        focusedLeafId = 0
+        nextLeafId = 1
+        ownerAgentId = agentId
+        splitFocused(axis: axis) // Creates second empty pane
         isActive = true
+        scheduleSave()
+    }
+
+    /// Exit grid mode entirely. Clears owner and resets to single leaf.
+    func exitGrid() {
+        isActive = false
+        ownerAgentId = nil
+        root = .leaf(id: 0, agentId: nil)
+        nextLeafId = 1
+        scheduleSave()
+    }
+
+    /// Suspend grid (hide but preserve state). Called when user navigates away.
+    func suspend() {
+        isActive = false
+        scheduleSave()
+    }
+
+    /// Whether a suspended grid can be restored (has saved state with an owner).
+    var canRestore: Bool {
+        ownerAgentId != nil && !isActive && root.leafCount > 1
+    }
+
+    /// Restore a suspended grid if the given agent is the owner. Returns true if restored.
+    func restoreIfOwner(_ agentId: String) -> Bool {
+        guard ownerAgentId == agentId, !isActive, root.leafCount > 1 else { return false }
+        isActive = true
+        return true
     }
 
     func splitFocused(axis: PaneSplitNode.Axis, agentId: String? = nil) {
         guard canSplit(axis: axis) else { return }
         root = root.splittingLeaf(id: focusedLeafId, axis: axis, nextId: &nextLeafId)
-        // Focus the new pane
         let newLeafId = nextLeafId - 1
         if let agentId {
             root = root.settingAgent(agentId, forLeafId: newLeafId)
         }
         focusedLeafId = newLeafId
+        scheduleSave()
     }
 
     func closeFocused() {
         guard leafCount > 1 else {
-            // Last pane — exit grid mode
-            isActive = false
+            exitGrid()
             return
         }
 
-        guard let newRoot = root.removingLeaf(id: focusedLeafId) else { return }
+        let closingId = focusedLeafId
+        // Find sibling before removing
+        let siblingId = root.siblingLeafId(of: closingId)
+
+        guard let newRoot = root.removingLeaf(id: closingId) else { return }
         root = newRoot
-        // Focus the first remaining leaf
-        focusedLeafId = root.allLeafIds.first ?? 0
+        focusedLeafId = siblingId ?? root.allLeafIds.first ?? 0
+
+        // If down to 1 leaf, exit grid mode
+        if root.leafCount <= 1 {
+            exitGrid()
+        } else {
+            scheduleSave()
+        }
     }
 
     func setAgent(_ agentId: String, forLeafId leafId: Int) {
         root = root.settingAgent(agentId, forLeafId: leafId)
+        scheduleSave()
+    }
+
+    func updateRatio(_ newRatio: CGFloat, forSplitIdentifiedByFirstLeaf leafId: Int) {
+        root = root.settingRatio(newRatio, forSplitIdentifiedByFirstLeaf: leafId)
+        scheduleSave()
+    }
+
+    // MARK: - Spatial Focus Navigation
+
+    enum Direction {
+        case up, down, left, right
     }
 
     func moveFocus(direction: Direction) {
-        let leaves = root.allLeafIds
-        guard let currentIndex = leaves.firstIndex(of: focusedLeafId) else { return }
-
-        let nextIndex: Int
-        switch direction {
-        case .next:
-            nextIndex = (currentIndex + 1) % leaves.count
-        case .previous:
-            nextIndex = (currentIndex - 1 + leaves.count) % leaves.count
+        let (axis, forward): (PaneSplitNode.Axis, Bool) = switch direction {
+        case .up: (.horizontal, false)
+        case .down: (.horizontal, true)
+        case .left: (.vertical, false)
+        case .right: (.vertical, true)
         }
-        focusedLeafId = leaves[nextIndex]
+
+        if let adjacent = root.findAdjacentLeaf(from: focusedLeafId, axis: axis, forward: forward) {
+            focusedLeafId = adjacent
+        }
     }
 
-    enum Direction {
-        case next, previous
+    // MARK: - Remote Command Handling
+
+    func handleRemoteCommand(_ command: GridCommandPayload) {
+        switch command {
+        case .split(let leafId, let axisStr):
+            if let leafId { focusedLeafId = leafId }
+            let axis: PaneSplitNode.Axis = axisStr == "h" ? .horizontal : .vertical
+            splitFocused(axis: axis)
+        case .close(let leafId):
+            if let leafId { focusedLeafId = leafId }
+            closeFocused()
+        case .focus(let leafId, let directionStr):
+            if let leafId {
+                focusedLeafId = leafId
+            } else if let directionStr {
+                let dir: Direction = switch directionStr {
+                case "up": .up
+                case "down": .down
+                case "left": .left
+                default: .right
+                }
+                moveFocus(direction: dir)
+            }
+        case .setAgent(let leafId, let agentId):
+            setAgent(agentId, forLeafId: Int(leafId))
+        case .getLayout:
+            break // Daemon handles directly from file
+        }
     }
 
     // MARK: - Persistence
 
     func save(projectRoot: String) {
-        GridLayoutPersistence.save(root, projectRoot: projectRoot)
+        GridLayoutPersistence.save(root, ownerAgentId: ownerAgentId, projectRoot: projectRoot)
     }
 
-    func restore(projectRoot: String) {
-        guard let restored = GridLayoutPersistence.load(projectRoot: projectRoot) else { return }
-        root = restored
+    func restore(projectRoot: String, validAgentIds: Set<String> = []) {
+        self.projectRoot = projectRoot
+        guard let persisted = GridLayoutPersistence.load(projectRoot: projectRoot) else { return }
+        root = persisted.root
+        ownerAgentId = persisted.ownerAgentId
         nextLeafId = (root.allLeafIds.max() ?? 0) + 1
         focusedLeafId = root.allLeafIds.first ?? 0
-        isActive = root.leafCount > 1 || root.allLeafIds.contains(where: { root.agentId(forLeafId: $0) != nil })
+
+        // Only activate if the owner still exists (or we haven't loaded agents yet)
+        if let owner = ownerAgentId, !validAgentIds.isEmpty, !validAgentIds.contains(owner) {
+            ownerAgentId = nil
+            isActive = false
+        } else {
+            isActive = root.leafCount > 1 && ownerAgentId != nil
+        }
+    }
+
+    /// Debounced auto-save (1 second coalesce).
+    func scheduleSave() {
+        saveWorkItem?.cancel()
+        let root = self.root
+        let projectRoot = self.projectRoot
+        let ownerAgentId = self.ownerAgentId
+        let item = DispatchWorkItem {
+            guard let projectRoot else { return }
+            GridLayoutPersistence.save(root, ownerAgentId: ownerAgentId, projectRoot: projectRoot)
+        }
+        saveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
     }
 }
