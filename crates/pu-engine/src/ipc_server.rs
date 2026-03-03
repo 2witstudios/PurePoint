@@ -100,9 +100,14 @@ impl IpcServer {
 
                     let is_shutdown = matches!(request, Request::Shutdown);
 
-                    // Detect attach requests to enter streaming mode
+                    // Detect attach/subscribe requests to enter streaming mode
                     let attach_agent_id = if let Request::Attach { ref agent_id } = request {
                         Some(agent_id.clone())
+                    } else {
+                        None
+                    };
+                    let subscribe_grid_root = if let Request::SubscribeGrid { ref project_root } = request {
+                        Some(project_root.clone())
                     } else {
                         None
                     };
@@ -123,7 +128,7 @@ impl IpcServer {
                     // Enter streaming sub-loop for attach
                     if let Some(agent_id) = attach_agent_id {
                         if !matches!(response, Response::AttachReady { .. }) {
-                            break; // Close connection on failed attach to free semaphore permit
+                            break;
                         }
                         Self::handle_attach_stream(
                             &mut reader,
@@ -132,7 +137,19 @@ impl IpcServer {
                             &agent_id,
                         )
                         .await;
-                        // After attach ends, continue the outer connection loop
+                    }
+
+                    // Enter streaming sub-loop for grid subscription
+                    if let Some(project_root) = subscribe_grid_root {
+                        if matches!(response, Response::GridSubscribed) {
+                            Self::handle_grid_stream(
+                                &mut reader,
+                                &mut writer,
+                                &engine,
+                                &project_root,
+                            )
+                            .await;
+                        }
                     }
                 }
                 Err(_) => break,
@@ -231,6 +248,69 @@ impl IpcServer {
             }
         }
         tracing::debug!(agent_id, "attach stream ended");
+    }
+
+    /// Streaming grid subscription: forwards GridEvent broadcasts to subscriber,
+    /// accepts incoming GridCommand requests from the subscriber connection.
+    async fn handle_grid_stream(
+        reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        engine: &Engine,
+        project_root: &str,
+    ) {
+        let mut rx = engine.subscribe_grid(project_root).await;
+        let pr = project_root.to_string();
+
+        tracing::debug!(project_root, "grid stream started");
+
+        let mut line = String::new();
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(command) => {
+                            let resp = Response::GridEvent {
+                                project_root: pr.clone(),
+                                command,
+                            };
+                            if Self::write_response(writer, &resp).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(project_root, "grid subscriber lagged {n} messages");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                result = async {
+                    line.clear();
+                    reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
+                } => {
+                    match result {
+                        Ok(0) => break, // Client disconnected
+                        Ok(_) => {
+                            let request: Request = match serde_json::from_str(line.trim()) {
+                                Ok(r) => r,
+                                Err(_) => break,
+                            };
+                            // Only accept GridCommand during grid stream
+                            match request {
+                                Request::GridCommand { command, .. } => {
+                                    let resp = engine.handle_grid_command(&pr, command).await;
+                                    if Self::write_response(writer, &resp).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                _ => break, // Any other request exits the grid stream
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        tracing::debug!(project_root, "grid stream ended");
     }
 
     async fn write_response(

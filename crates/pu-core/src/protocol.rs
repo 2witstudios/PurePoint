@@ -77,7 +77,44 @@ pub enum Request {
         cols: u16,
         rows: u16,
     },
+    SubscribeGrid {
+        project_root: String,
+    },
+    GridCommand {
+        project_root: String,
+        command: GridCommand,
+    },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum GridCommand {
+    Split {
+        #[serde(default)]
+        leaf_id: Option<u32>,
+        #[serde(default = "default_axis")]
+        axis: String,
+    },
+    Close {
+        #[serde(default)]
+        leaf_id: Option<u32>,
+    },
+    Focus {
+        #[serde(default)]
+        leaf_id: Option<u32>,
+        #[serde(default)]
+        direction: Option<String>,
+    },
+    SetAgent {
+        leaf_id: u32,
+        agent_id: String,
+    },
+    GetLayout,
+}
+
+fn default_axis() -> String {
+    "v".to_string()
 }
 
 fn default_agent_type() -> String {
@@ -134,6 +171,14 @@ pub enum Response {
         agent_id: String,
         #[serde(with = "hex_bytes")]
         data: Vec<u8>,
+    },
+    GridSubscribed,
+    GridLayout {
+        layout: serde_json::Value,
+    },
+    GridEvent {
+        project_root: String,
+        command: GridCommand,
     },
     Ok,
     ShuttingDown,
@@ -362,5 +407,110 @@ mod tests {
     #[test]
     fn given_protocol_version_should_be_1() {
         assert_eq!(PROTOCOL_VERSION, 1);
+    }
+
+    // --- GridCommand round-trips ---
+
+    #[test]
+    fn given_grid_split_command_should_round_trip() {
+        let cmd = GridCommand::Split { leaf_id: Some(2), axis: "v".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+        match parsed {
+            GridCommand::Split { leaf_id, axis } => {
+                assert_eq!(leaf_id, Some(2));
+                assert_eq!(axis, "v");
+            }
+            _ => panic!("expected Split"),
+        }
+    }
+
+    #[test]
+    fn given_grid_close_command_should_round_trip() {
+        let cmd = GridCommand::Close { leaf_id: None };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, GridCommand::Close { leaf_id: None }));
+    }
+
+    #[test]
+    fn given_grid_focus_command_should_round_trip() {
+        let cmd = GridCommand::Focus { leaf_id: None, direction: Some("right".into()) };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+        match parsed {
+            GridCommand::Focus { leaf_id, direction } => {
+                assert!(leaf_id.is_none());
+                assert_eq!(direction.unwrap(), "right");
+            }
+            _ => panic!("expected Focus"),
+        }
+    }
+
+    #[test]
+    fn given_grid_set_agent_command_should_round_trip() {
+        let cmd = GridCommand::SetAgent { leaf_id: 3, agent_id: "ag-abc".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+        match parsed {
+            GridCommand::SetAgent { leaf_id, agent_id } => {
+                assert_eq!(leaf_id, 3);
+                assert_eq!(agent_id, "ag-abc");
+            }
+            _ => panic!("expected SetAgent"),
+        }
+    }
+
+    #[test]
+    fn given_grid_get_layout_command_should_round_trip() {
+        let cmd = GridCommand::GetLayout;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, GridCommand::GetLayout));
+    }
+
+    #[test]
+    fn given_subscribe_grid_request_should_round_trip() {
+        let req = Request::SubscribeGrid { project_root: "/test".into() };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::SubscribeGrid { project_root } => assert_eq!(project_root, "/test"),
+            _ => panic!("expected SubscribeGrid"),
+        }
+    }
+
+    #[test]
+    fn given_grid_command_request_should_round_trip() {
+        let req = Request::GridCommand {
+            project_root: "/test".into(),
+            command: GridCommand::Split { leaf_id: Some(1), axis: "h".into() },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::GridCommand { project_root, command } => {
+                assert_eq!(project_root, "/test");
+                assert!(matches!(command, GridCommand::Split { .. }));
+            }
+            _ => panic!("expected GridCommand"),
+        }
+    }
+
+    #[test]
+    fn given_grid_event_response_should_round_trip() {
+        let resp = Response::GridEvent {
+            project_root: "/test".into(),
+            command: GridCommand::Focus { leaf_id: Some(2), direction: None },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::GridEvent { project_root, command } => {
+                assert_eq!(project_root, "/test");
+                assert!(matches!(command, GridCommand::Focus { .. }));
+            }
+            _ => panic!("expected GridEvent"),
+        }
     }
 }

@@ -10,7 +10,7 @@ use pu_core::config;
 use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
-use pu_core::protocol::{AgentStatusReport, KillTarget, Request, Response, PROTOCOL_VERSION};
+use pu_core::protocol::{AgentStatusReport, GridCommand, KillTarget, Request, Response, PROTOCOL_VERSION};
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 
 use crate::agent_monitor;
@@ -24,6 +24,8 @@ pub struct Engine {
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
     login_path: String,
     reaped_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Per-project broadcast channels for grid commands.
+    grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
 }
 
 impl Engine {
@@ -34,6 +36,7 @@ impl Engine {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_path: Self::resolve_login_path().await,
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            grid_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -80,6 +83,12 @@ impl Engine {
             Request::Input { agent_id, data } => self.handle_input(&agent_id, &data).await,
             Request::Resize { agent_id, cols, rows } => {
                 self.handle_resize(&agent_id, cols, rows).await
+            }
+            Request::SubscribeGrid { project_root } => {
+                self.handle_subscribe_grid(&project_root).await
+            }
+            Request::GridCommand { project_root, command } => {
+                self.handle_grid_command(&project_root, command).await
             }
         }
     }
@@ -614,6 +623,59 @@ impl Engine {
         sessions
             .get(agent_id)
             .map(|h| (h.output_buffer.clone(), h.master_fd()))
+    }
+
+    // --- Grid ---
+
+    async fn handle_subscribe_grid(&self, project_root: &str) -> Response {
+        let mut channels = self.grid_channels.lock().await;
+        channels
+            .entry(project_root.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
+        Response::GridSubscribed
+    }
+
+    pub async fn handle_grid_command(&self, project_root: &str, command: GridCommand) -> Response {
+        // For GetLayout, read the grid-layout.json directly
+        if matches!(command, GridCommand::GetLayout) {
+            let root = project_root.to_string();
+            return match tokio::task::spawn_blocking(move || {
+                let path = format!("{root}/.pu/grid-layout.json");
+                std::fs::read_to_string(path)
+            })
+            .await
+            {
+                Ok(Ok(contents)) => match serde_json::from_str(&contents) {
+                    Ok(layout) => Response::GridLayout { layout },
+                    Err(e) => Response::Error {
+                        code: "PARSE_ERROR".into(),
+                        message: format!("invalid grid layout JSON: {e}"),
+                    },
+                },
+                _ => Response::GridLayout {
+                    layout: serde_json::Value::Null,
+                },
+            };
+        }
+
+        // Broadcast mutation commands to subscribers
+        let channels = self.grid_channels.lock().await;
+        if let Some(tx) = channels.get(project_root) {
+            let _ = tx.send(command.clone());
+        }
+        Response::Ok
+    }
+
+    /// Get a grid broadcast receiver for a project (used by IPC server for streaming).
+    pub async fn subscribe_grid(
+        &self,
+        project_root: &str,
+    ) -> tokio::sync::broadcast::Receiver<GridCommand> {
+        let mut channels = self.grid_channels.lock().await;
+        let tx = channels
+            .entry(project_root.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
+        tx.subscribe()
     }
 
     // --- Helpers ---
