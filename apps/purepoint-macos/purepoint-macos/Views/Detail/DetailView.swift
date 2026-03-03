@@ -34,7 +34,10 @@ struct DetailView: View {
         switch selection {
         case .agent(let id):
             if let agent = appState.agent(byId: id) {
-                TerminalContainerView(agent: agent)
+                ZStack(alignment: .topTrailing) {
+                    TerminalContainerView(agent: agent)
+                    SinglePaneSplitOverlay(agentId: id)
+                }
             } else {
                 placeholderView(icon: "cpu", title: "Agent not found")
             }
@@ -63,5 +66,57 @@ struct DetailView: View {
                 .font(.title3)
                 .foregroundStyle(.primary)
         }
+    }
+}
+
+/// Split overlay for single-pane agent view — enters grid mode on click.
+private struct SinglePaneSplitOverlay: View {
+    let agentId: String
+    @State private var isHovered = false
+    @Environment(AppState.self) private var appState
+    @Environment(GridState.self) private var gridState
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.clear
+
+            if isHovered {
+                HStack(spacing: 4) {
+                    overlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
+                        enterGrid(axis: .vertical)
+                    }
+                    overlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
+                        enterGrid(axis: .horizontal)
+                    }
+                }
+                .padding(6)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .padding(8)
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
+                isHovered = hovering
+            }
+        }
+    }
+
+    private func enterGrid(axis: PaneSplitNode.Axis) {
+        gridState.projectRoot = appState.projectRoot
+        gridState.enterGridMode(agentId: agentId, axis: axis)
+        gridState.pendingPaletteLeafId = gridState.focusedLeafId
+    }
+
+    private func overlayButton(icon: String, tooltip: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
     }
 }
