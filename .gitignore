@@ -39,3 +39,12 @@ build/
 
 # Claude Code
 .claude/
+
+# Point Guard
+.ppg/results/
+.ppg/logs/
+.ppg/manifest.json
+.ppg/prompts/
+.ppg/agent-prompts/
+.ppg/swarms/
+.ppg/conductor-context.md

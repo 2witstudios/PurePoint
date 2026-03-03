@@ -2,6 +2,7 @@ import AppKit
 import SwiftTerm
 
 enum TerminalTheme {
+    static let font = NSFont(name: "Menlo", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     static let background = NSColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
     static let foreground = NSColor(red: 0.85, green: 0.85, blue: 0.87, alpha: 1)
 
@@ -75,6 +76,6 @@ enum TerminalTheme {
 
         term.refresh(startRow: 0, endRow: term.rows - 1)
         terminalView.needsDisplay = true
-        terminalView.font = terminalView.font
+        terminalView.font = font
     }
 }

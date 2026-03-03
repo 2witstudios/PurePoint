@@ -154,13 +154,40 @@ fn default_env_files() -> Vec<String> {
     vec![".env".to_string(), ".env.local".to_string()]
 }
 
-fn default_agents() -> HashMap<String, AgentConfig> {
+pub fn default_agents() -> HashMap<String, AgentConfig> {
     let mut map = HashMap::new();
     map.insert(
         "claude".to_string(),
         AgentConfig {
             name: "claude".to_string(),
             command: "claude".to_string(),
+            prompt_flag: None,
+            interactive: true,
+        },
+    );
+    map.insert(
+        "codex".to_string(),
+        AgentConfig {
+            name: "codex".to_string(),
+            command: "codex".to_string(),
+            prompt_flag: None,
+            interactive: true,
+        },
+    );
+    map.insert(
+        "opencode".to_string(),
+        AgentConfig {
+            name: "opencode".to_string(),
+            command: "opencode".to_string(),
+            prompt_flag: None,
+            interactive: true,
+        },
+    );
+    map.insert(
+        "terminal".to_string(),
+        AgentConfig {
+            name: "terminal".to_string(),
+            command: "shell".to_string(), // sentinel — engine resolves to $SHELL
             prompt_flag: None,
             interactive: true,
         },
@@ -451,8 +478,28 @@ mod tests {
         assert_eq!(config.default_agent, "claude");
         assert!(config.agents.contains_key("claude"));
         let claude = &config.agents["claude"];
+        assert_eq!(claude.command, "claude");
         assert!(claude.prompt_flag.is_none());
         assert!(claude.interactive);
+    }
+
+    #[test]
+    fn given_default_config_should_have_codex_and_opencode_agents() {
+        let config = Config::default();
+        assert!(config.agents.contains_key("codex"));
+        assert_eq!(config.agents["codex"].command, "codex");
+        assert!(config.agents.contains_key("opencode"));
+        assert_eq!(config.agents["opencode"].command, "opencode");
+    }
+
+    #[test]
+    fn given_default_config_should_have_terminal_agent() {
+        let config = Config::default();
+        assert!(config.agents.contains_key("terminal"));
+        let terminal = &config.agents["terminal"];
+        assert_eq!(terminal.command, "shell");
+        assert!(terminal.prompt_flag.is_none());
+        assert!(terminal.interactive);
     }
 
     #[test]

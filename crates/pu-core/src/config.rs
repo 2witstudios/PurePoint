@@ -15,7 +15,14 @@ pub fn load_config_strict(project_root: &Path) -> Result<Config, PuError> {
 fn load_config_result(project_root: &Path) -> Result<Config, PuError> {
     let path = paths::config_path(project_root);
     match std::fs::read_to_string(&path) {
-        Ok(content) => Ok(serde_yml::from_str(&content)?), // propagate parse error
+        Ok(content) => {
+            let mut config: Config = serde_yml::from_str(&content)?;
+            // Fill in any agents missing from file with code defaults
+            for (name, agent) in crate::types::default_agents() {
+                config.agents.entry(name).or_insert(agent);
+            }
+            Ok(config)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
         Err(e) => Err(PuError::Io(e)),
     }
@@ -27,8 +34,8 @@ pub fn resolve_agent<'a>(config: &'a Config, name: &str) -> Option<&'a AgentConf
 
 pub fn write_default_config(project_root: &Path) -> Result<(), PuError> {
     let path = paths::config_path(project_root);
-    let config = Config::default();
-    let yaml = serde_yml::to_string(&config)?;
+    // Only write user-level settings. Agent defaults come from code.
+    let yaml = "defaultAgent: claude\nenvFiles:\n- .env\n- .env.local\n";
     std::fs::write(&path, yaml)?;
     Ok(())
 }
@@ -100,7 +107,7 @@ envFiles: [".env"]
     }
 
     #[test]
-    fn given_write_default_config_should_create_yaml_file() {
+    fn given_write_default_config_should_create_minimal_yaml() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
@@ -110,7 +117,47 @@ envFiles: [".env"]
         let path = crate::paths::config_path(root);
         assert!(path.exists());
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("claude"));
+        assert!(content.contains("defaultAgent: claude"));
+        assert!(content.contains(".env"));
+        // Should NOT contain agents section — defaults come from code
+        assert!(!content.contains("agents:"));
+    }
+
+    #[test]
+    fn given_config_with_one_agent_should_merge_code_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        // Config file only defines codex — claude, opencode, terminal should be filled from defaults
+        let yaml = "defaultAgent: codex\nagents:\n  codex:\n    name: codex\n    command: \"codex --yolo\"\n";
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = load_config(root);
+        assert_eq!(config.default_agent, "codex");
+        // codex should keep file value
+        assert_eq!(config.agents["codex"].command, "codex --yolo");
+        // claude, opencode, terminal should come from code defaults
+        assert!(config.agents.contains_key("claude"));
+        assert_eq!(config.agents["claude"].command, "claude");
+        assert!(config.agents.contains_key("opencode"));
+        assert_eq!(config.agents["opencode"].command, "opencode");
+        assert!(config.agents.contains_key("terminal"));
+        assert_eq!(config.agents["terminal"].command, "shell");
+    }
+
+    #[test]
+    fn given_config_without_agents_key_should_get_all_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml = "defaultAgent: claude\nenvFiles:\n- .env\n";
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = load_config(root);
+        assert!(config.agents.contains_key("claude"));
+        assert!(config.agents.contains_key("codex"));
+        assert!(config.agents.contains_key("opencode"));
+        assert!(config.agents.contains_key("terminal"));
     }
 
     #[test]

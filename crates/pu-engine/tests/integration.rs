@@ -4,7 +4,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 async fn start_server(sock: &std::path::Path) -> tokio::task::JoinHandle<()> {
-    let engine = pu_engine::engine::Engine::new();
+    let engine = pu_engine::engine::Engine::new().await;
     let server = pu_engine::ipc_server::IpcServer::bind(sock, engine).unwrap();
     tokio::spawn(async move {
         server.run().await.ok();

@@ -59,7 +59,9 @@ class TerminalPaneNSView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        // Terminal creation deferred to layout() to ensure non-zero bounds
+        if window != nil && !terminalInstalled {
+            needsLayout = true
+        }
     }
 
     override func layout() {
@@ -85,6 +87,15 @@ class TerminalPaneNSView: NSView {
         attachTask = Task {
             await session.start()
         }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        if let tv = terminal?.terminalView {
+            window?.makeFirstResponder(tv)
+        }
+        super.mouseDown(with: event)
     }
 
     override func viewDidChangeEffectiveAppearance() {

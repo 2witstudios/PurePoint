@@ -256,7 +256,7 @@ mod tests {
     async fn given_ipc_server_should_accept_connection() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
-        let engine = Engine::new();
+        let engine = Engine::new().await;
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });
@@ -273,7 +273,7 @@ mod tests {
     async fn given_health_request_should_respond_with_report() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
-        let engine = Engine::new();
+        let engine = Engine::new().await;
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });
@@ -308,7 +308,7 @@ mod tests {
         let sock_path = tmp.path().join("test.sock");
         let project_root = tmp.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
-        let engine = Engine::new();
+        let engine = Engine::new().await;
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });
@@ -344,7 +344,7 @@ mod tests {
     async fn given_shutdown_request_should_respond_and_stop() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
-        let engine = Engine::new();
+        let engine = Engine::new().await;
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });

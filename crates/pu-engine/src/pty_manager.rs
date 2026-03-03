@@ -16,6 +16,7 @@ pub struct SpawnConfig {
     pub args: Vec<String>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
+    pub env_remove: Vec<String>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -93,6 +94,14 @@ impl NativePtyHost {
                 ))
             })
             .collect::<Result<Vec<_>, std::io::Error>>()?;
+        let c_env_remove: Vec<CString> = config
+            .env_remove
+            .iter()
+            .map(|k| {
+                CString::new(k.as_str())
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+            })
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
 
         let (exit_tx, exit_rx) = watch::channel(None);
 
@@ -133,6 +142,11 @@ impl NativePtyHost {
 
                     // Set cwd
                     libc::chdir(c_cwd.as_ptr());
+
+                    // Remove env vars (e.g. CLAUDECODE to avoid nested-session detection)
+                    for k in &c_env_remove {
+                        libc::unsetenv(k.as_ptr());
+                    }
 
                     // Set env
                     for (k, v) in &c_env {
@@ -301,6 +315,7 @@ mod tests {
                 args: vec!["hello".into()],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })
@@ -322,6 +337,7 @@ mod tests {
                 args: vec!["hello_pty_test".into()],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })
@@ -348,6 +364,7 @@ mod tests {
                 args: vec!["done".into()],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })
@@ -371,6 +388,7 @@ mod tests {
                 args: vec!["-c".into(), "exit 42".into()],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })
@@ -392,6 +410,7 @@ mod tests {
                 args: vec!["60".into()],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })
@@ -417,6 +436,7 @@ mod tests {
                 args: vec![],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })
@@ -447,6 +467,7 @@ mod tests {
                 args: vec!["5".into()],
                 cwd: "/tmp".into(),
                 env: vec![],
+                env_remove: vec![],
                 cols: 80,
                 rows: 24,
             })

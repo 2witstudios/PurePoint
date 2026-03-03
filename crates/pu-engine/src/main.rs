@@ -46,7 +46,23 @@ async fn main() {
 
     tracing::info!(pid = std::process::id(), socket = %socket.display(), managed, "starting pu-engine");
 
-    let engine = Engine::new();
+    // In managed mode, exit when the parent process (macOS app) dies.
+    // Without this, the daemon outlives app restarts and stale binaries persist.
+    if managed {
+        let parent_pid = std::os::unix::process::parent_id();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                // On macOS, orphaned processes get reparented to PID 1 (launchd)
+                if std::os::unix::process::parent_id() != parent_pid {
+                    tracing::info!("parent process died, shutting down managed daemon");
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+
+    let engine = Engine::new().await;
     let server = match IpcServer::bind(&socket, engine) {
         Ok(s) => s,
         Err(e) => {

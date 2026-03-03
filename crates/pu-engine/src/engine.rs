@@ -22,20 +22,31 @@ pub struct Engine {
     start_time: Instant,
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
-}
-
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new()
-    }
+    login_path: String,
 }
 
 impl Engine {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         Self {
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            login_path: Self::resolve_login_path().await,
+        }
+    }
+
+    async fn resolve_login_path() -> String {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        match tokio::process::Command::new(&shell)
+            .args(["-l", "-i", "-c", "echo $PATH"])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            _ => std::env::var("PATH").unwrap_or_default(),
         }
     }
 
@@ -262,11 +273,45 @@ impl Engine {
             .map(String::from)
             .collect();
         let command = cmd_parts.remove(0);
+        // Resolve "shell" sentinel to user's login shell
+        let command = if command == "shell" {
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+        } else {
+            command
+        };
         let mut args = cmd_parts;
-        if let Some(flag) = &agent_cfg.prompt_flag {
-            args.push(flag.clone());
+
+        // Add agent-type-specific flags (not stored in config — engine concern)
+        match agent_type {
+            "claude" => {
+                if !args.contains(&"--dangerously-skip-permissions".to_string()) {
+                    args.insert(0, "--dangerously-skip-permissions".into());
+                }
+            }
+            "codex" => {
+                if !args.contains(&"--full-auto".to_string()) {
+                    args.insert(0, "--full-auto".into());
+                }
+            }
+            _ => {}
         }
-        args.push(prompt.to_string());
+
+        // Generate session ID for claude agents (enables resume via --resume)
+        let session_id = if agent_type == "claude" {
+            let id = pu_core::id::session_id();
+            args.push("--session-id".into());
+            args.push(id.clone());
+            Some(id)
+        } else {
+            None
+        };
+
+        if !prompt.is_empty() {
+            if let Some(flag) = &agent_cfg.prompt_flag {
+                args.push(flag.clone());
+            }
+            args.push(prompt.to_string());
+        }
 
         // Determine working directory
         let (cwd, worktree_id) = if root || worktree.is_some() {
@@ -301,7 +346,12 @@ impl Engine {
             command,
             args,
             cwd: cwd.clone(),
-            env: vec![],
+            env: vec![
+                ("PATH".into(), self.login_path.clone()),
+                ("TERM".into(), "xterm-256color".into()),
+                ("COLORTERM".into(), "truecolor".into()),
+            ],
+            env_remove: vec!["CLAUDECODE".into()],
             cols: 120,
             rows: 40,
         };
@@ -336,7 +386,7 @@ impl Engine {
             exit_code: None,
             error: None,
             pid: Some(pid),
-            session_id: None,
+            session_id,
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -599,7 +649,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn given_unknown_agent_should_return_none() {
-        let engine = Engine::new();
+        let engine = Engine::new().await;
         let handles = engine.get_attach_handles("ag-nonexistent").await;
         assert!(handles.is_none());
     }
