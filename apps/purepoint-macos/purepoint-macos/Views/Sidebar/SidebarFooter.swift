@@ -56,7 +56,7 @@ struct SidebarFooter: View {
     private func showCommandPalette() {
         guard let project = activeProject else { return }
         let sel = selection
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt, name in
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, variants: AgentVariant.variantsWithWorktree) { variant, prompt, name in
             project.createAgent(variant: variant, prompt: prompt, name: name, selection: sel)
         }
     }

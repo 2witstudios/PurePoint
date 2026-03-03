@@ -52,6 +52,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: selection) { _, newValue in
+            appState.activeSidebarSelection = newValue
+
             // Track active project for Cmd+N routing
             switch newValue {
             case .agent(let id):

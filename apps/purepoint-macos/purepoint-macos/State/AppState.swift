@@ -9,6 +9,7 @@ final class AppState {
     var projects: [ProjectState] = []
     var selectedAgentId: String?
     var activeProjectRoot: String?
+    var activeSidebarSelection: SidebarSelection?
     var daemonError: String?
     var showSettings = false
     var pendingSelectAgentId: String?

@@ -133,7 +133,7 @@ struct purepoint_macosApp: App {
         }
         guard let project else { return }
         CommandPalettePanel.show(relativeTo: NSApp.keyWindow, variants: AgentVariant.variantsWithWorktree) { variant, prompt, name in
-            project.createAgent(variant: variant, prompt: prompt, name: name, selection: nil)
+            project.createAgent(variant: variant, prompt: prompt, name: name, selection: appState.activeSidebarSelection)
         }
     }
 
