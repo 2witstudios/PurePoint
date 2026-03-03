@@ -1,6 +1,6 @@
 import Foundation
 
-struct ManifestModel: Codable, Sendable {
+nonisolated struct ManifestModel: Codable, Sendable {
     let version: Int
     let projectRoot: String
     let worktrees: [String: WorktreeEntry]
@@ -19,7 +19,7 @@ struct ManifestModel: Codable, Sendable {
     }
 }
 
-struct WorktreeEntry: Codable, Sendable {
+nonisolated struct WorktreeEntry: Codable, Sendable {
     let id: String
     let name: String
     let path: String
@@ -51,7 +51,7 @@ struct WorktreeEntry: Codable, Sendable {
     }
 }
 
-struct AgentEntry: Codable, Sendable {
+nonisolated struct AgentEntry: Codable, Sendable {
     let id: String
     let name: String
     let agentType: String

@@ -254,7 +254,7 @@ nonisolated enum DaemonResponse: Decodable {
     }
 }
 
-struct AgentStatusReport: Decodable {
+nonisolated struct AgentStatusReport: Decodable {
     let id: String
     let name: String
     let agentType: String
@@ -295,11 +295,11 @@ struct AgentStatusReport: Decodable {
 
 // MARK: - Response payload helpers
 
-private struct InitResultPayload: Decodable {
+private nonisolated struct InitResultPayload: Decodable {
     let created: Bool
 }
 
-private struct HealthReportPayload: Decodable {
+private nonisolated struct HealthReportPayload: Decodable {
     let pid: Int
     let uptimeSeconds: Int
     let protocolVersion: Int
@@ -313,12 +313,12 @@ private struct HealthReportPayload: Decodable {
     }
 }
 
-private struct StatusReportPayload: Decodable {
+private nonisolated struct StatusReportPayload: Decodable {
     let worktrees: [WorktreeEntry]
     let agents: [AgentStatusReport]
 }
 
-private struct AttachReadyPayload: Decodable {
+private nonisolated struct AttachReadyPayload: Decodable {
     let bufferedBytes: Int
 
     enum CodingKeys: String, CodingKey {
@@ -326,7 +326,7 @@ private struct AttachReadyPayload: Decodable {
     }
 }
 
-private struct OutputPayload: Decodable {
+private nonisolated struct OutputPayload: Decodable {
     let agentId: String
     let data: String
 
@@ -336,7 +336,7 @@ private struct OutputPayload: Decodable {
     }
 }
 
-private struct SpawnResultPayload: Decodable {
+private nonisolated struct SpawnResultPayload: Decodable {
     let worktreeId: String?
     let agentId: String
     let status: String
@@ -348,15 +348,15 @@ private struct SpawnResultPayload: Decodable {
     }
 }
 
-private struct KillResultPayload: Decodable {
+private nonisolated struct KillResultPayload: Decodable {
     let killed: [String]
 }
 
-private struct SuspendResultPayload: Decodable {
+private nonisolated struct SuspendResultPayload: Decodable {
     let suspended: [String]
 }
 
-private struct ResumeResultPayload: Decodable {
+private nonisolated struct ResumeResultPayload: Decodable {
     let agentId: String
     let status: String
 
@@ -366,12 +366,12 @@ private struct ResumeResultPayload: Decodable {
     }
 }
 
-private struct ErrorPayload: Decodable {
+private nonisolated struct ErrorPayload: Decodable {
     let code: String
     let message: String
 }
 
-private struct GridLayoutPayload: Decodable {
+private nonisolated struct GridLayoutPayload: Decodable {
     let layout: AnyCodable
 
     var layoutData: Data {
@@ -382,7 +382,7 @@ private struct GridLayoutPayload: Decodable {
 }
 
 /// Minimal wrapper so we can round-trip arbitrary JSON.
-private struct AnyCodable: Codable {
+private nonisolated struct AnyCodable: Codable {
     let value: Any
 
     init(from decoder: Decoder) throws {
@@ -425,7 +425,7 @@ private struct AnyCodable: Codable {
     init(value: Any) { self.value = value }
 }
 
-private struct GridEventPayload: Decodable {
+private nonisolated struct GridEventPayload: Decodable {
     let projectRoot: String
     let command: GridCommandPayload
 
@@ -574,7 +574,7 @@ nonisolated final class DaemonLineReader: @unchecked Sendable {
 
 // MARK: - Errors
 
-enum DaemonClientError: Error, LocalizedError {
+nonisolated enum DaemonClientError: Error, LocalizedError {
     case eof
     case cancelled
     case notRunning
@@ -590,7 +590,7 @@ enum DaemonClientError: Error, LocalizedError {
 
 // MARK: - Helpers
 
-private struct DynamicCodingKey: CodingKey {
+private nonisolated struct DynamicCodingKey: CodingKey {
     var stringValue: String
     var intValue: Int? { nil }
 
@@ -602,9 +602,9 @@ private struct DynamicCodingKey: CodingKey {
     }
 }
 
-private let hexDigits: [UInt8] = Array("0123456789abcdef".utf8)
+nonisolated private let hexDigits: [UInt8] = Array("0123456789abcdef".utf8)
 
-extension Data {
+nonisolated extension Data {
     var hexString: String {
         var chars = [UInt8]()
         chars.reserveCapacity(count * 2)

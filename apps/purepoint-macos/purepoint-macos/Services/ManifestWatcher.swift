@@ -8,13 +8,13 @@ final class ManifestWatcher: @unchecked Sendable {
     private var source: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
     private let path: String
-    private let onChange: @Sendable () -> Void
+    private let onChange: @MainActor @Sendable () -> Void
     private var debounceWork: DispatchWorkItem?
     private static let debounceInterval: TimeInterval = 0.3
 
     var isWatching: Bool { source != nil }
 
-    init(path: String, onChange: @escaping @Sendable () -> Void) {
+    init(path: String, onChange: @escaping @MainActor @Sendable () -> Void) {
         self.path = path
         self.onChange = onChange
         startWatching()
@@ -69,7 +69,7 @@ final class ManifestWatcher: @unchecked Sendable {
         debounceWork?.cancel()
         let callback = onChange
         let work = DispatchWorkItem {
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 callback()
             }
         }
