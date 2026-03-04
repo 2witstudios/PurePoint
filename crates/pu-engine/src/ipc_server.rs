@@ -31,6 +31,11 @@ impl IpcServer {
         })
     }
 
+    /// Get a reference to the engine for starting background tasks.
+    pub fn engine(&self) -> &Arc<Engine> {
+        &self.engine
+    }
+
     pub async fn run(self) -> Result<(), std::io::Error> {
         let mut sigterm = tokio::signal::unix::signal(
             tokio::signal::unix::SignalKind::terminate(),
@@ -183,7 +188,7 @@ impl IpcServer {
         engine: &Engine,
         agent_id: &str,
     ) {
-        let (buffer, master_fd) = match engine.get_attach_handles(agent_id).await {
+        let (buffer, master_fd, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
             Some(handles) => handles,
             None => {
                 let _ = Self::write_response(writer, &Response::Error {
@@ -216,6 +221,7 @@ impl IpcServer {
             }
         }
 
+        let process_exited = exit_rx.borrow().is_some();
         let mut line = String::new();
         loop {
             tokio::select! {
@@ -232,6 +238,19 @@ impl IpcServer {
                             break;
                         }
                     }
+                }
+                Ok(()) = exit_rx.changed(), if !process_exited => {
+                    // Drain any remaining buffered output
+                    let (data, _) = buffer.read_from(offset);
+                    if !data.is_empty() {
+                        let resp = Response::Output {
+                            agent_id: agent_id.to_string(),
+                            data,
+                        };
+                        let _ = Self::write_response(writer, &resp).await;
+                    }
+                    tracing::debug!(agent_id, "attach stream ended: process exited");
+                    break;
                 }
                 result = async {
                     line.clear();
