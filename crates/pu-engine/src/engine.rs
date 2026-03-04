@@ -105,8 +105,9 @@ impl Engine {
 
     async fn resolve_login_path() -> String {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        match tokio::process::Command::new(&shell)
-            .args(["-l", "-i", "-c", "echo $PATH"])
+        let base_path = match tokio::process::Command::new(&shell)
+            .args(["-l", "-c", "echo $PATH"])
+            .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
             .await
@@ -115,7 +116,24 @@ impl Engine {
                 String::from_utf8_lossy(&output.stdout).trim().to_string()
             }
             _ => std::env::var("PATH").unwrap_or_default(),
+        };
+
+        // Append common tool directories that may only appear in .zshrc/.bashrc
+        // (guards against the missing-claude-binary issue from d60c911)
+        let home = std::env::var("HOME").unwrap_or_default();
+        let fallbacks = [
+            format!("{home}/.local/bin"),
+            format!("{home}/.cargo/bin"),
+            "/usr/local/bin".to_string(),
+            "/opt/homebrew/bin".to_string(),
+        ];
+        let mut path = base_path;
+        for dir in fallbacks {
+            if !path.split(':').any(|p| p == dir) {
+                path = format!("{path}:{dir}");
+            }
         }
+        path
     }
 
     pub async fn handle_request(&self, request: Request) -> Response {
