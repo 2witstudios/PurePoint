@@ -50,6 +50,42 @@ pub async fn remove_worktree(
     Ok(())
 }
 
+pub async fn delete_local_branch(
+    repo_root: &Path,
+    branch: &str,
+) -> Result<(), std::io::Error> {
+    let output = tokio::process::Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(
+            format!("git branch -D failed: {stderr}"),
+        ));
+    }
+    Ok(())
+}
+
+pub async fn delete_remote_branch(
+    repo_root: &Path,
+    branch: &str,
+) -> Result<(), std::io::Error> {
+    let output = tokio::process::Command::new("git")
+        .args(["push", "origin", "--delete", branch])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(
+            format!("git push origin --delete failed: {stderr}"),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +136,41 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let wt_path = tmp.path().join("wt-fail");
         let result = create_worktree(tmp.path(), &wt_path, "pu/fail", "HEAD").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_branch_should_delete_locally() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        // Create a branch via worktree, then remove worktree to leave the branch
+        let wt_path = tmp.path().join("wt-del");
+        create_worktree(tmp.path(), &wt_path, "pu/del-branch", "HEAD")
+            .await
+            .unwrap();
+        remove_worktree(tmp.path(), &wt_path).await.unwrap();
+
+        let result = delete_local_branch(tmp.path(), "pu/del-branch").await;
+        assert!(result.is_ok(), "delete_local_branch failed: {result:?}");
+
+        // Verify branch is gone
+        let output = std::process::Command::new("git")
+            .args(["branch", "--list", "pu/del-branch"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let branches = String::from_utf8_lossy(&output.stdout);
+        assert!(branches.trim().is_empty(), "branch should be deleted");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_no_remote_should_fail_delete_remote_branch() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        // No remote configured, so this should fail
+        let result = delete_remote_branch(tmp.path(), "pu/no-remote").await;
         assert!(result.is_err());
     }
 }

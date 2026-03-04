@@ -114,6 +114,9 @@ impl Engine {
         match request {
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => self.handle_init(&project_root).await,
+            Request::Rename { project_root, agent_id, name } => {
+                self.handle_rename(&project_root, &agent_id, &name).await
+            }
             Request::Shutdown => Response::ShuttingDown,
             Request::Status { project_root, agent_id } => {
                 self.handle_status(&project_root, agent_id.as_deref()).await
@@ -153,6 +156,9 @@ impl Engine {
             }
             Request::GridCommand { project_root, command } => {
                 self.handle_grid_command(&project_root, command).await
+            }
+            Request::DeleteWorktree { project_root, worktree_id } => {
+                self.handle_delete_worktree(&project_root, &worktree_id).await
             }
         }
     }
@@ -685,6 +691,117 @@ impl Engine {
         self.notify_status_change(project_root).await;
 
         Response::KillResult { killed, exit_codes }
+    }
+
+    async fn handle_delete_worktree(&self, project_root: &str, worktree_id: &str) -> Response {
+        let m = match self.get_cached_manifest(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let wt = match m.worktrees.get(worktree_id) {
+            Some(wt) => wt.clone(),
+            None => {
+                return Response::Error {
+                    code: "WORKTREE_NOT_FOUND".into(),
+                    message: format!("worktree {worktree_id} not found"),
+                };
+            }
+        };
+
+        // 1. Kill all agents in the worktree
+        let agent_ids: Vec<String> = wt.agents.keys().cloned().collect();
+        let handles_to_kill: Vec<(String, AgentHandle)> = {
+            let mut sessions = self.sessions.lock().await;
+            agent_ids
+                .iter()
+                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
+                .collect()
+        };
+        for (_, handle) in &handles_to_kill {
+            self.pty_host
+                .kill(handle, Duration::from_secs(5))
+                .await
+                .ok();
+        }
+
+        // 2. Remove git worktree directory
+        let root_path = Path::new(project_root);
+        let wt_path = paths::worktree_path(root_path, worktree_id);
+        git::remove_worktree(root_path, &wt_path).await.ok();
+
+        // 3. Delete local branch (soft-fail)
+        let branch = wt.branch.clone();
+        let branch_deleted = git::delete_local_branch(root_path, &branch).await.is_ok();
+
+        // 4. Delete remote branch (soft-fail)
+        let remote_deleted = git::delete_remote_branch(root_path, &branch).await.is_ok();
+
+        // 5. Remove worktree from manifest
+        let wt_id = worktree_id.to_string();
+        let killed_agents = agent_ids.clone();
+        let pr = project_root.to_string();
+        let pr2 = pr.clone();
+        let cache = self.manifest_cache.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Ok(updated) = manifest::update_manifest(Path::new(&pr), move |mut m| {
+                m.worktrees.shift_remove(&wt_id);
+                m
+            }) {
+                cache.lock().unwrap().insert(pr2, updated);
+            }
+        })
+        .await
+        .ok();
+
+        self.notify_status_change(project_root).await;
+
+        Response::DeleteWorktreeResult {
+            worktree_id: worktree_id.to_string(),
+            killed_agents,
+            branch_deleted,
+            remote_deleted,
+        }
+    }
+
+    async fn handle_rename(&self, project_root: &str, agent_id: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let pr2 = pr.clone();
+        let aid = agent_id.to_string();
+        let new_name = name.to_string();
+        let new_name2 = new_name.clone();
+        let cache = self.manifest_cache.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(Path::new(&pr), |mut m| {
+                if let Some(agent) = m.find_agent_mut(&aid) {
+                    agent.name = new_name.clone();
+                }
+                m
+            })
+        })
+        .await;
+
+        match result {
+            Ok(Ok(updated)) => {
+                let found = updated.find_agent(agent_id).is_some();
+                cache.lock().unwrap().insert(pr2, updated);
+                if found {
+                    self.notify_status_change(project_root).await;
+                    Response::RenameResult {
+                        agent_id: agent_id.to_string(),
+                        name: new_name2,
+                    }
+                } else {
+                    Self::agent_not_found(agent_id)
+                }
+            }
+            Ok(Err(e)) => Self::error_response(&e),
+            Err(e) => Response::Error {
+                code: "INTERNAL".into(),
+                message: format!("rename task failed: {e}"),
+            },
+        }
     }
 
     async fn handle_suspend(&self, project_root: &str, target: SuspendTarget) -> Response {
