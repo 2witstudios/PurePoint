@@ -13,7 +13,7 @@ struct WorktreeDetailView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
+        .task(id: worktree.id) {
             diffState.loadForWorktree(worktree)
         }
         .onDisappear {

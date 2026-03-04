@@ -111,6 +111,22 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyTheme(forceRefresh: true)
+        if window != nil {
+            lastKnownTerminalViewSize = .zero
+            // Defer to next run loop cycle so Auto Layout has resolved the new frame.
+            // updateFullScreen marks all terminal rows dirty, ensuring drawTerminalContents
+            // repaints everything — not just rows that processSizeChange thinks changed.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil else { return }
+                let size = self.bounds.size
+                guard size.width > 1, size.height > 1 else { return }
+                self.terminalView.getTerminal().updateFullScreen()
+                self.lastKnownTerminalViewSize = .zero
+                self.terminalView.setFrameSize(size)
+                self.lastKnownTerminalViewSize = size
+                self.terminalView.needsDisplay = true
+            }
+        }
     }
 
     private func applyTheme(forceRefresh: Bool) {

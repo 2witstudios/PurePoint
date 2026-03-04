@@ -67,21 +67,27 @@ struct ContentView: View {
             }
 
             guard case .agent(let agentId) = newValue else {
-                // Non-agent selection (nav items, worktrees): suspend grid if active
-                if gridState.isActive { gridState.suspend() }
+                // Non-agent selection (nav items, worktrees): deactivate grid
+                if gridState.isActive { gridState.deactivate() }
                 appState.selectedAgentId = nil
                 return
             }
 
-            // Clicking the grid owner → restore grid
+            // Clicking the grid owner while grid active → already showing it
+            if gridState.isActive, agentId == gridState.ownerAgentId {
+                appState.selectedAgentId = agentId
+                return
+            }
+
+            // Clicking the grid owner while suspended → restore grid
             if gridState.restoreIfOwner(agentId) {
                 appState.selectedAgentId = agentId
                 return
             }
 
-            // Clicking any other agent → suspend grid, show single-pane
+            // Clicking any other agent → deactivate grid
             if gridState.isActive {
-                gridState.suspend()
+                gridState.deactivate()
             }
             appState.selectedAgentId = agentId
         }

@@ -13,7 +13,7 @@ struct ProjectDetailView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task {
+        .task(id: project.projectRoot) {
             diffState.loadForProject(projectRoot: project.projectRoot)
         }
         .onDisappear {
