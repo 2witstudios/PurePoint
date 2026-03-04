@@ -141,7 +141,7 @@ impl NativePtyHost {
                     // other PTY fds, and tokio internals into the child.
                     let max_fd = libc::sysconf(libc::_SC_OPEN_MAX);
                     let upper = if max_fd > 3 && max_fd <= i32::MAX as libc::c_long {
-                        max_fd as i32
+                        core::cmp::min(max_fd as i32, FD_CLOSE_UPPER_BOUND)
                     } else {
                         FD_CLOSE_UPPER_BOUND
                     };
