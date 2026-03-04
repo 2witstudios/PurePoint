@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Network
 import SwiftTerm
@@ -98,7 +99,9 @@ actor DaemonAttachSession {
             case .output(_, let data):
                 let bytes = [UInt8](data)
                 await MainActor.run {
-                    tv?.feed(byteArray: ArraySlice(bytes))
+                    guard let tv else { return }
+                    tv.feed(byteArray: ArraySlice(bytes))
+                    tv.setNeedsDisplay(tv.bounds)
                 }
             case .error(_, let message):
                 throw DaemonAttachError.attachFailed(message)
