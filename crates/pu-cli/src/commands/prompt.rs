@@ -1,5 +1,5 @@
-use pu_core::template;
 use crate::error::CliError;
+use pu_core::template;
 
 pub async fn run_list(json: bool) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;

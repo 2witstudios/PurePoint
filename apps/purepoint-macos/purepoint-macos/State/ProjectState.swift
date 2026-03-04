@@ -230,6 +230,13 @@ final class ProjectState: Identifiable {
         }
     }
 
+    /// Eagerly remove an agent from the local model, then async kill via daemon.
+    /// Used by pane-close to prevent sidebar flash.
+    func removeAndKillAgent(_ agentId: String) {
+        rootAgents.removeAll { $0.id == agentId }
+        killAgent(agentId)
+    }
+
     func killAgent(_ agentId: String) {
         let root = projectRoot
         Task {

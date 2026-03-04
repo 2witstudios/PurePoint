@@ -21,6 +21,9 @@ struct purepoint_macosApp: App {
                 )
                 .onAppear {
                     appState.gridState = gridState
+                    gridState.onCloseAgent = { agentId in
+                        appState.projectState(forRoot: gridState.projectRoot ?? "")?.removeAndKillAgent(agentId)
+                    }
                     CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
                 }

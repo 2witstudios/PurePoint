@@ -37,12 +37,9 @@ impl IpcServer {
     }
 
     pub async fn run(self) -> Result<(), std::io::Error> {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        )?;
-        let mut sigint = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::interrupt(),
-        )?;
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
         loop {
             tokio::select! {
@@ -86,7 +83,11 @@ impl IpcServer {
 
         loop {
             line.clear();
-            match (&mut reader).take(MAX_MESSAGE_SIZE).read_line(&mut line).await {
+            match (&mut reader)
+                .take(MAX_MESSAGE_SIZE)
+                .read_line(&mut line)
+                .await
+            {
                 Ok(0) => break, // EOF
                 Ok(_) => {
                     let request: Request = match serde_json::from_str(line.trim()) {
@@ -111,16 +112,18 @@ impl IpcServer {
                     } else {
                         None
                     };
-                    let subscribe_grid_root = if let Request::SubscribeGrid { ref project_root } = request {
-                        Some(project_root.clone())
-                    } else {
-                        None
-                    };
-                    let subscribe_status_root = if let Request::SubscribeStatus { ref project_root } = request {
-                        Some(project_root.clone())
-                    } else {
-                        None
-                    };
+                    let subscribe_grid_root =
+                        if let Request::SubscribeGrid { ref project_root } = request {
+                            Some(project_root.clone())
+                        } else {
+                            None
+                        };
+                    let subscribe_status_root =
+                        if let Request::SubscribeStatus { ref project_root } = request {
+                            Some(project_root.clone())
+                        } else {
+                            None
+                        };
 
                     let response = engine.handle_request(request).await;
                     if Self::write_response(&mut writer, &response).await.is_err() {
@@ -140,13 +143,8 @@ impl IpcServer {
                         if !matches!(response, Response::AttachReady { .. }) {
                             break;
                         }
-                        Self::handle_attach_stream(
-                            &mut reader,
-                            &mut writer,
-                            &engine,
-                            &agent_id,
-                        )
-                        .await;
+                        Self::handle_attach_stream(&mut reader, &mut writer, &engine, &agent_id)
+                            .await;
                     }
 
                     // Enter streaming sub-loop for grid subscription
@@ -191,10 +189,14 @@ impl IpcServer {
         let (buffer, master_fd, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
             Some(handles) => handles,
             None => {
-                let _ = Self::write_response(writer, &Response::Error {
-                    code: "AGENT_NOT_FOUND".into(),
-                    message: format!("agent {agent_id} was removed during attach"),
-                }).await;
+                let _ = Self::write_response(
+                    writer,
+                    &Response::Error {
+                        code: "AGENT_NOT_FOUND".into(),
+                        message: format!("agent {agent_id} was removed during attach"),
+                    },
+                )
+                .await;
                 return;
             }
         };
@@ -463,7 +465,10 @@ mod tests {
 
         // Send health request
         let req = serde_json::to_string(&Request::Health).unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         // Read response
         let mut line = String::new();
@@ -471,7 +476,9 @@ mod tests {
         let resp: Response = serde_json::from_str(&line).unwrap();
 
         match resp {
-            Response::HealthReport { protocol_version, .. } => {
+            Response::HealthReport {
+                protocol_version, ..
+            } => {
                 assert_eq!(protocol_version, pu_core::protocol::PROTOCOL_VERSION);
             }
             other => panic!("expected HealthReport, got {other:?}"),
@@ -500,7 +507,10 @@ mod tests {
             project_root: project_root.to_string_lossy().into(),
         })
         .unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
@@ -533,7 +543,10 @@ mod tests {
         let mut reader = BufReader::new(reader);
 
         let req = serde_json::to_string(&Request::Shutdown).unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
@@ -547,7 +560,12 @@ mod tests {
 
     /// Helper: init project + spawn agent via shared helper, then bind IPC server.
     /// Returns (sock_path, agent_id, server_handle, _tmp).
-    async fn setup_with_agent() -> (std::path::PathBuf, String, tokio::task::JoinHandle<Result<(), std::io::Error>>, TempDir) {
+    async fn setup_with_agent() -> (
+        std::path::PathBuf,
+        String,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        TempDir,
+    ) {
         let (engine, agent_id, tmp) = crate::test_helpers::init_and_spawn().await;
         let sock_path = tmp.path().join("test.sock");
 
@@ -570,21 +588,31 @@ mod tests {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
-        let req = serde_json::to_string(&Request::Attach { agent_id: agent_id.clone() }).unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        let req = serde_json::to_string(&Request::Attach {
+            agent_id: agent_id.clone(),
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         // Should get AttachReady first
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let resp: Response = serde_json::from_str(line.trim()).unwrap();
-        assert!(matches!(resp, Response::AttachReady { .. }), "expected AttachReady, got {resp:?}");
+        assert!(
+            matches!(resp, Response::AttachReady { .. }),
+            "expected AttachReady, got {resp:?}"
+        );
 
         // Should get at least one Output message with buffered data
         line.clear();
         let read_result = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             reader.read_line(&mut line),
-        ).await;
+        )
+        .await;
         assert!(read_result.is_ok(), "timed out waiting for Output");
         let resp: Response = serde_json::from_str(line.trim()).unwrap();
         match resp {
@@ -612,8 +640,14 @@ mod tests {
         let mut reader = BufReader::new(reader);
 
         // Attach
-        let req = serde_json::to_string(&Request::Attach { agent_id: agent_id.clone() }).unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        let req = serde_json::to_string(&Request::Attach {
+            agent_id: agent_id.clone(),
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap(); // AttachReady
@@ -623,8 +657,12 @@ mod tests {
         let input_req = serde_json::to_string(&Request::Input {
             agent_id: agent_id.clone(),
             data: b"hello\n".to_vec(),
-        }).unwrap();
-        writer.write_all(format!("{input_req}\n").as_bytes()).await.unwrap();
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{input_req}\n").as_bytes())
+            .await
+            .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -638,11 +676,17 @@ mod tests {
         let mut reader2 = BufReader::new(reader2);
 
         let health_req = serde_json::to_string(&Request::Health).unwrap();
-        writer2.write_all(format!("{health_req}\n").as_bytes()).await.unwrap();
+        writer2
+            .write_all(format!("{health_req}\n").as_bytes())
+            .await
+            .unwrap();
         let mut line2 = String::new();
         reader2.read_line(&mut line2).await.unwrap();
         let resp: Response = serde_json::from_str(line2.trim()).unwrap();
-        assert!(matches!(resp, Response::HealthReport { .. }), "server still healthy after input during attach");
+        assert!(
+            matches!(resp, Response::HealthReport { .. }),
+            "server still healthy after input during attach"
+        );
 
         server_handle.abort();
     }
@@ -657,8 +701,14 @@ mod tests {
         let mut reader = BufReader::new(reader);
 
         // Attach
-        let req = serde_json::to_string(&Request::Attach { agent_id: agent_id.clone() }).unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        let req = serde_json::to_string(&Request::Attach {
+            agent_id: agent_id.clone(),
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap(); // AttachReady
@@ -668,8 +718,12 @@ mod tests {
             agent_id: agent_id.clone(),
             cols: 200,
             rows: 50,
-        }).unwrap();
-        writer.write_all(format!("{resize_req}\n").as_bytes()).await.unwrap();
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{resize_req}\n").as_bytes())
+            .await
+            .unwrap();
 
         // If resize caused a crash we'd get EOF; give it a moment
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -693,13 +747,20 @@ mod tests {
         let kill_req = serde_json::to_string(&Request::Kill {
             project_root: pr,
             target: KillTarget::Agent(agent_id.clone()),
-        }).unwrap();
-        writer.write_all(format!("{kill_req}\n").as_bytes()).await.unwrap();
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{kill_req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let resp: Response = serde_json::from_str(line.trim()).unwrap();
-        assert!(matches!(resp, Response::KillResult { .. }), "expected KillResult, got {resp:?}");
+        assert!(
+            matches!(resp, Response::KillResult { .. }),
+            "expected KillResult, got {resp:?}"
+        );
         drop(writer);
         drop(reader);
 
@@ -709,7 +770,10 @@ mod tests {
         let mut reader = BufReader::new(reader);
 
         let attach_req = serde_json::to_string(&Request::Attach { agent_id }).unwrap();
-        writer.write_all(format!("{attach_req}\n").as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{attach_req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
@@ -735,8 +799,14 @@ mod tests {
             let (reader, mut writer) = stream.into_split();
             let mut reader = BufReader::new(reader);
 
-            let req = serde_json::to_string(&Request::Attach { agent_id: agent_id.clone() }).unwrap();
-            writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+            let req = serde_json::to_string(&Request::Attach {
+                agent_id: agent_id.clone(),
+            })
+            .unwrap();
+            writer
+                .write_all(format!("{req}\n").as_bytes())
+                .await
+                .unwrap();
 
             let mut line = String::new();
             reader.read_line(&mut line).await.unwrap(); // AttachReady
@@ -751,12 +821,18 @@ mod tests {
         let mut reader = BufReader::new(reader);
 
         let req = serde_json::to_string(&Request::Health).unwrap();
-        writer.write_all(format!("{req}\n").as_bytes()).await.unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
 
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let resp: Response = serde_json::from_str(line.trim()).unwrap();
-        assert!(matches!(resp, Response::HealthReport { .. }), "server still healthy after attach disconnect");
+        assert!(
+            matches!(resp, Response::HealthReport { .. }),
+            "server still healthy after attach disconnect"
+        );
 
         server_handle.abort();
     }

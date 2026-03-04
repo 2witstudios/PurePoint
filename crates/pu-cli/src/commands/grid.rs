@@ -2,10 +2,10 @@ use std::path::Path;
 
 use pu_core::protocol::{GridCommand, Request, Response};
 
+use crate::GridAction;
 use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
-use crate::GridAction;
 
 pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -134,7 +134,7 @@ fn print_ascii_grid(layout: &serde_json::Value) {
     println!("┌{border_h}┐");
     for leaf in &leaves {
         let agent = leaf.as_deref().unwrap_or("(empty)");
-        let padded = format!("{agent:^width$}", width = max_width);
+        let padded = format!("{agent:^max_width$}");
         println!("│{padded}│");
     }
     println!("└{border_h}┘");
@@ -143,7 +143,10 @@ fn print_ascii_grid(layout: &serde_json::Value) {
 fn collect_leaves(node: &serde_json::Value, out: &mut Vec<Option<String>>) {
     match node.get("type").and_then(|t| t.as_str()) {
         Some("leaf") => {
-            let agent_id = node.get("agentId").and_then(|a| a.as_str()).map(String::from);
+            let agent_id = node
+                .get("agentId")
+                .and_then(|a| a.as_str())
+                .map(String::from);
             out.push(agent_id);
         }
         Some("split") => {

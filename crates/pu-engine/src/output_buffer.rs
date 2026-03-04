@@ -91,11 +91,18 @@ impl OutputBuffer {
 
     /// Current total bytes written (monotonic offset).
     pub fn current_offset(&self) -> usize {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).total_written
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .total_written
     }
 
     pub fn len(&self) -> usize {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).data.len()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .data
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -112,12 +119,22 @@ impl OutputBuffer {
         if n >= inner.data.len() {
             inner.data.iter().copied().collect()
         } else {
-            inner.data.iter().skip(inner.data.len() - n).copied().collect()
+            inner
+                .data
+                .iter()
+                .skip(inner.data.len() - n)
+                .copied()
+                .collect()
         }
     }
 
     pub fn idle_seconds(&self) -> u64 {
-        self.inner.read().unwrap_or_else(|e| e.into_inner()).last_write.elapsed().as_secs()
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_write
+            .elapsed()
+            .as_secs()
     }
 
     pub fn looks_like_shell_prompt(&self) -> bool {
@@ -127,7 +144,12 @@ impl OutputBuffer {
         }
         // Check the last 256 bytes for shell prompt patterns
         let tail_bytes: Vec<u8> = if inner.data.len() > 256 {
-            inner.data.iter().skip(inner.data.len() - 256).copied().collect()
+            inner
+                .data
+                .iter()
+                .skip(inner.data.len() - 256)
+                .copied()
+                .collect()
         } else {
             inner.data.iter().copied().collect()
         };
@@ -187,7 +209,7 @@ mod tests {
         let buf = OutputBuffer::with_capacity(10);
         buf.write(b"12345"); // 5 bytes
         buf.write(b"67890"); // full at 10
-        buf.write(b"abc");   // wraps, oldest 3 bytes discarded
+        buf.write(b"abc"); // wraps, oldest 3 bytes discarded
         let data = buf.read_all();
         assert!(data.len() <= 10);
         assert!(data.ends_with(b"abc"));
@@ -274,7 +296,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        assert!(buf.len() > 0);
+        assert!(!buf.is_empty());
     }
 
     // --- Streaming / notification tests ---
@@ -291,13 +313,10 @@ mod tests {
         // Small yield to ensure the waiter is registered
         tokio::task::yield_now().await;
         buf2.write(b"ping");
-        let notified = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            handle,
-        )
-        .await
-        .expect("timeout")
-        .expect("join");
+        let notified = tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("timeout")
+            .expect("join");
         assert!(notified);
     }
 
@@ -353,7 +372,7 @@ mod tests {
         let buf = OutputBuffer::with_capacity(10);
         buf.write(b"12345"); // total_written = 5, data = [1,2,3,4,5]
         buf.write(b"67890"); // total_written = 10, data = [1,2,3,4,5,6,7,8,9,0]
-        buf.write(b"abc");   // total_written = 13, data trimmed to last 10: [4,5,6,7,8,9,0,a,b,c]
+        buf.write(b"abc"); // total_written = 13, data trimmed to last 10: [4,5,6,7,8,9,0,a,b,c]
 
         // Reading from offset 5 wants bytes 5..13 = 8 bytes, but buffer only has 10 chars
         // starting from total_written - data.len() = 13 - 10 = 3

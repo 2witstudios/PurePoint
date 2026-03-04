@@ -44,7 +44,9 @@ pub fn update_manifest(
     use fs4::fs_std::FileExt;
     let lock_path = path.with_extension("json.lock");
     let lock_file = std::fs::File::create(&lock_path)?;
-    lock_file.lock_exclusive().map_err(|_| PuError::ManifestLocked)?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|_| PuError::ManifestLocked)?;
 
     // RAII guard ensures lock file is cleaned up even on panic
     let _guard = LockFileGuard { path: &lock_path };

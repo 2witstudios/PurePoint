@@ -25,7 +25,7 @@ pub fn write_pid_file(path: &Path) -> Result<(), std::io::Error> {
                 Ok(Some(pid)) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::AlreadyExists,
-                        format!("daemon already running (pid {})", pid),
+                        format!("daemon already running (pid {pid})"),
                     ));
                 }
                 _ => {
@@ -142,6 +142,9 @@ mod tests {
 
         let result = write_pid_file(&path);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
     }
 }

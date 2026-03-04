@@ -15,6 +15,7 @@ struct DetailView: View {
                 placeholderContent
             }
         }
+        .animation(nil, value: gridState.isActive)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

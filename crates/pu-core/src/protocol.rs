@@ -274,7 +274,9 @@ mod tests {
 
     #[test]
     fn given_init_request_should_round_trip() {
-        let req = Request::Init { project_root: "/test".into() };
+        let req = Request::Init {
+            project_root: "/test".into(),
+        };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -288,7 +290,9 @@ mod tests {
         let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
         let req: Request = serde_json::from_str(json).unwrap();
         match req {
-            Request::Spawn { agent, name, root, .. } => {
+            Request::Spawn {
+                agent, name, root, ..
+            } => {
                 assert_eq!(agent, "claude");
                 assert!(name.is_none());
                 assert!(!root);
@@ -311,7 +315,9 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::Spawn { agent, name, base, .. } => {
+            Request::Spawn {
+                agent, name, base, ..
+            } => {
                 assert_eq!(agent, "codex");
                 assert_eq!(name.unwrap(), "fix-auth");
                 assert_eq!(base.unwrap(), "develop");
@@ -343,7 +349,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::Kill { target: KillTarget::Agent(id), .. } => assert_eq!(id, "ag-abc"),
+            Request::Kill {
+                target: KillTarget::Agent(id),
+                ..
+            } => assert_eq!(id, "ag-abc"),
             _ => panic!("expected Kill with Agent target"),
         }
     }
@@ -368,7 +377,9 @@ mod tests {
 
     #[test]
     fn given_attach_request_should_round_trip() {
-        let req = Request::Attach { agent_id: "ag-abc".into() };
+        let req = Request::Attach {
+            agent_id: "ag-abc".into(),
+        };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -399,7 +410,11 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
         match parsed {
-            Response::HealthReport { pid, protocol_version, .. } => {
+            Response::HealthReport {
+                pid,
+                protocol_version,
+                ..
+            } => {
                 assert_eq!(pid, 1234);
                 assert_eq!(protocol_version, PROTOCOL_VERSION);
             }
@@ -434,7 +449,11 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
         match parsed {
-            Response::SpawnResult { worktree_id, agent_id, .. } => {
+            Response::SpawnResult {
+                worktree_id,
+                agent_id,
+                ..
+            } => {
                 assert_eq!(worktree_id.unwrap(), "wt-abc");
                 assert_eq!(agent_id, "ag-xyz");
             }
@@ -470,7 +489,10 @@ mod tests {
 
     #[test]
     fn given_grid_split_command_should_round_trip() {
-        let cmd = GridCommand::Split { leaf_id: Some(2), axis: "v".into() };
+        let cmd = GridCommand::Split {
+            leaf_id: Some(2),
+            axis: "v".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: GridCommand = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -492,7 +514,10 @@ mod tests {
 
     #[test]
     fn given_grid_focus_command_should_round_trip() {
-        let cmd = GridCommand::Focus { leaf_id: None, direction: Some("right".into()) };
+        let cmd = GridCommand::Focus {
+            leaf_id: None,
+            direction: Some("right".into()),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: GridCommand = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -506,7 +531,10 @@ mod tests {
 
     #[test]
     fn given_grid_set_agent_command_should_round_trip() {
-        let cmd = GridCommand::SetAgent { leaf_id: 3, agent_id: "ag-abc".into() };
+        let cmd = GridCommand::SetAgent {
+            leaf_id: 3,
+            agent_id: "ag-abc".into(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: GridCommand = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -528,7 +556,9 @@ mod tests {
 
     #[test]
     fn given_subscribe_grid_request_should_round_trip() {
-        let req = Request::SubscribeGrid { project_root: "/test".into() };
+        let req = Request::SubscribeGrid {
+            project_root: "/test".into(),
+        };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
@@ -541,12 +571,18 @@ mod tests {
     fn given_grid_command_request_should_round_trip() {
         let req = Request::GridCommand {
             project_root: "/test".into(),
-            command: GridCommand::Split { leaf_id: Some(1), axis: "h".into() },
+            command: GridCommand::Split {
+                leaf_id: Some(1),
+                axis: "h".into(),
+            },
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::GridCommand { project_root, command } => {
+            Request::GridCommand {
+                project_root,
+                command,
+            } => {
                 assert_eq!(project_root, "/test");
                 assert!(matches!(command, GridCommand::Split { .. }));
             }
@@ -558,12 +594,18 @@ mod tests {
     fn given_grid_event_response_should_round_trip() {
         let resp = Response::GridEvent {
             project_root: "/test".into(),
-            command: GridCommand::Focus { leaf_id: Some(2), direction: None },
+            command: GridCommand::Focus {
+                leaf_id: Some(2),
+                direction: None,
+            },
         };
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
         match parsed {
-            Response::GridEvent { project_root, command } => {
+            Response::GridEvent {
+                project_root,
+                command,
+            } => {
                 assert_eq!(project_root, "/test");
                 assert!(matches!(command, GridCommand::Focus { .. }));
             }
@@ -582,7 +624,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::Suspend { project_root, target } => {
+            Request::Suspend {
+                project_root,
+                target,
+            } => {
                 assert_eq!(project_root, "/test");
                 assert!(matches!(target, SuspendTarget::All));
             }
@@ -599,7 +644,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::Suspend { target: SuspendTarget::Agent(id), .. } => {
+            Request::Suspend {
+                target: SuspendTarget::Agent(id),
+                ..
+            } => {
                 assert_eq!(id, "ag-abc");
             }
             _ => panic!("expected Suspend with Agent target"),
@@ -615,7 +663,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::Resume { project_root, agent_id } => {
+            Request::Resume {
+                project_root,
+                agent_id,
+            } => {
                 assert_eq!(project_root, "/test");
                 assert_eq!(agent_id, "ag-abc");
             }
@@ -667,7 +718,11 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::Rename { project_root, agent_id, name } => {
+            Request::Rename {
+                project_root,
+                agent_id,
+                name,
+            } => {
                 assert_eq!(project_root, "/test");
                 assert_eq!(agent_id, "ag-abc");
                 assert_eq!(name, "new-name");
@@ -704,7 +759,10 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::DeleteWorktree { project_root, worktree_id } => {
+            Request::DeleteWorktree {
+                project_root,
+                worktree_id,
+            } => {
                 assert_eq!(project_root, "/test");
                 assert_eq!(worktree_id, "wt-abc");
             }
@@ -723,7 +781,12 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
         match parsed {
-            Response::DeleteWorktreeResult { worktree_id, killed_agents, branch_deleted, remote_deleted } => {
+            Response::DeleteWorktreeResult {
+                worktree_id,
+                killed_agents,
+                branch_deleted,
+                remote_deleted,
+            } => {
                 assert_eq!(worktree_id, "wt-abc");
                 assert_eq!(killed_agents, vec!["ag-1", "ag-2"]);
                 assert!(branch_deleted);

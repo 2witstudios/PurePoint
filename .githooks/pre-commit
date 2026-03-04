@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Only check formatting when Rust files are staged
+if git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$'; then
+  echo "pre-commit: checking Rust formatting..."
+  cargo fmt --all -- --check
+fi

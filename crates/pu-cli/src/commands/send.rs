@@ -1,9 +1,9 @@
-use std::path::Path;
-use pu_core::protocol::Request;
 use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
+use pu_core::protocol::Request;
+use std::path::Path;
 
 pub async fn run(
     socket: &Path,
@@ -38,7 +38,10 @@ pub async fn run(
     output::check_response(resp, json)?;
 
     if json {
-        println!("{}", serde_json::json!({"status": "ok", "agent_id": agent_id}));
+        println!(
+            "{}",
+            serde_json::json!({"status": "ok", "agent_id": agent_id})
+        );
     } else {
         println!("Sent to {agent_id}");
     }
@@ -63,7 +66,10 @@ fn translate_keys(keys: &str) -> Result<Vec<u8>, CliError> {
             "Escape" | "escape" | "ESC" => result.push(0x1b),
             other => {
                 // C-x pattern for any letter
-                if let Some(letter) = other.strip_prefix("C-").or_else(|| other.strip_prefix("ctrl-")) {
+                if let Some(letter) = other
+                    .strip_prefix("C-")
+                    .or_else(|| other.strip_prefix("ctrl-"))
+                {
                     if letter.len() == 1 {
                         let ch = letter.chars().next().unwrap();
                         if ch.is_ascii_lowercase() {

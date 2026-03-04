@@ -41,17 +41,14 @@ pub async fn create_worktree(
         .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(
-            format!("git worktree add failed: {stderr}"),
-        ));
+        return Err(std::io::Error::other(format!(
+            "git worktree add failed: {stderr}"
+        )));
     }
     Ok(())
 }
 
-pub async fn remove_worktree(
-    repo_root: &Path,
-    worktree_path: &Path,
-) -> Result<(), std::io::Error> {
+pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<(), std::io::Error> {
     let output = tokio::process::Command::new("git")
         .args([
             "worktree",
@@ -64,17 +61,14 @@ pub async fn remove_worktree(
         .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(
-            format!("git worktree remove failed: {stderr}"),
-        ));
+        return Err(std::io::Error::other(format!(
+            "git worktree remove failed: {stderr}"
+        )));
     }
     Ok(())
 }
 
-pub async fn delete_local_branch(
-    repo_root: &Path,
-    branch: &str,
-) -> Result<(), std::io::Error> {
+pub async fn delete_local_branch(repo_root: &Path, branch: &str) -> Result<(), std::io::Error> {
     let output = tokio::process::Command::new("git")
         .args(["branch", "-D", branch])
         .current_dir(repo_root)
@@ -82,17 +76,14 @@ pub async fn delete_local_branch(
         .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(
-            format!("git branch -D failed: {stderr}"),
-        ));
+        return Err(std::io::Error::other(format!(
+            "git branch -D failed: {stderr}"
+        )));
     }
     Ok(())
 }
 
-pub async fn delete_remote_branch(
-    repo_root: &Path,
-    branch: &str,
-) -> Result<(), std::io::Error> {
+pub async fn delete_remote_branch(repo_root: &Path, branch: &str) -> Result<(), std::io::Error> {
     let output = tokio::process::Command::new("git")
         .args(["push", "origin", "--delete", branch])
         .current_dir(repo_root)
@@ -100,9 +91,9 @@ pub async fn delete_remote_branch(
         .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(
-            format!("git push origin --delete failed: {stderr}"),
-        ));
+        return Err(std::io::Error::other(format!(
+            "git push origin --delete failed: {stderr}"
+        )));
     }
     Ok(())
 }

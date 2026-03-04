@@ -1,4 +1,4 @@
-use pu_core::protocol::{Request, Response, PROTOCOL_VERSION};
+use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -120,8 +120,7 @@ async fn given_manifest_should_be_readable_by_macos_app() {
     .await;
 
     // Read the manifest as raw JSON and verify camelCase format
-    let content =
-        std::fs::read_to_string(project.join(".pu/manifest.json")).unwrap();
+    let content = std::fs::read_to_string(project.join(".pu/manifest.json")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&content).unwrap();
 
     assert!(v.get("projectRoot").is_some());
