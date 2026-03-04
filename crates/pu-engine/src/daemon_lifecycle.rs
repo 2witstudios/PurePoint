@@ -14,18 +14,27 @@ pub fn write_pid_file(path: &Path) -> Result<(), std::io::Error> {
     let mut file = match open_exclusive() {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Check if the existing PID file refers to a still-alive process
-            if let Ok(Some(pid)) = read_pid_file(path) {
-                if is_process_alive(pid) {
+            // Only remove the PID file if we can parse a PID and that process is dead.
+            // If the file is empty, corrupted, or unreadable, treat it as in-use to
+            // avoid racing with a daemon that created the file but hasn't written yet.
+            match read_pid_file(path) {
+                Ok(Some(pid)) if !is_process_alive(pid) => {
+                    let _ = std::fs::remove_file(path);
+                    open_exclusive()?
+                }
+                Ok(Some(pid)) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::AlreadyExists,
                         format!("daemon already running (pid {})", pid),
                     ));
                 }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "daemon already running (PID file exists)",
+                    ));
+                }
             }
-            // Stale PID file — remove and retry (ignore NotFound from concurrent cleanup)
-            let _ = std::fs::remove_file(path);
-            open_exclusive()?
         }
         Err(e) => return Err(e),
     };
