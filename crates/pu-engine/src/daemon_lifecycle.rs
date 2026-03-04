@@ -1,30 +1,35 @@
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 
-#[derive(Default)]
-pub struct DaemonArgs {
-    pub managed: bool,
-    pub socket_path: Option<PathBuf>,
-}
-
+use nix::sys::signal;
+use nix::unistd::Pid;
 
 pub fn write_pid_file(path: &Path) -> Result<(), std::io::Error> {
-    use std::io::Write;
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    "daemon already running (PID file exists)",
-                )
-            } else {
-                e
+    let open_exclusive = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+    };
+    let mut file = match open_exclusive() {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Check if the existing PID file refers to a still-alive process
+            if let Ok(Some(pid)) = read_pid_file(path) {
+                if is_process_alive(pid) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!("daemon already running (pid {})", pid),
+                    ));
+                }
             }
-        })?;
-    let mut writer = std::io::BufWriter::new(file);
-    writeln!(writer, "{}", std::process::id())?;
+            // Stale PID file — remove and retry (ignore NotFound from concurrent cleanup)
+            let _ = std::fs::remove_file(path);
+            open_exclusive()?
+        }
+        Err(e) => return Err(e),
+    };
+    writeln!(file, "{}", std::process::id())?;
     Ok(())
 }
 
@@ -42,8 +47,6 @@ pub fn cleanup_files(pid_path: &Path, socket_path: &Path) {
 }
 
 pub fn is_process_alive(pid: u32) -> bool {
-    use nix::sys::signal;
-    use nix::unistd::Pid;
     let Ok(raw) = i32::try_from(pid) else {
         return false;
     };
@@ -120,23 +123,6 @@ mod tests {
         // PID 99999999 is almost certainly not running
         let alive = is_process_alive(99999999);
         assert!(!alive);
-    }
-
-    #[test]
-    fn given_daemon_args_default_should_be_standalone() {
-        let args = DaemonArgs::default();
-        assert!(!args.managed);
-        assert!(args.socket_path.is_none());
-    }
-
-    #[test]
-    fn given_daemon_args_managed_should_have_socket() {
-        let args = DaemonArgs {
-            managed: true,
-            socket_path: Some("/tmp/test.sock".into()),
-        };
-        assert!(args.managed);
-        assert_eq!(args.socket_path.unwrap().to_string_lossy(), "/tmp/test.sock");
     }
 
     #[test]
