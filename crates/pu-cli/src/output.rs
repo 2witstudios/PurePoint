@@ -110,6 +110,17 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::ResumeResult { agent_id, status } => {
             println!("Resumed agent {} ({})", agent_id.bold(), status_colored(*status, None));
         }
+        Response::RenameResult { agent_id, name } => {
+            println!("Renamed agent {} to {}", agent_id.bold(), name.green());
+        }
+        Response::DeleteWorktreeResult { worktree_id, killed_agents, branch_deleted, remote_deleted } => {
+            println!("Deleted worktree {}", worktree_id.bold());
+            if !killed_agents.is_empty() {
+                println!("  Killed {} agent(s)", killed_agents.len());
+            }
+            println!("  Branch deleted: {}", if *branch_deleted { "yes".green().to_string() } else { "no".dimmed().to_string() });
+            println!("  Remote deleted: {}", if *remote_deleted { "yes".green().to_string() } else { "no".dimmed().to_string() });
+        }
         Response::LogsResult { agent_id, data } => {
             println!("{}", format!("--- Logs for {agent_id} ---").dimmed());
             print!("{data}");
