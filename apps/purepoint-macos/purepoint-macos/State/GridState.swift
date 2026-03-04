@@ -126,7 +126,12 @@ final class GridState {
             if agentId == ownerAgentId {
                 // Closing the owner pane — promote surviving agent to owner.
                 // Old owner stays alive (visible in sidebar as regular agent).
-                ownerAgentId = root.agentId(forLeafId: focusedLeafId)
+                // If no surviving agent (empty pane), exit grid entirely.
+                guard let newOwner = root.agentId(forLeafId: focusedLeafId) else {
+                    exitGrid()
+                    return
+                }
+                ownerAgentId = newOwner
             } else {
                 // Closing a child pane — kill the child agent
                 onCloseAgent?(agentId)
