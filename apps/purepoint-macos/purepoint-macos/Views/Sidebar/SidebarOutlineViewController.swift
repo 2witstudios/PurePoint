@@ -137,7 +137,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         // Restore expansion — auto-expand new items
         for node in projectNodes {
-            let shouldExpand = oldExpanded.contains(node.id) || !oldExpanded.contains(where: { _ in true }) || !oldExpanded.contains(node.id) && isNew(node.id, in: oldExpanded, allOldIds: oldExpanded)
             outlineView.expandItem(node) // Always expand projects
             for child in node.children {
                 if case .worktree = child.kind {
