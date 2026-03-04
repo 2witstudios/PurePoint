@@ -114,11 +114,13 @@ nonisolated enum DaemonRequest: Encodable {
                name: String? = nil, base: String? = nil, root: Bool = false,
                worktree: String? = nil)
     case kill(projectRoot: String, target: KillTarget)
+    case rename(projectRoot: String, agentId: String, name: String)
     case suspend(projectRoot: String, target: SuspendTarget)
     case resume(projectRoot: String, agentId: String)
     case subscribeGrid(projectRoot: String)
     case subscribeStatus(projectRoot: String)
     case gridCommand(projectRoot: String, command: GridCommandPayload)
+    case deleteWorktree(projectRoot: String, worktreeId: String)
     case shutdown
 
     func encode(to encoder: Encoder) throws {
@@ -158,6 +160,11 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("kill", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(target, forKey: .key("target"))
+        case .rename(let projectRoot, let agentId, let name):
+            try container.encode("rename", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(agentId, forKey: .key("agent_id"))
+            try container.encode(name, forKey: .key("name"))
         case .suspend(let projectRoot, let target):
             try container.encode("suspend", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -176,6 +183,10 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("grid_command", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(command, forKey: .key("command"))
+        case .deleteWorktree(let projectRoot, let worktreeId):
+            try container.encode("delete_worktree", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(worktreeId, forKey: .key("worktree_id"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
@@ -192,11 +203,13 @@ nonisolated enum DaemonResponse: Decodable {
     case killResult(killed: [String])
     case suspendResult(suspended: [String])
     case resumeResult(agentId: String, status: String)
+    case renameResult(agentId: String, name: String)
     case gridSubscribed
     case gridLayout(layout: Data)
     case gridEvent(projectRoot: String, command: GridCommandPayload)
     case statusSubscribed
     case statusEvent(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
+    case deleteWorktreeResult(worktreeId: String, killedAgents: [String])
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -239,6 +252,9 @@ nonisolated enum DaemonResponse: Decodable {
         case "resume_result":
             let p = try ResumeResultPayload(from: decoder)
             self = .resumeResult(agentId: p.agentId, status: p.status)
+        case "rename_result":
+            let p = try RenameResultPayload(from: decoder)
+            self = .renameResult(agentId: p.agentId, name: p.name)
         case "grid_subscribed":
             self = .gridSubscribed
         case "status_subscribed":
@@ -252,6 +268,9 @@ nonisolated enum DaemonResponse: Decodable {
         case "grid_event":
             let p = try GridEventPayload(from: decoder)
             self = .gridEvent(projectRoot: p.projectRoot, command: p.command)
+        case "delete_worktree_result":
+            let p = try DeleteWorktreeResultPayload(from: decoder)
+            self = .deleteWorktreeResult(worktreeId: p.worktreeId, killedAgents: p.killedAgents)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -374,6 +393,26 @@ private nonisolated struct ResumeResultPayload: Decodable {
     enum CodingKeys: String, CodingKey {
         case agentId = "agent_id"
         case status
+    }
+}
+
+private nonisolated struct RenameResultPayload: Decodable {
+    let agentId: String
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case agentId = "agent_id"
+        case name
+    }
+}
+
+private nonisolated struct DeleteWorktreeResultPayload: Decodable {
+    let worktreeId: String
+    let killedAgents: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case worktreeId = "worktree_id"
+        case killedAgents = "killed_agents"
     }
 }
 

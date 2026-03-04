@@ -243,6 +243,45 @@ final class ProjectState: Identifiable {
         }
     }
 
+    func renameAgent(_ agentId: String, to name: String) {
+        let root = projectRoot
+        Task {
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(.rename(projectRoot: root, agentId: agentId, name: name))
+                if case .error(_, let message) = response { self.appState?.daemonError = message }
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
+    func killAllAgents() {
+        let root = projectRoot
+        Task {
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(.kill(projectRoot: root, target: .all))
+                if case .error(_, let message) = response { self.appState?.daemonError = message }
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
+    func deleteWorktree(_ worktreeId: String) {
+        let root = projectRoot
+        Task {
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(.deleteWorktree(projectRoot: root, worktreeId: worktreeId))
+                if case .error(_, let message) = response { self.appState?.daemonError = message }
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
     func killWorktreeAgents(_ worktreeId: String) {
         let root = projectRoot
         Task {
