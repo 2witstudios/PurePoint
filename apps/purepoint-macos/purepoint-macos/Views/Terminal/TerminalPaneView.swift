@@ -30,6 +30,7 @@ class TerminalPaneNSView: NSView {
     private var isAttachDone = false
     private var terminalInstalled = false
     private var heartbeatTimer: Timer?
+    private var installDebounce: DispatchWorkItem?
 
     init(agent: AgentModel) {
         self.agent = agent
@@ -39,6 +40,17 @@ class TerminalPaneNSView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private func scheduleTerminalInstall() {
+        installDebounce?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.terminalInstalled else { return }
+            self.ensureTerminal()
+            self.needsLayout = true
+        }
+        installDebounce = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: item)
+    }
 
     private func ensureTerminal() {
         guard !terminalInstalled else { return }
@@ -62,8 +74,16 @@ class TerminalPaneNSView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil && !terminalInstalled {
+        if window != nil {
             needsLayout = true
+            // Force terminal to redraw after being re-parented between containers.
+            // Without this, closing a grid pane (2→1) leaves the surviving terminal blank
+            // because the AnyView type change in PaneGridView destroys and recreates the
+            // SwiftUI view hierarchy, moving this NSView to a new container.
+            if let tv = terminal {
+                tv.needsDisplay = true
+                tv.terminalView.needsDisplay = true
+            }
         }
     }
 
@@ -71,7 +91,7 @@ class TerminalPaneNSView: NSView {
         super.layout()
         // Create terminal only after we have a real frame, preventing 0-column grids
         if window != nil && !terminalInstalled && bounds.width > 1 {
-            ensureTerminal()
+            scheduleTerminalInstall()
         }
         // Start daemon attach only after the first layout pass gives us a real frame.
         // Starting while frame is .zero causes SwiftTerm to report 1-column size.
@@ -128,6 +148,8 @@ class TerminalPaneNSView: NSView {
     }
 
     func tearDown() {
+        installDebounce?.cancel()
+        installDebounce = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         attachTask?.cancel()

@@ -15,18 +15,24 @@ struct DraggableSplit<First: View, Second: View>: View {
         GeometryReader { geo in
             let isVertical = axis == .vertical
             let total = isVertical ? geo.size.width : geo.size.height
-            let firstSize = total * ratio - dividerThickness / 2
+            let collapsed = ratio >= 1.0 || ratio <= 0.0
+            let effectiveDivider: CGFloat = collapsed ? 0 : dividerThickness
+            let firstSize = total * ratio - effectiveDivider / 2
 
             if isVertical {
                 HStack(spacing: 0) {
                     first().frame(width: max(firstSize, 0))
-                    dividerHandle(total: total, isVertical: true)
+                    if !collapsed {
+                        dividerHandle(total: total, isVertical: true)
+                    }
                     second()
                 }
             } else {
                 VStack(spacing: 0) {
                     first().frame(height: max(firstSize, 0))
-                    dividerHandle(total: total, isVertical: false)
+                    if !collapsed {
+                        dividerHandle(total: total, isVertical: false)
+                    }
                     second()
                 }
             }

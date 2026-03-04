@@ -76,6 +76,15 @@ final class GridState {
         scheduleSave()
     }
 
+    /// Smart deactivation: exit fully if 1 pane (nothing to restore), suspend if multi-pane.
+    func deactivate() {
+        if root.leafCount <= 1 {
+            exitGrid()
+        } else {
+            suspend()
+        }
+    }
+
     /// Whether a suspended grid can be restored (has saved state with an owner).
     var canRestore: Bool {
         ownerAgentId != nil && !isActive && root.leafCount > 1
@@ -101,7 +110,7 @@ final class GridState {
 
     func closeFocused() {
         guard leafCount > 1 else {
-            exitGrid()
+            exitGrid()  // Remote command edge case: can't close the only pane
             return
         }
 
@@ -113,16 +122,24 @@ final class GridState {
         root = newRoot
         focusedLeafId = siblingId ?? root.allLeafIds.first ?? 0
 
-        // Kill non-owner agent BEFORE exitGrid clears the sidebar filter
-        if let agentId = closingAgentId, agentId != ownerAgentId {
-            onCloseAgent?(agentId)
+        if let agentId = closingAgentId {
+            if agentId == ownerAgentId {
+                // Closing the owner pane — promote surviving agent to owner.
+                // Old owner stays alive (visible in sidebar as regular agent).
+                // If no surviving agent (empty pane), exit grid entirely.
+                guard let newOwner = root.agentId(forLeafId: focusedLeafId) else {
+                    exitGrid()
+                    return
+                }
+                ownerAgentId = newOwner
+            } else {
+                // Closing a child pane — kill the child agent
+                onCloseAgent?(agentId)
+            }
         }
 
-        if root.leafCount <= 1 {
-            exitGrid()
-        } else {
-            scheduleSave()
-        }
+        // Stay in grid mode with 1 pane — no view swap, no blank
+        scheduleSave()
     }
 
     func setAgent(_ agentId: String, forLeafId leafId: Int) {
@@ -203,7 +220,7 @@ final class GridState {
             ownerAgentId = nil
             isActive = false
         } else {
-            isActive = root.leafCount > 1 && ownerAgentId != nil
+            isActive = ownerAgentId != nil
         }
     }
 
