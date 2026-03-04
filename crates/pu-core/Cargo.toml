@@ -11,7 +11,7 @@ serde_yml = "0.0.12"
 thiserror = { workspace = true }
 chrono = { workspace = true }
 nanoid = "0.4"
-rand = "0.8"
+rand = "0.10"
 uuid = { workspace = true }
 indexmap = { workspace = true }
 fs4 = "0.13"

@@ -1,5 +1,5 @@
 use nanoid::nanoid;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use uuid::Uuid;
 
 const ALPHABET: &[char] = &[
@@ -54,7 +54,7 @@ pub fn root_agent_name() -> String {
         "Davis",
     ];
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let first = PG_FIRSTS.choose(&mut rng).unwrap();
     let last = PG_LASTS.choose(&mut rng).unwrap();
     format!("{first} {last}")
@@ -161,7 +161,7 @@ pub fn worktree_agent_name() -> String {
         "Chamberlain",
     ];
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let first = NBA_FIRSTS.choose(&mut rng).unwrap();
     let last = NBA_LASTS.choose(&mut rng).unwrap();
     format!("{first} {last}")
