@@ -11,6 +11,9 @@ use tokio::sync::watch;
 
 use crate::output_buffer::OutputBuffer;
 
+/// Fallback fd upper bound when sysconf(_SC_OPEN_MAX) fails or overflows i32.
+const FD_CLOSE_UPPER_BOUND: i32 = 10240;
+
 pub struct SpawnConfig {
     pub command: String,
     pub args: Vec<String>,
@@ -119,8 +122,12 @@ impl NativePtyHost {
 
                 unsafe {
                     // New session + controlling terminal
-                    libc::setsid();
-                    libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0);
+                    if libc::setsid() < 0 {
+                        libc::_exit(1);
+                    }
+                    if libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0) < 0 {
+                        libc::_exit(1);
+                    }
 
                     // Dup slave fd to stdin/stdout/stderr
                     if libc::dup2(slave_fd, 0) < 0
@@ -132,16 +139,20 @@ impl NativePtyHost {
 
                     // Close ALL fds >= 3 — prevents leaking master fd, epoll fds,
                     // other PTY fds, and tokio internals into the child.
-                    // Cap at a sane max to avoid iterating millions on macOS
-                    // where _SC_OPEN_MAX can be huge.
-                    let max_fd = libc::sysconf(libc::_SC_OPEN_MAX) as i32;
-                    let upper = if max_fd > 0 && max_fd < 8192 { max_fd } else { 1024 };
+                    let max_fd = libc::sysconf(libc::_SC_OPEN_MAX);
+                    let upper = if max_fd > 3 && max_fd <= i32::MAX as libc::c_long {
+                        max_fd as i32
+                    } else {
+                        FD_CLOSE_UPPER_BOUND
+                    };
                     for fd in 3..upper {
                         libc::close(fd);
                     }
 
                     // Set cwd
-                    libc::chdir(c_cwd.as_ptr());
+                    if libc::chdir(c_cwd.as_ptr()) < 0 {
+                        libc::_exit(1);
+                    }
 
                     // Remove env vars (e.g. CLAUDECODE to avoid nested-session detection)
                     for k in &c_env_remove {
