@@ -56,6 +56,7 @@ class TerminalPaneNSView: NSView {
             tv.trailingAnchor.constraint(equalTo: trailingAnchor),
             tv.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
         terminal = tv
     }
 
