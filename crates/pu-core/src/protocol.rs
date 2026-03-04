@@ -96,6 +96,15 @@ pub enum Request {
         project_root: String,
         command: GridCommand,
     },
+    Rename {
+        project_root: String,
+        agent_id: String,
+        name: String,
+    },
+    DeleteWorktree {
+        project_root: String,
+        worktree_id: String,
+    },
     Shutdown,
 }
 
@@ -210,6 +219,16 @@ pub enum Response {
     StatusEvent {
         worktrees: Vec<WorktreeEntry>,
         agents: Vec<AgentStatusReport>,
+    },
+    RenameResult {
+        agent_id: String,
+        name: String,
+    },
+    DeleteWorktreeResult {
+        worktree_id: String,
+        killed_agents: Vec<String>,
+        branch_deleted: bool,
+        remote_deleted: bool,
     },
     Ok,
     ShuttingDown,
@@ -633,6 +652,84 @@ mod tests {
                 assert_eq!(status, crate::types::AgentStatus::Streaming);
             }
             _ => panic!("expected ResumeResult"),
+        }
+    }
+
+    // --- Rename round-trips ---
+
+    #[test]
+    fn given_rename_request_should_round_trip() {
+        let req = Request::Rename {
+            project_root: "/test".into(),
+            agent_id: "ag-abc".into(),
+            name: "new-name".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Rename { project_root, agent_id, name } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(name, "new-name");
+            }
+            _ => panic!("expected Rename"),
+        }
+    }
+
+    #[test]
+    fn given_rename_result_should_round_trip() {
+        let resp = Response::RenameResult {
+            agent_id: "ag-abc".into(),
+            name: "new-name".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::RenameResult { agent_id, name } => {
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(name, "new-name");
+            }
+            _ => panic!("expected RenameResult"),
+        }
+    }
+
+    // --- DeleteWorktree round-trips ---
+
+    #[test]
+    fn given_delete_worktree_request_should_round_trip() {
+        let req = Request::DeleteWorktree {
+            project_root: "/test".into(),
+            worktree_id: "wt-abc".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::DeleteWorktree { project_root, worktree_id } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(worktree_id, "wt-abc");
+            }
+            _ => panic!("expected DeleteWorktree"),
+        }
+    }
+
+    #[test]
+    fn given_delete_worktree_result_should_round_trip() {
+        let resp = Response::DeleteWorktreeResult {
+            worktree_id: "wt-abc".into(),
+            killed_agents: vec!["ag-1".into(), "ag-2".into()],
+            branch_deleted: true,
+            remote_deleted: false,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::DeleteWorktreeResult { worktree_id, killed_agents, branch_deleted, remote_deleted } => {
+                assert_eq!(worktree_id, "wt-abc");
+                assert_eq!(killed_agents, vec!["ag-1", "ag-2"]);
+                assert!(branch_deleted);
+                assert!(!remote_deleted);
+            }
+            _ => panic!("expected DeleteWorktreeResult"),
         }
     }
 
