@@ -6,7 +6,15 @@ enum DaemonLifecycle {
         let client = DaemonClient()
 
         // Check if already healthy
-        if await isHealthy(client: client) { return }
+        if await isHealthy(client: client) {
+            // Restart if daemon binary is newer than the running instance
+            if shouldRestart() {
+                _ = try? await client.send(.shutdown)
+                try await Task.sleep(nanoseconds: 200_000_000)
+            } else {
+                return
+            }
+        }
 
         // Find the pu-engine binary
         guard let binaryPath = findBinary() else {
@@ -46,6 +54,23 @@ enum DaemonLifecycle {
         }
 
         throw DaemonLifecycleError.startupTimeout
+    }
+
+    /// Returns true if the app bundle's pu-engine binary is newer than the PID file,
+    /// meaning the daemon was started from an older build.
+    private static func shouldRestart() -> Bool {
+        guard let binaryPath = findBinary() else { return false }
+        let pidPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pu/daemon.pid").path
+
+        guard let binaryDate = modDate(path: binaryPath),
+              let pidDate = modDate(path: pidPath) else { return false }
+
+        return binaryDate > pidDate
+    }
+
+    private static func modDate(path: String) -> Date? {
+        try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
     }
 
     private static func isHealthy(client: DaemonClient) async -> Bool {
