@@ -17,7 +17,6 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     private var lastScrollDirection: Bool?
     private var lastScrollLocation: NSPoint = .zero
     private var scrollFlushTimer: DispatchSourceTimer?
-    private var hasRevealedTerminal = false
     private var tornDown = false
     private static let pixelsPerScrollTick: CGFloat = 30
 
@@ -42,10 +41,6 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
         // Apply theme
         applyTheme(forceRefresh: false)
-
-        // Hide until first output arrives (prevents stray blinking cursor at 0,0)
-        self.terminalView.alphaValue = 0
-        self.terminalView.notifyUpdateChanges = true
 
         // Intercept scroll events before SwiftTerm's non-overridable scrollWheel
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
@@ -104,12 +99,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(content, forType: .string)
     }
-    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
-        if !hasRevealedTerminal {
-            hasRevealedTerminal = true
-            terminalView.alphaValue = 1
-        }
-    }
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
     // MARK: - Theme
 
