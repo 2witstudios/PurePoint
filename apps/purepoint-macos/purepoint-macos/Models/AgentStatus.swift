@@ -1,48 +1,58 @@
 import SwiftUI
 
 enum AgentStatus: String, CaseIterable, Codable, Sendable {
+    // New observable states
+    case streaming
+    case waiting
+    case broken
+
+    // Legacy values — exist solely for backward compat with old manifests.
+    // The current daemon only writes streaming/waiting/broken. These cases
+    // will never appear in newly-written manifests and can be removed once
+    // we drop support for pre-v1 manifest files.
     case running
     case idle
     case completed
     case failed
     case killed
     case spawning
-    case waiting
     case lost
     case suspended
 
     var color: Color {
         switch self {
-        case .running:   .green
-        case .idle:      .mint
-        case .completed: .blue
-        case .failed:    .red
-        case .killed:    .orange
-        case .spawning:  .yellow
-        case .waiting:   .gray
-        case .lost:      .gray
-        case .suspended: .orange
+        case .streaming, .running, .spawning: .green
+        case .waiting, .idle, .suspended:     .cyan
+        case .completed:                      .secondary
+        case .broken, .failed,
+             .killed, .lost:                  .red
         }
     }
 
     var nsColor: NSColor {
         switch self {
-        case .running:   .systemGreen
-        case .idle:      .systemMint
-        case .completed: .systemBlue
-        case .failed:    .systemRed
-        case .killed:    .systemOrange
-        case .spawning:  .systemYellow
-        case .waiting:   .systemGray
-        case .lost:      .systemGray
-        case .suspended: .systemOrange
+        case .streaming, .running, .spawning: .systemGreen
+        case .waiting, .idle, .suspended:     .systemCyan
+        case .completed:                      .systemGray
+        case .broken, .failed,
+             .killed, .lost:                  .systemRed
         }
     }
 
-    var isTerminal: Bool {
+    var isAlive: Bool {
         switch self {
-        case .completed, .failed, .killed, .lost: true
-        default: false
+        case .streaming, .waiting, .running, .idle, .spawning, .suspended: true
+        case .broken, .completed, .failed, .killed, .lost: false
+        }
+    }
+
+    /// Normalize legacy status to the three observable states
+    var normalized: AgentStatus {
+        switch self {
+        case .streaming, .running, .spawning: .streaming
+        case .waiting, .idle, .suspended:     .waiting
+        case .broken, .completed, .failed,
+             .killed, .lost:                  .broken
         }
     }
 }

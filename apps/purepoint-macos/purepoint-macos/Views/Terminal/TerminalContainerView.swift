@@ -29,7 +29,7 @@ struct TerminalContainerView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         let termView = viewCache.terminalView(for: agent)
 
-        // Already showing the correct agent — nothing to do (besides focus check)
+        // Already showing the correct agent — just ensure focus
         if termView.superview === nsView && !termView.isHidden {
             if isFocused {
                 makeTerminalFirstResponder(in: nsView)
@@ -57,9 +57,8 @@ struct TerminalContainerView: NSViewRepresentable {
         termView.isHidden = false
         viewCache.show(agentId: agent.id)
 
-        if isFocused {
-            makeTerminalFirstResponder(in: nsView)
-        }
+        // Always focus terminal when switching to a new agent
+        makeTerminalFirstResponder(in: nsView)
     }
 
     private func makeTerminalFirstResponder(in nsView: NSView) {

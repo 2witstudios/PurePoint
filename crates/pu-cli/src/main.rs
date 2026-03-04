@@ -3,6 +3,7 @@ mod daemon_ctrl;
 mod error;
 mod output;
 mod commands;
+mod skill;
 
 use clap::{Parser, Subcommand};
 
@@ -16,11 +17,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize a PurePoint workspace
-    Init,
+    Init {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Spawn an agent in a new worktree
     Spawn {
-        /// The prompt for the agent
-        prompt: String,
+        /// The prompt for the agent (optional if --template or --file provided)
+        prompt: Option<String>,
         /// Agent type (default: claude)
         #[arg(short, long)]
         agent: Option<String>,
@@ -36,6 +41,18 @@ enum Commands {
         /// Add to existing worktree
         #[arg(short, long)]
         worktree: Option<String>,
+        /// Use a saved prompt template by name
+        #[arg(long, conflicts_with = "file")]
+        template: Option<String>,
+        /// Read prompt from a file path
+        #[arg(long, conflicts_with = "template")]
+        file: Option<String>,
+        /// Variable substitution (KEY=VALUE), repeatable
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Show workspace status
     Status {
@@ -57,6 +74,9 @@ enum Commands {
         /// Kill all agents
         #[arg(long)]
         all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Attach to an agent's terminal
     Attach {
@@ -70,13 +90,51 @@ enum Commands {
         /// Number of bytes to read from tail
         #[arg(long, default_value = "500")]
         tail: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Check daemon health
-    Health,
+    Health {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage saved prompt templates
+    Prompt {
+        #[command(subcommand)]
+        action: PromptAction,
+    },
+    /// Send text or keys to an agent's terminal
+    Send {
+        /// Agent ID
+        agent_id: String,
+        /// Text to send
+        text: Option<String>,
+        /// Don't append Enter after text
+        #[arg(long)]
+        no_enter: bool,
+        /// Send a control key sequence (e.g., C-c, C-d)
+        #[arg(long, conflicts_with = "text")]
+        keys: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Control the pane grid layout
     Grid {
         #[command(subcommand)]
         action: GridAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PromptAction {
+    /// List available prompt templates
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -133,18 +191,29 @@ async fn main() {
         }
     };
 
+    // Background skill freshness check (non-blocking)
+    std::thread::spawn(skill::ensure_skill_current);
+
     let result = match cli.command {
-        Commands::Init => commands::init::run(&socket).await,
-        Commands::Spawn { prompt, agent, name, base, root, worktree } => {
-            commands::spawn::run(&socket, prompt, agent, name, base, root, worktree).await
+        Commands::Init { json } => commands::init::run(&socket, json).await,
+        Commands::Spawn { prompt, agent, name, base, root, worktree, template, file, vars, json } => {
+            commands::spawn::run(&socket, prompt, agent, name, base, root, worktree, template, file, vars, json).await
         }
         Commands::Status { agent, json } => commands::status::run(&socket, agent, json).await,
-        Commands::Kill { agent, worktree, all } => {
-            commands::kill::run(&socket, agent, worktree, all).await
+        Commands::Kill { agent, worktree, all, json } => {
+            commands::kill::run(&socket, agent, worktree, all, json).await
         }
         Commands::Attach { agent_id } => commands::attach::run(&socket, &agent_id).await,
-        Commands::Logs { agent_id, tail } => commands::logs::run(&socket, &agent_id, tail).await,
-        Commands::Health => commands::health::run(&socket).await,
+        Commands::Logs { agent_id, tail, json } => commands::logs::run(&socket, &agent_id, tail, json).await,
+        Commands::Health { json } => commands::health::run(&socket, json).await,
+        Commands::Prompt { action } => {
+            match action {
+                PromptAction::List { json } => commands::prompt::run_list(json).await,
+            }
+        }
+        Commands::Send { agent_id, text, no_enter, keys, json } => {
+            commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await
+        }
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
     };
 

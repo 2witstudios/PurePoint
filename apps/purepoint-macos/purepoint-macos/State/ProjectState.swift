@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Observation
 
 /// Per-project state: agents, worktrees, manifest watching, and daemon interaction.
@@ -19,6 +20,7 @@ final class ProjectState: Identifiable {
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private var manifestWatcher: ManifestWatcher?
     @ObservationIgnored private var gridSubscription: DaemonGridSubscription?
+    @ObservationIgnored private var statusSubscriptionTask: Task<Void, Never>?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var gridSubscriptionTask: Task<Void, Never>?
@@ -72,6 +74,7 @@ final class ProjectState: Identifiable {
             }
 
             self.startGridSubscription()
+            self.startStatusSubscription()
             self.refresh()
             // Resume suspended agents after initial data load
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -83,6 +86,7 @@ final class ProjectState: Identifiable {
         openTask?.cancel()
         refreshTask?.cancel()
         gridSubscriptionTask?.cancel()
+        statusSubscriptionTask?.cancel()
         Task { await gridSubscription?.stop() }
         manifestWatcher?.stop()
         manifestWatcher = nil
@@ -116,12 +120,8 @@ final class ProjectState: Identifiable {
                     }
                 }
 
-                if self.worktrees != snapshot.worktrees {
-                    self.worktrees = snapshot.worktrees
-                }
-                if self.rootAgents != snapshot.rootAgents {
-                    self.rootAgents = snapshot.rootAgents
-                }
+                self.mergeWorktrees(snapshot.worktrees)
+                self.mergeRootAgents(snapshot.rootAgents)
             } catch is CancellationError {
                 // Task was cancelled (new refresh started) — ignore
             } catch {
@@ -259,7 +259,7 @@ final class ProjectState: Identifiable {
     // MARK: - Resume
 
     private func resumeSuspendedAgents() {
-        let suspended = allAgents.filter { $0.status == .suspended }
+        let suspended = allAgents.filter { $0.suspended }
         guard !suspended.isEmpty else { return }
         let root = projectRoot
 
@@ -274,7 +274,91 @@ final class ProjectState: Identifiable {
         }
     }
 
+    // MARK: - Selective Merge
+
+    /// Merge root agents by ID: update changed agents in-place, add new, remove stale.
+    /// Only triggers view updates for agents whose observable properties changed.
+    private func mergeRootAgents(_ incoming: [AgentModel]) {
+        let incomingById = Dictionary(uniqueKeysWithValues: incoming.map { ($0.id, $0) })
+        let currentById = Dictionary(uniqueKeysWithValues: rootAgents.map { ($0.id, $0) })
+
+        // If the sets differ, just replace (avoids complex diff for add/remove)
+        if Set(incomingById.keys) != Set(currentById.keys) || rootAgents != incoming {
+            rootAgents = incoming
+        }
+    }
+
+    /// Merge worktrees by ID with nested agent merge.
+    private func mergeWorktrees(_ incoming: [WorktreeModel]) {
+        if worktrees != incoming {
+            worktrees = incoming
+        }
+    }
+
     // MARK: - Private
+
+    private func startStatusSubscription() {
+        statusSubscriptionTask?.cancel()
+        let root = projectRoot
+
+        statusSubscriptionTask = Task {
+            while !Task.isCancelled {
+                do {
+                    let client = DaemonClient()
+                    let (connection, reader) = try await client.connect()
+                    defer { connection.cancel() }
+
+                    try await DaemonClient.write(.subscribeStatus(projectRoot: root), to: connection)
+                    let firstLine = try await reader.readLine()
+                    let firstResp = DaemonClient.parse(firstLine)
+                    guard case .statusSubscribed = firstResp else { break }
+
+                    // Read streaming status events
+                    while !Task.isCancelled {
+                        let line = try await reader.readLine()
+                        let resp = DaemonClient.parse(line)
+                        if case .statusEvent(let worktrees, let agents) = resp {
+                            let worktreeModels = DaemonWorkspaceService.parseWorktrees(worktrees)
+                            let agentModels = agents.map { report in
+                                AgentModel(
+                                    id: report.id,
+                                    name: report.name,
+                                    agentType: report.agentType,
+                                    status: AgentStatus(rawValue: report.status) ?? .lost,
+                                    prompt: report.prompt ?? "",
+                                    startedAt: report.startedAt ?? "",
+                                    sessionId: report.sessionId
+                                )
+                            }
+
+                            // Sidebar leak fix: eagerly assign new agents to pending grid leaves
+                            if let gs = self.gridState, gs.projectRoot == root {
+                                var pending = gs.pendingSpawnLeafIds
+                                if !pending.isEmpty {
+                                    let currentIds = Set(self.rootAgents.map(\.id))
+                                    let newAgents = agentModels.filter { !currentIds.contains($0.id) }
+                                    for agent in newAgents {
+                                        guard let leafId = pending.first else { break }
+                                        pending.remove(leafId)
+                                        gs.pendingSpawnLeafIds.remove(leafId)
+                                        gs.setAgent(agent.id, forLeafId: leafId)
+                                    }
+                                }
+                            }
+
+                            self.mergeWorktrees(worktreeModels)
+                            self.mergeRootAgents(agentModels)
+                        }
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // Reconnect after 1s on failure
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+    }
 
     private func startGridSubscription() {
         gridSubscriptionTask?.cancel()

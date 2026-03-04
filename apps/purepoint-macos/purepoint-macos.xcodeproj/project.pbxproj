@@ -104,7 +104,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = FBC7CFDB2F53F1FE00F8E0A1 /* Build configuration list for PBXNativeTarget "purepoint-macos" */;
 			buildPhases = (
-				FB0B00012F70000000000001 /* Build Rust Engine */,
+				FB0B00012F70000000000001 /* Build Rust Binaries */,
 				FBC7CFB62F53F1FD00F8E0A1 /* Sources */,
 				FBC7CFB72F53F1FD00F8E0A1 /* Frameworks */,
 				FBC7CFB82F53F1FD00F8E0A1 /* Resources */,
@@ -242,7 +242,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		FB0B00012F70000000000001 /* Build Rust Engine */ = {
+		FB0B00012F70000000000001 /* Build Rust Binaries */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -251,16 +251,21 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/../../crates/pu-engine/src/**/*.rs",
+				"$(SRCROOT)/../../crates/pu-cli/src/**/*.rs",
+				"$(SRCROOT)/../../crates/pu-core/src/**/*.rs",
+				"$(SRCROOT)/../../crates/pu-cli/assets/SKILL.md",
 			);
-			name = "Build Rust Engine";
+			name = "Build Rust Binaries";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/MacOS/pu-engine",
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/MacOS/pu",
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/pu-skill.md",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\n# Ensure cargo is available (Xcode strips PATH)\nexport PATH=\"$HOME/.cargo/bin:$PATH:/opt/homebrew/bin:/usr/local/bin\"\n\nRUST_ROOT=\"$SRCROOT/../../crates\"\nENGINE_BIN=\"pu-engine\"\nOUT_DIR=\"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/MacOS\"\n\n# Build for current architecture only in Debug, universal in Release\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    cargo build --release --manifest-path \"$RUST_ROOT/../Cargo.toml\" -p pu-engine \\\n        --target aarch64-apple-darwin\n    cargo build --release --manifest-path \"$RUST_ROOT/../Cargo.toml\" -p pu-engine \\\n        --target x86_64-apple-darwin\n    lipo -create -output \"$OUT_DIR/$ENGINE_BIN\" \\\n        \"$RUST_ROOT/../target/aarch64-apple-darwin/release/$ENGINE_BIN\" \\\n        \"$RUST_ROOT/../target/x86_64-apple-darwin/release/$ENGINE_BIN\"\nelse\n    cargo build --manifest-path \"$RUST_ROOT/../Cargo.toml\" -p pu-engine\n    cp \"$RUST_ROOT/../target/debug/$ENGINE_BIN\" \"$OUT_DIR/$ENGINE_BIN\"\n    # Also update ~/.cargo/bin so CLI usage stays in sync\n    cp \"$RUST_ROOT/../target/debug/$ENGINE_BIN\" \"$HOME/.cargo/bin/$ENGINE_BIN\" 2>/dev/null || true\nfi\n\n# Code sign the binary with the app's identity\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:-'-'}\" --options runtime \"$OUT_DIR/$ENGINE_BIN\"\n";
+			shellScript = "set -euo pipefail\n\n# Ensure cargo is available (Xcode strips PATH)\nexport PATH=\"$HOME/.cargo/bin:$PATH:/opt/homebrew/bin:/usr/local/bin\"\n\nRUST_ROOT=\"$SRCROOT/../../crates\"\nENGINE_BIN=\"pu-engine\"\nCLI_BIN=\"pu\"\nOUT_DIR=\"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/MacOS\"\nPU_BIN_DIR=\"$HOME/.pu/bin\"\n\n# Build for current architecture only in Debug, universal in Release\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    cargo build --release --manifest-path \"$RUST_ROOT/../Cargo.toml\" -p pu-engine -p pu-cli \\\n        --target aarch64-apple-darwin\n    cargo build --release --manifest-path \"$RUST_ROOT/../Cargo.toml\" -p pu-engine -p pu-cli \\\n        --target x86_64-apple-darwin\n    lipo -create -output \"$OUT_DIR/$ENGINE_BIN\" \\\n        \"$RUST_ROOT/../target/aarch64-apple-darwin/release/$ENGINE_BIN\" \\\n        \"$RUST_ROOT/../target/x86_64-apple-darwin/release/$ENGINE_BIN\"\n    lipo -create -output \"$OUT_DIR/$CLI_BIN\" \\\n        \"$RUST_ROOT/../target/aarch64-apple-darwin/release/$CLI_BIN\" \\\n        \"$RUST_ROOT/../target/x86_64-apple-darwin/release/$CLI_BIN\"\nelse\n    cargo build --manifest-path \"$RUST_ROOT/../Cargo.toml\" -p pu-engine -p pu-cli\n    cp \"$RUST_ROOT/../target/debug/$ENGINE_BIN\" \"$OUT_DIR/$ENGINE_BIN\"\n    cp \"$RUST_ROOT/../target/debug/$CLI_BIN\" \"$OUT_DIR/$CLI_BIN\"\n    # Also update ~/.cargo/bin and ~/.pu/bin so CLI usage stays in sync\n    cp \"$RUST_ROOT/../target/debug/$ENGINE_BIN\" \"$HOME/.cargo/bin/$ENGINE_BIN\" 2>/dev/null || true\n    mkdir -p \"$PU_BIN_DIR\"\n    cp \"$RUST_ROOT/../target/debug/$CLI_BIN\" \"$PU_BIN_DIR/$CLI_BIN\" 2>/dev/null || true\nfi\n\n# Copy skill file into app bundle for CLIInstaller\nmkdir -p \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/Resources\"\ncp \"$RUST_ROOT/pu-cli/assets/SKILL.md\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/Resources/pu-skill.md\"\n\n# Code sign the binaries with the app's identity\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:-'-'}\" --options runtime \"$OUT_DIR/$ENGINE_BIN\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:-'-'}\" --options runtime \"$OUT_DIR/$CLI_BIN\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

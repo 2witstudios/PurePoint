@@ -21,6 +21,7 @@ struct purepoint_macosApp: App {
                 )
                 .onAppear {
                     appState.gridState = gridState
+                    CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in

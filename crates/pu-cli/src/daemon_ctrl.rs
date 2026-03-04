@@ -48,12 +48,16 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         .spawn()
         .map_err(CliError::Io)?;
 
-    // Poll for socket (100ms × 30 = 3s timeout)
-    for _ in 0..30 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Poll for socket with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms
+    let mut delay_ms = 10u64;
+    let mut total_ms = 0u64;
+    while total_ms < 3000 {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        total_ms += delay_ms;
         if check_daemon_health(socket).await {
             return Ok(());
         }
+        delay_ms = (delay_ms * 2).min(640);
     }
 
     Err(CliError::Other("daemon did not start within 3 seconds".into()))

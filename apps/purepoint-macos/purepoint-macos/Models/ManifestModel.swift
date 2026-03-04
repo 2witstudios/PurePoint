@@ -63,11 +63,12 @@ nonisolated struct AgentEntry: Codable, Sendable {
     let error: String?
     let pid: Int?
     let sessionId: String?
+    let suspended: Bool?
 
     // Explicit CodingKeys document the camelCase wire format
     // matching Rust's #[serde(rename_all = "camelCase")] on types::AgentEntry.
     private enum CodingKeys: String, CodingKey {
-        case id, name, status, prompt, error, pid
+        case id, name, status, prompt, error, pid, suspended
         case agentType, startedAt, completedAt, exitCode, sessionId
     }
 }

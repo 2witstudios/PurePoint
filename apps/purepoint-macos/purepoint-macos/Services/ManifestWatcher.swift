@@ -10,7 +10,7 @@ final class ManifestWatcher: @unchecked Sendable {
     private let path: String
     private let onChange: @MainActor @Sendable () -> Void
     private var debounceWork: DispatchWorkItem?
-    private static let debounceInterval: TimeInterval = 0.3
+    private static let debounceInterval: TimeInterval = 0.05
 
     var isWatching: Bool { source != nil }
 

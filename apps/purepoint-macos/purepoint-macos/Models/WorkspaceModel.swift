@@ -21,12 +21,13 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
     let prompt: String
     let startedAt: String
     let sessionId: String?
+    let suspended: Bool
 
     var displayName: String {
         name.isEmpty ? id : name
     }
 
-    init(id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String, sessionId: String? = nil) {
+    init(id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String, sessionId: String? = nil, suspended: Bool = false) {
         self.id = id
         self.name = name
         self.agentType = agentType
@@ -34,6 +35,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
         self.prompt = prompt
         self.startedAt = startedAt
         self.sessionId = sessionId
+        self.suspended = suspended
     }
 
     init(from entry: AgentEntry) {
@@ -44,11 +46,12 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
             status: AgentStatus(rawValue: entry.status) ?? .lost,
             prompt: entry.prompt ?? "",
             startedAt: entry.startedAt,
-            sessionId: entry.sessionId
+            sessionId: entry.sessionId,
+            suspended: entry.suspended ?? false
         )
     }
 
     static func == (lhs: AgentModel, rhs: AgentModel) -> Bool {
-        lhs.id == rhs.id && lhs.status == rhs.status
+        lhs.id == rhs.id && lhs.status == rhs.status && lhs.suspended == rhs.suspended
     }
 }

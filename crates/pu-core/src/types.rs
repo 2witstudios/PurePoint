@@ -3,22 +3,46 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
-    Spawning,
-    Running,
-    Idle,
-    Completed,
-    Failed,
-    Killed,
-    Lost,
-    Suspended,
+    Streaming,
+    Waiting,
+    Broken,
 }
 
 impl AgentStatus {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Killed | Self::Lost)
+    pub fn is_alive(self) -> bool {
+        matches!(self, Self::Streaming | Self::Waiting)
+    }
+}
+
+impl Serialize for AgentStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let s = match self {
+            AgentStatus::Streaming => "streaming",
+            AgentStatus::Waiting => "waiting",
+            AgentStatus::Broken => "broken",
+        };
+        serializer.serialize_str(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentStatus {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "streaming" => Ok(AgentStatus::Streaming),
+            "waiting" => Ok(AgentStatus::Waiting),
+            "broken" => Ok(AgentStatus::Broken),
+            // Backward compat: map old status values
+            "spawning" | "running" => Ok(AgentStatus::Streaming),
+            "idle" | "suspended" => Ok(AgentStatus::Waiting),
+            "completed" | "failed" | "killed" | "lost" => Ok(AgentStatus::Broken),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["streaming", "waiting", "broken"],
+            )),
+        }
     }
 }
 
@@ -32,7 +56,7 @@ pub enum WorktreeStatus {
     Cleaned,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEntry {
     pub id: String,
@@ -53,6 +77,54 @@ pub struct AgentEntry {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suspended_at: Option<DateTime<Utc>>,
+    /// Whether this agent is currently suspended. Only meaningful when `status.is_alive()`.
+    /// Invariant: custom Deserialize infers `true` when `suspended_at` is present (backward
+    /// compat with old manifests). The engine sets both `suspended` and `suspended_at`
+    /// atomically on suspend/resume.
+    #[serde(default)]
+    pub suspended: bool,
+}
+
+impl<'de> Deserialize<'de> for AgentEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            id: String,
+            name: String,
+            agent_type: String,
+            status: AgentStatus,
+            prompt: Option<String>,
+            started_at: DateTime<Utc>,
+            completed_at: Option<DateTime<Utc>>,
+            exit_code: Option<i32>,
+            error: Option<String>,
+            pid: Option<u32>,
+            session_id: Option<String>,
+            suspended_at: Option<DateTime<Utc>>,
+            #[serde(default)]
+            suspended: bool,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        // Backward compat: old manifests have suspended_at set but no suspended field.
+        // Ensure suspended is true when suspended_at is present.
+        let suspended = raw.suspended || raw.suspended_at.is_some();
+        Ok(AgentEntry {
+            id: raw.id,
+            name: raw.name,
+            agent_type: raw.agent_type,
+            status: raw.status,
+            prompt: raw.prompt,
+            started_at: raw.started_at,
+            completed_at: raw.completed_at,
+            exit_code: raw.exit_code,
+            error: raw.error,
+            pid: raw.pid,
+            session_id: raw.session_id,
+            suspended_at: raw.suspended_at,
+            suspended,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,28 +301,29 @@ mod tests {
     // --- AgentStatus ---
 
     #[test]
-    fn given_agent_status_running_should_serialize_to_camel_case() {
-        let json = serde_json::to_string(&AgentStatus::Running).unwrap();
-        assert_eq!(json, r#""running""#);
+    fn given_agent_status_streaming_should_serialize() {
+        let json = serde_json::to_string(&AgentStatus::Streaming).unwrap();
+        assert_eq!(json, r#""streaming""#);
     }
 
     #[test]
-    fn given_agent_status_json_should_deserialize_from_camel_case() {
-        let status: AgentStatus = serde_json::from_str(r#""completed""#).unwrap();
-        assert_eq!(status, AgentStatus::Completed);
+    fn given_agent_status_waiting_should_serialize() {
+        let json = serde_json::to_string(&AgentStatus::Waiting).unwrap();
+        assert_eq!(json, r#""waiting""#);
+    }
+
+    #[test]
+    fn given_agent_status_broken_should_serialize() {
+        let json = serde_json::to_string(&AgentStatus::Broken).unwrap();
+        assert_eq!(json, r#""broken""#);
     }
 
     #[test]
     fn given_all_agent_statuses_should_round_trip_json() {
         let statuses = vec![
-            AgentStatus::Spawning,
-            AgentStatus::Running,
-            AgentStatus::Idle,
-            AgentStatus::Completed,
-            AgentStatus::Failed,
-            AgentStatus::Killed,
-            AgentStatus::Lost,
-            AgentStatus::Suspended,
+            AgentStatus::Streaming,
+            AgentStatus::Waiting,
+            AgentStatus::Broken,
         ];
         for status in statuses {
             let json = serde_json::to_string(&status).unwrap();
@@ -260,19 +333,29 @@ mod tests {
     }
 
     #[test]
-    fn given_terminal_statuses_should_report_terminal() {
-        assert!(AgentStatus::Completed.is_terminal());
-        assert!(AgentStatus::Failed.is_terminal());
-        assert!(AgentStatus::Killed.is_terminal());
-        assert!(AgentStatus::Lost.is_terminal());
+    fn given_old_status_values_should_deserialize_to_new() {
+        // spawning, running → Streaming
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""spawning""#).unwrap(), AgentStatus::Streaming);
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""running""#).unwrap(), AgentStatus::Streaming);
+        // idle, suspended → Waiting
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""idle""#).unwrap(), AgentStatus::Waiting);
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""suspended""#).unwrap(), AgentStatus::Waiting);
+        // completed, failed, killed, lost → Broken
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""completed""#).unwrap(), AgentStatus::Broken);
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""failed""#).unwrap(), AgentStatus::Broken);
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""killed""#).unwrap(), AgentStatus::Broken);
+        assert_eq!(serde_json::from_str::<AgentStatus>(r#""lost""#).unwrap(), AgentStatus::Broken);
     }
 
     #[test]
-    fn given_active_statuses_should_report_not_terminal() {
-        assert!(!AgentStatus::Spawning.is_terminal());
-        assert!(!AgentStatus::Running.is_terminal());
-        assert!(!AgentStatus::Idle.is_terminal());
-        assert!(!AgentStatus::Suspended.is_terminal());
+    fn given_broken_status_should_not_be_alive() {
+        assert!(!AgentStatus::Broken.is_alive());
+    }
+
+    #[test]
+    fn given_active_statuses_should_be_alive() {
+        assert!(AgentStatus::Streaming.is_alive());
+        assert!(AgentStatus::Waiting.is_alive());
     }
 
     // --- WorktreeStatus ---
@@ -301,7 +384,7 @@ mod tests {
             id: "ag-abc".into(),
             name: "claude".into(),
             agent_type: "claude".into(),
-            status: AgentStatus::Running,
+            status: AgentStatus::Streaming,
             prompt: Some("fix bug".into()),
             started_at: chrono::Utc::now(),
             completed_at: None,
@@ -310,6 +393,7 @@ mod tests {
             pid: Some(1234),
             session_id: None,
             suspended_at: None,
+            suspended: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -319,6 +403,22 @@ mod tests {
         assert!(!json.contains("completedAt"));
         assert!(!json.contains("exitCode"));
         assert!(!json.contains("sessionId"));
+    }
+
+    #[test]
+    fn given_agent_entry_with_suspended_at_but_no_suspended_field_should_infer_suspended() {
+        let json = r#"{
+            "id": "ag-old",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "waiting",
+            "prompt": null,
+            "startedAt": "2026-03-01T00:00:00Z",
+            "suspendedAt": "2026-03-01T01:00:00Z"
+        }"#;
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.suspended, "suspended should be true when suspendedAt is present");
+        assert!(entry.suspended_at.is_some());
     }
 
     #[test]
@@ -334,7 +434,7 @@ mod tests {
         }"#;
         let entry: AgentEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.id, "ag-xyz");
-        assert_eq!(entry.status, AgentStatus::Idle);
+        assert_eq!(entry.status, AgentStatus::Waiting);
         assert_eq!(entry.pid, Some(5678));
     }
 
@@ -349,7 +449,7 @@ mod tests {
                 id: "ag-1".into(),
                 name: "claude".into(),
                 agent_type: "claude".into(),
-                status: AgentStatus::Running,
+                status: AgentStatus::Streaming,
                 prompt: Some("test".into()),
                 started_at: chrono::Utc::now(),
                 completed_at: None,
@@ -358,6 +458,7 @@ mod tests {
                 pid: None,
                 session_id: None,
                 suspended_at: None,
+                suspended: false,
             },
         );
         let entry = WorktreeEntry {
@@ -398,7 +499,7 @@ mod tests {
                 id: "ag-1".into(),
                 name: "claude".into(),
                 agent_type: "claude".into(),
-                status: AgentStatus::Running,
+                status: AgentStatus::Streaming,
                 prompt: None,
                 started_at: chrono::Utc::now(),
                 completed_at: None,
@@ -407,6 +508,7 @@ mod tests {
                 pid: None,
                 session_id: None,
                 suspended_at: None,
+                suspended: false,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -423,7 +525,7 @@ mod tests {
                 id: "ag-2".into(),
                 name: "claude".into(),
                 agent_type: "claude".into(),
-                status: AgentStatus::Idle,
+                status: AgentStatus::Waiting,
                 prompt: None,
                 started_at: chrono::Utc::now(),
                 completed_at: None,
@@ -432,6 +534,7 @@ mod tests {
                 pid: None,
                 session_id: None,
                 suspended_at: None,
+                suspended: false,
             },
         );
         m.worktrees.insert(
@@ -462,7 +565,7 @@ mod tests {
             id: id.into(),
             name: "claude".into(),
             agent_type: "claude".into(),
-            status: AgentStatus::Running,
+            status: AgentStatus::Streaming,
             prompt: None,
             started_at: now,
             completed_at: None,
@@ -471,6 +574,7 @@ mod tests {
             pid: None,
             session_id: None,
             suspended_at: None,
+            suspended: false,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();

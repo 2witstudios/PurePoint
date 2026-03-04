@@ -11,7 +11,7 @@ pub(crate) async fn init_and_spawn() -> (Engine, String, TempDir) {
     std::fs::create_dir_all(&project_root).unwrap();
     let pr = project_root.to_string_lossy().to_string();
 
-    let engine = Engine::new().await;
+    let engine = Engine::new();
 
     // Init
     engine

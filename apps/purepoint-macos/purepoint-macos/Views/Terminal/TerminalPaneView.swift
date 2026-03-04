@@ -27,7 +27,9 @@ class TerminalPaneNSView: NSView {
     private(set) var terminal: ScrollableTerminal?
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
+    private var isAttachDone = false
     private var terminalInstalled = false
+    private var heartbeatTimer: Timer?
 
     init(agent: AgentModel) {
         self.agent = agent
@@ -72,21 +74,35 @@ class TerminalPaneNSView: NSView {
         }
         // Start daemon attach only after the first layout pass gives us a real frame.
         // Starting while frame is .zero causes SwiftTerm to report 1-column size.
-        if let tv = terminal, !attachStarted, tv.bounds.width > 1 {
-            attachStarted = true
-            startDaemonAttach()
+        if let tv = terminal, tv.bounds.width > 1 {
+            if !attachStarted {
+                attachStarted = true
+                startDaemonAttach()
+                startHeartbeat()
+            } else if let task = attachTask, task.isCancelled || isAttachDone {
+                // Session died — restart
+                startDaemonAttach()
+            }
         }
     }
 
     private func startDaemonAttach() {
         guard let tv = terminal else { return }
 
+        isAttachDone = false
         let session = DaemonAttachSession(agentId: agent.id, terminalView: tv.terminalView)
         tv.attachSession = session
 
-        attachTask = Task {
+        attachTask = Task { [weak self] in
             await session.start()
+            await MainActor.run { self?.isAttachDone = true }
         }
+    }
+
+    /// Restart the attach session if it has died and the view has a valid frame.
+    func reconnectIfNeeded() {
+        guard isAttachDone, let tv = terminal, tv.bounds.width > 1 else { return }
+        startDaemonAttach()
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -103,7 +119,16 @@ class TerminalPaneNSView: NSView {
         layer?.backgroundColor = TerminalTheme.background.cgColor
     }
 
+    private func startHeartbeat() {
+        guard heartbeatTimer == nil else { return }
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.reconnectIfNeeded()
+        }
+    }
+
     func tearDown() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
         attachTask?.cancel()
         attachTask = nil
         terminal?.tearDown()

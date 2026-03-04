@@ -1,5 +1,5 @@
 use std::path::Path;
-use pu_core::protocol::{KillTarget, Request, Response};
+use pu_core::protocol::{KillTarget, Request};
 use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
@@ -10,6 +10,7 @@ pub async fn run(
     agent: Option<String>,
     worktree: Option<String>,
     all: bool,
+    json: bool,
 ) -> Result<(), CliError> {
     let target = if all {
         KillTarget::All
@@ -28,9 +29,7 @@ pub async fn run(
     let cwd = std::env::current_dir()?;
     let project_root = cwd.to_string_lossy().to_string();
     let resp = client::send_request(socket, &Request::Kill { project_root, target }).await?;
-    if let Response::Error { code, message } = resp {
-        return Err(CliError::DaemonError { code, message });
-    }
-    output::print_response(&resp, false);
+    let resp = output::check_response(resp, json)?;
+    output::print_response(&resp, json);
     Ok(())
 }

@@ -2,16 +2,30 @@ use owo_colors::OwoColorize;
 use pu_core::protocol::Response;
 use pu_core::types::AgentStatus;
 
-fn status_colored(status: AgentStatus) -> String {
+use crate::error::CliError;
+
+/// Check a daemon response for errors. On error, print JSON if requested, then return Err.
+pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> {
+    if let Response::Error { ref code, ref message } = resp {
+        if json {
+            print_response(&resp, true);
+        }
+        let code = code.clone();
+        let message = message.clone();
+        Err(CliError::DaemonError { code, message })
+    } else {
+        Ok(resp)
+    }
+}
+
+fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
     match status {
-        AgentStatus::Running => "running".green().to_string(),
-        AgentStatus::Spawning => "spawning".yellow().to_string(),
-        AgentStatus::Idle => "idle".cyan().to_string(),
-        AgentStatus::Completed => "completed".green().bold().to_string(),
-        AgentStatus::Failed => "failed".red().to_string(),
-        AgentStatus::Killed => "killed".red().to_string(),
-        AgentStatus::Lost => "lost".red().dimmed().to_string(),
-        AgentStatus::Suspended => "suspended".yellow().dimmed().to_string(),
+        AgentStatus::Streaming => "streaming".green().to_string(),
+        AgentStatus::Waiting => "waiting".cyan().to_string(),
+        AgentStatus::Broken => match exit_code {
+            Some(0) => "done".dimmed().to_string(),
+            _ => "broken".red().to_string(),
+        },
     }
 }
 
@@ -37,7 +51,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
             }
         }
         Response::SpawnResult { worktree_id, agent_id, status } => {
-            println!("Spawned agent {} ({})", agent_id.bold(), status_colored(*status));
+            println!("Spawned agent {} ({})", agent_id.bold(), status_colored(*status, None));
             if let Some(wt) = worktree_id {
                 println!("  Worktree: {wt}");
             }
@@ -50,7 +64,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
             if !agents.is_empty() {
                 println!("{:<14} {:<16} {}", "ID".bold(), "NAME".bold(), "STATUS".bold());
                 for a in agents {
-                    println!("{:<14} {:<16} {}", a.id.dimmed(), a.name, status_colored(a.status));
+                    println!("{:<14} {:<16} {}", a.id.dimmed(), a.name, status_colored(a.status, a.exit_code));
                 }
             }
             for wt in worktrees {
@@ -66,14 +80,14 @@ pub fn print_response(response: &Response, json_mode: bool) {
                         println!("  {:<14} {:<16} {}",
                             a.id.dimmed(),
                             a.name,
-                            status_colored(a.status),
+                            status_colored(a.status, a.exit_code),
                         );
                     }
                 }
             }
         }
         Response::AgentStatus(a) => {
-            println!("{} {} {}", a.id.dimmed(), a.name.bold(), status_colored(a.status));
+            println!("{} {} {}", a.id.dimmed(), a.name.bold(), status_colored(a.status, a.exit_code));
             if let Some(pid) = a.pid {
                 println!("  PID:    {pid}");
             }
@@ -94,7 +108,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Suspended {} agent(s)", suspended.len());
         }
         Response::ResumeResult { agent_id, status } => {
-            println!("Resumed agent {} ({})", agent_id.bold(), status_colored(*status));
+            println!("Resumed agent {} ({})", agent_id.bold(), status_colored(*status, None));
         }
         Response::LogsResult { agent_id, data } => {
             println!("{}", format!("--- Logs for {agent_id} ---").dimmed());
@@ -121,6 +135,12 @@ pub fn print_response(response: &Response, json_mode: bool) {
         }
         Response::GridEvent { project_root, command } => {
             println!("Grid event for {project_root}: {command:?}");
+        }
+        Response::StatusSubscribed => {
+            println!("Status subscription active");
+        }
+        Response::StatusEvent { agents, worktrees } => {
+            println!("Status update: {} agents, {} worktrees", agents.len(), worktrees.len());
         }
     }
 }

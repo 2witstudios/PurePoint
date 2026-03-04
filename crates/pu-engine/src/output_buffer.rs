@@ -1,14 +1,15 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::time::Instant;
 
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 const DEFAULT_CAPACITY: usize = 1024 * 1024; // 1MB
 
 pub struct OutputBuffer {
     inner: RwLock<BufferInner>,
-    notify: Arc<Notify>,
+    written_tx: watch::Sender<usize>,
+    written_rx: watch::Receiver<usize>,
 }
 
 struct BufferInner {
@@ -30,6 +31,7 @@ impl OutputBuffer {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
+        let (written_tx, written_rx) = watch::channel(0usize);
         Self {
             inner: RwLock::new(BufferInner {
                 data: VecDeque::new(),
@@ -37,7 +39,8 @@ impl OutputBuffer {
                 last_write: Instant::now(),
                 total_written: 0,
             }),
-            notify: Arc::new(Notify::new()),
+            written_tx,
+            written_rx,
         }
     }
 
@@ -50,9 +53,10 @@ impl OutputBuffer {
             let excess = inner.data.len() - inner.capacity;
             inner.data.drain(..excess);
         }
+        let total = inner.total_written;
         inner.last_write = Instant::now();
         drop(inner);
-        self.notify.notify_waiters();
+        self.written_tx.send_replace(total);
     }
 
     /// Read bytes written since `offset`. Returns `(bytes, new_offset)`.
@@ -78,9 +82,11 @@ impl OutputBuffer {
         (bytes, total)
     }
 
-    /// Get an Arc<Notify> clone for subscribing to write notifications.
-    pub fn subscribe_notify(&self) -> Arc<Notify> {
-        self.notify.clone()
+    /// Get a watch receiver for subscribing to write notifications.
+    /// Level-triggered: `changed().await` resolves immediately if data was
+    /// written since the last call, eliminating the Notify re-arm gap.
+    pub fn subscribe(&self) -> watch::Receiver<usize> {
+        self.written_rx.clone()
     }
 
     /// Current total bytes written (monotonic offset).
@@ -137,6 +143,7 @@ impl OutputBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn given_new_buffer_should_be_empty() {
@@ -275,10 +282,10 @@ mod tests {
     #[tokio::test]
     async fn given_write_should_notify_waiters() {
         let buf = Arc::new(OutputBuffer::new());
-        let notify = buf.subscribe_notify();
+        let mut watcher = buf.subscribe();
         let buf2 = buf.clone();
         let handle = tokio::spawn(async move {
-            notify.notified().await;
+            watcher.changed().await.unwrap();
             true
         });
         // Small yield to ensure the waiter is registered

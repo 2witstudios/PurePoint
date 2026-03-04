@@ -25,6 +25,12 @@ enum PurePointTheme {
     static let settingsHeight: CGFloat = 480
     static let settingsSidebarWidth: CGFloat = 180
 
+    // MARK: - Calendar
+    static let calendarHourHeight: CGFloat = 60
+    static let calendarTimeGutterWidth: CGFloat = 56
+    static let calendarHeaderHeight: CGFloat = 40
+    static let calendarPillHeight: CGFloat = 16
+
     // MARK: - Fonts
     static let navFont = Font.system(size: 12, weight: .medium)
     static let treeFont = Font.system(size: 12)

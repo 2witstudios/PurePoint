@@ -4,5 +4,7 @@ pub mod health;
 pub mod init;
 pub mod kill;
 pub mod logs;
+pub mod prompt;
+pub mod send;
 pub mod spawn;
 pub mod status;

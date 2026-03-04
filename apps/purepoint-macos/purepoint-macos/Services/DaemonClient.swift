@@ -117,6 +117,7 @@ nonisolated enum DaemonRequest: Encodable {
     case suspend(projectRoot: String, target: SuspendTarget)
     case resume(projectRoot: String, agentId: String)
     case subscribeGrid(projectRoot: String)
+    case subscribeStatus(projectRoot: String)
     case gridCommand(projectRoot: String, command: GridCommandPayload)
     case shutdown
 
@@ -168,6 +169,9 @@ nonisolated enum DaemonRequest: Encodable {
         case .subscribeGrid(let projectRoot):
             try container.encode("subscribe_grid", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
+        case .subscribeStatus(let projectRoot):
+            try container.encode("subscribe_status", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
         case .gridCommand(let projectRoot, let command):
             try container.encode("grid_command", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -191,6 +195,8 @@ nonisolated enum DaemonResponse: Decodable {
     case gridSubscribed
     case gridLayout(layout: Data)
     case gridEvent(projectRoot: String, command: GridCommandPayload)
+    case statusSubscribed
+    case statusEvent(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -235,6 +241,11 @@ nonisolated enum DaemonResponse: Decodable {
             self = .resumeResult(agentId: p.agentId, status: p.status)
         case "grid_subscribed":
             self = .gridSubscribed
+        case "status_subscribed":
+            self = .statusSubscribed
+        case "status_event":
+            let p = try StatusReportPayload(from: decoder)
+            self = .statusEvent(worktrees: p.worktrees, agents: p.agents)
         case "grid_layout":
             let p = try GridLayoutPayload(from: decoder)
             self = .gridLayout(layout: p.layoutData)
@@ -551,7 +562,6 @@ nonisolated final class DaemonLineReader: @unchecked Sendable {
                 }
                 return line
             }
-            scanOffset = buffer.count
             let chunk = try await readChunk()
             buffer.append(chunk)
         }

@@ -34,16 +34,18 @@ struct DetailView: View {
         switch selection {
         case .agent(let id):
             if let agent = appState.agent(byId: id) {
-                ZStack(alignment: .topTrailing) {
-                    TerminalContainerView(agent: agent, isFocused: appState.pendingFocusAgentId == id)
-                    SinglePaneSplitOverlay(agentId: id)
-                }
+                AgentTerminalPane(agent: agent, agentId: id)
             } else {
                 placeholderView(icon: "cpu", title: "Agent not found")
             }
 
         case .nav(let item):
-            placeholderView(icon: item.icon, title: item.title)
+            switch item {
+            case .schedule:
+                ScheduleView()
+            default:
+                placeholderView(icon: item.icon, title: item.title)
+            }
 
         case .worktree(let id):
             if let wt = appState.projectState(forWorktreeId: id)?.worktrees.first(where: { $0.id == id }) {
@@ -76,8 +78,11 @@ struct DetailView: View {
     }
 }
 
-/// Split overlay for single-pane agent view — enters grid mode on click.
-private struct SinglePaneSplitOverlay: View {
+/// Terminal + split overlay for single-pane agent view.
+/// Hover detection lives on the outer ZStack (backed by the opaque terminal),
+/// so the overlay never intercepts clicks meant for the terminal.
+private struct AgentTerminalPane: View {
+    let agent: AgentModel
     let agentId: String
     @State private var isHovered = false
     @Environment(AppState.self) private var appState
@@ -85,7 +90,7 @@ private struct SinglePaneSplitOverlay: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Color.clear
+            TerminalContainerView(agent: agent, isFocused: appState.pendingFocusAgentId == agentId)
 
             if isHovered {
                 HStack(spacing: 4) {
@@ -102,8 +107,6 @@ private struct SinglePaneSplitOverlay: View {
                 .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
                 isHovered = hovering

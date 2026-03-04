@@ -40,6 +40,14 @@ pub fn worktree_path(project_root: &Path, worktree_id: &str) -> PathBuf {
     pu_dir(project_root).join("worktrees").join(worktree_id)
 }
 
+pub fn templates_dir(project_root: &Path) -> PathBuf {
+    pu_dir(project_root).join("templates")
+}
+
+pub fn global_templates_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("templates"))
+}
+
 fn home_dir() -> Result<PathBuf, std::io::Error> {
     std::env::var("HOME")
         .map(PathBuf::from)
@@ -90,6 +98,24 @@ mod tests {
         assert_eq!(
             worktree_path(root, "wt-xyz"),
             PathBuf::from("/projects/myapp/.pu/worktrees/wt-xyz")
+        );
+    }
+
+    #[test]
+    fn given_project_root_should_build_templates_dir() {
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            templates_dir(root),
+            PathBuf::from("/projects/myapp/.pu/templates")
+        );
+    }
+
+    #[test]
+    fn given_global_templates_dir_should_live_under_home_pu() {
+        let path = global_templates_dir().unwrap();
+        assert!(
+            path.to_string_lossy().contains(".pu/templates"),
+            "unexpected path: {path:?}"
         );
     }
 

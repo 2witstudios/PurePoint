@@ -1,5 +1,5 @@
 use std::path::Path;
-use pu_core::protocol::{Request, Response};
+use pu_core::protocol::Request;
 use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
@@ -22,13 +22,7 @@ pub async fn run(
         },
     )
     .await?;
-    if let Response::Error { code, message } = resp {
-        if json {
-            // Machine consumers need the error as JSON on stdout
-            output::print_response(&Response::Error { code: code.clone(), message: message.clone() }, true);
-        }
-        return Err(CliError::DaemonError { code, message });
-    }
+    let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json);
     Ok(())
 }

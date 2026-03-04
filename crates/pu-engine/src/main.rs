@@ -62,7 +62,7 @@ async fn main() {
         });
     }
 
-    let engine = Engine::new().await;
+    let engine = Engine::new();
     let server = match IpcServer::bind(&socket, engine) {
         Ok(s) => s,
         Err(e) => {

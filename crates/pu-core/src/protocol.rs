@@ -10,8 +10,8 @@ mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-        let encoded = data.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        encoded.serialize(serializer)
+        let hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
+        hex.serialize(serializer)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
@@ -87,6 +87,9 @@ pub enum Request {
         rows: u16,
     },
     SubscribeGrid {
+        project_root: String,
+    },
+    SubscribeStatus {
         project_root: String,
     },
     GridCommand {
@@ -203,6 +206,11 @@ pub enum Response {
         project_root: String,
         command: GridCommand,
     },
+    StatusSubscribed,
+    StatusEvent {
+        worktrees: Vec<WorktreeEntry>,
+        agents: Vec<AgentStatusReport>,
+    },
     Ok,
     ShuttingDown,
     Error {
@@ -227,6 +235,8 @@ pub struct AgentStatusReport {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 #[cfg(test)]
@@ -400,7 +410,7 @@ mod tests {
         let resp = Response::SpawnResult {
             worktree_id: Some("wt-abc".into()),
             agent_id: "ag-xyz".into(),
-            status: crate::types::AgentStatus::Spawning,
+            status: crate::types::AgentStatus::Streaming,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
@@ -613,14 +623,14 @@ mod tests {
     fn given_resume_result_should_round_trip() {
         let resp = Response::ResumeResult {
             agent_id: "ag-abc".into(),
-            status: crate::types::AgentStatus::Running,
+            status: crate::types::AgentStatus::Streaming,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
         match parsed {
             Response::ResumeResult { agent_id, status } => {
                 assert_eq!(agent_id, "ag-abc");
-                assert_eq!(status, crate::types::AgentStatus::Running);
+                assert_eq!(status, crate::types::AgentStatus::Streaming);
             }
             _ => panic!("expected ResumeResult"),
         }

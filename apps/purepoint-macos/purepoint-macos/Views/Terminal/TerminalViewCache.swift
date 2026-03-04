@@ -30,6 +30,7 @@ final class TerminalViewCache {
         lastAccess[agent.id] = Date()
 
         if let existing = views[agent.id] {
+            existing.reconnectIfNeeded()
             return existing
         }
 
@@ -86,7 +87,7 @@ final class TerminalViewCache {
 
         for (id, view) in views {
             guard !visibleIds.contains(id) else { continue }
-            guard view.agent.status.isTerminal else { continue }
+            guard !view.agent.status.isAlive else { continue }
             guard let access = lastAccess[id],
                   now.timeIntervalSince(access) > Self.evictionDelay else { continue }
             toEvict.append(id)

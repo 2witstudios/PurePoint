@@ -111,6 +111,11 @@ impl IpcServer {
                     } else {
                         None
                     };
+                    let subscribe_status_root = if let Request::SubscribeStatus { ref project_root } = request {
+                        Some(project_root.clone())
+                    } else {
+                        None
+                    };
 
                     let response = engine.handle_request(request).await;
                     if Self::write_response(&mut writer, &response).await.is_err() {
@@ -151,6 +156,19 @@ impl IpcServer {
                             .await;
                         }
                     }
+
+                    // Enter streaming sub-loop for status subscription
+                    if let Some(project_root) = subscribe_status_root {
+                        if matches!(response, Response::StatusSubscribed) {
+                            Self::handle_status_stream(
+                                &mut reader,
+                                &mut writer,
+                                &engine,
+                                &project_root,
+                            )
+                            .await;
+                        }
+                    }
                 }
                 Err(_) => break,
             }
@@ -178,31 +196,30 @@ impl IpcServer {
 
         tracing::debug!(agent_id, "attach stream started");
 
-        let notify = buffer.subscribe_notify();
+        let mut watcher = buffer.subscribe();
 
-        // Pre-register the notified future BEFORE reading current data,
-        // so notifications fired during the gap are captured.
-        let mut notified_fut = std::pin::pin!(notify.notified());
-
-        // Send all currently buffered output
+        // Send buffered output in 64KB chunks so client starts rendering immediately
+        const CHUNK_SIZE: usize = 64 * 1024;
         let mut offset = 0;
         let (data, new_offset) = buffer.read_from(offset);
         offset = new_offset;
         if !data.is_empty() {
-            let resp = Response::Output {
-                agent_id: agent_id.to_string(),
-                data,
-            };
-            if Self::write_response(writer, &resp).await.is_err() {
-                tracing::debug!(agent_id, "attach stream ended: write error on initial data");
-                return;
+            for chunk in data.chunks(CHUNK_SIZE) {
+                let resp = Response::Output {
+                    agent_id: agent_id.to_string(),
+                    data: chunk.to_vec(),
+                };
+                if Self::write_response(writer, &resp).await.is_err() {
+                    tracing::debug!(agent_id, "attach stream ended: write error on initial data");
+                    return;
+                }
             }
         }
 
         let mut line = String::new();
         loop {
             tokio::select! {
-                _ = &mut notified_fut => {
+                Ok(()) = watcher.changed() => {
                     let (data, new_offset) = buffer.read_from(offset);
                     offset = new_offset;
                     if !data.is_empty() {
@@ -215,8 +232,6 @@ impl IpcServer {
                             break;
                         }
                     }
-                    // Re-arm the notified future
-                    notified_fut.set(notify.notified());
                 }
                 result = async {
                     line.clear();
@@ -313,6 +328,70 @@ impl IpcServer {
         tracing::debug!(project_root, "grid stream ended");
     }
 
+    /// Streaming status subscription: pushes full StatusEvent on every state change.
+    /// Client receives real-time updates without polling.
+    async fn handle_status_stream(
+        reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        engine: &Engine,
+        project_root: &str,
+    ) {
+        let mut rx = engine.subscribe_status(project_root).await;
+        let pr = project_root.to_string();
+
+        tracing::debug!(project_root, "status stream started");
+
+        // Send initial status immediately
+        if let Some((worktrees, agents)) = engine.compute_full_status(&pr).await {
+            let resp = Response::StatusEvent { worktrees, agents };
+            if Self::write_response(writer, &resp).await.is_err() {
+                return;
+            }
+        }
+
+        let mut line = String::new();
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(()) => {
+                            // Drain any queued signals (batch rapid changes)
+                            while rx.try_recv().is_ok() {}
+                            if let Some((worktrees, agents)) = engine.compute_full_status(&pr).await {
+                                let resp = Response::StatusEvent { worktrees, agents };
+                                if Self::write_response(writer, &resp).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(project_root, "status subscriber lagged {n} messages");
+                            // Send fresh status after lag
+                            if let Some((worktrees, agents)) = engine.compute_full_status(&pr).await {
+                                let resp = Response::StatusEvent { worktrees, agents };
+                                if Self::write_response(writer, &resp).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                result = async {
+                    line.clear();
+                    reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
+                } => {
+                    match result {
+                        Ok(0) => break, // Client disconnected
+                        Ok(_) => break, // Any request exits the status stream
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        tracing::debug!(project_root, "status stream ended");
+    }
+
     async fn write_response(
         writer: &mut tokio::net::unix::OwnedWriteHalf,
         response: &Response,
@@ -336,7 +415,7 @@ mod tests {
     async fn given_ipc_server_should_accept_connection() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
-        let engine = Engine::new().await;
+        let engine = Engine::new();
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });
@@ -353,7 +432,7 @@ mod tests {
     async fn given_health_request_should_respond_with_report() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
-        let engine = Engine::new().await;
+        let engine = Engine::new();
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });
@@ -388,7 +467,7 @@ mod tests {
         let sock_path = tmp.path().join("test.sock");
         let project_root = tmp.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
-        let engine = Engine::new().await;
+        let engine = Engine::new();
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });
@@ -424,7 +503,7 @@ mod tests {
     async fn given_shutdown_request_should_respond_and_stop() {
         let tmp = TempDir::new().unwrap();
         let sock_path = tmp.path().join("test.sock");
-        let engine = Engine::new().await;
+        let engine = Engine::new();
 
         let server = IpcServer::bind(&sock_path, engine).unwrap();
         let handle = tokio::spawn(async move { server.run().await });

@@ -15,6 +15,10 @@ nonisolated enum Theme {
     static let deletionText = adaptive(dark: (0.90, 0.55, 0.55, 1.0), light: (0.58, 0.10, 0.10, 1.0))
     static let hunkSeparator = adaptiveGray(dark: 0.22, light: 0.82)
 
+    // MARK: - Calendar
+    static let calendarGridLine = adaptiveGray(dark: 0.22, light: 0.85)
+    static let calendarTodayBackground = adaptive(dark: (0.15, 0.20, 0.35, 0.3), light: (0.90, 0.93, 1.0, 0.5))
+
     // MARK: - Helpers
 
     private static func adaptive(dark: (CGFloat, CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat, CGFloat)) -> NSColor {
