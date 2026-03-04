@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
@@ -229,7 +228,7 @@ pub struct Config {
     #[serde(default = "default_agent")]
     pub default_agent: String,
     #[serde(default = "default_agents")]
-    pub agents: HashMap<String, AgentConfig>,
+    pub agents: IndexMap<String, AgentConfig>,
     #[serde(default = "default_env_files")]
     pub env_files: Vec<String>,
 }
@@ -242,45 +241,19 @@ fn default_env_files() -> Vec<String> {
     vec![".env".to_string(), ".env.local".to_string()]
 }
 
-pub fn default_agents() -> HashMap<String, AgentConfig> {
-    let mut map = HashMap::new();
-    map.insert(
-        "claude".to_string(),
-        AgentConfig {
-            name: "claude".to_string(),
-            command: "claude".to_string(),
-            prompt_flag: None,
-            interactive: true,
-        },
-    );
-    map.insert(
-        "codex".to_string(),
-        AgentConfig {
-            name: "codex".to_string(),
-            command: "codex".to_string(),
-            prompt_flag: None,
-            interactive: true,
-        },
-    );
-    map.insert(
-        "opencode".to_string(),
-        AgentConfig {
-            name: "opencode".to_string(),
-            command: "opencode".to_string(),
-            prompt_flag: None,
-            interactive: true,
-        },
-    );
-    map.insert(
-        "terminal".to_string(),
-        AgentConfig {
-            name: "terminal".to_string(),
-            command: "shell".to_string(), // sentinel — engine resolves to $SHELL
-            prompt_flag: None,
-            interactive: true,
-        },
-    );
-    map
+pub fn default_agents() -> IndexMap<String, AgentConfig> {
+    // (name, command) — command "shell" is a sentinel the engine resolves to $SHELL
+    [("claude", "claude"), ("codex", "codex"), ("opencode", "opencode"), ("terminal", "shell")]
+        .into_iter()
+        .map(|(name, cmd)| {
+            (name.to_string(), AgentConfig {
+                name: name.to_string(),
+                command: cmd.to_string(),
+                prompt_flag: None,
+                interactive: true,
+            })
+        })
+        .collect()
 }
 
 impl Default for Config {
