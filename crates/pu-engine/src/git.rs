@@ -6,6 +6,27 @@ pub async fn create_worktree(
     branch: &str,
     base: &str,
 ) -> Result<(), std::io::Error> {
+    // Prune stale worktree references so deleted directories don't block reuse
+    let _ = tokio::process::Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(repo_root)
+        .output()
+        .await;
+
+    // Delete stale branch if it exists (left over from a previous worktree)
+    let check = tokio::process::Command::new("git")
+        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if check.status.success() {
+        let _ = tokio::process::Command::new("git")
+            .args(["branch", "-D", branch])
+            .current_dir(repo_root)
+            .output()
+            .await;
+    }
+
     let output = tokio::process::Command::new("git")
         .args([
             "worktree",

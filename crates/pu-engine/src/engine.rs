@@ -98,7 +98,7 @@ impl Engine {
     async fn resolve_login_path() -> String {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         match tokio::process::Command::new(&shell)
-            .args(["-l", "-c", "echo $PATH"])
+            .args(["-l", "-i", "-c", "echo $PATH"])
             .stderr(std::process::Stdio::null())
             .output()
             .await
@@ -526,12 +526,13 @@ impl Engine {
 
         // Track whether we created a new worktree (for rollback on failure)
         let created_worktree = !root && worktree.is_none() && worktree_id.is_some();
+        let rollback_branch = if created_worktree { Some(format!("pu/{agent_name}")) } else { None };
 
         let handle = match self.pty_host.spawn(spawn_config).await {
             Ok(h) => h,
             Err(e) => {
                 if created_worktree {
-                    self.rollback_worktree(root_path, worktree_id.as_deref()).await;
+                    self.rollback_worktree(root_path, worktree_id.as_deref(), rollback_branch.as_deref()).await;
                 }
                 return Response::Error {
                     code: "SPAWN_FAILED".into(),
@@ -592,7 +593,7 @@ impl Engine {
                     .await
                     .ok();
                 if created_worktree {
-                    self.rollback_worktree(root_path, worktree_id.as_deref()).await;
+                    self.rollback_worktree(root_path, worktree_id.as_deref(), rollback_branch.as_deref()).await;
                 }
                 return Response::Error {
                     code: "SPAWN_FAILED".into(),
@@ -1309,10 +1310,13 @@ impl Engine {
         }
     }
 
-    async fn rollback_worktree(&self, root_path: &Path, worktree_id: Option<&str>) {
+    async fn rollback_worktree(&self, root_path: &Path, worktree_id: Option<&str>, branch: Option<&str>) {
         if let Some(wt_id) = worktree_id {
             let wt_path = paths::worktree_path(root_path, wt_id);
             git::remove_worktree(root_path, &wt_path).await.ok();
+        }
+        if let Some(b) = branch {
+            git::delete_local_branch(root_path, b).await.ok();
         }
     }
 
