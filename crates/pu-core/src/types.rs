@@ -172,7 +172,10 @@ impl Manifest {
         }
         for wt in self.worktrees.values() {
             if let Some(agent) = wt.agents.get(agent_id) {
-                return Some(AgentLocation::Worktree { worktree: wt, agent });
+                return Some(AgentLocation::Worktree {
+                    worktree: wt,
+                    agent,
+                });
             }
         }
         None
@@ -243,17 +246,25 @@ fn default_env_files() -> Vec<String> {
 
 pub fn default_agents() -> IndexMap<String, AgentConfig> {
     // (name, command) — command "shell" is a sentinel the engine resolves to $SHELL
-    [("claude", "claude"), ("codex", "codex"), ("opencode", "opencode"), ("terminal", "shell")]
-        .into_iter()
-        .map(|(name, cmd)| {
-            (name.to_string(), AgentConfig {
+    [
+        ("claude", "claude"),
+        ("codex", "codex"),
+        ("opencode", "opencode"),
+        ("terminal", "shell"),
+    ]
+    .into_iter()
+    .map(|(name, cmd)| {
+        (
+            name.to_string(),
+            AgentConfig {
                 name: name.to_string(),
                 command: cmd.to_string(),
                 prompt_flag: None,
                 interactive: true,
-            })
-        })
-        .collect()
+            },
+        )
+    })
+    .collect()
 }
 
 impl Default for Config {
@@ -308,16 +319,40 @@ mod tests {
     #[test]
     fn given_old_status_values_should_deserialize_to_new() {
         // spawning, running → Streaming
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""spawning""#).unwrap(), AgentStatus::Streaming);
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""running""#).unwrap(), AgentStatus::Streaming);
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""spawning""#).unwrap(),
+            AgentStatus::Streaming
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""running""#).unwrap(),
+            AgentStatus::Streaming
+        );
         // idle, suspended → Waiting
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""idle""#).unwrap(), AgentStatus::Waiting);
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""suspended""#).unwrap(), AgentStatus::Waiting);
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""idle""#).unwrap(),
+            AgentStatus::Waiting
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""suspended""#).unwrap(),
+            AgentStatus::Waiting
+        );
         // completed, failed, killed, lost → Broken
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""completed""#).unwrap(), AgentStatus::Broken);
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""failed""#).unwrap(), AgentStatus::Broken);
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""killed""#).unwrap(), AgentStatus::Broken);
-        assert_eq!(serde_json::from_str::<AgentStatus>(r#""lost""#).unwrap(), AgentStatus::Broken);
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""completed""#).unwrap(),
+            AgentStatus::Broken
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""failed""#).unwrap(),
+            AgentStatus::Broken
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""killed""#).unwrap(),
+            AgentStatus::Broken
+        );
+        assert_eq!(
+            serde_json::from_str::<AgentStatus>(r#""lost""#).unwrap(),
+            AgentStatus::Broken
+        );
     }
 
     #[test]
@@ -390,7 +425,10 @@ mod tests {
             "suspendedAt": "2026-03-01T01:00:00Z"
         }"#;
         let entry: AgentEntry = serde_json::from_str(json).unwrap();
-        assert!(entry.suspended, "suspended should be true when suspendedAt is present");
+        assert!(
+            entry.suspended,
+            "suspended should be true when suspendedAt is present"
+        );
         assert!(entry.suspended_at.is_some());
     }
 

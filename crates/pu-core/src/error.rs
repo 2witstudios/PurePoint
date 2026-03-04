@@ -119,7 +119,10 @@ mod tests {
 
     #[test]
     fn given_protocol_mismatch_should_include_versions() {
-        let err = PuError::ProtocolMismatch { client: 1, daemon: 2 };
+        let err = PuError::ProtocolMismatch {
+            client: 1,
+            daemon: 2,
+        };
         let msg = format!("{err}");
         assert!(msg.contains("1") && msg.contains("2"));
         assert_eq!(err.code(), "PROTOCOL_MISMATCH");

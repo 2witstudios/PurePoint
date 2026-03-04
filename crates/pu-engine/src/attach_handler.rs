@@ -9,7 +9,9 @@ pub fn parse_apc_resize(input: &[u8]) -> Option<(u16, u16)> {
     }
     // Find the ST (string terminator): ESC + backslash
     let payload = &input[APC_START.len()..];
-    let end_pos = payload.windows(2).position(|w| w[0] == ESC && w[1] == APC_END)?;
+    let end_pos = payload
+        .windows(2)
+        .position(|w| w[0] == ESC && w[1] == APC_END)?;
     let dims = &payload[..end_pos];
     let s = std::str::from_utf8(dims).ok()?;
     let mut parts = s.split(':');
@@ -24,7 +26,10 @@ pub fn strip_apc_resize(input: &[u8]) -> (Option<(u16, u16)>, &[u8]) {
         return (None, input);
     }
     let payload = &input[APC_START.len()..];
-    if let Some(end_pos) = payload.windows(2).position(|w| w[0] == ESC && w[1] == APC_END) {
+    if let Some(end_pos) = payload
+        .windows(2)
+        .position(|w| w[0] == ESC && w[1] == APC_END)
+    {
         let rest = &payload[end_pos + 2..];
         return (parse_apc_resize(input), rest);
     }

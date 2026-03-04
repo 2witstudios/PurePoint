@@ -6,7 +6,11 @@ use crate::error::CliError;
 
 /// Check a daemon response for errors. On error, print JSON if requested, then return Err.
 pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> {
-    if let Response::Error { ref code, ref message } = resp {
+    if let Response::Error {
+        ref code,
+        ref message,
+    } = resp
+    {
         if json {
             print_response(&resp, true);
         }
@@ -35,7 +39,13 @@ pub fn print_response(response: &Response, json_mode: bool) {
         return;
     }
     match response {
-        Response::HealthReport { pid, uptime_seconds, protocol_version, projects, agent_count } => {
+        Response::HealthReport {
+            pid,
+            uptime_seconds,
+            protocol_version,
+            projects,
+            agent_count,
+        } => {
             println!("{}", "Daemon healthy".green().bold());
             println!("  PID:      {pid}");
             println!("  Uptime:   {uptime_seconds}s");
@@ -50,8 +60,16 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 println!("Already initialized");
             }
         }
-        Response::SpawnResult { worktree_id, agent_id, status } => {
-            println!("Spawned agent {} ({})", agent_id.bold(), status_colored(*status, None));
+        Response::SpawnResult {
+            worktree_id,
+            agent_id,
+            status,
+        } => {
+            println!(
+                "Spawned agent {} ({})",
+                agent_id.bold(),
+                status_colored(*status, None)
+            );
             if let Some(wt) = worktree_id {
                 println!("  Worktree: {wt}");
             }
@@ -62,22 +80,39 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 return;
             }
             if !agents.is_empty() {
-                println!("{:<14} {:<16} {}", "ID".bold(), "NAME".bold(), "STATUS".bold());
+                println!(
+                    "{:<14} {:<16} {}",
+                    "ID".bold(),
+                    "NAME".bold(),
+                    "STATUS".bold()
+                );
                 for a in agents {
-                    println!("{:<14} {:<16} {}", a.id.dimmed(), a.name, status_colored(a.status, a.exit_code));
+                    println!(
+                        "{:<14} {:<16} {}",
+                        a.id.dimmed(),
+                        a.name,
+                        status_colored(a.status, a.exit_code)
+                    );
                 }
             }
             for wt in worktrees {
-                println!("\n{} {} ({}) — {:?}",
+                println!(
+                    "\n{} {} ({}) — {:?}",
                     "Worktree".bold(),
                     wt.id.dimmed(),
                     wt.branch,
                     wt.status,
                 );
                 if !wt.agents.is_empty() {
-                    println!("  {:<14} {:<16} {}", "ID".bold(), "NAME".bold(), "STATUS".bold());
+                    println!(
+                        "  {:<14} {:<16} {}",
+                        "ID".bold(),
+                        "NAME".bold(),
+                        "STATUS".bold()
+                    );
                     for a in wt.agents.values() {
-                        println!("  {:<14} {:<16} {}",
+                        println!(
+                            "  {:<14} {:<16} {}",
                             a.id.dimmed(),
                             a.name,
                             status_colored(a.status, a.exit_code),
@@ -87,7 +122,12 @@ pub fn print_response(response: &Response, json_mode: bool) {
             }
         }
         Response::AgentStatus(a) => {
-            println!("{} {} {}", a.id.dimmed(), a.name.bold(), status_colored(a.status, a.exit_code));
+            println!(
+                "{} {} {}",
+                a.id.dimmed(),
+                a.name.bold(),
+                status_colored(a.status, a.exit_code)
+            );
             if let Some(pid) = a.pid {
                 println!("  PID:    {pid}");
             }
@@ -108,18 +148,41 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Suspended {} agent(s)", suspended.len());
         }
         Response::ResumeResult { agent_id, status } => {
-            println!("Resumed agent {} ({})", agent_id.bold(), status_colored(*status, None));
+            println!(
+                "Resumed agent {} ({})",
+                agent_id.bold(),
+                status_colored(*status, None)
+            );
         }
         Response::RenameResult { agent_id, name } => {
             println!("Renamed agent {} to {}", agent_id.bold(), name.green());
         }
-        Response::DeleteWorktreeResult { worktree_id, killed_agents, branch_deleted, remote_deleted } => {
+        Response::DeleteWorktreeResult {
+            worktree_id,
+            killed_agents,
+            branch_deleted,
+            remote_deleted,
+        } => {
             println!("Deleted worktree {}", worktree_id.bold());
             if !killed_agents.is_empty() {
                 println!("  Killed {} agent(s)", killed_agents.len());
             }
-            println!("  Branch deleted: {}", if *branch_deleted { "yes".green().to_string() } else { "no".dimmed().to_string() });
-            println!("  Remote deleted: {}", if *remote_deleted { "yes".green().to_string() } else { "no".dimmed().to_string() });
+            println!(
+                "  Branch deleted: {}",
+                if *branch_deleted {
+                    "yes".green().to_string()
+                } else {
+                    "no".dimmed().to_string()
+                }
+            );
+            println!(
+                "  Remote deleted: {}",
+                if *remote_deleted {
+                    "yes".green().to_string()
+                } else {
+                    "no".dimmed().to_string()
+                }
+            );
         }
         Response::LogsResult { agent_id, data } => {
             println!("{}", format!("--- Logs for {agent_id} ---").dimmed());
@@ -144,14 +207,21 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::GridLayout { layout } => {
             println!("{}", serde_json::to_string_pretty(layout).unwrap());
         }
-        Response::GridEvent { project_root, command } => {
+        Response::GridEvent {
+            project_root,
+            command,
+        } => {
             println!("Grid event for {project_root}: {command:?}");
         }
         Response::StatusSubscribed => {
             println!("Status subscription active");
         }
         Response::StatusEvent { agents, worktrees } => {
-            println!("Status update: {} agents, {} worktrees", agents.len(), worktrees.len());
+            println!(
+                "Status update: {} agents, {} worktrees",
+                agents.len(),
+                worktrees.len()
+            );
         }
     }
 }

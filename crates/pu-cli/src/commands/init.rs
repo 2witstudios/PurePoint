@@ -1,5 +1,5 @@
-use pu_core::{config, manifest, paths};
 use pu_core::types::Manifest;
+use pu_core::{config, manifest, paths};
 
 use crate::error::CliError;
 use crate::skill;

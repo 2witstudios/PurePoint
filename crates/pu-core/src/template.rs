@@ -30,13 +30,12 @@ pub fn parse_template(content: &str, file_name: &str) -> Template {
         // Find closing --- (with or without trailing newline for EOF case)
         let (yaml, body) = if let Some(end) = rest.find("\n---\n") {
             (&rest[..end], rest[end + 5..].trim_start().to_string())
-        } else if rest.ends_with("\n---") {
-            (&rest[..rest.len() - 4], String::new())
+        } else if let Some(stripped) = rest.strip_suffix("\n---") {
+            (stripped, String::new())
         } else {
             ("", String::new()) // triggers fallthrough below
         };
         if !yaml.is_empty() {
-
             #[derive(Deserialize)]
             struct FrontMatter {
                 #[serde(default)]
@@ -123,7 +122,10 @@ pub fn render(template: &Template, vars: &HashMap<String, String>) -> String {
     }
     if result.contains("{{") {
         let remaining = extract_variables(&result);
-        eprintln!("warning: unsubstituted template variables: {}", remaining.join(", "));
+        eprintln!(
+            "warning: unsubstituted template variables: {}",
+            remaining.join(", ")
+        );
     }
     result
 }
@@ -180,12 +182,9 @@ fn find_in_dir(dir: &Path, name: &str, source: &str) -> Option<Template> {
         }
     }
     // Scan all files and match by frontmatter name
-    for tpl in scan_dir(dir, source) {
-        if tpl.name == name {
-            return Some(tpl);
-        }
-    }
-    None
+    scan_dir(dir, source)
+        .into_iter()
+        .find(|tpl| tpl.name == name)
 }
 
 #[cfg(test)]
@@ -255,11 +254,7 @@ mod tests {
             "---\nname: review\n---\nLocal review.\n",
         )
         .unwrap();
-        std::fs::write(
-            local_dir.join("deploy.md"),
-            "Deploy prompt.\n",
-        )
-        .unwrap();
+        std::fs::write(local_dir.join("deploy.md"), "Deploy prompt.\n").unwrap();
 
         let templates = list_templates(root);
         assert_eq!(templates.len(), 2);

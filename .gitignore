@@ -19,7 +19,6 @@ DerivedData/
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Node
 node_modules/

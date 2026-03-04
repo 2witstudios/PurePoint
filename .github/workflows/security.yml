@@ -1,0 +1,19 @@
+name: Security Audit
+
+# Catches newly disclosed advisories against existing deps even when no PRs
+# are open. The per-PR deny job in rust.yml also checks advisories, but only
+# runs when code changes — this cron fills the gap.
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Monday 9am UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Advisory Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

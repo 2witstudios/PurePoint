@@ -38,11 +38,10 @@ async fn main() {
     }
 
     // Write PID file (standalone mode only)
-    if !managed
-        && let Err(e) = daemon_lifecycle::write_pid_file(&pid_path) {
-            eprintln!("failed to write PID file: {e}");
-            std::process::exit(1);
-        }
+    if !managed && let Err(e) = daemon_lifecycle::write_pid_file(&pid_path) {
+        eprintln!("failed to write PID file: {e}");
+        std::process::exit(1);
+    }
 
     tracing::info!(pid = std::process::id(), socket = %socket.display(), managed, "starting pu-engine");
 

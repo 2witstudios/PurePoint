@@ -15,12 +15,24 @@ fn skill_hash() -> String {
 
 fn claude_skill_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".claude").join("skills").join("pu").join("SKILL.md"))
+    Some(
+        PathBuf::from(home)
+            .join(".claude")
+            .join("skills")
+            .join("pu")
+            .join("SKILL.md"),
+    )
 }
 
 fn hash_marker_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".claude").join("skills").join("pu").join(".hash"))
+    Some(
+        PathBuf::from(home)
+            .join(".claude")
+            .join("skills")
+            .join("pu")
+            .join(".hash"),
+    )
 }
 
 /// Write the Claude skill file if it doesn't exist or is stale.

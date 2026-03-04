@@ -12,19 +12,22 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, CliError> {
     let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
-        let stream = UnixStream::connect(socket).await.map_err(|e| {
-            match e.kind() {
+        let stream = UnixStream::connect(socket)
+            .await
+            .map_err(|e| match e.kind() {
                 std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
                     CliError::DaemonNotRunning
                 }
                 _ => CliError::Io(e),
-            }
-        })?;
+            })?;
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
         let json = serde_json::to_string(request)?;
-        writer.write_all(format!("{json}\n").as_bytes()).await.map_err(CliError::Io)?;
+        writer
+            .write_all(format!("{json}\n").as_bytes())
+            .await
+            .map_err(CliError::Io)?;
 
         let mut line = String::new();
         reader.read_line(&mut line).await.map_err(CliError::Io)?;
@@ -42,7 +45,7 @@ pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pu_core::protocol::{Request, Response, PROTOCOL_VERSION};
+    use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
     use tempfile::TempDir;
 
     // Helper: start a real pu-engine IPC server for testing
@@ -63,7 +66,9 @@ mod tests {
 
         let resp = send_request(&sock, &Request::Health).await.unwrap();
         match resp {
-            Response::HealthReport { protocol_version, .. } => {
+            Response::HealthReport {
+                protocol_version, ..
+            } => {
                 assert_eq!(protocol_version, PROTOCOL_VERSION);
             }
             other => panic!("expected HealthReport, got {other:?}"),

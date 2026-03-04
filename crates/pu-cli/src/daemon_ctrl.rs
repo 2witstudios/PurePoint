@@ -10,7 +10,10 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
 }
 
 pub async fn check_daemon_health(socket: &Path) -> bool {
-    matches!(crate::client::send_request(socket, &Request::Health).await, Ok(Response::HealthReport { .. }))
+    matches!(
+        crate::client::send_request(socket, &Request::Health).await,
+        Ok(Response::HealthReport { .. })
+    )
 }
 
 pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
@@ -60,7 +63,9 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         delay_ms = (delay_ms * 2).min(640);
     }
 
-    Err(CliError::Other("daemon did not start within 3 seconds".into()))
+    Err(CliError::Other(
+        "daemon did not start within 3 seconds".into(),
+    ))
 }
 
 #[cfg(test)]
@@ -89,13 +94,17 @@ mod tests {
 
         let engine = pu_engine::engine::Engine::new();
         let server = pu_engine::ipc_server::IpcServer::bind(&sock, engine).unwrap();
-        let handle = tokio::spawn(async move { server.run().await.ok(); });
+        let handle = tokio::spawn(async move {
+            server.run().await.ok();
+        });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let healthy = check_daemon_health(&sock).await;
         assert!(healthy);
 
-        crate::client::send_request(&sock, &pu_core::protocol::Request::Shutdown).await.ok();
+        crate::client::send_request(&sock, &pu_core::protocol::Request::Shutdown)
+            .await
+            .ok();
         handle.await.ok();
     }
 

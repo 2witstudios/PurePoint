@@ -7,14 +7,16 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
+use indexmap::IndexMap;
 use pu_core::config;
 use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
-use pu_core::protocol::{AgentStatusReport, GridCommand, KillTarget, Request, Response, SuspendTarget, PROTOCOL_VERSION};
-use tokio::sync::OnceCell;
-use indexmap::IndexMap;
+use pu_core::protocol::{
+    AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION, Request, Response, SuspendTarget,
+};
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
+use tokio::sync::OnceCell;
 
 use crate::agent_monitor;
 use crate::daemon_lifecycle;
@@ -34,6 +36,12 @@ pub struct Engine {
     manifest_cache: Arc<std::sync::Mutex<HashMap<String, Manifest>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Engine {
@@ -114,13 +122,16 @@ impl Engine {
         match request {
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => self.handle_init(&project_root).await,
-            Request::Rename { project_root, agent_id, name } => {
-                self.handle_rename(&project_root, &agent_id, &name).await
-            }
+            Request::Rename {
+                project_root,
+                agent_id,
+                name,
+            } => self.handle_rename(&project_root, &agent_id, &name).await,
             Request::Shutdown => Response::ShuttingDown,
-            Request::Status { project_root, agent_id } => {
-                self.handle_status(&project_root, agent_id.as_deref()).await
-            }
+            Request::Status {
+                project_root,
+                agent_id,
+            } => self.handle_status(&project_root, agent_id.as_deref()).await,
             Request::Spawn {
                 project_root,
                 prompt,
@@ -133,32 +144,42 @@ impl Engine {
                 self.handle_spawn(&project_root, &prompt, &agent, name, base, root, worktree)
                     .await
             }
-            Request::Kill { project_root, target } => {
-                self.handle_kill(&project_root, target).await
-            }
-            Request::Suspend { project_root, target } => {
-                self.handle_suspend(&project_root, target).await
-            }
-            Request::Resume { project_root, agent_id } => {
-                self.handle_resume(&project_root, &agent_id).await
-            }
+            Request::Kill {
+                project_root,
+                target,
+            } => self.handle_kill(&project_root, target).await,
+            Request::Suspend {
+                project_root,
+                target,
+            } => self.handle_suspend(&project_root, target).await,
+            Request::Resume {
+                project_root,
+                agent_id,
+            } => self.handle_resume(&project_root, &agent_id).await,
             Request::Logs { agent_id, tail } => self.handle_logs(&agent_id, tail).await,
             Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
             Request::Input { agent_id, data } => self.handle_input(&agent_id, &data).await,
-            Request::Resize { agent_id, cols, rows } => {
-                self.handle_resize(&agent_id, cols, rows).await
-            }
+            Request::Resize {
+                agent_id,
+                cols,
+                rows,
+            } => self.handle_resize(&agent_id, cols, rows).await,
             Request::SubscribeGrid { project_root } => {
                 self.handle_subscribe_grid(&project_root).await
             }
             Request::SubscribeStatus { project_root } => {
                 self.handle_subscribe_status(&project_root).await
             }
-            Request::GridCommand { project_root, command } => {
-                self.handle_grid_command(&project_root, command).await
-            }
-            Request::DeleteWorktree { project_root, worktree_id } => {
-                self.handle_delete_worktree(&project_root, &worktree_id).await
+            Request::GridCommand {
+                project_root,
+                command,
+            } => self.handle_grid_command(&project_root, command).await,
+            Request::DeleteWorktree {
+                project_root,
+                worktree_id,
+            } => {
+                self.handle_delete_worktree(&project_root, &worktree_id)
+                    .await
             }
         }
     }
@@ -219,7 +240,8 @@ impl Engine {
                 }
             };
             let mut file = file;
-            if let Err(e) = file.write_all(content.as_bytes())
+            if let Err(e) = file
+                .write_all(content.as_bytes())
                 .and_then(|_| file.sync_all())
             {
                 let _ = std::fs::remove_file(&manifest_path);
@@ -426,7 +448,7 @@ impl Engine {
             normalized
         } else {
             // Root agents and existing-worktree agents get auto-generated names
-            name.unwrap_or_else(|| pu_core::id::root_agent_name())
+            name.unwrap_or_else(pu_core::id::root_agent_name)
         };
         let base_branch = base.unwrap_or_else(|| "HEAD".into());
 
@@ -487,8 +509,7 @@ impl Engine {
             let wt_path = paths::worktree_path(root_path, &wt_id);
             let branch = format!("pu/{agent_name}");
 
-            if let Err(e) = git::create_worktree(root_path, &wt_path, &branch, &base_branch).await
-            {
+            if let Err(e) = git::create_worktree(root_path, &wt_path, &branch, &base_branch).await {
                 return Response::Error {
                     code: "SPAWN_FAILED".into(),
                     message: format!("failed to create worktree: {e}"),
@@ -526,13 +547,22 @@ impl Engine {
 
         // Track whether we created a new worktree (for rollback on failure)
         let created_worktree = !root && worktree.is_none() && worktree_id.is_some();
-        let rollback_branch = if created_worktree { Some(format!("pu/{agent_name}")) } else { None };
+        let rollback_branch = if created_worktree {
+            Some(format!("pu/{agent_name}"))
+        } else {
+            None
+        };
 
         let handle = match self.pty_host.spawn(spawn_config).await {
             Ok(h) => h,
             Err(e) => {
                 if created_worktree {
-                    self.rollback_worktree(root_path, worktree_id.as_deref(), rollback_branch.as_deref()).await;
+                    self.rollback_worktree(
+                        root_path,
+                        worktree_id.as_deref(),
+                        rollback_branch.as_deref(),
+                    )
+                    .await;
                 }
                 return Response::Error {
                     code: "SPAWN_FAILED".into(),
@@ -565,8 +595,10 @@ impl Engine {
         let manifest_result = manifest::update_manifest(root_path, move |mut m| {
             if let Some(ref wt_id) = wt_id_for_manifest {
                 // Add or update worktree entry
-                let wt_entry = m.worktrees.entry(wt_id.clone()).or_insert_with(|| {
-                    WorktreeEntry {
+                let wt_entry = m
+                    .worktrees
+                    .entry(wt_id.clone())
+                    .or_insert_with(|| WorktreeEntry {
                         id: wt_id.clone(),
                         name: agent_name.clone(),
                         path: cwd.clone(),
@@ -576,8 +608,7 @@ impl Engine {
                         agents: IndexMap::new(),
                         created_at: chrono::Utc::now(),
                         merged_at: None,
-                    }
-                });
+                    });
                 wt_entry.agents.insert(agent_id_clone, agent_entry);
             } else {
                 m.agents.insert(agent_id_clone, agent_entry);
@@ -593,7 +624,12 @@ impl Engine {
                     .await
                     .ok();
                 if created_worktree {
-                    self.rollback_worktree(root_path, worktree_id.as_deref(), rollback_branch.as_deref()).await;
+                    self.rollback_worktree(
+                        root_path,
+                        worktree_id.as_deref(),
+                        rollback_branch.as_deref(),
+                    )
+                    .await;
                 }
                 return Response::Error {
                     code: "SPAWN_FAILED".into(),
@@ -625,17 +661,15 @@ impl Engine {
 
         let agent_ids: Vec<String> = match &target {
             KillTarget::Agent(id) => vec![id.clone()],
-            KillTarget::Worktree(wt_id) => {
-                match m.worktrees.get(wt_id) {
-                    Some(wt) => wt.agents.keys().cloned().collect(),
-                    None => {
-                        return Response::Error {
-                            code: "WORKTREE_NOT_FOUND".into(),
-                            message: format!("worktree {wt_id} not found"),
-                        };
-                    }
+            KillTarget::Worktree(wt_id) => match m.worktrees.get(wt_id) {
+                Some(wt) => wt.agents.keys().cloned().collect(),
+                None => {
+                    return Response::Error {
+                        code: "WORKTREE_NOT_FOUND".into(),
+                        message: format!("worktree {wt_id} not found"),
+                    };
                 }
-            }
+            },
             KillTarget::All => {
                 let mut ids: Vec<String> = m.agents.keys().cloned().collect();
                 for wt in m.worktrees.values() {
@@ -813,28 +847,25 @@ impl Engine {
 
         // Collect suspendable agents — must be alive and not already suspended.
         let agent_ids: Vec<String> = match &target {
-            SuspendTarget::Agent(id) => {
-                match m.find_agent(id) {
-                    Some(loc) => {
-                        let agent = match loc {
-                            pu_core::types::AgentLocation::Root(a) => a,
-                            pu_core::types::AgentLocation::Worktree { agent, .. } => agent,
-                        };
-                        if !agent.status.is_alive() || agent.suspended {
-                            return Response::SuspendResult { suspended: vec![] };
-                        }
-                        vec![id.clone()]
+            SuspendTarget::Agent(id) => match m.find_agent(id) {
+                Some(loc) => {
+                    let agent = match loc {
+                        pu_core::types::AgentLocation::Root(a) => a,
+                        pu_core::types::AgentLocation::Worktree { agent, .. } => agent,
+                    };
+                    if !agent.status.is_alive() || agent.suspended {
+                        return Response::SuspendResult { suspended: vec![] };
                     }
-                    None => return Self::agent_not_found(id),
+                    vec![id.clone()]
                 }
-            }
-            SuspendTarget::All => {
-                m.all_agents()
-                    .into_iter()
-                    .filter(|a| a.status.is_alive() && !a.suspended)
-                    .map(|a| a.id.clone())
-                    .collect()
-            }
+                None => return Self::agent_not_found(id),
+            },
+            SuspendTarget::All => m
+                .all_agents()
+                .into_iter()
+                .filter(|a| a.status.is_alive() && !a.suspended)
+                .map(|a| a.id.clone())
+                .collect(),
         };
 
         if agent_ids.is_empty() {
@@ -901,9 +932,11 @@ impl Engine {
             Some(pu_core::types::AgentLocation::Root(a)) => {
                 (a.clone(), None::<String>, project_root.to_string())
             }
-            Some(pu_core::types::AgentLocation::Worktree { worktree, agent }) => {
-                (agent.clone(), Some(worktree.id.clone()), worktree.path.clone())
-            }
+            Some(pu_core::types::AgentLocation::Worktree { worktree, agent }) => (
+                agent.clone(),
+                Some(worktree.id.clone()),
+                worktree.path.clone(),
+            ),
             None => return Self::agent_not_found(agent_id),
         };
 
@@ -1007,7 +1040,10 @@ impl Engine {
                 };
             }
             Ok(updated) => {
-                cache.lock().unwrap().insert(project_root.to_string(), updated);
+                cache
+                    .lock()
+                    .unwrap()
+                    .insert(project_root.to_string(), updated);
             }
         }
 
@@ -1027,6 +1063,7 @@ impl Engine {
 
     /// Construct the resume command for a given agent type.
     /// Returns Ok((command, args, session_id)) or Err(Response) on failure.
+    #[allow(clippy::result_large_err)]
     fn build_resume_command(
         &self,
         agent_type: &str,
@@ -1035,11 +1072,10 @@ impl Engine {
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
         match agent_type {
             "claude" => {
-                let sid = session_id
-                    .ok_or_else(|| Response::Error {
-                        code: "RESUME_FAILED".into(),
-                        message: "cannot resume Claude agent: no session_id preserved".into(),
-                    })?;
+                let sid = session_id.ok_or_else(|| Response::Error {
+                    code: "RESUME_FAILED".into(),
+                    message: "cannot resume Claude agent: no session_id preserved".into(),
+                })?;
                 let args = vec![
                     "--dangerously-skip-permissions".into(),
                     "--resume".into(),
@@ -1074,7 +1110,10 @@ impl Engine {
         let data = buf.read_tail(tail);
         let text = String::from_utf8_lossy(&data);
         if let std::borrow::Cow::Owned(_) = &text {
-            tracing::warn!(agent_id, "logs output contained non-UTF-8 bytes (lossy conversion applied)");
+            tracing::warn!(
+                agent_id,
+                "logs output contained non-UTF-8 bytes (lossy conversion applied)"
+            );
         }
         Response::LogsResult {
             agent_id: agent_id.to_string(),
@@ -1134,7 +1173,12 @@ impl Engine {
     }
 
     /// Resize a PTY fd via the pty host (avoids duplicating unsafe ioctl logic).
-    pub async fn resize_pty(&self, fd: &Arc<OwnedFd>, cols: u16, rows: u16) -> Result<(), std::io::Error> {
+    pub async fn resize_pty(
+        &self,
+        fd: &Arc<OwnedFd>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), std::io::Error> {
         self.pty_host.resize_fd(fd, cols, rows).await
     }
 
@@ -1143,7 +1187,11 @@ impl Engine {
     pub async fn get_attach_handles(
         &self,
         agent_id: &str,
-    ) -> Option<(Arc<OutputBuffer>, Arc<OwnedFd>, tokio::sync::watch::Receiver<Option<i32>>)> {
+    ) -> Option<(
+        Arc<OutputBuffer>,
+        Arc<OwnedFd>,
+        tokio::sync::watch::Receiver<Option<i32>>,
+    )> {
         let sessions = self.sessions.lock().await;
         sessions
             .get(agent_id)
@@ -1154,10 +1202,7 @@ impl Engine {
     /// Prepends ~/.pu/bin so agents can find the `pu` CLI.
     /// Login PATH is resolved lazily on first spawn (absorbed into spawn latency).
     async fn agent_path(&self) -> String {
-        let login_path = self
-            .login_path
-            .get_or_init(|| Self::resolve_login_path())
-            .await;
+        let login_path = self.login_path.get_or_init(Self::resolve_login_path).await;
         match paths::global_pu_dir() {
             Ok(pu_dir) => {
                 let bin_dir = pu_dir.join("bin");
@@ -1224,7 +1269,11 @@ impl Engine {
 
     /// Parse an agent config's command string into (program, args), resolving
     /// the "shell" sentinel to the user's login shell.
-    fn parse_agent_command(agent_cfg: &pu_core::types::AgentConfig, agent_type: &str) -> Result<(String, Vec<String>), Response> {
+    #[allow(clippy::result_large_err)]
+    fn parse_agent_command(
+        agent_cfg: &pu_core::types::AgentConfig,
+        agent_type: &str,
+    ) -> Result<(String, Vec<String>), Response> {
         let mut parts: Vec<String> = agent_cfg
             .command
             .split_whitespace()
@@ -1252,10 +1301,7 @@ impl Engine {
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
     /// Called once per project on the first status request after daemon (re)start.
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
-    fn reap_stale_agents(
-        project_root: &str,
-        cache: &std::sync::Mutex<HashMap<String, Manifest>>,
-    ) {
+    fn reap_stale_agents(project_root: &str, cache: &std::sync::Mutex<HashMap<String, Manifest>>) {
         let root = Path::new(project_root);
         let m = match manifest::read_manifest(root) {
             Ok(m) => m,
@@ -1265,18 +1311,17 @@ impl Engine {
         let needs_reap = |agent: &AgentEntry| -> bool {
             !agent.suspended
                 && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                && agent.pid.map_or(true, |pid| !Self::is_pid_alive(pid))
+                && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
         };
 
-        let has_stale = m.agents.values().any(|a| needs_reap(a))
-            || m.worktrees.values().any(|wt| wt.agents.values().any(|a| needs_reap(a)));
+        let has_stale = m.agents.values().any(&needs_reap)
+            || m.worktrees
+                .values()
+                .any(|wt| wt.agents.values().any(&needs_reap));
 
         if !has_stale {
             // Cache even when no reap needed (populates on first access)
-            cache
-                .lock()
-                .unwrap()
-                .insert(project_root.to_string(), m);
+            cache.lock().unwrap().insert(project_root.to_string(), m);
             return;
         }
 
@@ -1284,7 +1329,7 @@ impl Engine {
             for agent in m.agents.values_mut() {
                 if !agent.suspended
                     && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                    && agent.pid.map_or(true, |pid| !Self::is_pid_alive(pid))
+                    && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
                 {
                     agent.status = AgentStatus::Broken;
                     agent.completed_at = Some(chrono::Utc::now());
@@ -1294,7 +1339,7 @@ impl Engine {
                 for agent in wt.agents.values_mut() {
                     if !agent.suspended
                         && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                        && agent.pid.map_or(true, |pid| !Self::is_pid_alive(pid))
+                        && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
                     {
                         agent.status = AgentStatus::Broken;
                         agent.completed_at = Some(chrono::Utc::now());
@@ -1310,7 +1355,12 @@ impl Engine {
         }
     }
 
-    async fn rollback_worktree(&self, root_path: &Path, worktree_id: Option<&str>, branch: Option<&str>) {
+    async fn rollback_worktree(
+        &self,
+        root_path: &Path,
+        worktree_id: Option<&str>,
+        branch: Option<&str>,
+    ) {
         if let Some(wt_id) = worktree_id {
             let wt_path = paths::worktree_path(root_path, wt_id);
             git::remove_worktree(root_path, &wt_path).await.ok();
@@ -1451,7 +1501,10 @@ mod tests {
         let (engine, agent_id, _tmp) = init_and_spawn().await;
 
         let handles = engine.get_attach_handles(&agent_id).await;
-        assert!(handles.is_some(), "expected attach handles for spawned agent");
+        assert!(
+            handles.is_some(),
+            "expected attach handles for spawned agent"
+        );
 
         let (buffer, _fd, _exit_rx) = handles.unwrap();
         // Buffer exists and has a valid offset

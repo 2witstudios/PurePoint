@@ -1,9 +1,9 @@
-use std::path::Path;
-use pu_core::protocol::{KillTarget, Request};
 use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
+use pu_core::protocol::{KillTarget, Request};
+use std::path::Path;
 
 pub async fn run(
     socket: &Path,
@@ -28,7 +28,14 @@ pub async fn run(
 
     let cwd = std::env::current_dir()?;
     let project_root = cwd.to_string_lossy().to_string();
-    let resp = client::send_request(socket, &Request::Kill { project_root, target }).await?;
+    let resp = client::send_request(
+        socket,
+        &Request::Kill {
+            project_root,
+            target,
+        },
+    )
+    .await?;
     let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json);
     Ok(())

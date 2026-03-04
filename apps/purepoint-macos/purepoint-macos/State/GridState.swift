@@ -26,6 +26,9 @@ final class GridState {
     /// Set after a UI-initiated split to auto-open the command palette in the new pane.
     var pendingPaletteLeafId: Int?
 
+    /// Called when a non-owner pane is closed. Wired to ProjectState.removeAndKillAgent().
+    @ObservationIgnored var onCloseAgent: ((String) -> Void)?
+
     /// Leaf IDs with in-flight spawn requests. Used by ProjectState.refresh() to eagerly
     /// assign new agents to grid leaves before they appear in rootAgents (sidebar leak fix).
     var pendingSpawnLeafIds: Set<Int> = []
@@ -103,14 +106,18 @@ final class GridState {
         }
 
         let closingId = focusedLeafId
-        // Find sibling before removing
+        let closingAgentId = root.agentId(forLeafId: closingId)
         let siblingId = root.siblingLeafId(of: closingId)
 
         guard let newRoot = root.removingLeaf(id: closingId) else { return }
         root = newRoot
         focusedLeafId = siblingId ?? root.allLeafIds.first ?? 0
 
-        // If down to 1 leaf, exit grid mode
+        // Kill non-owner agent BEFORE exitGrid clears the sidebar filter
+        if let agentId = closingAgentId, agentId != ownerAgentId {
+            onCloseAgent?(agentId)
+        }
+
         if root.leafCount <= 1 {
             exitGrid()
         } else {

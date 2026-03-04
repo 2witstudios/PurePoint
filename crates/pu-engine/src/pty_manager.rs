@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use nix::pty::openpty;
 use nix::sys::signal::{self, Signal};
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{self, ForkResult, Pid};
 use tokio::sync::watch;
 
@@ -65,9 +65,7 @@ impl NativePtyHost {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let ret = unsafe {
-            libc::ioctl(pty.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize)
-        };
+        let ret = unsafe { libc::ioctl(pty.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize) };
         if ret < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -183,9 +181,8 @@ impl NativePtyHost {
                     let read_fd = fd_holder.as_raw_fd();
                     let mut tmp = [0u8; 4096];
                     loop {
-                        let n = unsafe {
-                            libc::read(read_fd, tmp.as_mut_ptr() as *mut _, tmp.len())
-                        };
+                        let n =
+                            unsafe { libc::read(read_fd, tmp.as_mut_ptr() as *mut _, tmp.len()) };
                         if n > 0 {
                             read_buf.write(&tmp[..n as usize]);
                         } else {
@@ -201,7 +198,9 @@ impl NativePtyHost {
                         loop {
                             match waitpid(child_pid, Some(WaitPidFlag::WUNTRACED)) {
                                 Ok(WaitStatus::Exited(_, code)) => return Some(code),
-                                Ok(WaitStatus::Signaled(_, sig, _)) => return Some(128 + sig as i32),
+                                Ok(WaitStatus::Signaled(_, sig, _)) => {
+                                    return Some(128 + sig as i32);
+                                }
                                 Ok(_) => continue,
                                 Err(_) => return None,
                             }
@@ -229,7 +228,11 @@ impl NativePtyHost {
         Ok(ProcessState { exit_code })
     }
 
-    pub async fn kill(&self, handle: &AgentHandle, grace_period: Duration) -> Result<ProcessState, std::io::Error> {
+    pub async fn kill(
+        &self,
+        handle: &AgentHandle,
+        grace_period: Duration,
+    ) -> Result<ProcessState, std::io::Error> {
         let raw_pid: i32 = handle.pid.try_into().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "PID out of i32 range")
         })?;
@@ -256,12 +259,20 @@ impl NativePtyHost {
         self.check(handle).await
     }
 
-    pub async fn write_input(&self, handle: &AgentHandle, data: &[u8]) -> Result<(), std::io::Error> {
+    pub async fn write_input(
+        &self,
+        handle: &AgentHandle,
+        data: &[u8],
+    ) -> Result<(), std::io::Error> {
         self.write_to_fd(&handle.master_fd, data).await
     }
 
     /// Write to a PTY fd directly (for use without holding a session lock).
-    pub async fn write_to_fd(&self, fd_holder: &Arc<OwnedFd>, data: &[u8]) -> Result<(), std::io::Error> {
+    pub async fn write_to_fd(
+        &self,
+        fd_holder: &Arc<OwnedFd>,
+        data: &[u8],
+    ) -> Result<(), std::io::Error> {
         let fd_holder = fd_holder.clone();
         let data = data.to_vec();
         tokio::task::spawn_blocking(move || {
@@ -282,12 +293,22 @@ impl NativePtyHost {
         .map_err(std::io::Error::other)?
     }
 
-    pub async fn resize(&self, handle: &AgentHandle, cols: u16, rows: u16) -> Result<(), std::io::Error> {
+    pub async fn resize(
+        &self,
+        handle: &AgentHandle,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), std::io::Error> {
         self.resize_fd(&handle.master_fd, cols, rows).await
     }
 
     /// Resize a PTY fd directly (for use without holding a session lock).
-    pub async fn resize_fd(&self, fd_holder: &Arc<OwnedFd>, cols: u16, rows: u16) -> Result<(), std::io::Error> {
+    pub async fn resize_fd(
+        &self,
+        fd_holder: &Arc<OwnedFd>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), std::io::Error> {
         let fd_holder = fd_holder.clone();
         let winsize = nix::pty::Winsize {
             ws_row: rows,
@@ -386,7 +407,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         let state = host.check(&handle).await.unwrap();
-        assert!(state.exit_code.is_some(), "expected exit code, process still running");
+        assert!(
+            state.exit_code.is_some(),
+            "expected exit code, process still running"
+        );
         assert_eq!(state.exit_code.unwrap(), 0);
     }
 

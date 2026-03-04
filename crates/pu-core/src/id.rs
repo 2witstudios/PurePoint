@@ -3,8 +3,8 @@ use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 const ALPHABET: &[char] = &[
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r',
-    's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+    't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
 ];
 
 const ID_LEN: usize = 8;
@@ -24,16 +24,34 @@ pub fn session_id() -> String {
 /// Generate a name for root/project-level agents by mashing up elite PG names.
 pub fn root_agent_name() -> String {
     const PG_FIRSTS: &[&str] = &[
-        "Magic", "John", "Steve", "Jason", "Stephen", "Chris", "Isiah",
-        "Penny", "Rajon", "Damian", "Kyrie", "Allen", "Bob", "Walt",
-        "Tiny", "Oscar", "Gary", "Russell", "Tony", "Derrick", "Tim",
-        "Mark", "Kevin", "Chauncey", "Baron",
+        "Magic", "John", "Steve", "Jason", "Stephen", "Chris", "Isiah", "Penny", "Rajon", "Damian",
+        "Kyrie", "Allen", "Bob", "Walt", "Tiny", "Oscar", "Gary", "Russell", "Tony", "Derrick",
+        "Tim", "Mark", "Kevin", "Chauncey", "Baron",
     ];
     const PG_LASTS: &[&str] = &[
-        "Johnson", "Stockton", "Nash", "Kidd", "Curry", "Paul", "Thomas",
-        "Hardaway", "Rondo", "Lillard", "Irving", "Iverson", "Cousy",
-        "Frazier", "Archibald", "Robertson", "Payton", "Westbrook",
-        "Parker", "Rose", "Price", "Billups", "Davis",
+        "Johnson",
+        "Stockton",
+        "Nash",
+        "Kidd",
+        "Curry",
+        "Paul",
+        "Thomas",
+        "Hardaway",
+        "Rondo",
+        "Lillard",
+        "Irving",
+        "Iverson",
+        "Cousy",
+        "Frazier",
+        "Archibald",
+        "Robertson",
+        "Payton",
+        "Westbrook",
+        "Parker",
+        "Rose",
+        "Price",
+        "Billups",
+        "Davis",
     ];
 
     let mut rng = rand::thread_rng();
@@ -80,18 +98,67 @@ pub fn normalize_worktree_name(input: &str) -> String {
 /// Generate a name for worktree agents by mashing up All-NBA names across all positions.
 pub fn worktree_agent_name() -> String {
     const NBA_FIRSTS: &[&str] = &[
-        "LeBron", "Kobe", "Michael", "Shaquille", "Tim", "Kevin", "Dirk",
-        "Hakeem", "Charles", "Karl", "Patrick", "Scottie", "Dennis",
-        "Clyde", "Dominique", "James", "Vince", "Tracy", "Paul", "Ray",
-        "Reggie", "Carmelo", "Dwyane", "Giannis", "Kawhi", "Anthony",
-        "Julius", "Larry", "Bill", "Wilt",
+        "LeBron",
+        "Kobe",
+        "Michael",
+        "Shaquille",
+        "Tim",
+        "Kevin",
+        "Dirk",
+        "Hakeem",
+        "Charles",
+        "Karl",
+        "Patrick",
+        "Scottie",
+        "Dennis",
+        "Clyde",
+        "Dominique",
+        "James",
+        "Vince",
+        "Tracy",
+        "Paul",
+        "Ray",
+        "Reggie",
+        "Carmelo",
+        "Dwyane",
+        "Giannis",
+        "Kawhi",
+        "Anthony",
+        "Julius",
+        "Larry",
+        "Bill",
+        "Wilt",
     ];
     const NBA_LASTS: &[&str] = &[
-        "James", "Bryant", "Jordan", "Duncan", "Garnett", "Nowitzki",
-        "Olajuwon", "Barkley", "Malone", "Ewing", "Pippen", "Rodman",
-        "Drexler", "Wilkins", "Worthy", "Carter", "McGrady", "Pierce",
-        "Allen", "Miller", "Anthony", "Wade", "Durant", "Leonard",
-        "Davis", "Erving", "Bird", "Russell", "Chamberlain",
+        "James",
+        "Bryant",
+        "Jordan",
+        "Duncan",
+        "Garnett",
+        "Nowitzki",
+        "Olajuwon",
+        "Barkley",
+        "Malone",
+        "Ewing",
+        "Pippen",
+        "Rodman",
+        "Drexler",
+        "Wilkins",
+        "Worthy",
+        "Carter",
+        "McGrady",
+        "Pierce",
+        "Allen",
+        "Miller",
+        "Anthony",
+        "Wade",
+        "Durant",
+        "Leonard",
+        "Davis",
+        "Erving",
+        "Bird",
+        "Russell",
+        "Chamberlain",
     ];
 
     let mut rng = rand::thread_rng();
@@ -115,7 +182,12 @@ mod tests {
     fn given_worktree_id_should_have_correct_length() {
         // wt- (3) + 8 chars = 11
         let id = worktree_id();
-        assert_eq!(id.len(), 11, "expected length 11, got {} for {id}", id.len());
+        assert_eq!(
+            id.len(),
+            11,
+            "expected length 11, got {} for {id}",
+            id.len()
+        );
     }
 
     #[test]
@@ -145,7 +217,9 @@ mod tests {
             let id = agent_id();
             let suffix = &id[3..]; // skip "ag-"
             assert!(
-                suffix.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+                suffix
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
                 "unexpected chars in {id}"
             );
         }

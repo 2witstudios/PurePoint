@@ -1,8 +1,8 @@
 mod client;
+mod commands;
 mod daemon_ctrl;
 mod error;
 mod output;
-mod commands;
 mod skill;
 
 use clap::{Parser, Subcommand};
@@ -196,24 +196,47 @@ async fn main() {
 
     let result = match cli.command {
         Commands::Init { json } => commands::init::run(&socket, json).await,
-        Commands::Spawn { prompt, agent, name, base, root, worktree, template, file, vars, json } => {
-            commands::spawn::run(&socket, prompt, agent, name, base, root, worktree, template, file, vars, json).await
+        Commands::Spawn {
+            prompt,
+            agent,
+            name,
+            base,
+            root,
+            worktree,
+            template,
+            file,
+            vars,
+            json,
+        } => {
+            commands::spawn::run(
+                &socket, prompt, agent, name, base, root, worktree, template, file, vars, json,
+            )
+            .await
         }
         Commands::Status { agent, json } => commands::status::run(&socket, agent, json).await,
-        Commands::Kill { agent, worktree, all, json } => {
-            commands::kill::run(&socket, agent, worktree, all, json).await
-        }
+        Commands::Kill {
+            agent,
+            worktree,
+            all,
+            json,
+        } => commands::kill::run(&socket, agent, worktree, all, json).await,
         Commands::Attach { agent_id } => commands::attach::run(&socket, &agent_id).await,
-        Commands::Logs { agent_id, tail, json } => commands::logs::run(&socket, &agent_id, tail, json).await,
+        Commands::Logs {
+            agent_id,
+            tail,
+            json,
+        } => commands::logs::run(&socket, &agent_id, tail, json).await,
         Commands::Health { json } => commands::health::run(&socket, json).await,
-        Commands::Prompt { action } => {
-            match action {
-                PromptAction::List { json } => commands::prompt::run_list(json).await,
-            }
-        }
-        Commands::Send { agent_id, text, no_enter, keys, json } => {
-            commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await
-        }
+        Commands::Prompt { action } => match action {
+            PromptAction::List { json } => commands::prompt::run_list(json).await,
+        },
+        Commands::Send {
+            agent_id,
+            text,
+            no_enter,
+            keys,
+            json,
+        } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
     };
 

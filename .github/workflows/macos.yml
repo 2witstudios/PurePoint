@@ -1,0 +1,67 @@
+name: macOS Build & Test
+
+on:
+  push:
+    branches: [main]
+    paths: &macos-paths
+      - "apps/purepoint-macos/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/macos.yml"
+  pull_request:
+    paths: *macos-paths
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: purepoint-macos
+  PROJECT: apps/purepoint-macos/purepoint-macos.xcodeproj
+  DESTINATION: "platform=macOS"
+
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install xcbeautify
+        run: brew install xcbeautify
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "$DESTINATION" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM="" \
+            | xcbeautify
+
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "$DESTINATION" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM="" \
+            | xcbeautify
