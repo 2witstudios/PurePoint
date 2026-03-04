@@ -17,6 +17,7 @@ use indexmap::IndexMap;
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 
 use crate::agent_monitor;
+use crate::daemon_lifecycle;
 use crate::git;
 use crate::output_buffer::OutputBuffer;
 use crate::pty_manager::{AgentHandle, NativePtyHost, SpawnConfig};
@@ -1127,11 +1128,7 @@ impl Engine {
     }
 
     fn is_pid_alive(pid: u32) -> bool {
-        let Ok(raw) = i32::try_from(pid) else {
-            return false;
-        };
-        // kill(pid, 0) checks if the process exists without sending a signal
-        unsafe { libc::kill(raw, 0) == 0 }
+        daemon_lifecycle::is_process_alive(pid)
     }
 
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
