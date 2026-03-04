@@ -13,7 +13,7 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
-which = "7"
+which = "8"
 
 [[bin]]
 name = "pu"
