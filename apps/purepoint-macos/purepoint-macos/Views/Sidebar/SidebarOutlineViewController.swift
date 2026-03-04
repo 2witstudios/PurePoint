@@ -25,6 +25,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Callback for killing all agents in a worktree.
     var onKillWorktreeAgents: ((ProjectState, String) -> Void)?
 
+    /// Callback for renaming an agent: (project, agentId, newName).
+    var onRenameAgent: ((ProjectState, String, String) -> Void)?
+
+    /// Callback for deleting a worktree (full cleanup).
+    var onDeleteWorktree: ((ProjectState, String) -> Void)?
+
+    /// Callback for killing all agents in a project.
+    var onKillAllProjectAgents: ((ProjectState) -> Void)?
+
     /// Agent currently shown in the grid.
     var gridOwnerAgentId: String?
 
@@ -39,6 +48,11 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Node for context-menu tracking.
     private var contextClickedNode: SidebarNode?
+
+    /// Inline rename state.
+    private var editingTextField: NSTextField?
+    private var editingOriginalName: String?
+    private var editingAgentId: String?
 
     // MARK: - Lifecycle
 
@@ -486,19 +500,48 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         contextClickedNode = node
 
         switch node.kind {
-        case .agent(let agent):
+        case .agent:
+            let renameItem = NSMenuItem(title: "Rename…", action: #selector(contextRenameAgent(_:)), keyEquivalent: "")
+            renameItem.target = self
+            menu.addItem(renameItem)
+
+            menu.addItem(.separator())
+
             let killItem = NSMenuItem(title: "Kill Agent", action: #selector(contextKillAgent(_:)), keyEquivalent: "")
             killItem.target = self
             menu.addItem(killItem)
 
         case .worktree(let worktree):
-            guard worktree.agents.count > 0 else { return }
-            let killAllItem = NSMenuItem(title: "Kill All Agents", action: #selector(contextKillWorktreeAgents(_:)), keyEquivalent: "")
+            let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
+            if aliveCount > 0 {
+                let killAllItem = NSMenuItem(
+                    title: "Kill All Agents (\(aliveCount))",
+                    action: #selector(contextKillWorktreeAgents(_:)),
+                    keyEquivalent: ""
+                )
+                killAllItem.target = self
+                menu.addItem(killAllItem)
+                menu.addItem(.separator())
+            }
+
+            let deleteItem = NSMenuItem(
+                title: "Delete Worktree…",
+                action: #selector(contextDeleteWorktree(_:)),
+                keyEquivalent: ""
+            )
+            deleteItem.target = self
+            menu.addItem(deleteItem)
+
+        case .project(let project):
+            let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
+            guard aliveCount > 0 else { return }
+            let killAllItem = NSMenuItem(
+                title: "Kill All Agents (\(aliveCount))",
+                action: #selector(contextKillAllProjectAgents(_:)),
+                keyEquivalent: ""
+            )
             killAllItem.target = self
             menu.addItem(killAllItem)
-
-        case .project:
-            break
         }
     }
 
@@ -511,7 +554,147 @@ extension SidebarOutlineViewController: NSMenuDelegate {
     @objc private func contextKillWorktreeAgents(_ sender: NSMenuItem) {
         guard let node = contextClickedNode, case .worktree(let worktree) = node.kind else { return }
         guard let project = findProject(forWorktreeId: worktree.id) else { return }
-        onKillWorktreeAgents?(project, worktree.id)
+        let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
+        showConfirmation(
+            title: "Kill All Agents in \(worktree.branch)?",
+            message: "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s") in this worktree."
+        ) {
+            self.onKillWorktreeAgents?(project, worktree.id)
+        }
+    }
+
+    @objc private func contextDeleteWorktree(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode, case .worktree(let worktree) = node.kind else { return }
+        guard let project = findProject(forWorktreeId: worktree.id) else { return }
+        let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
+        let agentNote = aliveCount > 0
+            ? "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s"), "
+            : "This will "
+        showConfirmation(
+            title: "Delete worktree \(worktree.branch)?",
+            message: "\(agentNote)remove the worktree directory, and delete the branch locally and from GitHub.",
+            confirmTitle: "Delete"
+        ) {
+            self.onDeleteWorktree?(project, worktree.id)
+        }
+    }
+
+    @objc private func contextKillAllProjectAgents(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
+        let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
+        showConfirmation(
+            title: "Kill All Agents in \(project.projectName)?",
+            message: "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s") in this project."
+        ) {
+            self.onKillAllProjectAgents?(project)
+        }
+    }
+
+    @objc private func contextRenameAgent(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode, case .agent(let agent) = node.kind else { return }
+
+        let clickedRow = outlineView.row(forItem: node)
+        guard clickedRow >= 0 else { return }
+
+        guard let cellView = outlineView.view(atColumn: 0, row: clickedRow, makeIfNecessary: false) else { return }
+
+        // Find the name label NSTextField within the cell's stack view
+        guard let textField = findNameTextField(in: cellView) else { return }
+
+        editingAgentId = agent.id
+        editingOriginalName = textField.stringValue
+        editingTextField = textField
+
+        textField.isEditable = true
+        textField.isSelectable = true
+        textField.delegate = self
+        view.window?.makeFirstResponder(textField)
+        textField.selectText(nil)
+    }
+
+    /// Find the name label text field in a cell view (the non-dot, non-icon label).
+    private func findNameTextField(in cellView: NSView) -> NSTextField? {
+        for subview in cellView.subviews {
+            if let stack = subview as? NSStackView {
+                for arranged in stack.arrangedSubviews {
+                    if let tf = arranged as? NSTextField,
+                       tf.isKind(of: NSTextField.self),
+                       !tf.stringValue.isEmpty,
+                       tf.font?.pointSize == 11 { // Agent name font size
+                        return tf
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Confirmation Dialog
+
+    private func showConfirmation(title: String, message: String, confirmTitle: String = "Kill All", action: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: "Cancel")
+
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn {
+                    action()
+                }
+            }
+        } else {
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                action()
+            }
+        }
+    }
+}
+
+// MARK: - Inline Rename (NSTextFieldDelegate)
+
+extension SidebarOutlineViewController: NSTextFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            // Escape: cancel editing, restore original name
+            if let tf = editingTextField, let original = editingOriginalName {
+                tf.stringValue = original
+                tf.isEditable = false
+                tf.isSelectable = false
+            }
+            editingTextField = nil
+            editingOriginalName = nil
+            editingAgentId = nil
+            view.window?.makeFirstResponder(outlineView)
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let tf = editingTextField, let agentId = editingAgentId else { return }
+        let newName = tf.stringValue.trimmingCharacters(in: .whitespaces)
+
+        tf.isEditable = false
+        tf.isSelectable = false
+
+        if !newName.isEmpty, newName != editingOriginalName {
+            if let project = findProject(forAgentId: agentId) {
+                onRenameAgent?(project, agentId, newName)
+            }
+        } else {
+            // Restore original on empty or unchanged
+            if let original = editingOriginalName {
+                tf.stringValue = original
+            }
+        }
+
+        editingTextField = nil
+        editingOriginalName = nil
+        editingAgentId = nil
     }
 }
 

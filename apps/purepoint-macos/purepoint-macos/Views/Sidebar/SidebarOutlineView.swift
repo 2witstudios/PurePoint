@@ -33,6 +33,18 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             project.killWorktreeAgents(worktreeId)
         }
 
+        vc.onRenameAgent = { project, agentId, newName in
+            project.renameAgent(agentId, to: newName)
+        }
+
+        vc.onDeleteWorktree = { project, worktreeId in
+            project.deleteWorktree(worktreeId)
+        }
+
+        vc.onKillAllProjectAgents = { project in
+            project.killAllAgents()
+        }
+
         return vc
     }
 
