@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
@@ -48,10 +49,55 @@ impl Engine {
         }
     }
 
+    /// Start a background task that periodically removes session handles for
+    /// processes that have exited naturally, and cleans up broadcast channels
+    /// with no subscribers. Without this, HashMap entries leak.
+    pub fn start_session_reaper(self: &Arc<Self>) {
+        let sessions = self.sessions.clone();
+        let grid_channels = self.grid_channels.clone();
+        let status_channels = self.status_channels.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+
+                // Reap dead sessions
+                let dead_ids: Vec<String> = {
+                    let sessions = sessions.lock().await;
+                    sessions
+                        .iter()
+                        .filter(|(_, handle)| handle.exit_rx.borrow().is_some())
+                        .map(|(id, _)| id.clone())
+                        .collect()
+                };
+                if !dead_ids.is_empty() {
+                    let mut sessions = sessions.lock().await;
+                    for id in &dead_ids {
+                        sessions.remove(id);
+                    }
+                    tracing::debug!(count = dead_ids.len(), "reaped dead session handles");
+                }
+
+                // Clean up grid channels with no subscribers
+                {
+                    let mut channels = grid_channels.lock().await;
+                    channels.retain(|_, tx| tx.receiver_count() > 0);
+                }
+
+                // Clean up status channels with no subscribers
+                {
+                    let mut channels = status_channels.lock().await;
+                    channels.retain(|_, tx| tx.receiver_count() > 0);
+                }
+            }
+        });
+    }
+
     async fn resolve_login_path() -> String {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         match tokio::process::Command::new(&shell)
-            .args(["-l", "-i", "-c", "echo $PATH"])
+            .args(["-l", "-c", "echo $PATH"])
             .stderr(std::process::Stdio::null())
             .output()
             .await
@@ -128,10 +174,6 @@ impl Engine {
             let root = Path::new(&project_root);
             let pu_dir = paths::pu_dir(root);
 
-            if paths::manifest_path(root).exists() {
-                return Response::InitResult { created: false };
-            }
-
             if let Err(e) = std::fs::create_dir_all(&pu_dir) {
                 return Response::Error {
                     code: "IO_ERROR".into(),
@@ -139,8 +181,41 @@ impl Engine {
                 };
             }
 
+            // Atomic check-and-create via O_EXCL — prevents TOCTOU race
+            let manifest_path = paths::manifest_path(root);
+            let file = match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&manifest_path)
+            {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Response::InitResult { created: false };
+                }
+                Err(e) => {
+                    return Response::Error {
+                        code: "IO_ERROR".into(),
+                        message: format!("failed to create manifest: {e}"),
+                    };
+                }
+            };
+
             let m = Manifest::new(project_root.clone());
-            if let Err(e) = manifest::write_manifest(root, &m) {
+            let content = match serde_json::to_string_pretty(&m) {
+                Ok(c) => c + "\n",
+                Err(e) => {
+                    let _ = std::fs::remove_file(&manifest_path);
+                    return Response::Error {
+                        code: "IO_ERROR".into(),
+                        message: format!("failed to serialize manifest: {e}"),
+                    };
+                }
+            };
+            let mut file = file;
+            if let Err(e) = file.write_all(content.as_bytes())
+                .and_then(|_| file.sync_all())
+            {
+                let _ = std::fs::remove_file(&manifest_path);
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: format!("failed to write manifest: {e}"),
@@ -349,19 +424,11 @@ impl Engine {
         let base_branch = base.unwrap_or_else(|| "HEAD".into());
 
         // Build command with prompt
-        let mut cmd_parts: Vec<String> = agent_cfg
-            .command
-            .split_whitespace()
-            .map(String::from)
-            .collect();
-        let command = cmd_parts.remove(0);
-        // Resolve "shell" sentinel to user's login shell
-        let command = if command == "shell" {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
-        } else {
-            command
+        let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, agent_type) {
+            Ok(v) => v,
+            Err(e) => return e,
         };
-        let mut args = cmd_parts;
+        let mut args = cmd_args;
 
         // Add agent-type-specific flags (not stored in config — engine concern)
         match agent_type {
@@ -788,20 +855,41 @@ impl Engine {
         // 5. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
-        if let Ok(updated) = manifest::update_manifest(root_path, move |mut m| {
-            if let Some(agent) = m.find_agent_mut(&aid) {
-                agent.status = AgentStatus::Streaming;
-                agent.suspended = false;
-                agent.pid = Some(pid);
-                agent.completed_at = None;
-                agent.suspended_at = None;
-                if let Some(ref s) = sid {
-                    agent.session_id = Some(s.clone());
+        let pr = project_root.to_string();
+        let cache = self.manifest_cache.clone();
+        let manifest_result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
+                if let Some(agent) = m.find_agent_mut(&aid) {
+                    agent.status = AgentStatus::Streaming;
+                    agent.suspended = false;
+                    agent.pid = Some(pid);
+                    agent.completed_at = None;
+                    agent.suspended_at = None;
+                    if let Some(ref s) = sid {
+                        agent.session_id = Some(s.clone());
+                    }
                 }
+                m
+            })
+        })
+        .await
+        .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
+
+        match manifest_result {
+            Err(e) => {
+                // Rollback: kill the resumed process
+                self.pty_host
+                    .kill(&handle, Duration::from_secs(2))
+                    .await
+                    .ok();
+                return Response::Error {
+                    code: "RESUME_FAILED".into(),
+                    message: format!("failed to update manifest: {e}"),
+                };
             }
-            m
-        }) {
-            self.cache_manifest(project_root, updated);
+            Ok(updated) => {
+                cache.lock().unwrap().insert(project_root.to_string(), updated);
+            }
         }
 
         // 6. Store handle in session map
@@ -850,18 +938,8 @@ impl Engine {
             }
             _ => {
                 // Terminal / unknown: fresh shell in same directory
-                let mut cmd_parts: Vec<String> = agent_cfg
-                    .command
-                    .split_whitespace()
-                    .map(String::from)
-                    .collect();
-                let command = cmd_parts.remove(0);
-                let command = if command == "shell" {
-                    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
-                } else {
-                    command
-                };
-                Ok((command, cmd_parts, None))
+                let (command, args) = Self::parse_agent_command(agent_cfg, agent_type)?;
+                Ok((command, args, None))
             }
         }
     }
@@ -875,9 +953,13 @@ impl Engine {
             }
         };
         let data = buf.read_tail(tail);
+        let text = String::from_utf8_lossy(&data);
+        if let std::borrow::Cow::Owned(_) = &text {
+            tracing::warn!(agent_id, "logs output contained non-UTF-8 bytes (lossy conversion applied)");
+        }
         Response::LogsResult {
             agent_id: agent_id.to_string(),
-            data: String::from_utf8_lossy(&data).to_string(),
+            data: text.into_owned(),
         }
     }
 
@@ -937,15 +1019,16 @@ impl Engine {
         self.pty_host.resize_fd(fd, cols, rows).await
     }
 
-    /// Return the output buffer and master PTY fd for an agent, if it has an active session.
+    /// Return the output buffer, master PTY fd, and exit receiver for an agent,
+    /// if it has an active session.
     pub async fn get_attach_handles(
         &self,
         agent_id: &str,
-    ) -> Option<(Arc<OutputBuffer>, Arc<OwnedFd>)> {
+    ) -> Option<(Arc<OutputBuffer>, Arc<OwnedFd>, tokio::sync::watch::Receiver<Option<i32>>)> {
         let sessions = self.sessions.lock().await;
         sessions
             .get(agent_id)
-            .map(|h| (h.output_buffer.clone(), h.master_fd()))
+            .map(|h| (h.output_buffer.clone(), h.master_fd(), h.exit_rx.clone()))
     }
 
     /// Build the PATH env value for spawned agents.
@@ -1020,9 +1103,35 @@ impl Engine {
 
     // --- Helpers ---
 
+    /// Parse an agent config's command string into (program, args), resolving
+    /// the "shell" sentinel to the user's login shell.
+    fn parse_agent_command(agent_cfg: &pu_core::types::AgentConfig, agent_type: &str) -> Result<(String, Vec<String>), Response> {
+        let mut parts: Vec<String> = agent_cfg
+            .command
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        if parts.is_empty() {
+            return Err(Response::Error {
+                code: "CONFIG_ERROR".into(),
+                message: format!("agent type '{agent_type}' has an empty command"),
+            });
+        }
+        let command = parts.remove(0);
+        let command = if command == "shell" {
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+        } else {
+            command
+        };
+        Ok((command, parts))
+    }
+
     fn is_pid_alive(pid: u32) -> bool {
+        let Ok(raw) = i32::try_from(pid) else {
+            return false;
+        };
         // kill(pid, 0) checks if the process exists without sending a signal
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        unsafe { libc::kill(raw, 0) == 0 }
     }
 
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
@@ -1226,7 +1335,7 @@ mod tests {
         let handles = engine.get_attach_handles(&agent_id).await;
         assert!(handles.is_some(), "expected attach handles for spawned agent");
 
-        let (buffer, _fd) = handles.unwrap();
+        let (buffer, _fd, _exit_rx) = handles.unwrap();
         // Buffer exists and has a valid offset
         let _ = buffer.current_offset();
     }
