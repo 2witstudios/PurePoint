@@ -109,11 +109,25 @@ mod tests {
             .current_dir(dir)
             .output()
             .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
+        let output = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@test.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
             .current_dir(dir)
             .output()
             .unwrap();
+        assert!(
+            output.status.success(),
+            "git init commit failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

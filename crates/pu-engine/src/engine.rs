@@ -1491,6 +1491,19 @@ impl Engine {
     }
 }
 
+impl Drop for Engine {
+    fn drop(&mut self) {
+        // Kill all child processes so spawn_blocking reader/waitpid tasks can finish.
+        if let Ok(sessions) = self.sessions.try_lock() {
+            for handle in sessions.values() {
+                unsafe {
+                    libc::kill(handle.pid as i32, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -24,8 +24,8 @@ pub(crate) async fn init_and_spawn() -> (Engine, String, TempDir) {
     let resp = engine
         .handle_request(Request::Spawn {
             project_root: pr,
-            prompt: "hello".into(),
-            agent: "claude".into(),
+            prompt: String::new(),
+            agent: "terminal".into(),
             name: None,
             base: None,
             root: true,
