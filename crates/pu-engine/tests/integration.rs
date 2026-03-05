@@ -136,3 +136,240 @@ async fn given_manifest_should_be_readable_by_macos_app() {
     send(&sock, &Request::Shutdown).await;
     handle.await.ok();
 }
+
+/// Test harness that handles server setup, project init, and shutdown.
+struct TestHarness {
+    _tmp: TempDir,
+    sock: std::path::PathBuf,
+    project: std::path::PathBuf,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl TestHarness {
+    /// Start a server and initialise a project.
+    async fn new() -> Self {
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("daemon.sock");
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let handle = start_server(&sock).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        send(
+            &sock,
+            &Request::Init {
+                project_root: project.to_string_lossy().into(),
+            },
+        )
+        .await;
+
+        Self {
+            _tmp: tmp,
+            sock,
+            project,
+            handle,
+        }
+    }
+
+    /// Start a server without initialising a project.
+    async fn new_bare() -> Self {
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("daemon.sock");
+        let project = tmp.path().join("project");
+
+        let handle = start_server(&sock).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        Self {
+            _tmp: tmp,
+            sock,
+            project,
+            handle,
+        }
+    }
+
+    fn project_root(&self) -> String {
+        self.project.to_string_lossy().into()
+    }
+
+    async fn send(&self, req: &Request) -> Response {
+        send(&self.sock, req).await
+    }
+
+    async fn shutdown(self) {
+        send(&self.sock, &Request::Shutdown).await;
+        self.handle.await.ok();
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_kill_all_on_empty_project_should_return_empty_killed() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::Kill {
+            project_root: h.project_root(),
+            target: pu_core::protocol::KillTarget::All,
+        })
+        .await;
+    match resp {
+        Response::KillResult { killed, .. } => {
+            assert!(killed.is_empty());
+        }
+        other => panic!("expected KillResult, got {other:?}"),
+    }
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_kill_nonexistent_agent_should_return_kill_result() {
+    let h = TestHarness::new().await;
+
+    // Engine returns KillResult even for nonexistent agents (best-effort kill)
+    let resp = h
+        .send(&Request::Kill {
+            project_root: h.project_root(),
+            target: pu_core::protocol::KillTarget::Agent("ag-nonexistent".into()),
+        })
+        .await;
+    match resp {
+        Response::KillResult { killed, .. } => {
+            assert_eq!(killed, vec!["ag-nonexistent"]);
+        }
+        other => panic!("expected KillResult, got {other:?}"),
+    }
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_grid_get_layout_should_return_layout() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::GridCommand {
+            project_root: h.project_root(),
+            command: pu_core::protocol::GridCommand::GetLayout,
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::GridLayout { .. }),
+        "expected GridLayout, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_grid_split_should_succeed() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::GridCommand {
+            project_root: h.project_root(),
+            command: pu_core::protocol::GridCommand::Split {
+                leaf_id: None,
+                axis: "v".into(),
+            },
+        })
+        .await;
+    assert!(
+        !matches!(resp, Response::Error { .. }),
+        "expected success for grid split, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_logs_for_nonexistent_agent_should_return_error() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::Logs {
+            agent_id: "ag-nonexistent".into(),
+            tail: 100,
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent agent logs, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_rename_nonexistent_agent_should_return_error() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::Rename {
+            project_root: h.project_root(),
+            agent_id: "ag-nonexistent".into(),
+            name: "new-name".into(),
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent agent rename, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_status_for_nonexistent_agent_should_return_error() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::Status {
+            project_root: h.project_root(),
+            agent_id: Some("ag-nonexistent".into()),
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent agent status, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_delete_nonexistent_worktree_should_return_error() {
+    let h = TestHarness::new().await;
+
+    let resp = h
+        .send(&Request::DeleteWorktree {
+            project_root: h.project_root(),
+            worktree_id: "wt-nonexistent".into(),
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent worktree delete, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_uninitialised_project_kill_should_return_error() {
+    let h = TestHarness::new_bare().await;
+
+    let resp = h
+        .send(&Request::Kill {
+            project_root: "/nonexistent/project".into(),
+            target: pu_core::protocol::KillTarget::All,
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for uninitialised project, got {resp:?}"
+    );
+
+    h.shutdown().await;
+}

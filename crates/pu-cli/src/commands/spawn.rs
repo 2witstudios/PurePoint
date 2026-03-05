@@ -107,3 +107,54 @@ fn resolve_prompt(
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_valid_key_value_pairs_should_parse() {
+        let vars = vec!["FOO=bar".to_string(), "BAZ=qux".to_string()];
+        let map = parse_vars(&vars).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["FOO"], "bar");
+        assert_eq!(map["BAZ"], "qux");
+    }
+
+    #[test]
+    fn given_empty_vars_should_return_empty_map() {
+        let vars: Vec<String> = vec![];
+        let map = parse_vars(&vars).unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn given_value_with_equals_should_preserve_remainder() {
+        let vars = vec!["KEY=val=ue=extra".to_string()];
+        let map = parse_vars(&vars).unwrap();
+        assert_eq!(map["KEY"], "val=ue=extra");
+    }
+
+    #[test]
+    fn given_missing_equals_should_return_error() {
+        let vars = vec!["NOEQUALS".to_string()];
+        let result = parse_vars(&vars);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid --var format"));
+    }
+
+    #[test]
+    fn given_empty_value_should_parse() {
+        let vars = vec!["KEY=".to_string()];
+        let map = parse_vars(&vars).unwrap();
+        assert_eq!(map["KEY"], "");
+    }
+
+    #[test]
+    fn given_duplicate_keys_should_use_last() {
+        let vars = vec!["KEY=first".to_string(), "KEY=second".to_string()];
+        let map = parse_vars(&vars).unwrap();
+        assert_eq!(map["KEY"], "second");
+    }
+}
