@@ -80,6 +80,27 @@ struct PaneSplitNodeTests {
         #expect(result.allLeafIds == [0, 1, 2])
     }
 
+    @Test func splitNestedLeafPreservesCustomRatio() {
+        var nextId = 2
+        let tree = PaneSplitNode.split(
+            axis: .horizontal, ratio: 0.5,
+            first: .leaf(id: 0, agentId: nil),
+            second: .leaf(id: 1, agentId: nil)
+        )
+        let result = tree.splittingLeaf(id: 1, axis: .vertical, ratio: 0.7, nextId: &nextId)
+        // The inner split created for leaf 1 should have ratio 0.7
+        let expected = PaneSplitNode.split(
+            axis: .horizontal, ratio: 0.5,
+            first: .leaf(id: 0, agentId: nil),
+            second: .split(
+                axis: .vertical, ratio: 0.7,
+                first: .leaf(id: 1, agentId: nil),
+                second: .leaf(id: 2, agentId: nil)
+            )
+        )
+        #expect(result == expected)
+    }
+
     // MARK: Row count / canSplit
 
     @Test func horizontalSplitCountsRows() {
@@ -103,6 +124,18 @@ struct PaneSplitNodeTests {
     @Test func canSplitUnderSixLeaves() {
         let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
         #expect(leaf.canSplit(axis: .horizontal) == true)
+    }
+
+    @Test func canSplitAtFiveLeaves() {
+        // Build a tree with 5 leaves — should still allow one more split
+        var nextId = 1
+        var tree = PaneSplitNode.leaf(id: 0, agentId: nil)
+        for _ in 0..<4 {
+            let target = tree.allLeafIds.last!
+            tree = tree.splittingLeaf(id: target, axis: .vertical, nextId: &nextId)
+        }
+        #expect(tree.leafCount == 5)
+        #expect(tree.canSplit(axis: .horizontal) == true)
     }
 
     @Test func cannotSplitAtSixLeaves() {
@@ -300,6 +333,38 @@ struct GridLayoutPersistenceTests {
         #expect(restored.containsAgent("a1"))
         #expect(restored.containsAgent("a2"))
         #expect(nextId == 3)
+    }
+
+    @Test func roundTripPreservesRatios() throws {
+        let original = PaneSplitNode.split(
+            axis: .vertical, ratio: 0.6,
+            first: .leaf(id: 0, agentId: "a1"),
+            second: .split(
+                axis: .horizontal, ratio: 0.4,
+                first: .leaf(id: 1, agentId: "a2"),
+                second: .leaf(id: 2, agentId: nil)
+            )
+        )
+        let layoutNode = original.toLayoutNode()
+        let data = try JSONEncoder().encode(layoutNode)
+        let decoded = try JSONDecoder().decode(GridLayoutNode.self, from: data)
+        var nextId = 0
+        let restored = PaneSplitNode.fromLayoutNode(decoded, nextId: &nextId)
+        // Compare layout nodes to verify ratios survive the round trip
+        let restoredLayout = restored.toLayoutNode()
+        let originalLayout = original.toLayoutNode()
+        #expect(restoredLayout.ratio == originalLayout.ratio)
+        #expect(restoredLayout.first?.ratio == originalLayout.first?.ratio)
+        #expect(restoredLayout.second?.ratio == originalLayout.second?.ratio)
+    }
+
+    @Test func fromLayoutNodeDegradedSplitFallsBackToLeaf() {
+        // A split node with missing axis/ratio/children should degrade to a single leaf
+        let degraded = GridLayoutNode(type: .split, agentId: nil, axis: nil, ratio: nil, first: nil, second: nil)
+        var nextId = 0
+        let result = PaneSplitNode.fromLayoutNode(degraded, nextId: &nextId)
+        #expect(result.leafCount == 1)
+        #expect(nextId == 1)
     }
 
     @Test func roundTripPersistedGridLayout() throws {
