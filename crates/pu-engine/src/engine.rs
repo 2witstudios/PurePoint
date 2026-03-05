@@ -103,7 +103,7 @@ impl Engine {
     async fn resolve_login_path() -> String {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         let base_path = match tokio::process::Command::new(&shell)
-            .args(["-l", "-c", "echo $PATH"])
+            .args(["-li", "-c", "echo $PATH"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
