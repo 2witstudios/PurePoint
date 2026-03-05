@@ -1,20 +1,24 @@
-use nanoid::nanoid;
 use rand::seq::IndexedRandom;
 use uuid::Uuid;
 
-const ALPHABET: &[char] = &[
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
-    't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-];
+const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
 const ID_LEN: usize = 8;
 
+fn random_id(prefix: &str) -> String {
+    let mut rng = rand::rng();
+    let suffix: String = (0..ID_LEN)
+        .map(|_| *ALPHABET.choose(&mut rng).unwrap() as char)
+        .collect();
+    format!("{prefix}{suffix}")
+}
+
 pub fn worktree_id() -> String {
-    format!("wt-{}", nanoid!(ID_LEN, ALPHABET))
+    random_id("wt-")
 }
 
 pub fn agent_id() -> String {
-    format!("ag-{}", nanoid!(ID_LEN, ALPHABET))
+    random_id("ag-")
 }
 
 pub fn session_id() -> String {
