@@ -20,7 +20,7 @@ Terminal state: Broken.
 
 ## Decisions
 
-! [AL-001] Shell prompt pattern matching (`$ `, `% `, `# `, `> `) plus 30-second output inactivity timeout — `effective_status()` is a pure function (no polling loop) called on-demand when computing status for requests. Checks last 256 bytes of output buffer for prompt patterns (UTF-8 lossy, trailing whitespace stripped). If prompt detected OR `idle_seconds() > 30`, status is Idle. If exit code present: 0 = Completed, nonzero = Failed. Otherwise Running. Implemented in `pu-engine/src/agent_monitor.rs`.
+! [AL-001] Shell prompt pattern matching (`$ `, `% `, `# `, `> `) plus 30-second output inactivity timeout — `effective_status()` is a pure function (no polling loop) called on-demand when computing status for requests. Checks last 256 bytes of output buffer for prompt patterns (UTF-8 lossy, trailing whitespace stripped). If prompt detected OR `idle_seconds() > 30`, status is Waiting. If exit code present, status is Broken. Otherwise Streaming. Implemented in `pu-engine/src/agent_monitor.rs`.
 
 ## Research Notes
 
