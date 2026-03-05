@@ -69,10 +69,12 @@ pub fn ensure_claude_skill() {
         Ok(()) => {
             if let Err(e) = std::fs::rename(&tmp_path, &skill_path) {
                 eprintln!("pu: failed to install skill file: {e}");
+                return;
             }
         }
         Err(e) => {
             eprintln!("pu: failed to write skill file: {e}");
+            return;
         }
     }
     if let Err(e) = std::fs::write(&hash_path, &current_hash) {
