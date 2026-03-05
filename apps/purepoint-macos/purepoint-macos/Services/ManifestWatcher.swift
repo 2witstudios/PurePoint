@@ -46,7 +46,7 @@ final class ManifestWatcher: @unchecked Sendable {
             let flags = source.data
             if flags.contains(.delete) || flags.contains(.rename) {
                 // File was replaced (atomic write) — re-open after brief delay
-                self.queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self.queue.asyncAfter(deadline: .now() + 0.01) { [weak self] in
                     guard let self else { return }
                     self.startWatching()
                     self.scheduleDebounce()

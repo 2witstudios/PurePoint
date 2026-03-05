@@ -49,7 +49,7 @@ class TerminalPaneNSView: NSView {
             self.needsLayout = true
         }
         installDebounce = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16), execute: item)
     }
 
     private func ensureTerminal() {
@@ -123,6 +123,7 @@ class TerminalPaneNSView: NSView {
     /// Restart the attach session if it has died and the view has a valid frame.
     func reconnectIfNeeded() {
         guard isAttachDone, let tv = terminal, tv.bounds.width > 1 else { return }
+        attachTask?.cancel()
         startDaemonAttach()
     }
 
