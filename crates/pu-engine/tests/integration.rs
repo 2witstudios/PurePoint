@@ -136,3 +136,279 @@ async fn given_manifest_should_be_readable_by_macos_app() {
     send(&sock, &Request::Shutdown).await;
     handle.await.ok();
 }
+
+async fn init_project(sock: &std::path::Path, project: &std::path::Path) {
+    send(
+        sock,
+        &Request::Init {
+            project_root: project.to_string_lossy().into(),
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_kill_all_on_empty_project_should_return_empty_killed() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::Kill {
+            project_root: project.to_string_lossy().into(),
+            target: pu_core::protocol::KillTarget::All,
+        },
+    )
+    .await;
+    match resp {
+        Response::KillResult { killed, .. } => {
+            assert!(killed.is_empty());
+        }
+        other => panic!("expected KillResult, got {other:?}"),
+    }
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_kill_nonexistent_agent_should_return_kill_result() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    // Engine returns KillResult even for nonexistent agents (best-effort kill)
+    let resp = send(
+        &sock,
+        &Request::Kill {
+            project_root: project.to_string_lossy().into(),
+            target: pu_core::protocol::KillTarget::Agent("ag-nonexistent".into()),
+        },
+    )
+    .await;
+    match resp {
+        Response::KillResult { killed, .. } => {
+            assert_eq!(killed, vec!["ag-nonexistent"]);
+        }
+        other => panic!("expected KillResult, got {other:?}"),
+    }
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_grid_get_layout_should_return_layout() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::GridCommand {
+            project_root: project.to_string_lossy().into(),
+            command: pu_core::protocol::GridCommand::GetLayout,
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, Response::GridLayout { .. }),
+        "expected GridLayout, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_grid_split_should_succeed() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::GridCommand {
+            project_root: project.to_string_lossy().into(),
+            command: pu_core::protocol::GridCommand::Split {
+                leaf_id: None,
+                axis: "v".into(),
+            },
+        },
+    )
+    .await;
+    assert!(
+        !matches!(resp, Response::Error { .. }),
+        "expected success for grid split, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_logs_for_nonexistent_agent_should_return_error() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::Logs {
+            agent_id: "ag-nonexistent".into(),
+            tail: 100,
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent agent logs, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_rename_nonexistent_agent_should_return_error() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::Rename {
+            project_root: project.to_string_lossy().into(),
+            agent_id: "ag-nonexistent".into(),
+            name: "new-name".into(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent agent rename, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_status_for_nonexistent_agent_should_return_error() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::Status {
+            project_root: project.to_string_lossy().into(),
+            agent_id: Some("ag-nonexistent".into()),
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent agent status, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_delete_nonexistent_worktree_should_return_error() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    init_project(&sock, &project).await;
+
+    let resp = send(
+        &sock,
+        &Request::DeleteWorktree {
+            project_root: project.to_string_lossy().into(),
+            worktree_id: "wt-nonexistent".into(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for nonexistent worktree delete, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_uninitialised_project_kill_should_return_error() {
+    let tmp = TempDir::new().unwrap();
+    let sock = tmp.path().join("daemon.sock");
+
+    let handle = start_server(&sock).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let resp = send(
+        &sock,
+        &Request::Kill {
+            project_root: "/nonexistent/project".into(),
+            target: pu_core::protocol::KillTarget::All,
+        },
+    )
+    .await;
+    assert!(
+        matches!(resp, Response::Error { .. }),
+        "expected Error for uninitialised project, got {resp:?}"
+    );
+
+    send(&sock, &Request::Shutdown).await;
+    handle.await.ok();
+}
