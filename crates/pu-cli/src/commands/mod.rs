@@ -8,3 +8,9 @@ pub mod prompt;
 pub mod send;
 pub mod spawn;
 pub mod status;
+
+use crate::error::CliError;
+
+pub fn cwd_string() -> Result<String, CliError> {
+    Ok(std::env::current_dir()?.to_string_lossy().to_string())
+}

@@ -10,7 +10,7 @@ pub async fn run(_socket: &std::path::Path, json: bool) -> Result<(), CliError> 
 
     if paths::manifest_path(project_root).exists() {
         if json {
-            println!("{{\"created\":false}}");
+            println!("{}", serde_json::json!({"created": false}));
         } else {
             println!("Already initialized");
         }
@@ -31,7 +31,7 @@ pub async fn run(_socket: &std::path::Path, json: bool) -> Result<(), CliError> 
     write_agent_context(project_root);
 
     if json {
-        println!("{{\"created\":true}}");
+        println!("{}", serde_json::json!({"created": true}));
     } else {
         println!("Initialized PurePoint workspace");
     }

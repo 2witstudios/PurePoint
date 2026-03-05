@@ -1,4 +1,5 @@
 use crate::client;
+use crate::commands::cwd_string;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
@@ -24,7 +25,7 @@ pub async fn run(
     daemon_ctrl::ensure_daemon(socket).await?;
 
     let cwd = std::env::current_dir()?;
-    let project_root = cwd.to_string_lossy().to_string();
+    let project_root = cwd_string()?;
 
     // Parse --var KEY=VALUE pairs
     let var_map = parse_vars(&vars)?;
