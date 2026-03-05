@@ -374,7 +374,8 @@ final class ProjectState: Identifiable {
                                     status: AgentStatus(rawValue: report.status) ?? .lost,
                                     prompt: report.prompt ?? "",
                                     startedAt: report.startedAt ?? "",
-                                    sessionId: report.sessionId
+                                    sessionId: report.sessionId,
+                                    suspended: report.suspended
                                 )
                             }
 

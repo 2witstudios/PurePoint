@@ -22,7 +22,8 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                     status: AgentStatus(rawValue: report.status) ?? .lost,
                     prompt: report.prompt ?? "",
                     startedAt: report.startedAt ?? "",
-                    sessionId: report.sessionId
+                    sessionId: report.sessionId,
+                    suspended: report.suspended
                 )
             }
             return WorkspaceSnapshot(worktrees: worktreeModels, rootAgents: rootAgents)

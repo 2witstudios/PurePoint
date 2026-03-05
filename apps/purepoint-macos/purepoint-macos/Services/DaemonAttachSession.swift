@@ -10,18 +10,22 @@ actor DaemonAttachSession {
     private weak var terminalView: TerminalView?
     private var connection: NWConnection?
     private var stopped = false
+    private var onFirstOutput: (() -> Void)?
+    private var hasReceivedOutput = false
 
-    init(agentId: String, terminalView: TerminalView) {
+    init(agentId: String, terminalView: TerminalView, onFirstOutput: (() -> Void)? = nil) {
         self.agentId = agentId
         self.terminalView = terminalView
+        self.onFirstOutput = onFirstOutput
     }
 
     /// Start streaming output from the daemon to the terminal view.
     func start() async {
         guard !stopped else { return }
 
-        var backoff: UInt64 = 500_000_000 // 0.5s
-        let maxBackoff: UInt64 = 5_000_000_000 // 5s
+        let fastRetries = 5
+        let fastDelay: UInt64 = 100_000_000   // 100ms
+        let slowDelay: UInt64 = 2_000_000_000 // 2s
         var retries = 0
         let maxRetries = 20
 
@@ -35,13 +39,14 @@ actor DaemonAttachSession {
             } catch {
                 // Connection lost — attempt reconnect with backoff
                 retries += 1
+                print("[DaemonAttach \(agentId.prefix(8))] retry \(retries): \(error.localizedDescription)")
                 guard !stopped, retries <= maxRetries else { break }
+                let delay = retries <= fastRetries ? fastDelay : slowDelay
                 do {
-                    try await Task.sleep(nanoseconds: backoff)
+                    try await Task.sleep(nanoseconds: delay)
                 } catch {
                     break // CancellationError — exit immediately
                 }
-                backoff = min(backoff * 2, maxBackoff)
             }
         }
     }
@@ -85,10 +90,13 @@ actor DaemonAttachSession {
         let firstResponse = DaemonClient.parse(firstLine)
         guard case .attachReady = firstResponse else {
             if case .error(_, let msg) = firstResponse {
+                print("[DaemonAttach \(agentId.prefix(8))] attach error: \(msg)")
                 throw DaemonAttachError.attachFailed(msg)
             }
+            print("[DaemonAttach \(agentId.prefix(8))] unexpected response: \(firstLine.prefix(100))")
             throw DaemonAttachError.unexpectedResponse
         }
+        print("[DaemonAttach \(agentId.prefix(8))] attached successfully")
 
         // Send initial resize so PTY matches the terminal view's actual dimensions.
         // The sizeChanged delegate fires during terminal creation (before connection
@@ -112,6 +120,14 @@ actor DaemonAttachSession {
 
             switch response {
             case .output(_, let data):
+                if !hasReceivedOutput {
+                    hasReceivedOutput = true
+                    print("[DaemonAttach \(agentId.prefix(8))] first output: \(data.count) bytes")
+                    if let cb = onFirstOutput {
+                        onFirstOutput = nil
+                        await MainActor.run { cb() }
+                    }
+                }
                 let bytes = [UInt8](data)
                 await MainActor.run {
                     tv?.feed(byteArray: ArraySlice(bytes))
