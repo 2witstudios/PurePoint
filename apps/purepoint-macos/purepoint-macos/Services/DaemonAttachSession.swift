@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Network
 import SwiftTerm
@@ -12,6 +13,8 @@ actor DaemonAttachSession {
     private var stopped = false
     private var onFirstOutput: (() -> Void)?
     private var hasReceivedOutput = false
+    private var lastFullRefreshAtNanos: UInt64 = 0
+    private static let fullRefreshIntervalNanos: UInt64 = 200_000_000 // 200ms
 
     init(agentId: String, terminalView: TerminalView, onFirstOutput: (() -> Void)? = nil) {
         self.agentId = agentId
@@ -120,6 +123,8 @@ actor DaemonAttachSession {
 
             switch response {
             case .output(_, let data):
+                guard !data.isEmpty else { continue }
+                let now = DispatchTime.now().uptimeNanoseconds
                 if !hasReceivedOutput {
                     hasReceivedOutput = true
                     print("[DaemonAttach \(agentId.prefix(8))] first output: \(data.count) bytes")
@@ -128,9 +133,17 @@ actor DaemonAttachSession {
                         await MainActor.run { cb() }
                     }
                 }
+                let shouldForceFullRefresh = now &- lastFullRefreshAtNanos >= Self.fullRefreshIntervalNanos
+                if shouldForceFullRefresh {
+                    lastFullRefreshAtNanos = now
+                }
                 let bytes = [UInt8](data)
                 await MainActor.run {
                     tv?.feed(byteArray: ArraySlice(bytes))
+                    if shouldForceFullRefresh {
+                        tv?.getTerminal().updateFullScreen()
+                    }
+                    tv?.needsDisplay = true
                 }
             case .error(_, let message):
                 throw DaemonAttachError.attachFailed(message)

@@ -104,6 +104,11 @@ class TerminalPaneNSView: NSView {
                 attachStarted = true
                 startDaemonAttach()
                 startHeartbeat()
+                // New panes should be immediately interactive.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.window?.makeFirstResponder(tv.terminalView)
+                }
             } else if let task = attachTask, task.isCancelled || isAttachDone {
                 // Session died — restart
                 startDaemonAttach()

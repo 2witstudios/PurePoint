@@ -28,7 +28,8 @@ pub struct Engine {
     start_time: Instant,
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
-    login_path: Arc<OnceCell<String>>,
+    pending_initial_inputs: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    login_env: Arc<OnceCell<Vec<(String, String)>>>,
     reaped_projects: Arc<std::sync::Mutex<HashSet<String>>>,
     /// Per-project broadcast channels for grid commands.
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
@@ -48,7 +49,8 @@ impl Engine {
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            login_path: Arc::new(OnceCell::new()),
+            pending_initial_inputs: Arc::new(Mutex::new(HashMap::new())),
+            login_env: Arc::new(OnceCell::new()),
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
@@ -60,6 +62,7 @@ impl Engine {
     /// with no subscribers. Without this, HashMap entries leak.
     pub fn start_session_reaper(self: &Arc<Self>) {
         let sessions = self.sessions.clone();
+        let pending_initial_inputs = self.pending_initial_inputs.clone();
         let grid_channels = self.grid_channels.clone();
         let status_channels = self.status_channels.clone();
         tokio::spawn(async move {
@@ -82,6 +85,10 @@ impl Engine {
                     for id in &dead_ids {
                         sessions.remove(id);
                     }
+                    let mut pending_initial_inputs = pending_initial_inputs.lock().await;
+                    for id in &dead_ids {
+                        pending_initial_inputs.remove(id);
+                    }
                     tracing::debug!(count = dead_ids.len(), "reaped dead session handles");
                 }
 
@@ -100,37 +107,30 @@ impl Engine {
         });
     }
 
-    async fn resolve_login_path() -> String {
+    async fn resolve_login_env() -> Vec<(String, String)> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let base_path = match tokio::process::Command::new(&shell)
-            .args(["-li", "-c", "echo $PATH"])
+        match tokio::process::Command::new(&shell)
+            .args(["-li", "-c", "env -0"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
             .await
         {
-            Ok(output) if output.status.success() => {
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
-            }
-            _ => std::env::var("PATH").unwrap_or_default(),
-        };
-
-        // Append common tool directories that may only appear in .zshrc/.bashrc
-        // (guards against the missing-claude-binary issue from d60c911)
-        let home = std::env::var("HOME").unwrap_or_default();
-        let fallbacks = [
-            format!("{home}/.local/bin"),
-            format!("{home}/.cargo/bin"),
-            "/usr/local/bin".to_string(),
-            "/opt/homebrew/bin".to_string(),
-        ];
-        let mut path = base_path;
-        for dir in fallbacks {
-            if !path.split(':').any(|p| p == dir) {
-                path = format!("{path}:{dir}");
-            }
+            Ok(output) if output.status.success() => output
+                .stdout
+                .split(|&b| b == 0)
+                .filter_map(|entry| {
+                    let s = std::str::from_utf8(entry).ok()?;
+                    let (k, v) = s.split_once('=')?;
+                    if k.is_empty() {
+                        return None;
+                    }
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect(),
+            // Fallback: use the daemon's own env
+            _ => std::env::vars().collect(),
         }
-        path
     }
 
     pub async fn handle_request(&self, request: Request) -> Response {
@@ -495,7 +495,8 @@ impl Engine {
             None
         };
 
-        if !prompt.is_empty() {
+        let inject_prompt_via_stdin = !prompt.is_empty() && agent_cfg.interactive;
+        if !inject_prompt_via_stdin && !prompt.is_empty() {
             if let Some(flag) = &agent_cfg.prompt_flag {
                 args.push(flag.clone());
             }
@@ -546,11 +547,7 @@ impl Engine {
             command,
             args,
             cwd: cwd.clone(),
-            env: vec![
-                ("PATH".into(), self.agent_path().await),
-                ("TERM".into(), "xterm-256color".into()),
-                ("COLORTERM".into(), "truecolor".into()),
-            ],
+            env: self.agent_env().await,
             env_remove: vec!["CLAUDECODE".into()],
             cols: 120,
             rows: 40,
@@ -581,6 +578,14 @@ impl Engine {
                 };
             }
         };
+
+        if inject_prompt_via_stdin {
+            let input = prompt.as_bytes().to_vec();
+            self.pending_initial_inputs
+                .lock()
+                .await
+                .insert(agent_id.clone(), input);
+        }
 
         let pid = handle.pid;
 
@@ -692,6 +697,12 @@ impl Engine {
         // Extract handles from session map, then DROP the lock before killing.
         // Killing can take up to 5s per agent — holding the mutex would block
         // all other operations (status, logs, attach).
+        {
+            let mut pending_inputs = self.pending_initial_inputs.lock().await;
+            for id in &agent_ids {
+                pending_inputs.remove(id);
+            }
+        }
         let handles_to_kill: Vec<(String, AgentHandle)> = {
             let mut sessions = self.sessions.lock().await;
             agent_ids
@@ -753,6 +764,12 @@ impl Engine {
 
         // 1. Kill all agents in the worktree
         let agent_ids: Vec<String> = wt.agents.keys().cloned().collect();
+        {
+            let mut pending_inputs = self.pending_initial_inputs.lock().await;
+            for id in &agent_ids {
+                pending_inputs.remove(id);
+            }
+        }
         let handles_to_kill: Vec<(String, AgentHandle)> = {
             let mut sessions = self.sessions.lock().await;
             agent_ids
@@ -873,6 +890,13 @@ impl Engine {
             return Response::SuspendResult { suspended: vec![] };
         }
 
+        {
+            let mut pending_inputs = self.pending_initial_inputs.lock().await;
+            for id in &agent_ids {
+                pending_inputs.remove(id);
+            }
+        }
+
         // Extract handles from session map, then drop lock before killing
         let handles_to_kill: Vec<(String, AgentHandle)> = {
             let mut sessions = self.sessions.lock().await;
@@ -980,11 +1004,7 @@ impl Engine {
             command,
             args,
             cwd,
-            env: vec![
-                ("PATH".into(), self.agent_path().await),
-                ("TERM".into(), "xterm-256color".into()),
-                ("COLORTERM".into(), "truecolor".into()),
-            ],
+            env: self.agent_env().await,
             env_remove: vec!["CLAUDECODE".into()],
             cols: 120,
             rows: 40,
@@ -1161,6 +1181,20 @@ impl Engine {
         self.pty_host.write_to_fd(fd, data).await
     }
 
+    /// Take and clear any queued initial input for an agent.
+    pub async fn take_initial_input(&self, agent_id: &str) -> Option<Vec<u8>> {
+        self.pending_initial_inputs.lock().await.remove(agent_id)
+    }
+
+    /// Re-queue initial input if an attach session ended before delivery.
+    pub async fn restore_initial_input(&self, agent_id: &str, data: Vec<u8>) {
+        self.pending_initial_inputs
+            .lock()
+            .await
+            .entry(agent_id.to_string())
+            .or_insert(data);
+    }
+
     /// Resize a PTY fd via the pty host (avoids duplicating unsafe ioctl logic).
     pub async fn resize_pty(
         &self,
@@ -1187,18 +1221,46 @@ impl Engine {
             .map(|h| (h.output_buffer.clone(), h.master_fd(), h.exit_rx.clone()))
     }
 
-    /// Build the PATH env value for spawned agents.
-    /// Prepends ~/.pu/bin so agents can find the `pu` CLI.
-    /// Login PATH is resolved lazily on first spawn (absorbed into spawn latency).
-    async fn agent_path(&self) -> String {
-        let login_path = self.login_path.get_or_init(Self::resolve_login_path).await;
-        match paths::global_pu_dir() {
-            Ok(pu_dir) => {
-                let bin_dir = pu_dir.join("bin");
-                format!("{}:{}", bin_dir.display(), login_path)
+    /// Build the full environment for spawned agents.
+    /// Starts from the user's login shell env, then overrides PATH
+    /// (prepends ~/.pu/bin + fallback dirs), TERM, and COLORTERM.
+    async fn agent_env(&self) -> Vec<(String, String)> {
+        let login_env = self.login_env.get_or_init(Self::resolve_login_env).await;
+        let mut env = login_env.clone();
+
+        // Extract login PATH for augmentation
+        let login_path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+
+        // Append common fallback dirs (guards against missing-binary issues)
+        let home = std::env::var("HOME").unwrap_or_default();
+        let fallbacks = [
+            format!("{home}/.local/bin"),
+            format!("{home}/.cargo/bin"),
+            "/usr/local/bin".to_string(),
+            "/opt/homebrew/bin".to_string(),
+        ];
+        let mut path = login_path;
+        for dir in fallbacks {
+            if !path.split(':').any(|p| p == dir) {
+                path = format!("{path}:{dir}");
             }
-            Err(_) => login_path.clone(),
         }
+        // Prepend ~/.pu/bin
+        if let Ok(pu_dir) = paths::global_pu_dir() {
+            path = format!("{}:{}", pu_dir.join("bin").display(), path);
+        }
+
+        // Override PATH, TERM, COLORTERM in the env
+        env.retain(|(k, _)| k != "PATH" && k != "TERM" && k != "COLORTERM");
+        env.push(("PATH".into(), path));
+        env.push(("TERM".into(), "xterm-256color".into()));
+        env.push(("COLORTERM".into(), "truecolor".into()));
+
+        env
     }
 
     // --- Grid ---
@@ -1519,6 +1581,8 @@ impl Drop for Engine {
 mod tests {
     use super::*;
     use crate::test_helpers::init_and_spawn;
+    use pu_core::protocol::{Request, Response};
+    use tempfile::TempDir;
 
     #[tokio::test(flavor = "current_thread")]
     async fn given_spawned_agent_should_return_attach_handles() {
@@ -1540,5 +1604,40 @@ mod tests {
         let engine = Engine::new();
         let handles = engine.get_attach_handles("ag-nonexistent").await;
         assert!(handles.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_spawn_with_prompt_should_queue_initial_input() {
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let pr = project_root.to_string_lossy().to_string();
+
+        let engine = Engine::new();
+        engine
+            .handle_request(Request::Init {
+                project_root: pr.clone(),
+            })
+            .await;
+
+        let resp = engine
+            .handle_request(Request::Spawn {
+                project_root: pr,
+                prompt: "hello world".into(),
+                agent: "terminal".into(),
+                name: None,
+                base: None,
+                root: true,
+                worktree: None,
+            })
+            .await;
+
+        let agent_id = match resp {
+            Response::SpawnResult { agent_id, .. } => agent_id,
+            other => panic!("expected SpawnResult, got {other:?}"),
+        };
+
+        let initial_input = engine.take_initial_input(&agent_id).await;
+        assert_eq!(initial_input, Some(b"hello world".to_vec()));
     }
 }
