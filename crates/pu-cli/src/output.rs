@@ -272,14 +272,30 @@ mod tests {
         assert!(matches!(result.unwrap(), Response::ShuttingDown));
     }
 
+    #[test]
+    fn given_error_response_in_json_mode_check_response_should_print_and_return_err() {
+        let resp = Response::Error {
+            code: "TEST_ERR".into(),
+            message: "json mode error".into(),
+        };
+        let result = check_response(resp, true);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("TEST_ERR"));
+    }
+
     // --- print_response (json mode) ---
 
     #[test]
     fn given_json_mode_should_produce_valid_json() {
+        // Exercise the print_response JSON path (which calls serde internally)
         let resp = Response::InitResult { created: true };
-        // JSON mode should not panic
+        print_response(&resp, true);
+        // Verify it round-trips through serde correctly
         let json = serde_json::to_string_pretty(&resp).unwrap();
-        assert!(json.contains("init_result"));
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "init_result");
+        assert_eq!(parsed["created"], true);
     }
 
     // --- print_response (human mode, smoke tests that they don't panic) ---
