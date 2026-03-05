@@ -1,6 +1,6 @@
 # Desktop App
 
-**Maturity: DECIDED** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`
+**Maturity: CONVERGING** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`
 
 ## Purpose
 

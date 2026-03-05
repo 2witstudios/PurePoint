@@ -21,7 +21,7 @@ Daemon (pu-engine binary)
 
 ## Research Notes
 
-**DMN-001: Single daemon, per-project state keyed by project root.** The daemon is a single process serving all projects. Each request includes a `project_root` parameter to scope operations. `Engine` maintains per-project state internally. `Request::Init { project_root }` registers a project; subsequent `Spawn`/`Status`/`Kill` requests reference it. `Response::HealthReport` includes a `projects: Vec<String>` listing all registered project roots and `agent_count: usize` across all projects.
+**Single daemon, per-project state keyed by project root.** The daemon is a single process serving all projects. Each request includes a `project_root` parameter to scope operations. `Engine` maintains per-project state internally. `Request::Init { project_root }` registers a project; subsequent `Spawn`/`Status`/`Kill` requests reference it. `Response::HealthReport` includes a `projects: Vec<String>` listing all registered project roots and `agent_count: usize` across all projects.
 
 **Daemon binary:** `pu-engine` (separate from `pu-cli`). Standalone mode writes PID file and cleans up on exit; managed mode (`--managed`) skips PID file for when the CLI controls the lifecycle. Socket path configurable via `--socket <path>`, defaults to `~/.pu/daemon.sock`.
 

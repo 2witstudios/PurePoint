@@ -68,7 +68,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Output & Streaming | OUT | EXPLORING |
 | Memory System | MEM | SEED |
 | Recovery & Resilience | REC | SEED |
-| Desktop App | APP | DECIDED |
+| Desktop App | APP | CONVERGING |
 | Configuration | CFG | SEED |
 
 ### Reference (Inventory)
