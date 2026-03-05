@@ -495,12 +495,20 @@ impl Engine {
             None
         };
 
-        let inject_prompt_via_stdin = !prompt.is_empty() && agent_cfg.interactive;
+        // Claude prompt via argv can stall first render in some terminals; keep stdin injection
+        // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
+        let inject_prompt_via_stdin =
+            Self::should_inject_prompt_via_stdin(agent_type, agent_cfg.interactive, prompt);
         if !inject_prompt_via_stdin && !prompt.is_empty() {
-            if let Some(flag) = &agent_cfg.prompt_flag {
-                args.push(flag.clone());
+            let prompt_flag =
+                Self::resolved_prompt_flag(agent_type, agent_cfg.prompt_flag.as_deref());
+            if let Some(flag) = prompt_flag {
+                args.push(flag);
+                args.push(prompt.to_string());
+            } else {
+                // Default prompt style is positional (for example codex [PROMPT]).
+                args.push(prompt.to_string());
             }
-            args.push(prompt.to_string());
         }
 
         // Determine working directory
@@ -1345,6 +1353,18 @@ impl Engine {
         Ok((command, parts))
     }
 
+    fn should_inject_prompt_via_stdin(agent_type: &str, interactive: bool, prompt: &str) -> bool {
+        !prompt.is_empty() && interactive && matches!(agent_type, "claude" | "terminal")
+    }
+
+    fn resolved_prompt_flag(agent_type: &str, prompt_flag: Option<&str>) -> Option<String> {
+        match (agent_type, prompt_flag) {
+            ("opencode", None) => Some("--prompt".to_string()),
+            (_, Some(flag)) => Some(flag.to_string()),
+            _ => None,
+        }
+    }
+
     fn is_pid_alive(pid: u32) -> bool {
         daemon_lifecycle::is_process_alive(pid)
     }
@@ -1639,5 +1659,47 @@ mod tests {
 
         let initial_input = engine.take_initial_input(&agent_id).await;
         assert_eq!(initial_input, Some(b"hello world".to_vec()));
+    }
+
+    #[test]
+    fn given_claude_prompt_should_inject_via_stdin() {
+        assert!(Engine::should_inject_prompt_via_stdin(
+            "claude", true, "hello"
+        ));
+    }
+
+    #[test]
+    fn given_codex_prompt_should_not_inject_via_stdin() {
+        assert!(!Engine::should_inject_prompt_via_stdin(
+            "codex", true, "hello"
+        ));
+    }
+
+    #[test]
+    fn given_non_interactive_agent_should_not_inject_via_stdin() {
+        assert!(!Engine::should_inject_prompt_via_stdin(
+            "terminal", false, "hello"
+        ));
+    }
+
+    #[test]
+    fn given_opencode_without_configured_flag_should_use_prompt_flag() {
+        assert_eq!(
+            Engine::resolved_prompt_flag("opencode", None),
+            Some("--prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn given_codex_without_configured_flag_should_use_positional_prompt() {
+        assert_eq!(Engine::resolved_prompt_flag("codex", None), None);
+    }
+
+    #[test]
+    fn given_configured_prompt_flag_should_be_preserved() {
+        assert_eq!(
+            Engine::resolved_prompt_flag("codex", Some("--prompt")),
+            Some("--prompt".to_string())
+        );
     }
 }
