@@ -632,29 +632,26 @@ impl Engine {
             m
         });
 
-        match manifest_result {
-            Err(e) => {
-                // Rollback: remove session and kill process
-                if let Some(handle) = self.sessions.lock().await.remove(&agent_id) {
-                    self.pty_host
-                        .kill(&handle, Duration::from_secs(2))
-                        .await
-                        .ok();
-                }
-                if created_worktree {
-                    self.rollback_worktree(
-                        root_path,
-                        worktree_id.as_deref(),
-                        rollback_branch.as_deref(),
-                    )
-                    .await;
-                }
-                return Response::Error {
-                    code: "SPAWN_FAILED".into(),
-                    message: format!("failed to update manifest: {e}"),
-                };
+        if let Err(e) = manifest_result {
+            // Rollback: remove session and kill process
+            if let Some(handle) = self.sessions.lock().await.remove(&agent_id) {
+                self.pty_host
+                    .kill(&handle, Duration::from_secs(2))
+                    .await
+                    .ok();
             }
-            Ok(_) => {}
+            if created_worktree {
+                self.rollback_worktree(
+                    root_path,
+                    worktree_id.as_deref(),
+                    rollback_branch.as_deref(),
+                )
+                .await;
+            }
+            return Response::Error {
+                code: "SPAWN_FAILED".into(),
+                message: format!("failed to update manifest: {e}"),
+            };
         }
 
         self.notify_status_change(project_root).await;
