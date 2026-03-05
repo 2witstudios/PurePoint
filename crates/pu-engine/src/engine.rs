@@ -32,8 +32,6 @@ pub struct Engine {
     reaped_projects: Arc<std::sync::Mutex<HashSet<String>>>,
     /// Per-project broadcast channels for grid commands.
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
-    /// In-memory manifest cache: sub-microsecond reads vs 5-20ms disk I/O.
-    manifest_cache: Arc<std::sync::Mutex<HashMap<String, Manifest>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
 }
@@ -53,7 +51,6 @@ impl Engine {
             login_path: Arc::new(OnceCell::new()),
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
-            manifest_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -215,7 +212,6 @@ impl Engine {
 
     async fn handle_init(&self, project_root: &str) -> Response {
         let project_root = project_root.to_string();
-        let cache = self.manifest_cache.clone();
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&project_root);
             let pu_dir = paths::pu_dir(root);
@@ -269,9 +265,6 @@ impl Engine {
                 };
             }
 
-            // Cache the new manifest
-            cache.lock().unwrap().insert(project_root.clone(), m);
-
             if let Err(e) = config::write_default_config(root) {
                 return Response::Error {
                     code: "IO_ERROR".into(),
@@ -297,15 +290,14 @@ impl Engine {
         }; // MutexGuard dropped here — before any .await
         if should_reap {
             let pr = project_root.to_string();
-            let cache = self.manifest_cache.clone();
             tokio::spawn(async move {
-                tokio::task::spawn_blocking(move || Self::reap_stale_agents(&pr, &cache))
+                tokio::task::spawn_blocking(move || Self::reap_stale_agents(&pr))
                     .await
                     .ok();
             });
         }
 
-        let m = match self.get_cached_manifest(project_root).await {
+        let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
         };
@@ -654,9 +646,7 @@ impl Engine {
                     message: format!("failed to update manifest: {e}"),
                 };
             }
-            Ok(updated) => {
-                self.cache_manifest(project_root, updated);
-            }
+            Ok(_) => {}
         }
 
         // Store handle in session map
@@ -672,7 +662,7 @@ impl Engine {
     }
 
     async fn handle_kill(&self, project_root: &str, target: KillTarget) -> Response {
-        let m = match self.get_cached_manifest(project_root).await {
+        let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
         };
@@ -723,10 +713,8 @@ impl Engine {
         let killed = agent_ids.clone();
         let killed_ids = killed.clone();
         let pr = project_root.to_string();
-        let pr2 = pr.clone();
-        let cache = self.manifest_cache.clone();
         tokio::task::spawn_blocking(move || {
-            if let Ok(updated) = manifest::update_manifest(Path::new(&pr), move |mut m| {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
                 for id in &killed_ids {
                     m.agents.shift_remove(id);
                     for wt in m.worktrees.values_mut() {
@@ -734,9 +722,8 @@ impl Engine {
                     }
                 }
                 m
-            }) {
-                cache.lock().unwrap().insert(pr2, updated);
-            }
+            })
+            .ok();
         })
         .await
         .ok();
@@ -747,7 +734,7 @@ impl Engine {
     }
 
     async fn handle_delete_worktree(&self, project_root: &str, worktree_id: &str) -> Response {
-        let m = match self.get_cached_manifest(project_root).await {
+        let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
         };
@@ -794,15 +781,12 @@ impl Engine {
         let wt_id = worktree_id.to_string();
         let killed_agents = agent_ids.clone();
         let pr = project_root.to_string();
-        let pr2 = pr.clone();
-        let cache = self.manifest_cache.clone();
         tokio::task::spawn_blocking(move || {
-            if let Ok(updated) = manifest::update_manifest(Path::new(&pr), move |mut m| {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
                 m.worktrees.shift_remove(&wt_id);
                 m
-            }) {
-                cache.lock().unwrap().insert(pr2, updated);
-            }
+            })
+            .ok();
         })
         .await
         .ok();
@@ -819,11 +803,9 @@ impl Engine {
 
     async fn handle_rename(&self, project_root: &str, agent_id: &str, name: &str) -> Response {
         let pr = project_root.to_string();
-        let pr2 = pr.clone();
         let aid = agent_id.to_string();
         let new_name = name.to_string();
         let new_name2 = new_name.clone();
-        let cache = self.manifest_cache.clone();
 
         let result = tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), |mut m| {
@@ -838,7 +820,6 @@ impl Engine {
         match result {
             Ok(Ok(updated)) => {
                 let found = updated.find_agent(agent_id).is_some();
-                cache.lock().unwrap().insert(pr2, updated);
                 if found {
                     self.notify_status_change(project_root).await;
                     Response::RenameResult {
@@ -858,7 +839,7 @@ impl Engine {
     }
 
     async fn handle_suspend(&self, project_root: &str, target: SuspendTarget) -> Response {
-        let m = match self.get_cached_manifest(project_root).await {
+        let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
         };
@@ -911,10 +892,8 @@ impl Engine {
         let suspended = agent_ids.clone();
         let suspended_ids = suspended.clone();
         let pr = project_root.to_string();
-        let pr2 = pr.clone();
-        let cache = self.manifest_cache.clone();
         tokio::task::spawn_blocking(move || {
-            if let Ok(updated) = manifest::update_manifest(Path::new(&pr), move |mut m| {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
                 let now = chrono::Utc::now();
                 for id in &suspended_ids {
                     if let Some(agent) = m.find_agent_mut(id) {
@@ -925,9 +904,8 @@ impl Engine {
                     }
                 }
                 m
-            }) {
-                cache.lock().unwrap().insert(pr2, updated);
-            }
+            })
+            .ok();
         })
         .await
         .ok();
@@ -941,7 +919,7 @@ impl Engine {
         let root_path = Path::new(project_root);
 
         // 1. Read manifest, find the suspended agent
-        let m = match self.get_cached_manifest(project_root).await {
+        let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
         };
@@ -1026,7 +1004,6 @@ impl Engine {
         let aid = agent_id.to_string();
         let sid = session_id.clone();
         let pr = project_root.to_string();
-        let cache = self.manifest_cache.clone();
         let manifest_result = tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
                 if let Some(agent) = m.find_agent_mut(&aid) {
@@ -1045,24 +1022,16 @@ impl Engine {
         .await
         .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
 
-        match manifest_result {
-            Err(e) => {
-                // Rollback: kill the resumed process
-                self.pty_host
-                    .kill(&handle, Duration::from_secs(2))
-                    .await
-                    .ok();
-                return Response::Error {
-                    code: "RESUME_FAILED".into(),
-                    message: format!("failed to update manifest: {e}"),
-                };
-            }
-            Ok(updated) => {
-                cache
-                    .lock()
-                    .unwrap()
-                    .insert(project_root.to_string(), updated);
-            }
+        if let Err(e) = manifest_result {
+            // Rollback: kill the resumed process
+            self.pty_host
+                .kill(&handle, Duration::from_secs(2))
+                .await
+                .ok();
+            return Response::Error {
+                code: "RESUME_FAILED".into(),
+                message: format!("failed to update manifest: {e}"),
+            };
         }
 
         // 6. Store handle in session map
@@ -1319,7 +1288,7 @@ impl Engine {
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
     /// Called once per project on the first status request after daemon (re)start.
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
-    fn reap_stale_agents(project_root: &str, cache: &std::sync::Mutex<HashMap<String, Manifest>>) {
+    fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
         let m = match manifest::read_manifest(root) {
             Ok(m) => m,
@@ -1338,12 +1307,10 @@ impl Engine {
                 .any(|wt| wt.agents.values().any(&needs_reap));
 
         if !has_stale {
-            // Cache even when no reap needed (populates on first access)
-            cache.lock().unwrap().insert(project_root.to_string(), m);
             return;
         }
 
-        if let Ok(updated) = manifest::update_manifest(root, move |mut m| {
+        manifest::update_manifest(root, move |mut m| {
             for agent in m.agents.values_mut() {
                 if !agent.suspended
                     && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
@@ -1365,12 +1332,8 @@ impl Engine {
                 }
             }
             m
-        }) {
-            cache
-                .lock()
-                .unwrap()
-                .insert(project_root.to_string(), updated);
-        }
+        })
+        .ok();
     }
 
     async fn rollback_worktree(
@@ -1402,34 +1365,12 @@ impl Engine {
         }
     }
 
-    // --- Manifest Cache ---
-
-    /// Read manifest from cache, falling back to disk on miss.
-    async fn get_cached_manifest(&self, project_root: &str) -> Result<Manifest, PuError> {
-        {
-            let cache = self.manifest_cache.lock().unwrap();
-            if let Some(m) = cache.get(project_root) {
-                return Ok(m.clone());
-            }
-        }
-        // Cache miss: read from disk (off async runtime)
+    /// Read manifest from disk (off async runtime).
+    async fn read_manifest_async(&self, project_root: &str) -> Result<Manifest, PuError> {
         let pr = project_root.to_string();
-        let cache = self.manifest_cache.clone();
-        tokio::task::spawn_blocking(move || {
-            let m = manifest::read_manifest(Path::new(&pr))?;
-            cache.lock().unwrap().insert(pr, m.clone());
-            Ok(m)
-        })
-        .await
-        .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))))
-    }
-
-    /// Update the manifest cache after a write.
-    fn cache_manifest(&self, project_root: &str, manifest: Manifest) {
-        self.manifest_cache
-            .lock()
-            .unwrap()
-            .insert(project_root.to_string(), manifest);
+        tokio::task::spawn_blocking(move || manifest::read_manifest(Path::new(&pr)))
+            .await
+            .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))))
     }
 
     // --- Status Push ---
@@ -1467,7 +1408,7 @@ impl Engine {
         &self,
         project_root: &str,
     ) -> Option<(Vec<WorktreeEntry>, Vec<AgentStatusReport>)> {
-        let m = self.get_cached_manifest(project_root).await.ok()?;
+        let m = self.read_manifest_async(project_root).await.ok()?;
         let sessions = self.sessions.lock().await;
         let mut agents: Vec<AgentStatusReport> = m
             .agents
