@@ -49,7 +49,7 @@ class TerminalPaneNSView: NSView {
             self.needsLayout = true
         }
         installDebounce = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16), execute: item)
     }
 
     private func ensureTerminal() {
@@ -109,6 +109,13 @@ class TerminalPaneNSView: NSView {
 
     private func startDaemonAttach() {
         guard let tv = terminal else { return }
+
+        // Clean up previous session before creating a new one
+        attachTask?.cancel()
+        let oldSession = tv.attachSession
+        if oldSession != nil {
+            Task { await oldSession?.stop() }
+        }
 
         isAttachDone = false
         let session = DaemonAttachSession(agentId: agent.id, terminalView: tv.terminalView)
