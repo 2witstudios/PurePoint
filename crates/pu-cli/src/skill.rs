@@ -69,6 +69,7 @@ pub fn ensure_claude_skill() {
         Ok(()) => {
             if let Err(e) = std::fs::rename(&tmp_path, &skill_path) {
                 eprintln!("pu: failed to install skill file: {e}");
+                let _ = std::fs::remove_file(&tmp_path);
                 return;
             }
         }
