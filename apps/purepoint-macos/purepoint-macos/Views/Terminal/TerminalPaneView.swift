@@ -110,6 +110,13 @@ class TerminalPaneNSView: NSView {
     private func startDaemonAttach() {
         guard let tv = terminal else { return }
 
+        // Clean up previous session before creating a new one
+        attachTask?.cancel()
+        let oldSession = tv.attachSession
+        if oldSession != nil {
+            Task { await oldSession?.stop() }
+        }
+
         isAttachDone = false
         let session = DaemonAttachSession(agentId: agent.id, terminalView: tv.terminalView)
         tv.attachSession = session
@@ -123,7 +130,6 @@ class TerminalPaneNSView: NSView {
     /// Restart the attach session if it has died and the view has a valid frame.
     func reconnectIfNeeded() {
         guard isAttachDone, let tv = terminal, tv.bounds.width > 1 else { return }
-        attachTask?.cancel()
         startDaemonAttach()
     }
 

@@ -10,7 +10,6 @@ struct PaneCellView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // TODO: appState.agent(byId:) is O(n) across all projects — add a lookup cache if agent count grows
             if let agentId, let agent = appState.agent(byId: agentId) {
                 TerminalContainerView(agent: agent, isFocused: isFocused)
             } else {
