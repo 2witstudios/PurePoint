@@ -46,7 +46,11 @@ final class ManifestWatcher: @unchecked Sendable {
             let flags = source.data
             if flags.contains(.delete) || flags.contains(.rename) {
                 // File was replaced (atomic write) — re-open after brief delay
-                self.reopenAfterReplace(attempt: 1)
+                self.queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    guard let self else { return }
+                    self.startWatching()
+                    self.scheduleDebounce()
+                }
             } else {
                 self.scheduleDebounce()
             }
@@ -58,21 +62,6 @@ final class ManifestWatcher: @unchecked Sendable {
 
         source.resume()
         self.source = source
-    }
-
-    /// Re-open the file watcher after an atomic replace, retrying if the file hasn't appeared yet.
-    /// Must be called on `queue`.
-    private func reopenAfterReplace(attempt: Int) {
-        let maxAttempts = 3
-        queue.asyncAfter(deadline: .now() + 0.01) { [weak self] in
-            guard let self else { return }
-            self.startWatching()
-            if self.source != nil {
-                self.scheduleDebounce()
-            } else if attempt < maxAttempts {
-                self.reopenAfterReplace(attempt: attempt + 1)
-            }
-        }
     }
 
     /// Must be called on `queue`.
