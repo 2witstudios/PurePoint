@@ -85,8 +85,8 @@ indirect enum PaneSplitNode: Equatable {
             return .split(
                 axis: nodeAxis,
                 ratio: nodeRatio,
-                first: first.splittingLeaf(id: targetId, axis: axis, ratio: 0.5, nextId: &nextId),
-                second: second.splittingLeaf(id: targetId, axis: axis, ratio: 0.5, nextId: &nextId)
+                first: first.splittingLeaf(id: targetId, axis: axis, ratio: ratio, nextId: &nextId),
+                second: second.splittingLeaf(id: targetId, axis: axis, ratio: ratio, nextId: &nextId)
             )
         }
     }
