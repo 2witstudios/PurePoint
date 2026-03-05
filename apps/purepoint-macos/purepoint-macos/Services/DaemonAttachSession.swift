@@ -89,6 +89,21 @@ actor DaemonAttachSession {
             throw DaemonAttachError.unexpectedResponse
         }
 
+        // Send initial resize so PTY matches the terminal view's actual dimensions.
+        // The sizeChanged delegate fires during terminal creation (before connection
+        // exists), so this is the first opportunity to sync the PTY size.
+        let (initialCols, initialRows) = await MainActor.run {
+            guard let tv else { return (0, 0) }
+            let term = tv.getTerminal()
+            return (term.cols, term.rows)
+        }
+        if initialCols > 0 && initialRows > 0 {
+            try await DaemonClient.write(
+                .resize(agentId: agentId, cols: initialCols, rows: initialRows),
+                to: conn
+            )
+        }
+
         // Stream loop
         while !stopped {
             let line = try await reader.readLine()
