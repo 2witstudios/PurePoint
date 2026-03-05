@@ -8,8 +8,9 @@ struct ScheduleView: View {
             ScheduleHeaderView(state: state)
             Divider()
             calendarContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $state.showingCreationSheet) {
             ScheduleCreationSheet(state: state)
         }

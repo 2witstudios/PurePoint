@@ -39,6 +39,7 @@ struct TimeGridView: View {
                 proxy.scrollTo("timeGrid", anchor: UnitPoint(x: 0, y: currentTimeAnchor))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Grid Lines

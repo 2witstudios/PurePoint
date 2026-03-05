@@ -16,7 +16,9 @@ struct WeekCalendarView: View {
             dayHeaders
             Divider()
             TimeGridView(state: state, columns: 7, dates: state.weekDays)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Day Column Headers
@@ -48,5 +50,6 @@ struct WeekCalendarView: View {
                 .frame(height: PurePointTheme.calendarHeaderHeight)
             }
         }
+        .frame(height: PurePointTheme.calendarHeaderHeight)
     }
 }

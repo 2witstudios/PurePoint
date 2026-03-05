@@ -13,6 +13,7 @@ struct MonthCalendarView: View {
             Divider()
             monthGrid
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Weekday Header

@@ -26,6 +26,7 @@ struct ScheduleListView: View {
             }
             .padding(.bottom, 16)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Section Header

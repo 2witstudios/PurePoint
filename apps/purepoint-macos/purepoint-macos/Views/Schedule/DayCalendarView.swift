@@ -8,7 +8,9 @@ struct DayCalendarView: View {
             dayHeader
             Divider()
             TimeGridView(state: state, columns: 1, dates: [state.currentDate])
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Day Header
