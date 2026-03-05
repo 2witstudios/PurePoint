@@ -52,8 +52,11 @@ private actor DaemonLauncher {
         let client = DaemonClient()
 
         // Check if already healthy
-        if await isHealthy(client: client) {
-            if shouldRestart() {
+        let healthy = await isHealthy(client: client)
+        let restart = shouldRestart()
+        print("[Daemon] healthy=\(healthy), shouldRestart=\(restart)")
+        if healthy {
+            if restart {
                 killExistingDaemon()
             } else {
                 return
@@ -110,6 +113,7 @@ private actor DaemonLauncher {
         guard let binaryPath = DaemonLifecycle.findBinary() else {
             throw DaemonLifecycleError.binaryNotFound
         }
+        print("[Daemon] launching: \(binaryPath)")
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
@@ -148,9 +152,14 @@ private actor DaemonLauncher {
         guard let binaryPath = DaemonLifecycle.findBinary() else { return false }
 
         guard let binaryDate = modDate(path: binaryPath),
-              let pidDate = modDate(path: pidPath) else { return false }
+              let pidDate = modDate(path: pidPath) else {
+            print("[Daemon] shouldRestart: missing dates for binary=\(binaryPath) or pid=\(pidPath)")
+            return false
+        }
 
-        return binaryDate > pidDate
+        let result = binaryDate > pidDate
+        print("[Daemon] binary=\(binaryPath) (\(binaryDate)), pid=\(pidDate), restart=\(result)")
+        return result
     }
 
     private func modDate(path: String) -> Date? {

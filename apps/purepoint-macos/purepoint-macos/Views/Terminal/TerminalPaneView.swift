@@ -30,6 +30,8 @@ class TerminalPaneNSView: NSView {
     private var isAttachDone = false
     private var terminalInstalled = false
     private var heartbeatTimer: Timer?
+    private var spinner: NSProgressIndicator?
+    private var spinnerShownAt = Date()
 
     init(agent: AgentModel) {
         self.agent = agent
@@ -58,6 +60,20 @@ class TerminalPaneNSView: NSView {
         ])
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
         terminal = tv
+
+        // Show a small spinner while waiting for first output
+        let indicator = NSProgressIndicator()
+        indicator.style = .spinning
+        indicator.controlSize = .small
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.startAnimation(nil)
+        addSubview(indicator)
+        NSLayoutConstraint.activate([
+            indicator.centerXAnchor.constraint(equalTo: centerXAnchor),
+            indicator.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        spinner = indicator
+        spinnerShownAt = Date()
     }
 
     override func viewDidMoveToWindow() {
@@ -106,7 +122,11 @@ class TerminalPaneNSView: NSView {
         }
 
         isAttachDone = false
-        let session = DaemonAttachSession(agentId: agent.id, terminalView: tv.terminalView)
+        let session = DaemonAttachSession(
+            agentId: agent.id,
+            terminalView: tv.terminalView,
+            onFirstOutput: { [weak self] in self?.removeSpinner() }
+        )
         tv.attachSession = session
 
         attachTask = Task { [weak self] in
@@ -142,7 +162,24 @@ class TerminalPaneNSView: NSView {
         }
     }
 
+    private func removeSpinner() {
+        guard let spinner else { return }
+        let elapsed = Date().timeIntervalSince(spinnerShownAt)
+        if elapsed >= 0.5 {
+            spinner.stopAnimation(nil)
+            spinner.removeFromSuperview()
+            self.spinner = nil
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (0.5 - elapsed)) { [weak self] in
+                self?.spinner?.stopAnimation(nil)
+                self?.spinner?.removeFromSuperview()
+                self?.spinner = nil
+            }
+        }
+    }
+
     func tearDown() {
+        removeSpinner()
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         attachTask?.cancel()

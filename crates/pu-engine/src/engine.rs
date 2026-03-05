@@ -232,6 +232,7 @@ impl Engine {
             {
                 Ok(f) => f,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Self::reconcile_agents_on_init(&project_root);
                     return Response::InitResult { created: false };
                 }
                 Err(e) => {
@@ -583,6 +584,11 @@ impl Engine {
 
         let pid = handle.pid;
 
+        // Store handle in session map BEFORE writing manifest.
+        // ManifestWatcher in Swift fires on manifest write and immediately
+        // tries to attach — the session must already be in the map.
+        self.sessions.lock().await.insert(agent_id.clone(), handle);
+
         // Update manifest
         let agent_entry = AgentEntry {
             id: agent_id.clone(),
@@ -626,31 +632,27 @@ impl Engine {
             m
         });
 
-        match manifest_result {
-            Err(e) => {
-                // Rollback: kill process and remove worktree
+        if let Err(e) = manifest_result {
+            // Rollback: remove session and kill process
+            if let Some(handle) = self.sessions.lock().await.remove(&agent_id) {
                 self.pty_host
                     .kill(&handle, Duration::from_secs(2))
                     .await
                     .ok();
-                if created_worktree {
-                    self.rollback_worktree(
-                        root_path,
-                        worktree_id.as_deref(),
-                        rollback_branch.as_deref(),
-                    )
-                    .await;
-                }
-                return Response::Error {
-                    code: "SPAWN_FAILED".into(),
-                    message: format!("failed to update manifest: {e}"),
-                };
             }
-            Ok(_) => {}
+            if created_worktree {
+                self.rollback_worktree(
+                    root_path,
+                    worktree_id.as_deref(),
+                    rollback_branch.as_deref(),
+                )
+                .await;
+            }
+            return Response::Error {
+                code: "SPAWN_FAILED".into(),
+                message: format!("failed to update manifest: {e}"),
+            };
         }
-
-        // Store handle in session map
-        self.sessions.lock().await.insert(agent_id.clone(), handle);
 
         self.notify_status_change(project_root).await;
 
@@ -1283,6 +1285,56 @@ impl Engine {
 
     fn is_pid_alive(pid: u32) -> bool {
         daemon_lifecycle::is_process_alive(pid)
+    }
+
+    /// On daemon restart, reconcile agents that appear alive in the manifest but have no
+    /// live process. Resumable agents (claude, codex, opencode) with a session_id get marked
+    /// suspended so the Swift side can auto-resume them. Others get marked Broken.
+    /// Called synchronously inside handle_init so state is correct before the first status read.
+    fn reconcile_agents_on_init(project_root: &str) {
+        let root = Path::new(project_root);
+        let m = match manifest::read_manifest(root) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
+        let is_stale = |a: &AgentEntry| {
+            !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
+        };
+
+        let has_stale = m.agents.values().any(is_stale)
+            || m.worktrees
+                .values()
+                .any(|wt| wt.agents.values().any(is_stale));
+        if !has_stale {
+            return;
+        }
+
+        let now = chrono::Utc::now();
+        manifest::update_manifest(root, move |mut m| {
+            for agent in m.agents.values_mut().chain(
+                m.worktrees
+                    .values_mut()
+                    .flat_map(|wt| wt.agents.values_mut()),
+            ) {
+                if !agent.suspended
+                    && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
+                {
+                    if agent.session_id.is_some() && is_resumable(&agent.agent_type) {
+                        agent.status = AgentStatus::Waiting;
+                        agent.suspended = true;
+                        agent.pid = None;
+                        agent.suspended_at = Some(now);
+                    } else {
+                        agent.status = AgentStatus::Broken;
+                        agent.completed_at = Some(now);
+                    }
+                }
+            }
+            m
+        })
+        .ok();
     }
 
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
