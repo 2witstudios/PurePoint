@@ -42,13 +42,13 @@ final class ProjectState: Identifiable {
         manifestWatcher?.stop()
         manifestWatcher = nil
 
-        openTask = Task {
+        openTask = Task { [weak self] in
             do {
                 try await DaemonLifecycle.ensureDaemon()
             } catch is CancellationError {
                 return
             } catch {
-                self.appState?.daemonError = error.localizedDescription
+                self?.appState?.daemonError = error.localizedDescription
                 return
             }
 
@@ -56,17 +56,17 @@ final class ProjectState: Identifiable {
                 let client = DaemonClient()
                 let response = try await client.send(.initProject(projectRoot: root))
                 if case .error(_, let message) = response {
-                    self.appState?.daemonError = message
+                    self?.appState?.daemonError = message
                     return
                 }
             } catch is CancellationError {
                 return
             } catch {
-                self.appState?.daemonError = error.localizedDescription
+                self?.appState?.daemonError = error.localizedDescription
                 return
             }
 
-            guard !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { return }
 
             let manifestPath = svc.manifestPath(projectRoot: root)
             self.manifestWatcher = ManifestWatcher(path: manifestPath) { [weak self] in
@@ -99,14 +99,14 @@ final class ProjectState: Identifiable {
         let svc = service
 
         refreshTask?.cancel()
-        refreshTask = Task {
+        refreshTask = Task { [weak self] in
             do {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
-                guard !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled else { return }
 
                 // Sidebar leak fix: eagerly assign new root agents to pending grid leaves
                 // before updating rootAgents, so they appear in childAgentIds immediately.
-                if let gs = gridState, gs.projectRoot == root {
+                if let gs = self.gridState, gs.projectRoot == root {
                     var pending = gs.pendingSpawnLeafIds
                     if !pending.isEmpty {
                         let currentIds = Set(self.rootAgents.map(\.id))
@@ -125,7 +125,7 @@ final class ProjectState: Identifiable {
             } catch is CancellationError {
                 // Task was cancelled (new refresh started) — ignore
             } catch {
-                self.appState?.daemonError = error.localizedDescription
+                self?.appState?.daemonError = error.localizedDescription
             }
         }
     }
@@ -347,7 +347,7 @@ final class ProjectState: Identifiable {
         statusSubscriptionTask?.cancel()
         let root = projectRoot
 
-        statusSubscriptionTask = Task {
+        statusSubscriptionTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
                     let client = DaemonClient()
@@ -364,6 +364,7 @@ final class ProjectState: Identifiable {
                         let line = try await reader.readLine()
                         let resp = DaemonClient.parse(line)
                         if case .statusEvent(let worktrees, let agents) = resp {
+                            guard let self else { return }
                             let worktreeModels = DaemonWorkspaceService.parseWorktrees(worktrees)
                             let agentModels = agents.map { report in
                                 AgentModel(

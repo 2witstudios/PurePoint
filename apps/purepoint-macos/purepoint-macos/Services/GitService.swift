@@ -272,8 +272,8 @@ actor GitService {
         // Read stdout and stderr concurrently to avoid pipe buffer deadlock.
         // If we wait for exit first, a process that fills the pipe buffer blocks
         // forever because nobody is draining it.
-        var stdoutData = Data()
-        var stderrData = Data()
+        nonisolated(unsafe) var stdoutData = Data()
+        nonisolated(unsafe) var stderrData = Data()
         let group = DispatchGroup()
 
         group.enter()
