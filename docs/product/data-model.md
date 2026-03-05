@@ -46,18 +46,22 @@ WorktreeEntry:
 
 AgentEntry:
   id, name, agentType: String
-  status: AgentStatus (Spawning, Running, Idle, Completed, Failed, Killed, Lost)
+  status: AgentStatus (Streaming, Waiting, Broken)
   prompt: Option<String>
   startedAt: DateTime<Utc>
-  completedAt, error, sessionId: Option<String>
+  completedAt: Option<DateTime<Utc>>
   exitCode: Option<i32>
+  error: Option<String>
   pid: Option<u32>
+  sessionId: Option<String>
+  suspendedAt: Option<DateTime<Utc>>
+  suspended: bool (default false, inferred true when suspendedAt present)
 ```
 
 **ID generation (`pu-core/src/id.rs`):** nanoid with custom alphabet `[a-z0-9]` (36 chars), length 8:
 - Worktree: `wt-{nanoid8}` (11 chars total)
 - Agent: `ag-{nanoid8}` (11 chars total)
-- Session: `ses-{nanoid8}` (12 chars total)
+- Session: UUID v4 (e.g. `550e8400-e29b-41d4-a716-446655440000`)
 
 **Atomic writes (`pu-core/src/manifest.rs`):** Write to temp file, `fsync`, then `rename` — prevents partial reads. Advisory locking via `fs4` crate (`FileExt` for flock).
 

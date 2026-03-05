@@ -9,26 +9,22 @@ The complete lifecycle of an AI agent from spawn to completion: creation, monito
 ## Conceptual Model
 
 ```
-States: Spawning → Running → Idle → Completed | Failed | Killed | Lost
-  Spawning: PTY allocated, process forking
-  Running: agent process active, producing output
-  Idle: shell prompt detected OR 30s output inactivity
-  Completed: exit code 0
-  Failed: nonzero exit code (including 128+signal)
-  Killed: terminated via pu kill (SIGTERM → SIGKILL)
-  Lost: process disappeared unexpectedly
+States: Streaming → Waiting → Broken
+  Streaming: agent process active, producing output (maps from old: Spawning, Running)
+  Waiting: shell prompt detected, output idle, or suspended (maps from old: Idle, Suspended)
+  Broken: process exited or disappeared (maps from old: Completed, Failed, Killed, Lost)
 ```
 
-Terminal states (no further transitions): Completed, Failed, Killed, Lost.
-Non-terminal states: Spawning, Running, Idle.
+Alive states (`is_alive()`): Streaming, Waiting.
+Terminal state: Broken.
 
 ## Decisions
 
-! [AL-001] Shell prompt pattern matching (`$ `, `% `, `# `, `> `) plus 30-second output inactivity timeout — `effective_status()` is a pure function (no polling loop) called on-demand when computing status for requests. Checks last 256 bytes of output buffer for prompt patterns (UTF-8 lossy, trailing whitespace stripped). If prompt detected OR `idle_seconds() > 30`, status is Idle. If exit code present: 0 = Completed, nonzero = Failed. Otherwise Running. Implemented in `pu-engine/src/agent_monitor.rs`.
+! [AL-001] Shell prompt pattern matching (`$ `, `% `, `# `, `> `) plus 30-second output inactivity timeout — `effective_status()` is a pure function (no polling loop) called on-demand when computing status for requests. Checks last 256 bytes of output buffer for prompt patterns (UTF-8 lossy, trailing whitespace stripped). If prompt detected OR `idle_seconds() > 30`, status is Waiting. If exit code present, status is Broken. Otherwise Streaming. Implemented in `pu-engine/src/agent_monitor.rs`.
 
 ## Research Notes
 
-**Status enum (`pu-core/src/types.rs`):** `AgentStatus` variants: `Spawning`, `Running`, `Idle`, `Completed`, `Failed`, `Killed`, `Lost`. Serde-serialized as camelCase. `is_terminal()` returns true for Completed/Failed/Killed/Lost.
+**Status enum (`pu-core/src/types.rs`):** `AgentStatus` variants: `Streaming`, `Waiting`, `Broken`. Custom Serialize/Deserialize for backward compatibility — old values (`spawning`, `running` → Streaming; `idle`, `suspended` → Waiting; `completed`, `failed`, `killed`, `lost` → Broken). `is_alive()` returns true for Streaming/Waiting.
 
 **Effective status is computed live, not stored.** The manifest stores the last-known status, but `effective_status()` computes the real status from PTY state (exit code from `waitpid` watch channel, output buffer idle time, prompt detection). This means status reported via `pu status` reflects the actual current state, not a stale manifest snapshot.
 

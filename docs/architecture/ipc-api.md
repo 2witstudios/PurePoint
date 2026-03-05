@@ -32,7 +32,7 @@ Local connections are authenticated by OS file permissions on the Unix socket. R
 
 ## Research Notes
 
-**Protocol details (from `pu-core/src/protocol.rs`):** `PROTOCOL_VERSION = 1`. Request variants: `Health`, `Init`, `Spawn`, `Status`, `Kill`, `Logs`, `Attach`, `Input`, `Resize`, `Shutdown`. Response variants: `HealthReport`, `InitResult`, `SpawnResult`, `StatusReport`, `AgentStatus`, `KillResult`, `LogsResult`, `AttachReady`, `Output`, `Ok`, `ShuttingDown`, `Error`. `KillTarget` enum supports `Agent(id)`, `Worktree(id)`, or `All`.
+**Protocol details (from `pu-core/src/protocol.rs`):** `PROTOCOL_VERSION = 1`. Request variants: `Health`, `Init`, `Spawn`, `Status`, `Kill`, `Suspend`, `Resume`, `Logs`, `Attach`, `Input`, `Resize`, `SubscribeGrid`, `SubscribeStatus`, `GridCommand`, `Rename`, `DeleteWorktree`, `Shutdown`. Response variants: `HealthReport`, `InitResult`, `SpawnResult`, `StatusReport`, `AgentStatus`, `KillResult`, `SuspendResult`, `ResumeResult`, `LogsResult`, `AttachReady`, `Output`, `GridSubscribed`, `GridLayout`, `GridEvent`, `StatusSubscribed`, `StatusEvent`, `RenameResult`, `DeleteWorktreeResult`, `Ok`, `ShuttingDown`, `Error`. `KillTarget` enum supports `Agent(id)`, `Worktree(id)`, or `All`. `SuspendTarget` enum supports `Agent(id)` or `All`. `GridCommand` enum supports `Split`, `Close`, `Focus`, `SetAgent`, `GetLayout`.
 
 **Error handling:** Parse errors return `Response::Error { code: "PARSE_ERROR", message }` without closing the connection, allowing retry on the same connection.
 

@@ -33,13 +33,20 @@ Key behaviors:
 
 | Command | Args/Flags | Description |
 |---|---|---|
-| `pu init` | — | Register current project with daemon |
-| `pu spawn <prompt>` | `--agent`, `--name`, `--base`, `--root`, `--worktree` | Spawn an agent (in worktree or root) |
+| `pu init` | `--json` | Register current project with daemon |
+| `pu spawn <prompt>` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--var KEY=VALUE`, `--json` | Spawn an agent (in worktree or root) |
 | `pu status` | `--agent <id>`, `--json` | Show project/agent status |
-| `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive) | Kill agent(s) |
-| `pu logs <agent_id>` | `--tail <n>` (default 500) | Tail agent output buffer |
+| `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive), `--json` | Kill agent(s) |
+| `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Tail agent output buffer |
 | `pu attach <agent_id>` | — | Interactive PTY attach to agent |
-| `pu health` | — | Check daemon health |
+| `pu health` | `--json` | Check daemon health |
+| `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal |
+| `pu prompt list` | `--json` | List saved prompt templates |
+| `pu grid show` | `--json` | Show current pane grid layout |
+| `pu grid split` | `--axis <v\|h>`, `--leaf <id>` | Split a pane |
+| `pu grid close` | `--leaf <id>` | Close a pane |
+| `pu grid focus` | `--direction <up\|down\|left\|right>`, `--leaf <id>` | Move focus to another pane |
+| `pu grid assign <agent_id>` | `--leaf <id>` | Assign an agent to a pane |
 
 ## Research Notes
 
