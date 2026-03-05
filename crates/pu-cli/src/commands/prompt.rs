@@ -6,7 +6,7 @@ pub async fn run_list(json: bool) -> Result<(), CliError> {
     let templates = template::list_templates(&cwd);
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&templates).unwrap());
+        println!("{}", serde_json::to_string_pretty(&templates).expect("templates JSON serialization failed"));
         return Ok(());
     }
 
