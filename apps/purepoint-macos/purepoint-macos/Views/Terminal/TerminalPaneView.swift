@@ -30,7 +30,6 @@ class TerminalPaneNSView: NSView {
     private var isAttachDone = false
     private var terminalInstalled = false
     private var heartbeatTimer: Timer?
-    private var installDebounce: DispatchWorkItem?
 
     init(agent: AgentModel) {
         self.agent = agent
@@ -40,17 +39,6 @@ class TerminalPaneNSView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    private func scheduleTerminalInstall() {
-        installDebounce?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.terminalInstalled else { return }
-            self.ensureTerminal()
-            self.needsLayout = true
-        }
-        installDebounce = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16), execute: item)
-    }
 
     private func ensureTerminal() {
         guard !terminalInstalled else { return }
@@ -91,7 +79,7 @@ class TerminalPaneNSView: NSView {
         super.layout()
         // Create terminal only after we have a real frame, preventing 0-column grids
         if window != nil && !terminalInstalled && bounds.width > 1 {
-            scheduleTerminalInstall()
+            ensureTerminal()
         }
         // Start daemon attach only after the first layout pass gives us a real frame.
         // Starting while frame is .zero causes SwiftTerm to report 1-column size.
@@ -155,8 +143,6 @@ class TerminalPaneNSView: NSView {
     }
 
     func tearDown() {
-        installDebounce?.cancel()
-        installDebounce = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         attachTask?.cancel()

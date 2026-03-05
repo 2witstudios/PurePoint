@@ -224,6 +224,14 @@ impl IpcServer {
         }
 
         let process_exited = exit_rx.borrow().is_some();
+        // If process already exited, we've sent all buffered output above — return
+        // immediately. Without this, the streaming loop deadlocks: watcher never fires
+        // (no new output), exit_rx.changed() is disabled, and reader blocks forever.
+        if process_exited {
+            tracing::debug!(agent_id, "attach stream: process already exited");
+            return;
+        }
+
         let mut line = String::new();
         loop {
             tokio::select! {
