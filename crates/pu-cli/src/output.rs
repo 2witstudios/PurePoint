@@ -30,7 +30,10 @@ fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
 
 pub fn print_response(response: &Response, json_mode: bool) {
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(response).expect("response JSON serialization failed"));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(response).expect("response JSON serialization failed")
+        );
         return;
     }
     match response {
@@ -200,7 +203,10 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Grid subscription active");
         }
         Response::GridLayout { layout } => {
-            println!("{}", serde_json::to_string_pretty(layout).expect("layout JSON serialization failed"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(layout).expect("layout JSON serialization failed")
+            );
         }
         Response::GridEvent {
             project_root,

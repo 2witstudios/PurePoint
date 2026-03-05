@@ -35,11 +35,7 @@ pub async fn create_worktree(
     }
 
     let wt_str = worktree_path.to_string_lossy();
-    run_git(
-        &["worktree", "add", "-b", branch, &wt_str, base],
-        repo_root,
-    )
-    .await?;
+    run_git(&["worktree", "add", "-b", branch, &wt_str, base], repo_root).await?;
     Ok(())
 }
 

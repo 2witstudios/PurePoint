@@ -26,7 +26,11 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
             match resp {
                 Response::GridLayout { layout } => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&layout).expect("layout JSON serialization failed"));
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&layout)
+                                .expect("layout JSON serialization failed")
+                        );
                     } else {
                         print_ascii_grid(&layout);
                     }

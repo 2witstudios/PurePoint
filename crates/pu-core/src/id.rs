@@ -166,7 +166,9 @@ pub fn worktree_agent_name() -> String {
     ];
 
     let mut rng = rand::rng();
-    let first = NBA_FIRSTS.choose(&mut rng).expect("NBA_FIRSTS is non-empty");
+    let first = NBA_FIRSTS
+        .choose(&mut rng)
+        .expect("NBA_FIRSTS is non-empty");
     let last = NBA_LASTS.choose(&mut rng).expect("NBA_LASTS is non-empty");
     format!("{first} {last}")
 }
