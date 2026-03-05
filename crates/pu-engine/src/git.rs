@@ -1,5 +1,21 @@
 use std::path::Path;
 
+async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
+    let output = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 pub async fn create_worktree(
     repo_root: &Path,
     worktree_path: &Path,
@@ -7,94 +23,39 @@ pub async fn create_worktree(
     base: &str,
 ) -> Result<(), std::io::Error> {
     // Prune stale worktree references so deleted directories don't block reuse
-    let _ = tokio::process::Command::new("git")
-        .args(["worktree", "prune"])
-        .current_dir(repo_root)
-        .output()
-        .await;
+    let _ = run_git(&["worktree", "prune"], repo_root).await;
 
     // Delete stale branch if it exists (left over from a previous worktree)
-    let check = tokio::process::Command::new("git")
-        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
-        .current_dir(repo_root)
-        .output()
-        .await?;
-    if check.status.success() {
-        let _ = tokio::process::Command::new("git")
-            .args(["branch", "-D", branch])
-            .current_dir(repo_root)
-            .output()
-            .await;
+    let ref_name = format!("refs/heads/{branch}");
+    if run_git(&["rev-parse", "--verify", &ref_name], repo_root)
+        .await
+        .is_ok()
+    {
+        let _ = run_git(&["branch", "-D", branch], repo_root).await;
     }
 
-    let output = tokio::process::Command::new("git")
-        .args([
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            &worktree_path.to_string_lossy(),
-            base,
-        ])
-        .current_dir(repo_root)
-        .output()
-        .await?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(format!(
-            "git worktree add failed: {stderr}"
-        )));
-    }
+    let wt_str = worktree_path.to_string_lossy();
+    run_git(
+        &["worktree", "add", "-b", branch, &wt_str, base],
+        repo_root,
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<(), std::io::Error> {
-    let output = tokio::process::Command::new("git")
-        .args([
-            "worktree",
-            "remove",
-            "--force",
-            &worktree_path.to_string_lossy(),
-        ])
-        .current_dir(repo_root)
-        .output()
-        .await?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(format!(
-            "git worktree remove failed: {stderr}"
-        )));
-    }
+    let wt_str = worktree_path.to_string_lossy();
+    run_git(&["worktree", "remove", "--force", &wt_str], repo_root).await?;
     Ok(())
 }
 
 pub async fn delete_local_branch(repo_root: &Path, branch: &str) -> Result<(), std::io::Error> {
-    let output = tokio::process::Command::new("git")
-        .args(["branch", "-D", branch])
-        .current_dir(repo_root)
-        .output()
-        .await?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(format!(
-            "git branch -D failed: {stderr}"
-        )));
-    }
+    run_git(&["branch", "-D", branch], repo_root).await?;
     Ok(())
 }
 
 pub async fn delete_remote_branch(repo_root: &Path, branch: &str) -> Result<(), std::io::Error> {
-    let output = tokio::process::Command::new("git")
-        .args(["push", "origin", "--delete", branch])
-        .current_dir(repo_root)
-        .output()
-        .await?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(format!(
-            "git push origin --delete failed: {stderr}"
-        )));
-    }
+    run_git(&["push", "origin", "--delete", branch], repo_root).await?;
     Ok(())
 }
 

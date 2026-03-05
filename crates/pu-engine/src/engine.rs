@@ -480,12 +480,12 @@ impl Engine {
         // Add agent-type-specific flags (not stored in config — engine concern)
         match agent_type {
             "claude" => {
-                if !args.contains(&"--dangerously-skip-permissions".to_string()) {
+                if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
                     args.insert(0, "--dangerously-skip-permissions".into());
                 }
             }
             "codex" => {
-                if !args.contains(&"--full-auto".to_string()) {
+                if !args.iter().any(|a| a == "--full-auto") {
                     args.insert(0, "--full-auto".into());
                 }
             }
