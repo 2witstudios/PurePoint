@@ -6,13 +6,14 @@ use crate::error::CliError;
 
 /// Check a daemon response for errors. On error, print JSON if requested, then return Err.
 pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> {
-    if let Response::Error { code, message } = resp {
+    if let Response::Error { .. } = &resp {
         if json {
-            print_response(&Response::Error { code: code.clone(), message: message.clone() }, true);
+            print_response(&resp, true);
         }
-        Err(CliError::DaemonError { code, message })
-    } else {
-        Ok(resp)
+    }
+    match resp {
+        Response::Error { code, message } => Err(CliError::DaemonError { code, message }),
+        other => Ok(other),
     }
 }
 
@@ -29,7 +30,7 @@ fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
 
 pub fn print_response(response: &Response, json_mode: bool) {
     if json_mode {
-        println!("{}", serde_json::to_string_pretty(response).unwrap());
+        println!("{}", serde_json::to_string_pretty(response).expect("response JSON serialization failed"));
         return;
     }
     match response {
@@ -199,7 +200,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Grid subscription active");
         }
         Response::GridLayout { layout } => {
-            println!("{}", serde_json::to_string_pretty(layout).unwrap());
+            println!("{}", serde_json::to_string_pretty(layout).expect("layout JSON serialization failed"));
         }
         Response::GridEvent {
             project_root,

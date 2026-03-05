@@ -59,13 +59,25 @@ pub fn ensure_claude_skill() {
 
     // Write skill file atomically via temp + rename
     if let Some(parent) = skill_path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("pu: failed to create skill directory: {e}");
+            return;
+        }
     }
     let tmp_path = skill_path.with_extension("md.tmp");
-    if std::fs::write(&tmp_path, SKILL_CONTENT).is_ok() {
-        std::fs::rename(&tmp_path, &skill_path).ok();
+    match std::fs::write(&tmp_path, SKILL_CONTENT) {
+        Ok(()) => {
+            if let Err(e) = std::fs::rename(&tmp_path, &skill_path) {
+                eprintln!("pu: failed to install skill file: {e}");
+            }
+        }
+        Err(e) => {
+            eprintln!("pu: failed to write skill file: {e}");
+        }
     }
-    std::fs::write(&hash_path, &current_hash).ok();
+    if let Err(e) = std::fs::write(&hash_path, &current_hash) {
+        eprintln!("pu: failed to write skill hash: {e}");
+    }
 }
 
 /// Register all skills (called from `pu init`).

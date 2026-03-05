@@ -55,8 +55,8 @@ pub fn root_agent_name() -> String {
     ];
 
     let mut rng = rand::rng();
-    let first = PG_FIRSTS.choose(&mut rng).unwrap();
-    let last = PG_LASTS.choose(&mut rng).unwrap();
+    let first = PG_FIRSTS.choose(&mut rng).expect("PG_FIRSTS is non-empty");
+    let last = PG_LASTS.choose(&mut rng).expect("PG_LASTS is non-empty");
     format!("{first} {last}")
 }
 
@@ -162,8 +162,8 @@ pub fn worktree_agent_name() -> String {
     ];
 
     let mut rng = rand::rng();
-    let first = NBA_FIRSTS.choose(&mut rng).unwrap();
-    let last = NBA_LASTS.choose(&mut rng).unwrap();
+    let first = NBA_FIRSTS.choose(&mut rng).expect("NBA_FIRSTS is non-empty");
+    let last = NBA_LASTS.choose(&mut rng).expect("NBA_LASTS is non-empty");
     format!("{first} {last}")
 }
 
