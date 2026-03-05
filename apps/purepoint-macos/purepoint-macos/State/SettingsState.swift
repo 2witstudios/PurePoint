@@ -88,7 +88,7 @@ final class SettingsState {
         }
 
         // Validate loaded values
-        if terminalFontSize < 8 { terminalFontSize = 13 }
+        if terminalFontSize < 8 || terminalFontSize > 72 { terminalFontSize = 13 }
         if gridGap < 0 { gridGap = 1 }
     }
 }
