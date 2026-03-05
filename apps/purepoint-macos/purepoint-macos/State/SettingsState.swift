@@ -86,5 +86,9 @@ final class SettingsState {
         if defaults.object(forKey: "PP_gridGap") != nil {
             gridGap = defaults.double(forKey: "PP_gridGap")
         }
+
+        // Validate loaded values
+        if terminalFontSize < 8 || terminalFontSize > 72 { terminalFontSize = 13 }
+        if gridGap < 0 { gridGap = 1 }
     }
 }

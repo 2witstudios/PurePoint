@@ -81,13 +81,7 @@ private actor DaemonLauncher {
             return
         }
 
-        // Try graceful IPC shutdown first (best-effort)
-        Task {
-            let client = DaemonClient()
-            _ = try? await client.send(.shutdown)
-        }
-
-        // SIGTERM
+        // SIGTERM (IPC shutdown removed — fire-and-forget raced with the signal)
         kill(pid, SIGTERM)
 
         // Poll for death (up to 2s, 100ms intervals)

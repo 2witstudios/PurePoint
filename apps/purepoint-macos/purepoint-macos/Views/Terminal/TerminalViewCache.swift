@@ -14,7 +14,8 @@ final class TerminalViewCache {
 
     init() {
         evictionTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            self?.evictStale(visibleIds: self?.visibleAgentIds ?? [])
+            guard let self else { return }
+            self.evictStale(visibleIds: self.visibleAgentIds)
         }
     }
 
