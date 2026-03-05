@@ -74,6 +74,7 @@ actor DaemonAttachSession {
 
         let client = DaemonClient()
         let (conn, reader) = try await client.connect()
+        self.connection?.cancel()
         self.connection = conn
 
         // Send attach request

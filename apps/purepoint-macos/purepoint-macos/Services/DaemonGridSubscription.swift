@@ -65,6 +65,7 @@ actor DaemonGridSubscription {
 
         let client = DaemonClient()
         let (conn, reader) = try await client.connect()
+        self.connection?.cancel()
         self.connection = conn
 
         // Send subscribe request

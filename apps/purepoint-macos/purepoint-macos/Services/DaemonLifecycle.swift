@@ -58,6 +58,8 @@ private actor DaemonLauncher {
             } else {
                 return
             }
+        } else {
+            killExistingDaemon()
         }
 
         try await launchDaemon()
@@ -111,7 +113,7 @@ private actor DaemonLauncher {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = []
+        process.arguments = ["--managed"]
         process.standardOutput = FileHandle.nullDevice
 
         // Redirect stderr to log file for diagnostics
@@ -122,10 +124,13 @@ private actor DaemonLauncher {
             return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
         }()
 
-        // Clean up any stale files before launching
-        cleanupFiles()
-
         try process.run()
+
+        // Close stderr FileHandle in parent — the child has its own copy
+        if let stderrHandle = process.standardError as? FileHandle,
+           stderrHandle !== FileHandle.nullDevice {
+            try? stderrHandle.close()
+        }
 
         // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s)
         let client = DaemonClient()
