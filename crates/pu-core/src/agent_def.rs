@@ -8,7 +8,7 @@ use crate::paths;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDef {
     pub name: String,
-    #[serde(default = "default_agent_type")]
+    #[serde(default = "crate::serde_defaults::default_agent_type")]
     pub agent_type: String,
     #[serde(default)]
     pub template: Option<String>,
@@ -19,18 +19,10 @@ pub struct AgentDef {
     /// "local" or "global" — set at load time
     #[serde(skip)]
     pub scope: String,
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::serde_defaults::default_true")]
     pub available_in_command_dialog: bool,
     #[serde(default)]
     pub icon: Option<String>,
-}
-
-fn default_agent_type() -> String {
-    "claude".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Scan both local and global agent definition directories. Local defs take priority.

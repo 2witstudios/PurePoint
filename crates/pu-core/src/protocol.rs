@@ -10,7 +10,11 @@ mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-        let hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
+        use std::fmt::Write;
+        let mut hex = String::with_capacity(data.len() * 2);
+        for b in data {
+            write!(hex, "{b:02x}").unwrap();
+        }
         hex.serialize(serializer)
     }
 
@@ -40,7 +44,7 @@ pub enum Request {
     Spawn {
         project_root: String,
         prompt: String,
-        #[serde(default = "default_agent_type")]
+        #[serde(default = "crate::serde_defaults::default_agent_type")]
         agent: String,
         #[serde(default)]
         name: Option<String>,
@@ -145,7 +149,7 @@ pub enum Request {
         #[serde(default)]
         tags: Vec<String>,
         scope: String,
-        #[serde(default = "default_true")]
+        #[serde(default = "crate::serde_defaults::default_true")]
         available_in_command_dialog: bool,
         #[serde(default)]
         icon: Option<String>,
@@ -166,7 +170,7 @@ pub enum Request {
     SaveSwarmDef {
         project_root: String,
         name: String,
-        #[serde(default = "default_worktree_count")]
+        #[serde(default = "crate::serde_defaults::default_worktree_count")]
         worktree_count: u32,
         #[serde(default)]
         worktree_template: String,
@@ -221,31 +225,15 @@ fn default_axis() -> String {
     "v".to_string()
 }
 
-fn default_agent_type() -> String {
-    "claude".to_string()
-}
-
 fn default_tail() -> usize {
     500
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_worktree_count() -> u32 {
-    1
-}
-
-fn default_quantity() -> u32 {
-    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmRosterEntryPayload {
     pub agent_def: String,
     pub role: String,
-    #[serde(default = "default_quantity")]
+    #[serde(default = "crate::serde_defaults::default_quantity")]
     pub quantity: u32,
 }
 

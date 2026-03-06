@@ -8,7 +8,7 @@ use crate::paths;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmDef {
     pub name: String,
-    #[serde(default = "default_worktree_count")]
+    #[serde(default = "crate::serde_defaults::default_worktree_count")]
     pub worktree_count: u32,
     /// Branch name template for spawned worktrees. Use `{index}` as a placeholder
     /// for the worktree iteration index (0-based). E.g. `"feature-{index}"` produces
@@ -28,16 +28,8 @@ pub struct SwarmDef {
 pub struct SwarmRosterEntry {
     pub agent_def: String,
     pub role: String,
-    #[serde(default = "default_quantity")]
+    #[serde(default = "crate::serde_defaults::default_quantity")]
     pub quantity: u32,
-}
-
-fn default_worktree_count() -> u32 {
-    1
-}
-
-fn default_quantity() -> u32 {
-    1
 }
 
 /// Scan both local and global swarm definition directories. Local defs take priority.
