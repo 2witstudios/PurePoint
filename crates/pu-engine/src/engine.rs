@@ -78,18 +78,18 @@ impl Engine {
 
                 // Reap dead sessions
                 let dead_ids: Vec<String> = {
-                    let sessions = sessions.lock().await;
-                    sessions
+                    let mut sessions = sessions.lock().await;
+                    let dead: Vec<String> = sessions
                         .iter()
                         .filter(|(_, handle)| handle.exit_rx.borrow().is_some())
                         .map(|(id, _)| id.clone())
-                        .collect()
-                };
-                if !dead_ids.is_empty() {
-                    let mut sessions = sessions.lock().await;
-                    for id in &dead_ids {
+                        .collect();
+                    for id in &dead {
                         sessions.remove(id);
                     }
+                    dead
+                };
+                if !dead_ids.is_empty() {
                     let mut pending_initial_inputs = pending_initial_inputs.lock().await;
                     for id in &dead_ids {
                         pending_initial_inputs.remove(id);
@@ -488,12 +488,11 @@ impl Engine {
             });
         }
 
-        let m = match self.read_manifest_async(project_root).await {
-            Ok(m) => m,
-            Err(e) => return Self::error_response(&e),
-        };
-
         if let Some(id) = agent_id {
+            let m = match self.read_manifest_async(project_root).await {
+                Ok(m) => m,
+                Err(e) => return Self::error_response(&e),
+            };
             match m.find_agent(id) {
                 Some(loc) => {
                     let (agent, wt_id) = match loc {
@@ -503,65 +502,40 @@ impl Engine {
                         }
                     };
                     let sessions = self.sessions.lock().await;
-                    let (status, exit_code, idle_seconds) =
-                        self.live_agent_status_sync(id, agent, &sessions);
-                    Response::AgentStatus(AgentStatusReport {
-                        id: agent.id.clone(),
-                        name: agent.name.clone(),
-                        agent_type: agent.agent_type.clone(),
-                        status,
-                        pid: agent.pid,
-                        exit_code,
-                        idle_seconds,
-                        worktree_id: wt_id,
-                        started_at: agent.started_at,
-                        session_id: agent.session_id.clone(),
-                        prompt: agent.prompt.clone(),
-                        suspended: agent.suspended,
-                    })
+                    Response::AgentStatus(self.build_agent_status_report(agent, &sessions, wt_id))
                 }
                 None => Self::agent_not_found(id),
             }
         } else {
-            // Compute live status for all agents (root + worktree)
-            let sessions = self.sessions.lock().await;
-            let mut agents: Vec<AgentStatusReport> = m
-                .agents
-                .values()
-                .map(|a| {
-                    let (status, exit_code, idle_seconds) =
-                        self.live_agent_status_sync(&a.id, a, &sessions);
-                    AgentStatusReport {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                        agent_type: a.agent_type.clone(),
-                        status,
-                        pid: a.pid,
-                        exit_code,
-                        idle_seconds,
-                        worktree_id: None,
-                        started_at: a.started_at,
-                        session_id: a.session_id.clone(),
-                        prompt: a.prompt.clone(),
-                        suspended: a.suspended,
-                    }
-                })
-                .collect();
-            agents.sort_by_key(|a| a.started_at);
-            let worktrees: Vec<WorktreeEntry> = m
-                .worktrees
-                .into_values()
-                .map(|mut wt| {
-                    for agent in wt.agents.values_mut() {
-                        let (status, exit_code, _idle) =
-                            self.live_agent_status_sync(&agent.id, agent, &sessions);
-                        agent.status = status;
-                        agent.exit_code = exit_code;
-                    }
-                    wt
-                })
-                .collect();
-            Response::StatusReport { worktrees, agents }
+            match self.compute_full_status(project_root).await {
+                Ok((worktrees, agents)) => Response::StatusReport { worktrees, agents },
+                Err(e) => Self::error_response(&e),
+            }
+        }
+    }
+
+    /// Build a status report for a single agent, using live PTY state when available.
+    fn build_agent_status_report(
+        &self,
+        agent: &AgentEntry,
+        sessions: &HashMap<String, AgentHandle>,
+        worktree_id: Option<String>,
+    ) -> AgentStatusReport {
+        let (status, exit_code, idle_seconds) =
+            self.live_agent_status_sync(&agent.id, agent, sessions);
+        AgentStatusReport {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            agent_type: agent.agent_type.clone(),
+            status,
+            pid: agent.pid,
+            exit_code,
+            idle_seconds,
+            worktree_id,
+            started_at: agent.started_at,
+            session_id: agent.session_id.clone(),
+            prompt: agent.prompt.clone(),
+            suspended: agent.suspended,
         }
     }
 
@@ -729,11 +703,11 @@ impl Engine {
             // Copy env files (e.g., .env, .env.local) into new worktree
             for env_file in &cfg.env_files {
                 let src = root_path.join(env_file);
-                if src.exists() {
-                    let dst = wt_path.join(env_file);
-                    if let Err(e) = tokio::fs::copy(&src, &dst).await {
-                        tracing::warn!("failed to copy {env_file} to worktree: {e}");
-                    }
+                let dst = wt_path.join(env_file);
+                match tokio::fs::copy(&src, &dst).await {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && !src.exists() => {} // source doesn't exist, skip
+                    Err(e) => tracing::warn!("failed to copy {env_file} to worktree: {e}"),
                 }
             }
 
@@ -892,41 +866,20 @@ impl Engine {
             }
         };
 
-        // Extract handles from session map, then DROP the lock before killing.
-        // Killing can take up to 5s per agent — holding the mutex would block
-        // all other operations (status, logs, attach).
-        {
-            let mut pending_inputs = self.pending_initial_inputs.lock().await;
-            for id in &agent_ids {
-                pending_inputs.remove(id);
-            }
-        }
-        let handles_to_kill: Vec<(String, AgentHandle)> = {
-            let mut sessions = self.sessions.lock().await;
-            agent_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
-                .collect()
-        };
-        // Lock is dropped here.
-
-        let mut exit_codes = HashMap::new();
-        for (id, handle) in &handles_to_kill {
-            let state = self
-                .pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
-            exit_codes.insert(id.clone(), state.and_then(|s| s.exit_code));
-        }
+        // Kill agents: remove pending inputs, extract handles, kill PTY processes.
+        let handles_killed = self.kill_agents(&agent_ids).await;
+        let exit_codes: HashMap<String, Option<i32>> = handles_killed
+            .iter()
+            .map(|(id, handle)| (id.clone(), *handle.exit_rx.borrow()))
+            .collect();
 
         // Update manifest: remove all targeted agents (off async runtime)
         let killed = agent_ids.clone();
-        let killed_ids = killed.clone();
         let pr = project_root.to_string();
+        let killed_for_manifest = killed.clone();
         tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
-                for id in &killed_ids {
+                for id in &killed_for_manifest {
                     m.agents.shift_remove(id);
                     for wt in m.worktrees.values_mut() {
                         wt.agents.shift_remove(id);
@@ -962,25 +915,7 @@ impl Engine {
 
         // 1. Kill all agents in the worktree
         let agent_ids: Vec<String> = wt.agents.keys().cloned().collect();
-        {
-            let mut pending_inputs = self.pending_initial_inputs.lock().await;
-            for id in &agent_ids {
-                pending_inputs.remove(id);
-            }
-        }
-        let handles_to_kill: Vec<(String, AgentHandle)> = {
-            let mut sessions = self.sessions.lock().await;
-            agent_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
-                .collect()
-        };
-        for (_, handle) in &handles_to_kill {
-            self.pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
-        }
+        self.kill_agents(&agent_ids).await;
 
         // 2. Remove git worktree directory
         let root_path = Path::new(project_root);
@@ -1049,7 +984,7 @@ impl Engine {
             }
             Ok(Err(e)) => Self::error_response(&e),
             Err(e) => Response::Error {
-                code: "INTERNAL".into(),
+                code: "INTERNAL_ERROR".into(),
                 message: format!("rename task failed: {e}"),
             },
         }
@@ -1088,38 +1023,17 @@ impl Engine {
             return Response::SuspendResult { suspended: vec![] };
         }
 
-        {
-            let mut pending_inputs = self.pending_initial_inputs.lock().await;
-            for id in &agent_ids {
-                pending_inputs.remove(id);
-            }
-        }
-
-        // Extract handles from session map, then drop lock before killing
-        let handles_to_kill: Vec<(String, AgentHandle)> = {
-            let mut sessions = self.sessions.lock().await;
-            agent_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
-                .collect()
-        };
-
-        for (_id, handle) in &handles_to_kill {
-            self.pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
-        }
+        self.kill_agents(&agent_ids).await;
 
         // Update manifest: mark as suspended, clear pid, set suspended_at.
         // Status stays as-is (Waiting); suspended flag is metadata.
         let suspended = agent_ids.clone();
-        let suspended_ids = suspended.clone();
         let pr = project_root.to_string();
+        let suspended_for_manifest = suspended.clone();
         tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
                 let now = chrono::Utc::now();
-                for id in &suspended_ids {
+                for id in &suspended_for_manifest {
                     if let Some(agent) = m.find_agent_mut(id) {
                         agent.status = AgentStatus::Waiting;
                         agent.suspended = true;
@@ -1464,10 +1378,7 @@ impl Engine {
     // --- Grid ---
 
     async fn handle_subscribe_grid(&self, project_root: &str) -> Response {
-        let mut channels = self.grid_channels.lock().await;
-        channels
-            .entry(project_root.to_string())
-            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
+        self.ensure_grid_channel(project_root).await;
         Response::GridSubscribed
     }
 
@@ -1476,7 +1387,7 @@ impl Engine {
         if matches!(command, GridCommand::GetLayout) {
             let root = project_root.to_string();
             return match tokio::task::spawn_blocking(move || {
-                let path = format!("{root}/.pu/grid-layout.json");
+                let path = paths::pu_dir(Path::new(&root)).join("grid-layout.json");
                 std::fs::read_to_string(path)
             })
             .await
@@ -1500,6 +1411,13 @@ impl Engine {
             let _ = tx.send(command.clone());
         }
         Response::Ok
+    }
+
+    async fn ensure_grid_channel(&self, project_root: &str) {
+        let mut channels = self.grid_channels.lock().await;
+        channels
+            .entry(project_root.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
     }
 
     /// Get a grid broadcast receiver for a project (used by IPC server for streaming).
@@ -1555,8 +1473,28 @@ impl Engine {
         }
     }
 
-    fn is_pid_alive(pid: u32) -> bool {
-        daemon_lifecycle::is_process_alive(pid)
+    /// Remove pending inputs and session handles for the given agent IDs, then kill their
+    /// PTY processes. Returns the extracted handles (for callers that need exit codes).
+    async fn kill_agents(&self, agent_ids: &[String]) -> Vec<(String, AgentHandle)> {
+        {
+            let mut pending_inputs = self.pending_initial_inputs.lock().await;
+            for id in agent_ids {
+                pending_inputs.remove(id);
+            }
+        }
+        let handles: Vec<(String, AgentHandle)> = {
+            let mut sessions = self.sessions.lock().await;
+            agent_ids
+                .iter()
+                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
+                .collect()
+        };
+        for (id, handle) in &handles {
+            if let Err(e) = self.pty_host.kill(handle, Duration::from_secs(5)).await {
+                tracing::debug!(agent_id = id, "kill failed: {e}");
+            }
+        }
+        handles
     }
 
     /// On daemon restart, reconcile agents that appear alive in the manifest but have no
@@ -1569,20 +1507,18 @@ impl Engine {
             Ok(m) => m,
             Err(_) => return,
         };
-
-        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
         };
-
-        let has_stale = m.agents.values().any(is_stale)
-            || m.worktrees
-                .values()
-                .any(|wt| wt.agents.values().any(is_stale));
+        let has_stale = m
+            .agents
+            .values()
+            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
+            .any(is_stale);
         if !has_stale {
             return;
         }
-
+        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
         let now = chrono::Utc::now();
         manifest::update_manifest(root, move |mut m| {
             for agent in m.agents.values_mut().chain(
@@ -1618,41 +1554,35 @@ impl Engine {
             Ok(m) => m,
             Err(_) => return,
         };
-
-        let needs_reap = |agent: &AgentEntry| -> bool {
-            !agent.suspended
-                && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
+        let needs_reap = |a: &AgentEntry| {
+            !a.suspended
+                && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
+                && a.pid
+                    .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
         };
-
-        let has_stale = m.agents.values().any(&needs_reap)
-            || m.worktrees
-                .values()
-                .any(|wt| wt.agents.values().any(&needs_reap));
-
+        let has_stale = m
+            .agents
+            .values()
+            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
+            .any(needs_reap);
         if !has_stale {
             return;
         }
-
         manifest::update_manifest(root, move |mut m| {
-            for agent in m.agents.values_mut() {
+            let now = chrono::Utc::now();
+            for agent in m.agents.values_mut().chain(
+                m.worktrees
+                    .values_mut()
+                    .flat_map(|wt| wt.agents.values_mut()),
+            ) {
                 if !agent.suspended
                     && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                    && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
+                    && agent
+                        .pid
+                        .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
                 {
                     agent.status = AgentStatus::Broken;
-                    agent.completed_at = Some(chrono::Utc::now());
-                }
-            }
-            for wt in m.worktrees.values_mut() {
-                for agent in wt.agents.values_mut() {
-                    if !agent.suspended
-                        && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                        && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
-                    {
-                        agent.status = AgentStatus::Broken;
-                        agent.completed_at = Some(chrono::Utc::now());
-                    }
+                    agent.completed_at = Some(now);
                 }
             }
             m
@@ -1700,11 +1630,15 @@ impl Engine {
     // --- Status Push ---
 
     async fn handle_subscribe_status(&self, project_root: &str) -> Response {
+        self.ensure_status_channel(project_root).await;
+        Response::StatusSubscribed
+    }
+
+    async fn ensure_status_channel(&self, project_root: &str) {
         let mut channels = self.status_channels.lock().await;
         channels
             .entry(project_root.to_string())
             .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
-        Response::StatusSubscribed
     }
 
     /// Get a status broadcast receiver for a project (used by IPC server for streaming).
@@ -1731,30 +1665,13 @@ impl Engine {
     pub async fn compute_full_status(
         &self,
         project_root: &str,
-    ) -> Option<(Vec<WorktreeEntry>, Vec<AgentStatusReport>)> {
-        let m = self.read_manifest_async(project_root).await.ok()?;
+    ) -> Result<(Vec<WorktreeEntry>, Vec<AgentStatusReport>), PuError> {
+        let m = self.read_manifest_async(project_root).await?;
         let sessions = self.sessions.lock().await;
         let mut agents: Vec<AgentStatusReport> = m
             .agents
             .values()
-            .map(|a| {
-                let (status, exit_code, idle_seconds) =
-                    self.live_agent_status_sync(&a.id, a, &sessions);
-                AgentStatusReport {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                    agent_type: a.agent_type.clone(),
-                    status,
-                    pid: a.pid,
-                    exit_code,
-                    idle_seconds,
-                    worktree_id: None,
-                    started_at: a.started_at,
-                    session_id: a.session_id.clone(),
-                    prompt: a.prompt.clone(),
-                    suspended: a.suspended,
-                }
-            })
+            .map(|a| self.build_agent_status_report(a, &sessions, None))
             .collect();
         agents.sort_by_key(|a| a.started_at);
         let worktrees: Vec<WorktreeEntry> = m
@@ -1770,7 +1687,7 @@ impl Engine {
                 wt
             })
             .collect();
-        Some((worktrees, agents))
+        Ok((worktrees, agents))
     }
 
     // --- Template CRUD handlers ---
