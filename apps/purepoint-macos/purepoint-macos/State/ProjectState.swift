@@ -246,7 +246,14 @@ final class ProjectState: Identifiable {
 
     private func resumeSuspendedAgents() {
         for agent in allAgents where agent.suspended {
-            sendDaemonCommand(.resume(projectRoot: projectRoot, agentId: agent.id))
+            let name = agent.displayName
+            Task {
+                let client = DaemonClient()
+                let response = try? await client.send(.resume(projectRoot: projectRoot, agentId: agent.id))
+                if case .error(_, let msg) = response {
+                    self.appState?.daemonError = "Resume failed for \(name): \(msg)"
+                }
+            }
         }
     }
 

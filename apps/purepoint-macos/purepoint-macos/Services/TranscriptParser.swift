@@ -125,6 +125,7 @@ enum TranscriptParser {
         else { return nil }
 
         var contentBlocks: [ContentBlock] = []
+        var blockCount = 0
 
         for block in contentArray {
             guard let blockType = block["type"] as? String else { continue }
@@ -132,7 +133,8 @@ enum TranscriptParser {
             switch blockType {
             case "text":
                 if let text = block["text"] as? String {
-                    let split = ContentBlockSplitter.split(text)
+                    let split = ContentBlockSplitter.split(text, startIndex: blockCount)
+                    blockCount += split.count
                     contentBlocks.append(contentsOf: split)
                 }
             case "tool_use":

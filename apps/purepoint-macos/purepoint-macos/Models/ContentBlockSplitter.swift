@@ -10,7 +10,8 @@ enum ContentBlockSplitter {
 
     /// Split markdown text into content blocks. Uses stable index-based IDs
     /// so SwiftUI can diff efficiently across repeated calls.
-    static func split(_ text: String) -> [ContentBlock] {
+    /// Pass `startIndex` to avoid ID collisions when appending multiple split results.
+    static func split(_ text: String, startIndex: Int = 0) -> [ContentBlock] {
         guard !text.isEmpty else { return [] }
 
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -20,7 +21,7 @@ enum ContentBlockSplitter {
         var codeLanguage: String?
         var openingFenceLine: String?
         var inCodeBlock = false
-        var blockIndex = 0
+        var blockIndex = startIndex
 
         func flushText() {
             let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
