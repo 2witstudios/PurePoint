@@ -406,7 +406,7 @@ impl IpcServer {
         tracing::debug!(project_root, "status stream started");
 
         // Send initial status immediately
-        if let Some((worktrees, agents)) = engine.compute_full_status(&pr).await {
+        if let Ok((worktrees, agents)) = engine.compute_full_status(&pr).await {
             let resp = Response::StatusEvent { worktrees, agents };
             if Self::write_response(writer, &resp).await.is_err() {
                 return;
@@ -421,7 +421,7 @@ impl IpcServer {
                         Ok(()) => {
                             // Drain any queued signals (batch rapid changes)
                             while rx.try_recv().is_ok() {}
-                            if let Some((worktrees, agents)) = engine.compute_full_status(&pr).await {
+                            if let Ok((worktrees, agents)) = engine.compute_full_status(&pr).await {
                                 let resp = Response::StatusEvent { worktrees, agents };
                                 if Self::write_response(writer, &resp).await.is_err() {
                                     break;
@@ -431,7 +431,7 @@ impl IpcServer {
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             tracing::warn!(project_root, "status subscriber lagged {n} messages");
                             // Send fresh status after lag
-                            if let Some((worktrees, agents)) = engine.compute_full_status(&pr).await {
+                            if let Ok((worktrees, agents)) = engine.compute_full_status(&pr).await {
                                 let resp = Response::StatusEvent { worktrees, agents };
                                 if Self::write_response(writer, &resp).await.is_err() {
                                     break;

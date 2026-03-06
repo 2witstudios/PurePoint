@@ -422,18 +422,14 @@ impl Engine {
                         }
                     };
                     let sessions = self.sessions.lock().await;
-                    Response::AgentStatus(
-                        self.build_agent_status_report(agent, &sessions, wt_id),
-                    )
+                    Response::AgentStatus(self.build_agent_status_report(agent, &sessions, wt_id))
                 }
                 None => Self::agent_not_found(id),
             }
         } else {
             match self.compute_full_status(project_root).await {
-                Some((worktrees, agents)) => Response::StatusReport { worktrees, agents },
-                None => Self::error_response(&PuError::Io(std::io::Error::other(
-                    "failed to read manifest",
-                ))),
+                Ok((worktrees, agents)) => Response::StatusReport { worktrees, agents },
+                Err(e) => Self::error_response(&e),
             }
         }
     }
@@ -630,7 +626,7 @@ impl Engine {
                 let dst = wt_path.join(env_file);
                 match tokio::fs::copy(&src, &dst).await {
                     Ok(_) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // source doesn't exist, skip
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && !src.exists() => {} // source doesn't exist, skip
                     Err(e) => tracing::warn!("failed to copy {env_file} to worktree: {e}"),
                 }
             }
@@ -1445,11 +1441,11 @@ impl Engine {
         let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
         let now = chrono::Utc::now();
         manifest::update_manifest(root, move |mut m| {
-            for agent in m
-                .agents
-                .values_mut()
-                .chain(m.worktrees.values_mut().flat_map(|wt| wt.agents.values_mut()))
-            {
+            for agent in m.agents.values_mut().chain(
+                m.worktrees
+                    .values_mut()
+                    .flat_map(|wt| wt.agents.values_mut()),
+            ) {
                 if !agent.suspended
                     && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
                 {
@@ -1481,7 +1477,8 @@ impl Engine {
         let needs_reap = |a: &AgentEntry| {
             !a.suspended
                 && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                && a.pid.is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
+                && a.pid
+                    .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
         };
         let has_stale = m
             .agents
@@ -1493,14 +1490,16 @@ impl Engine {
         }
         manifest::update_manifest(root, move |mut m| {
             let now = chrono::Utc::now();
-            for agent in m
-                .agents
-                .values_mut()
-                .chain(m.worktrees.values_mut().flat_map(|wt| wt.agents.values_mut()))
-            {
+            for agent in m.agents.values_mut().chain(
+                m.worktrees
+                    .values_mut()
+                    .flat_map(|wt| wt.agents.values_mut()),
+            ) {
                 if !agent.suspended
                     && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                    && agent.pid.is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
+                    && agent
+                        .pid
+                        .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
                 {
                     agent.status = AgentStatus::Broken;
                     agent.completed_at = Some(now);
@@ -1586,8 +1585,8 @@ impl Engine {
     pub async fn compute_full_status(
         &self,
         project_root: &str,
-    ) -> Option<(Vec<WorktreeEntry>, Vec<AgentStatusReport>)> {
-        let m = self.read_manifest_async(project_root).await.ok()?;
+    ) -> Result<(Vec<WorktreeEntry>, Vec<AgentStatusReport>), PuError> {
+        let m = self.read_manifest_async(project_root).await?;
         let sessions = self.sessions.lock().await;
         let mut agents: Vec<AgentStatusReport> = m
             .agents
@@ -1608,7 +1607,7 @@ impl Engine {
                 wt
             })
             .collect();
-        Some((worktrees, agents))
+        Ok((worktrees, agents))
     }
 
     // --- Template CRUD handlers ---
