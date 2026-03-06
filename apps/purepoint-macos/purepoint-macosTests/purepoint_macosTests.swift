@@ -7,7 +7,7 @@
 
 import Testing
 import Foundation
-@testable import purepoint_macos
+@testable import PurePoint
 
 // MARK: - PaneSplitNode Tests
 

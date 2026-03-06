@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import purepoint_macos
+@testable import PurePoint
 
 struct StreamEventTests {
 

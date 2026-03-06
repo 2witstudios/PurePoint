@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import purepoint_macos
+@testable import PurePoint
 
 struct HexEncodingTests {
 
