@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "FBC7CFB92F53F1FD00F8E0A1"
-               BuildableName = "purepoint-macos.app"
+               BuildableName = "PurePoint.app"
                BlueprintName = "purepoint-macos"
                ReferencedContainer = "container:purepoint-macos.xcodeproj">
             </BuildableReference>
@@ -69,7 +69,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "FBC7CFB92F53F1FD00F8E0A1"
-            BuildableName = "purepoint-macos.app"
+            BuildableName = "PurePoint.app"
             BlueprintName = "purepoint-macos"
             ReferencedContainer = "container:purepoint-macos.xcodeproj">
          </BuildableReference>
@@ -86,7 +86,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "FBC7CFB92F53F1FD00F8E0A1"
-            BuildableName = "purepoint-macos.app"
+            BuildableName = "PurePoint.app"
             BlueprintName = "purepoint-macos"
             ReferencedContainer = "container:purepoint-macos.xcodeproj">
          </BuildableReference>
