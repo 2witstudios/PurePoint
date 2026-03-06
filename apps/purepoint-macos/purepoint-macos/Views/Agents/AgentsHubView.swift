@@ -95,22 +95,9 @@ struct AgentsHubView: View {
         } else {
             VStack(spacing: 0) {
                 if let error = hubState.error {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
-                        Text(error)
-                            .font(.system(size: 12))
-                            .lineLimit(2)
-                        Spacer()
-                        Button("Dismiss") {
-                            hubState.error = nil
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 11))
+                    InlineErrorBanner(message: error) {
+                        hubState.error = nil
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.red.opacity(0.1))
                 }
 
                 switch activeTab {

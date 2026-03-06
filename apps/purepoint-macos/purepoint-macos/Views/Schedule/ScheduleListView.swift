@@ -7,6 +7,7 @@ struct ScheduleListView: View {
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
         f.dateFormat = "h:mm a"
         return f
     }()
@@ -119,11 +120,16 @@ struct ScheduleListView: View {
         }
     }
 
+    private static let dayLabelFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
+        f.dateFormat = "EEEE, MMMM d"
+        return f
+    }()
+
     private func dayLabel(_ date: Date) -> String {
         if calendar.isDateInToday(date) { return "Today" }
         if calendar.isDateInTomorrow(date) { return "Tomorrow" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
-        return formatter.string(from: date)
+        return Self.dayLabelFormatter.string(from: date)
     }
 }

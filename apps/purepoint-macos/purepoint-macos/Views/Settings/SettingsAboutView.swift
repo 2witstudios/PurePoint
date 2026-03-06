@@ -56,11 +56,6 @@ struct SettingsAboutView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var versionString: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–"
-    }
-
-    private var buildString: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "–"
-    }
+    private var versionString: String { Bundle.main.appVersion }
+    private var buildString: String { Bundle.main.appBuild }
 }

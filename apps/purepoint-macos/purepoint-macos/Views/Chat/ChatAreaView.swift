@@ -63,21 +63,8 @@ struct ChatAreaView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text(message)
-                .font(.system(size: 12))
-                .lineLimit(2)
-            Spacer()
-            Button("Dismiss") {
-                chatState.streamError = nil
-            }
-            .buttonStyle(.borderless)
-            .font(.system(size: 11))
+        InlineErrorBanner(message: message) {
+            chatState.streamError = nil
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.red.opacity(0.1))
     }
 }

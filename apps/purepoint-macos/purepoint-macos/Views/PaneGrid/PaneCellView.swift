@@ -91,21 +91,21 @@ private struct HoverOverlay: View {
             if isHovered {
                 HStack(spacing: 4) {
                     if gridState.canSplit(axis: .vertical) {
-                        overlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
+                        OverlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
                             gridState.focusedLeafId = leafId
                             gridState.splitFocused(axis: .vertical)
                             gridState.pendingPaletteLeafId = gridState.focusedLeafId
                         }
                     }
                     if gridState.canSplit(axis: .horizontal) {
-                        overlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
+                        OverlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
                             gridState.focusedLeafId = leafId
                             gridState.splitFocused(axis: .horizontal)
                             gridState.pendingPaletteLeafId = gridState.focusedLeafId
                         }
                     }
                     if gridState.leafCount > 1 {
-                        overlayButton(icon: "xmark", tooltip: "Close Pane") {
+                        OverlayButton(icon: "xmark", tooltip: "Close Pane") {
                             gridState.focusedLeafId = leafId
                             gridState.closeFocused()
                         }
@@ -124,15 +124,5 @@ private struct HoverOverlay: View {
                 isHovered = hovering
             }
         }
-    }
-
-    private func overlayButton(icon: String, tooltip: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 11))
-                .frame(width: 20, height: 20)
-        }
-        .buttonStyle(.plain)
-        .help(tooltip)
     }
 }

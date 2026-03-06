@@ -36,3 +36,13 @@ enum PurePointTheme {
     static let treeFont = Font.system(size: 12)
     static let smallFont = Font.system(size: 11)
 }
+
+extension Bundle {
+    var appVersion: String {
+        infoDictionary?["CFBundleShortVersionString"] as? String ?? "–"
+    }
+
+    var appBuild: String {
+        infoDictionary?["CFBundleVersion"] as? String ?? "–"
+    }
+}
