@@ -6,9 +6,11 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
     @Binding var selection: SidebarSelection?
     var appState: AppState
     var gridState: GridState
+    var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
     func makeNSViewController(context: Context) -> SidebarOutlineViewController {
         let vc = SidebarOutlineViewController()
+        onOutlineViewReady?(vc.outlineView)
 
         vc.onSelectionChanged = { newSelection in
             selection = newSelection
