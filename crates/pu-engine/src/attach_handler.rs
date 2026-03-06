@@ -31,7 +31,13 @@ pub fn strip_apc_resize(input: &[u8]) -> (Option<(u16, u16)>, &[u8]) {
         .position(|w| w[0] == ESC && w[1] == APC_END)
     {
         let rest = &payload[end_pos + 2..];
-        return (parse_apc_resize(input), rest);
+        let dims = std::str::from_utf8(&payload[..end_pos]).ok().and_then(|s| {
+            let mut parts = s.split(':');
+            let cols: u16 = parts.next()?.parse().ok()?;
+            let rows: u16 = parts.next()?.parse().ok()?;
+            Some((cols, rows))
+        });
+        return (dims, rest);
     }
     (None, input)
 }

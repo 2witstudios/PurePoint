@@ -25,14 +25,9 @@ pub async fn create_worktree(
     // Prune stale worktree references so deleted directories don't block reuse
     let _ = run_git(&["worktree", "prune"], repo_root).await;
 
-    // Delete stale branch if it exists (left over from a previous worktree)
-    let ref_name = format!("refs/heads/{branch}");
-    if run_git(&["rev-parse", "--verify", &ref_name], repo_root)
-        .await
-        .is_ok()
-    {
-        let _ = run_git(&["branch", "-D", branch], repo_root).await;
-    }
+    // Delete stale branch if it exists (left over from a previous worktree).
+    // Ignore errors — the branch may not exist.
+    let _ = run_git(&["branch", "-D", branch], repo_root).await;
 
     let wt_str = worktree_path.to_string_lossy();
     run_git(&["worktree", "add", "-b", branch, &wt_str, base], repo_root).await?;
