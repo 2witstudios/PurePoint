@@ -10,7 +10,7 @@ struct PointGuardView: View {
         HSplitView {
             if showSidebar {
                 ConversationSidebarView(chatState: chatState)
-                    .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
+                    .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
             }
 
             ChatAreaView(chatState: chatState)

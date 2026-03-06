@@ -56,7 +56,8 @@ final class ChatState {
         var thisMonth: [ClaudeConversation] = []
         var older: [ClaudeConversation] = []
 
-        for session in filteredSessions {
+        var seen = Set<String>()
+        for session in filteredSessions where seen.insert(session.sessionId).inserted {
             let date = session.modifiedAt
             if calendar.isDateInToday(date) {
                 today.append(session)

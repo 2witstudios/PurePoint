@@ -64,12 +64,12 @@ struct ConversationSidebarView: View {
                                 }
                             } header: {
                                 Text(section.title)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.secondary)
                                     .textCase(.uppercase)
                                     .padding(.horizontal, 10)
-                                    .padding(.top, 12)
-                                    .padding(.bottom, 4)
+                                    .padding(.top, 8)
+                                    .padding(.bottom, 2)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(Color(NSColor.controlBackgroundColor))
                             }
@@ -154,7 +154,7 @@ struct ConversationSidebarView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8)
