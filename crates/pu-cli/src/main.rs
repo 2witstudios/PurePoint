@@ -105,6 +105,16 @@ enum Commands {
         #[command(subcommand)]
         action: PromptAction,
     },
+    /// Manage saved agent definitions
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+    /// Manage swarm compositions
+    Swarm {
+        #[command(subcommand)]
+        action: SwarmAction,
+    },
     /// Send text or keys to an agent's terminal
     Send {
         /// Agent ID
@@ -132,6 +142,141 @@ enum Commands {
 enum PromptAction {
     /// List available prompt templates
     List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a prompt template
+    Show {
+        /// Template name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a prompt template
+    Create {
+        /// Template name
+        name: String,
+        /// Template body
+        #[arg(long)]
+        body: String,
+        /// Description
+        #[arg(long, default_value = "")]
+        description: String,
+        /// Agent type
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a prompt template
+    Delete {
+        /// Template name
+        name: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentAction {
+    /// List agent definitions
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create an agent definition
+    Create {
+        /// Agent definition name
+        name: String,
+        /// Agent type
+        #[arg(long, default_value = "claude")]
+        agent_type: String,
+        /// Prompt template name to use
+        #[arg(long)]
+        template: Option<String>,
+        /// Inline prompt text
+        #[arg(long)]
+        inline_prompt: Option<String>,
+        /// Comma-separated tags
+        #[arg(long, default_value = "")]
+        tags: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete an agent definition
+    Delete {
+        /// Agent definition name
+        name: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SwarmAction {
+    /// List swarm definitions
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a swarm definition
+    Create {
+        /// Swarm name
+        name: String,
+        /// Number of worktrees
+        #[arg(long, default_value = "1")]
+        worktrees: u32,
+        /// Worktree template name
+        #[arg(long, default_value = "")]
+        worktree_template: String,
+        /// Include terminal in swarm
+        #[arg(long)]
+        include_terminal: bool,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a swarm definition
+    Delete {
+        /// Swarm name
+        name: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a swarm
+    Run {
+        /// Swarm name
+        name: String,
+        /// Variable substitution (KEY=VALUE), repeatable
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -228,7 +373,87 @@ async fn main() {
         } => commands::logs::run(&socket, &agent_id, tail, json).await,
         Commands::Health { json } => commands::health::run(&socket, json).await,
         Commands::Prompt { action } => match action {
-            PromptAction::List { json } => commands::prompt::run_list(json).await,
+            PromptAction::List { json } => commands::prompt::run_list(&socket, json).await,
+            PromptAction::Show { name, json } => {
+                commands::prompt::run_show(&socket, &name, json).await
+            }
+            PromptAction::Create {
+                name,
+                body,
+                description,
+                agent,
+                scope,
+                json,
+            } => {
+                commands::prompt::run_create(
+                    &socket,
+                    &name,
+                    &body,
+                    &description,
+                    &agent,
+                    &scope,
+                    json,
+                )
+                .await
+            }
+            PromptAction::Delete { name, scope, json } => {
+                commands::prompt::run_delete(&socket, &name, &scope, json).await
+            }
+        },
+        Commands::Agent { action } => match action {
+            AgentAction::List { json } => commands::agent_def::run_list(&socket, json).await,
+            AgentAction::Create {
+                name,
+                agent_type,
+                template,
+                inline_prompt,
+                tags,
+                scope,
+                json,
+            } => {
+                commands::agent_def::run_create(
+                    &socket,
+                    &name,
+                    &agent_type,
+                    template,
+                    inline_prompt,
+                    &tags,
+                    &scope,
+                    json,
+                )
+                .await
+            }
+            AgentAction::Delete { name, scope, json } => {
+                commands::agent_def::run_delete(&socket, &name, &scope, json).await
+            }
+        },
+        Commands::Swarm { action } => match action {
+            SwarmAction::List { json } => commands::swarm::run_list(&socket, json).await,
+            SwarmAction::Create {
+                name,
+                worktrees,
+                worktree_template,
+                include_terminal,
+                scope,
+                json,
+            } => {
+                commands::swarm::run_create(
+                    &socket,
+                    &name,
+                    worktrees,
+                    &worktree_template,
+                    include_terminal,
+                    &scope,
+                    json,
+                )
+                .await
+            }
+            SwarmAction::Delete { name, scope, json } => {
+                commands::swarm::run_delete(&socket, &name, &scope, json).await
+            }
+            SwarmAction::Run { name, vars, json } => {
+                commands::swarm::run_run(&socket, &name, vars, json).await
+            }
         },
         Commands::Send {
             agent_id,

@@ -1,3 +1,4 @@
+pub mod agent_def;
 pub mod attach;
 pub mod grid;
 pub mod health;
@@ -8,6 +9,7 @@ pub mod prompt;
 pub mod send;
 pub mod spawn;
 pub mod status;
+pub mod swarm;
 
 use crate::error::CliError;
 
