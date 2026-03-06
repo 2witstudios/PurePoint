@@ -2724,21 +2724,37 @@ impl Engine {
     async fn fire_schedule(&self, schedule: &pu_core::schedule_def::ScheduleDef) {
         let result = match &schedule.trigger {
             pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
-                // Resolve agent def and spawn
+                // Resolve agent def to get its type and prompt
                 let pr = schedule.project_root.clone();
-                let agent_name = name.clone();
-                let target = schedule.target.clone();
-                let prompt = format!("Scheduled task: run agent def '{agent_name}' in {target}");
-                self.handle_request(Request::Spawn {
-                    project_root: pr,
-                    prompt,
-                    agent: "claude".to_string(),
-                    name: None,
-                    base: None,
-                    root: true,
-                    worktree: None,
-                })
-                .await
+                let root = Path::new(&pr);
+                if let Some(def) = pu_core::agent_def::find_agent_def(root, name) {
+                    let prompt = if let Some(ref ip) = def.inline_prompt {
+                        ip.clone()
+                    } else if let Some(ref tpl_name) = def.template {
+                        pu_core::template::find_template(root, tpl_name)
+                            .map(|t| t.body)
+                            .unwrap_or_else(|| {
+                                format!("Scheduled: agent def '{name}' (template not found)")
+                            })
+                    } else {
+                        format!("Scheduled: run agent def '{name}'")
+                    };
+                    self.handle_request(Request::Spawn {
+                        project_root: pr,
+                        prompt,
+                        agent: def.agent_type,
+                        name: None,
+                        base: None,
+                        root: true,
+                        worktree: None,
+                    })
+                    .await
+                } else {
+                    Response::Error {
+                        code: "NOT_FOUND".to_string(),
+                        message: format!("agent def '{name}' not found"),
+                    }
+                }
             }
             pu_core::schedule_def::ScheduleTrigger::SwarmDef { name, vars } => {
                 self.handle_request(Request::RunSwarm {
@@ -2791,9 +2807,14 @@ impl Engine {
             );
         }
         let pr = schedule.project_root.clone();
+        let scope = schedule.scope.clone();
         let def = schedule;
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            let dir = paths::schedules_dir(Path::new(&pr));
+            let dir = if scope == "global" {
+                paths::global_schedules_dir()?
+            } else {
+                paths::schedules_dir(Path::new(&pr))
+            };
             pu_core::schedule_def::save_schedule_def(&dir, &def)
         })
         .await

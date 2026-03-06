@@ -187,10 +187,15 @@ struct ScheduleEvent: Identifiable {
         self.color = EventColor.forProject(payload.projectRoot)
         self.trigger = payload.trigger
 
-        // Parse start_at ISO 8601 date
+        // Parse start_at ISO 8601 date (with or without fractional seconds)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        self.date = formatter.date(from: payload.startAt) ?? Date()
+        if let parsed = formatter.date(from: payload.startAt) {
+            self.date = parsed
+        } else {
+            formatter.formatOptions = [.withInternetDateTime]
+            self.date = formatter.date(from: payload.startAt) ?? Date()
+        }
 
         // Determine type from trigger
         switch payload.trigger {

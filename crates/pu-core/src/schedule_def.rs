@@ -142,6 +142,12 @@ pub fn next_occurrence(
     recurrence: &Recurrence,
     after: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
+    // Clamp: never return an occurrence before start_at (base)
+    let after = if after < base {
+        base - Duration::seconds(1)
+    } else {
+        after
+    };
     match recurrence {
         Recurrence::None => {
             if after <= base {
@@ -634,5 +640,16 @@ created_at: "2025-06-01T00:00:00Z"
         let next = next_occurrence(base, &Recurrence::Monthly, after).unwrap();
         // 2025 is not a leap year, Feb has no 29th
         assert_eq!(next, utc(2025, 3, 29, 3, 0, 0));
+    }
+
+    #[test]
+    fn given_daily_with_after_before_start_at_should_not_precede_start_at() {
+        // start_at is in the future, after is now (before start_at)
+        let base = utc(2025, 6, 20, 9, 0, 0);
+        let after = utc(2025, 6, 15, 10, 0, 0);
+        let next = next_occurrence(base, &Recurrence::Daily, after).unwrap();
+        // Should return start_at itself, never a date before it
+        assert!(next >= base);
+        assert_eq!(next, utc(2025, 6, 20, 9, 0, 0));
     }
 }
