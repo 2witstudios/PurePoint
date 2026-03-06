@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import purepoint_macos
+@testable import PurePoint
 
 @MainActor
 struct ChatStateTests {
@@ -190,6 +190,60 @@ struct ChatStateTests {
             Issue.record("Expected text block"); return
         }
         #expect(text == "final authoritative text")
+    }
+
+    @Test func givenGroupedSessionsShouldPartitionByTimePeriod() {
+        let state = ChatState(processProvider: MockClaudeProcess())
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+
+        let todaySession = ClaudeConversation(
+            sessionId: "s-today", title: "Today work",
+            previewSnippets: [], projectPath: "/tmp",
+            purePointProjectRoot: nil, gitBranch: nil,
+            transcriptPath: "/tmp/s-today.jsonl",
+            createdAt: nil, modifiedAt: now, messageCount: nil
+        )
+        let yesterdaySession = ClaudeConversation(
+            sessionId: "s-yesterday", title: "Yesterday work",
+            previewSnippets: [], projectPath: "/tmp",
+            purePointProjectRoot: nil, gitBranch: nil,
+            transcriptPath: "/tmp/s-yesterday.jsonl",
+            createdAt: nil,
+            modifiedAt: calendar.date(byAdding: .day, value: -1, to: now)!,
+            messageCount: nil
+        )
+        let weekSession = ClaudeConversation(
+            sessionId: "s-week", title: "This week work",
+            previewSnippets: [], projectPath: "/tmp",
+            purePointProjectRoot: nil, gitBranch: nil,
+            transcriptPath: "/tmp/s-week.jsonl",
+            createdAt: nil,
+            modifiedAt: calendar.date(byAdding: .day, value: -4, to: now)!,
+            messageCount: nil
+        )
+        let oldSession = ClaudeConversation(
+            sessionId: "s-old", title: "Old work",
+            previewSnippets: [], projectPath: "/tmp",
+            purePointProjectRoot: nil, gitBranch: nil,
+            transcriptPath: "/tmp/s-old.jsonl",
+            createdAt: nil,
+            modifiedAt: calendar.date(byAdding: .day, value: -60, to: now)!,
+            messageCount: nil
+        )
+
+        state.sessions = [todaySession, yesterdaySession, weekSession, oldSession]
+
+        let sections = state.groupedSessions
+        #expect(sections.count == 4)
+        #expect(sections[0].id == "today")
+        #expect(sections[0].sessions.count == 1)
+        #expect(sections[1].id == "yesterday")
+        #expect(sections[1].sessions.count == 1)
+        #expect(sections[2].id == "this-week")
+        #expect(sections[2].sessions.count == 1)
+        #expect(sections[3].id == "older")
+        #expect(sections[3].sessions.count == 1)
     }
 
     @Test func givenStopStreamingShouldCancelProcess() async {

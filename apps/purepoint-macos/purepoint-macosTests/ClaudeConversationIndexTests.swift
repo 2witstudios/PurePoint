@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import purepoint_macos
+@testable import PurePoint
 
 struct ClaudeConversationIndexTests {
 
@@ -63,11 +63,8 @@ struct ClaudeConversationIndexTests {
         #expect(sessions[0].gitBranch == "feature/dashboard")
         #expect(sessions[0].purePointProjectRoot == projectRoot.path)
         #expect(sessions[0].messageCount == 4)
-        #expect(sessions[0].previewSnippets == [
-            "I'll index the local transcript files and wire a dashboard.",
-            "Show a pulse card too",
-            "The pulse card is mocked, but the conversation browser is real."
-        ])
+        // Snippets are deferred — loadSessions returns [] for lazy enrichment
+        #expect(sessions[0].previewSnippets == [])
     }
 
     @Test func looseSessionsFallbackToTranscriptMetadata() throws {
@@ -106,11 +103,133 @@ struct ClaudeConversationIndexTests {
         #expect(sessions[0].title == "Resume old Claude session")
         #expect(sessions[0].gitBranch == "feature/raw-browser")
         #expect(sessions[0].purePointProjectRoot == projectRoot.path)
-        #expect(sessions[0].previewSnippets == [
-            "I'm reading the transcript directly because there is no sessions index here.",
-            "Keep the conversation browser real",
-            "Done. The dashboard now falls back to raw JSONL files."
+        // Snippets are deferred — loadSessions returns [] for lazy enrichment
+        #expect(sessions[0].previewSnippets == [])
+    }
+
+    @Test func recentSnippetsLoadsFromTranscriptTail() throws {
+        let tempRoot = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let transcriptURL = tempRoot.appendingPathComponent("sid-snippets.jsonl")
+        try Self.writeTranscript(
+            to: transcriptURL,
+            cwd: "/tmp",
+            sessionId: "sid-snippets",
+            branch: "main",
+            lines: [
+                .user("First user message"),
+                .assistant("First assistant reply"),
+                .user("Second user message"),
+                .assistant("Second assistant reply")
+            ]
+        )
+
+        let snippets = ClaudeConversationIndex.recentSnippets(from: transcriptURL)
+
+        #expect(snippets == [
+            "First assistant reply",
+            "Second user message",
+            "Second assistant reply"
         ])
+    }
+
+    @Test func tempDirectoriesAreSkipped() throws {
+        let tempRoot = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let claudeBase = tempRoot.appendingPathComponent("claude/projects", isDirectory: true)
+
+        // Create a temp-dir project (should be skipped)
+        let tempDir = claudeBase.appendingPathComponent("private-var-folders-xx-xxxxxx", isDirectory: true)
+        try Self.createDirectory(tempDir)
+        let transcript = tempDir.appendingPathComponent("sid-temp.jsonl")
+        try Self.writeTranscript(
+            to: transcript,
+            cwd: "/private/var/folders/xx/xxxxxx",
+            sessionId: "sid-temp",
+            branch: "main",
+            lines: [.user("temp session")]
+        )
+
+        // Create a normal project (should be included)
+        let normalDir = claudeBase.appendingPathComponent("normal-project", isDirectory: true)
+        try Self.createDirectory(normalDir)
+        let normalTranscript = normalDir.appendingPathComponent("sid-normal.jsonl")
+        try Self.writeTranscript(
+            to: normalTranscript,
+            cwd: "/tmp/normal",
+            sessionId: "sid-normal",
+            branch: "main",
+            lines: [.user("normal session")]
+        )
+
+        let sessions = try ClaudeConversationIndex.loadSessions(baseURL: claudeBase)
+
+        #expect(sessions.count == 1)
+        #expect(sessions[0].sessionId == "sid-normal")
+    }
+
+    @Test func badSummariesFallbackToPromptOrBranch() throws {
+        let tempRoot = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let claudeBase = tempRoot.appendingPathComponent("claude/projects", isDirectory: true)
+        let dir = claudeBase.appendingPathComponent("project-bad", isDirectory: true)
+        try Self.createDirectory(dir)
+
+        let transcript = dir.appendingPathComponent("sid-bad.jsonl")
+        try Self.writeTranscript(
+            to: transcript,
+            cwd: "/tmp",
+            sessionId: "sid-bad",
+            branch: "pu/simplify-engine",
+            lines: [.user("  ")]
+        )
+
+        let indexURL = dir.appendingPathComponent("sessions-index.json")
+        let indexJSON = """
+        {
+          "version": 1,
+          "entries": [
+            {
+              "sessionId": "sid-bad",
+              "fullPath": "\(transcript.path)",
+              "summary": "error: invalid api key",
+              "gitBranch": "pu/simplify-engine",
+              "projectPath": "/tmp"
+            }
+          ]
+        }
+        """
+        try Data(indexJSON.utf8).write(to: indexURL)
+
+        let sessions = try ClaudeConversationIndex.loadSessions(baseURL: claudeBase)
+        #expect(sessions.count == 1)
+        // Bad summary rejected, empty prompt, falls back to branch name
+        #expect(sessions[0].title == "Simplify Engine")
+    }
+
+    @Test func fillerPrefixesAreStrippedFromPrompt() throws {
+        let tempRoot = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let claudeBase = tempRoot.appendingPathComponent("claude/projects", isDirectory: true)
+        let dir = claudeBase.appendingPathComponent("project-filler", isDirectory: true)
+        try Self.createDirectory(dir)
+
+        let transcript = dir.appendingPathComponent("sid-filler.jsonl")
+        try Self.writeTranscript(
+            to: transcript,
+            cwd: "/tmp",
+            sessionId: "sid-filler",
+            branch: "main",
+            lines: [.user("Can you fix the sidebar layout bug")]
+        )
+
+        let sessions = try ClaudeConversationIndex.loadSessions(baseURL: claudeBase)
+        #expect(sessions.count == 1)
+        #expect(sessions[0].title == "fix the sidebar layout bug")
     }
 
     private static func makeTemporaryDirectory() throws -> URL {

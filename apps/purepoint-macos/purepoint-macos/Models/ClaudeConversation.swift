@@ -22,4 +22,19 @@ nonisolated struct ClaudeConversation: Identifiable, Hashable, Sendable {
     var workspaceName: String {
         URL(fileURLWithPath: projectPath).lastPathComponent
     }
+
+    func withSnippets(_ snippets: [String]) -> ClaudeConversation {
+        ClaudeConversation(
+            sessionId: sessionId,
+            title: title,
+            previewSnippets: snippets,
+            projectPath: projectPath,
+            purePointProjectRoot: purePointProjectRoot,
+            gitBranch: gitBranch,
+            transcriptPath: transcriptPath,
+            createdAt: createdAt,
+            modifiedAt: modifiedAt,
+            messageCount: messageCount
+        )
+    }
 }

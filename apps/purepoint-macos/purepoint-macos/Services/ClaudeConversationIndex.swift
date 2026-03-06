@@ -1,40 +1,21 @@
 import Foundation
 
 enum ClaudeConversationIndex {
+
+    // MARK: - Public API
+
+    static var defaultBaseURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("projects", isDirectory: true)
+    }
+
+    /// Convenience: loads all sessions (indexed + loose), without snippets.
     static func loadSessions(baseURL: URL = defaultBaseURL, limit: Int? = nil) throws -> [ClaudeConversation] {
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: baseURL.path) else { return [] }
-
-        let directories = try fileManager.contentsOfDirectory(
-            at: baseURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        )
-        .filter { url in
-            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-        }
-
-        var conversations: [ClaudeConversation] = []
-        var seenSessionIds = Set<String>()
-
-        for directory in directories {
-            let indexed = try loadIndexedSessions(in: directory)
-            for session in indexed where seenSessionIds.insert(session.sessionId).inserted {
-                conversations.append(session)
-            }
-        }
-
-        for directory in directories {
-            let transcripts = try transcriptFiles(in: directory)
-            for transcript in transcripts {
-                let sessionId = transcript.deletingPathExtension().lastPathComponent
-                guard seenSessionIds.insert(sessionId).inserted else { continue }
-                if let session = try loadLooseSession(from: transcript) {
-                    conversations.append(session)
-                }
-            }
-        }
-
+        var conversations = try loadIndexedSessions(baseURL: baseURL)
+        let excludedIds = Set(conversations.map(\.sessionId))
+        let loose = try loadLooseSessions(baseURL: baseURL, excluding: excludedIds)
+        conversations.append(contentsOf: loose)
         conversations.sort { $0.modifiedAt > $1.modifiedAt }
         if let limit {
             return Array(conversations.prefix(limit))
@@ -42,11 +23,67 @@ enum ClaudeConversationIndex {
         return conversations
     }
 
-    static var defaultBaseURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude", isDirectory: true)
-            .appendingPathComponent("projects", isDirectory: true)
+    /// Phase 1: fast — reads only sessions-index.json files (no JSONL I/O).
+    static func loadIndexedSessions(baseURL: URL = defaultBaseURL) throws -> [ClaudeConversation] {
+        let directories = try projectDirectories(baseURL: baseURL)
+        var conversations: [ClaudeConversation] = []
+        var seenSessionIds = Set<String>()
+        var projectRootCache: [String: String?] = [:]
+
+        for directory in directories {
+            let indexed = try loadIndexedSessions(in: directory, projectRootCache: &projectRootCache)
+            for session in indexed where seenSessionIds.insert(session.sessionId).inserted {
+                conversations.append(session)
+            }
+        }
+
+        return conversations
     }
+
+    /// Phase 2: slower — scans .jsonl files, skipping already-indexed session IDs.
+    static func loadLooseSessions(baseURL: URL = defaultBaseURL, excluding excludedIds: Set<String> = []) throws -> [ClaudeConversation] {
+        let directories = try projectDirectories(baseURL: baseURL)
+        var conversations: [ClaudeConversation] = []
+        var seenSessionIds = excludedIds
+        var projectRootCache: [String: String?] = [:]
+
+        for directory in directories {
+            let transcripts = try transcriptFiles(in: directory)
+            for transcript in transcripts {
+                let sessionId = transcript.deletingPathExtension().lastPathComponent
+                guard seenSessionIds.insert(sessionId).inserted else { continue }
+                if let session = try loadLooseSession(from: transcript, projectRootCache: &projectRootCache) {
+                    conversations.append(session)
+                }
+            }
+        }
+
+        return conversations
+    }
+
+    /// Load recent snippets from a transcript file (for lazy background enrichment).
+    static func recentSnippets(from transcriptURL: URL, limit: Int = 3) -> [String] {
+        guard let tail = try? readSuffix(from: transcriptURL, byteCount: 64 * 1024) else { return [] }
+
+        var snippets: [String] = []
+        for line in tail.split(separator: "\n").reversed() {
+            guard let record = parseJSONLine(String(line)),
+                  let snippet = messageSnippet(from: record, maxLength: 180),
+                  !snippets.contains(snippet)
+            else {
+                continue
+            }
+
+            snippets.append(snippet)
+            if snippets.count == limit {
+                break
+            }
+        }
+
+        return snippets.reversed()
+    }
+
+    // MARK: - Private Types
 
     private struct SessionIndexFile: Decodable {
         let entries: [SessionIndexEntry]
@@ -85,11 +122,37 @@ enum ClaudeConversationIndex {
         return formatter
     }()
 
-    private static func loadIndexedSessions(in directory: URL) throws -> [ClaudeConversation] {
-        let indexURL = directory.appendingPathComponent("sessions-index.json")
-        guard FileManager.default.fileExists(atPath: indexURL.path) else { return [] }
+    // MARK: - Directory Discovery
 
-        let data = try Data(contentsOf: indexURL)
+    private static func projectDirectories(baseURL: URL) throws -> [URL] {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: baseURL.path) else { return [] }
+
+        return try fileManager.contentsOfDirectory(
+            at: baseURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        .filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        .filter { url in
+            let name = url.lastPathComponent
+            return !name.contains("private-var-folders") && !name.contains("private-tmp")
+        }
+    }
+
+    // MARK: - Indexed Sessions
+
+    private static func loadIndexedSessions(
+        in directory: URL,
+        projectRootCache: inout [String: String?]
+    ) throws -> [ClaudeConversation] {
+        let indexURL = directory.appendingPathComponent("sessions-index.json")
+
+        let data: Data
+        do { data = try Data(contentsOf: indexURL) }
+        catch { return [] }
         let index = try JSONDecoder().decode(SessionIndexFile.self, from: data)
 
         return index.entries.compactMap { entry in
@@ -106,15 +169,18 @@ enum ClaudeConversationIndex {
             let title = sessionTitle(
                 summary: entry.summary,
                 firstPrompt: entry.firstPrompt,
+                gitBranch: entry.gitBranch,
                 fallback: URL(fileURLWithPath: projectPath).lastPathComponent
             )
 
             return ClaudeConversation(
                 sessionId: entry.sessionId,
                 title: title,
-                previewSnippets: recentSnippets(from: transcriptURL),
+                previewSnippets: [],
                 projectPath: projectPath,
-                purePointProjectRoot: locatePurePointProjectRoot(startingAt: projectPath),
+                purePointProjectRoot: locatePurePointProjectRoot(
+                    startingAt: projectPath, cache: &projectRootCache
+                ),
                 gitBranch: entry.gitBranch?.trimmedNonEmpty,
                 transcriptPath: transcriptURL.path,
                 createdAt: parseTimestamp(entry.created),
@@ -124,7 +190,12 @@ enum ClaudeConversationIndex {
         }
     }
 
-    private static func loadLooseSession(from transcriptURL: URL) throws -> ClaudeConversation? {
+    // MARK: - Loose Sessions
+
+    private static func loadLooseSession(
+        from transcriptURL: URL,
+        projectRootCache: inout [String: String?]
+    ) throws -> ClaudeConversation? {
         let metadata = transcriptMetadata(from: transcriptURL)
         let sessionId = metadata.sessionId?.trimmedNonEmpty ?? transcriptURL.deletingPathExtension().lastPathComponent
         let projectPath = metadata.projectPath?.trimmedNonEmpty ?? transcriptURL.deletingLastPathComponent().path
@@ -136,15 +207,18 @@ enum ClaudeConversationIndex {
         let title = sessionTitle(
             summary: nil,
             firstPrompt: metadata.firstPrompt,
+            gitBranch: metadata.gitBranch,
             fallback: URL(fileURLWithPath: projectPath).lastPathComponent
         )
 
         return ClaudeConversation(
             sessionId: sessionId,
             title: title,
-            previewSnippets: recentSnippets(from: transcriptURL),
+            previewSnippets: [],
             projectPath: projectPath,
-            purePointProjectRoot: locatePurePointProjectRoot(startingAt: projectPath),
+            purePointProjectRoot: locatePurePointProjectRoot(
+                startingAt: projectPath, cache: &projectRootCache
+            ),
             gitBranch: metadata.gitBranch?.trimmedNonEmpty,
             transcriptPath: transcriptURL.path,
             createdAt: metadata.createdAt,
@@ -168,6 +242,8 @@ enum ClaudeConversationIndex {
             return lhsDate > rhsDate
         }
     }
+
+    // MARK: - Transcript Parsing
 
     private static func transcriptMetadata(from transcriptURL: URL) -> TranscriptMetadata {
         let head = (try? readPrefix(from: transcriptURL, byteCount: 24 * 1024)) ?? ""
@@ -218,26 +294,7 @@ enum ClaudeConversationIndex {
         }
     }
 
-    private static func recentSnippets(from transcriptURL: URL, limit: Int = 3) -> [String] {
-        guard let tail = try? readSuffix(from: transcriptURL, byteCount: 64 * 1024) else { return [] }
-
-        var snippets: [String] = []
-        for line in tail.split(separator: "\n").reversed() {
-            guard let record = parseJSONLine(String(line)),
-                  let snippet = messageSnippet(from: record, maxLength: 180),
-                  !snippets.contains(snippet)
-            else {
-                continue
-            }
-
-            snippets.append(snippet)
-            if snippets.count == limit {
-                break
-            }
-        }
-
-        return snippets.reversed()
-    }
+    // MARK: - Text Extraction
 
     private static func messageSnippet(from record: [String: Any], maxLength: Int) -> String? {
         guard let type = record["type"] as? String, type == "user" || type == "assistant" else {
@@ -298,37 +355,83 @@ enum ClaudeConversationIndex {
         return String(collapsed[..<index]).trimmingCharacters(in: .whitespaces) + "..."
     }
 
-    private static func sessionTitle(summary: String?, firstPrompt: String?, fallback: String) -> String {
-        if let summary = summary?.trimmedNonEmpty, summary.lowercased() != "no prompt" {
+    // MARK: - Title Resolution
+
+    private static func sessionTitle(
+        summary: String?,
+        firstPrompt: String?,
+        gitBranch: String?,
+        fallback: String
+    ) -> String {
+        // Use summary if available and not a known-bad pattern
+        if let summary = summary?.trimmedNonEmpty,
+           summary.lowercased() != "no prompt",
+           !summary.lowercased().contains("invalid api key"),
+           !summary.lowercased().hasPrefix("error:") {
             return summary
         }
 
-        guard let prompt = firstPrompt?.trimmedNonEmpty else {
-            return fallback
+        // Try first prompt with cleanup
+        if let prompt = firstPrompt?.trimmedNonEmpty {
+            let strippedPrompt = prompt.replacingOccurrences(
+                of: #"(?i)^implement the following plan:\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+
+            // Strip low-information filler prefixes
+            let cleanedPrompt = strippedPrompt.replacingOccurrences(
+                of: #"(?i)^(can you |could you |please |help me |i need to |i want to )"#,
+                with: "",
+                options: .regularExpression
+            )
+
+            let lines = cleanedPrompt
+                .split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+
+            let candidateLine = lines.first ?? cleanedPrompt
+            let cleanedLine = candidateLine.replacingOccurrences(
+                of: #"^#+\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+
+            if let title = compact(cleanedLine, maxLength: 72) {
+                return title
+            }
         }
 
-        let strippedPrompt = prompt.replacingOccurrences(
-            of: #"(?i)^implement the following plan:\s*"#,
-            with: "",
-            options: .regularExpression
-        )
+        // Use git branch as a descriptive fallback
+        if let branch = gitBranch?.trimmedNonEmpty {
+            let stripped = branch.replacingOccurrences(
+                of: #"^(pu|feature|fix|bugfix|hotfix)/"#,
+                with: "",
+                options: .regularExpression
+            )
+            let words = stripped
+                .replacingOccurrences(of: "-", with: " ")
+                .replacingOccurrences(of: "_", with: " ")
+                .split(separator: " ")
+                .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
+                .joined(separator: " ")
+            if !words.isEmpty {
+                return words
+            }
+        }
 
-        let lines = strippedPrompt
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        let candidateLine = lines.first ?? strippedPrompt
-        let cleanedLine = candidateLine.replacingOccurrences(
-            of: #"^#+\s*"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        return compact(cleanedLine, maxLength: 72) ?? fallback
+        return fallback
     }
 
-    private static func locatePurePointProjectRoot(startingAt path: String) -> String? {
+    // MARK: - Project Root Resolution (Cached)
+
+    private static func locatePurePointProjectRoot(
+        startingAt path: String,
+        cache: inout [String: String?]
+    ) -> String? {
+        if let cached = cache[path] { return cached }
+
         var currentURL = URL(fileURLWithPath: path).standardizedFileURL
         let fileManager = FileManager.default
 
@@ -339,16 +442,21 @@ enum ClaudeConversationIndex {
                 .path
 
             if fileManager.fileExists(atPath: manifestPath) {
-                return currentURL.path
+                let result = currentURL.path
+                cache[path] = result
+                return result
             }
 
             let parent = currentURL.deletingLastPathComponent()
             if parent.path == currentURL.path {
+                cache[path] = nil
                 return nil
             }
             currentURL = parent
         }
     }
+
+    // MARK: - File I/O
 
     private static func readPrefix(from url: URL, byteCount: Int) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
