@@ -32,17 +32,8 @@ struct PaneGridView: View {
                     AnyView(Color.clear)
                 }
             )
-        case .split(let axis, let ratio, let first, let second):
-            let splitId = first.allLeafIds.first ?? 0
-            return AnyView(
-                DraggableSplit(axis: axis, ratio: ratio, onRatioChanged: { newRatio in
-                    gridState.updateRatio(newRatio, forSplitIdentifiedByFirstLeaf: splitId)
-                }) {
-                    nodeView(first)
-                } second: {
-                    nodeView(second)
-                }
-            )
+        case .split:
+            return nodeView(node)
         }
     }
 
@@ -59,7 +50,7 @@ struct PaneGridView: View {
             )
 
         case .split(let axis, let ratio, let first, let second):
-            let splitId = first.allLeafIds.first ?? 0
+            let splitId = first.firstLeafId
             return AnyView(
                 DraggableSplit(axis: axis, ratio: ratio, onRatioChanged: { newRatio in
                     gridState.updateRatio(newRatio, forSplitIdentifiedByFirstLeaf: splitId)

@@ -20,7 +20,26 @@ indirect enum PaneSplitNode: Equatable {
         }
     }
 
-    var leafCount: Int { allLeafIds.count }
+    var leafCount: Int {
+        switch self {
+        case .leaf: return 1
+        case .split(_, _, let first, let second): return first.leafCount + second.leafCount
+        }
+    }
+
+    var firstLeafId: Int {
+        switch self {
+        case .leaf(let id, _): return id
+        case .split(_, _, let first, _): return first.firstLeafId
+        }
+    }
+
+    var lastLeafId: Int {
+        switch self {
+        case .leaf(let id, _): return id
+        case .split(_, _, _, let second): return second.lastLeafId
+        }
+    }
 
     func agentId(forLeafId leafId: Int) -> String? {
         switch self {
@@ -114,7 +133,7 @@ indirect enum PaneSplitNode: Equatable {
         case .leaf:
             return self
         case .split(let axis, let ratio, let first, let second):
-            if first.allLeafIds.first == targetLeafId {
+            if first.firstLeafId == targetLeafId {
                 return .split(axis: axis, ratio: newRatio, first: first, second: second)
             }
             return .split(
@@ -162,9 +181,9 @@ indirect enum PaneSplitNode: Equatable {
             // If forward and in first child, go to second's nearest leaf (front edge)
             // If backward and in second child, go to first's nearest leaf (back edge)
             if forward && isInFirst {
-                return second.allLeafIds.first
+                return second.firstLeafId
             } else if !forward && !isInFirst {
-                return first.allLeafIds.last
+                return first.lastLeafId
             }
         }
         return nil
@@ -177,7 +196,7 @@ indirect enum PaneSplitNode: Equatable {
         let lastStep = path.last!
         guard case .split(_, _, let first, let second) = lastStep.node else { return nil }
         let sibling = lastStep.wentFirst ? second : first
-        return sibling.allLeafIds.first
+        return sibling.firstLeafId
     }
 
     private struct PathStep {

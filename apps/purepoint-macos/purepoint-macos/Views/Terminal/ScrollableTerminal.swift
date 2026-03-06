@@ -24,14 +24,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         self.terminalView = terminalView ?? TerminalView(frame: frame)
         super.init(frame: frame)
 
-        self.terminalView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(self.terminalView)
-        NSLayoutConstraint.activate([
-            self.terminalView.topAnchor.constraint(equalTo: topAnchor),
-            self.terminalView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            self.terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            self.terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        self.terminalView.pinToEdges(of: self)
 
         // Set ourselves as the terminal delegate for input/resize events
         self.terminalView.terminalDelegate = self
@@ -138,17 +131,19 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     // MARK: - Drag & Drop
 
+    private func canAcceptDrop(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else {
-            return []
-        }
+        guard canAcceptDrop(sender) else { return [] }
         layer?.borderWidth = 2
         layer?.borderColor = NSColor.controlAccentColor.cgColor
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ? .copy : []
+        canAcceptDrop(sender) ? .copy : []
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
@@ -156,7 +151,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        canAcceptDrop(sender)
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
