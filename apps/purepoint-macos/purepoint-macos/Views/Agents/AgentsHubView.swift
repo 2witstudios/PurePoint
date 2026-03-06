@@ -10,6 +10,7 @@ struct AgentsHubView: View {
     @State private var activeTab: AgentsHubTab = .agents
     @State private var promptDraft = ""
     @State private var promptScope: PromptScopeChoice = .project
+    @State private var promptAgent = ""
 
     private var projectRoot: String {
         appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
@@ -158,6 +159,13 @@ struct AgentsHubView: View {
 
                                     Spacer()
 
+                                    Picker("Agent", selection: $promptAgent) {
+                                        ForEach(["", "claude", "codex", "opencode"], id: \.self) { t in
+                                            Text(t.isEmpty ? "Any" : t).tag(t)
+                                        }
+                                    }
+                                    .frame(maxWidth: 140)
+
                                     HStack(spacing: 8) {
                                         Button("Save") {
                                             Task {
@@ -165,7 +173,7 @@ struct AgentsHubView: View {
                                                     projectRoot: projectRoot,
                                                     name: prompt.name,
                                                     description: prompt.description,
-                                                    agent: prompt.agent,
+                                                    agent: promptAgent,
                                                     body: promptDraft,
                                                     scope: promptScope.wireValue
                                                 )
@@ -580,18 +588,17 @@ struct AgentsHubView: View {
     }
 
     private func syncPromptEditor() {
-        if let prompt = hubState.selectedPrompt {
+        guard let prompt = hubState.selectedPrompt else { return }
+        promptScope = prompt.source == "global" ? .global : .project
+        promptAgent = prompt.agent
+        if !prompt.body.isEmpty {
             promptDraft = prompt.body
-            if prompt.source == "global" {
-                promptScope = .global
-            } else {
-                promptScope = .project
-            }
-            Task {
-                await hubState.loadPromptDetail(projectRoot: projectRoot, name: prompt.name)
-                if let updated = hubState.selectedPrompt {
-                    promptDraft = updated.body
-                }
+        }
+        Task {
+            await hubState.loadPromptDetail(projectRoot: projectRoot, name: prompt.name)
+            if let updated = hubState.selectedPrompt {
+                promptDraft = updated.body
+                promptAgent = updated.agent
             }
         }
     }

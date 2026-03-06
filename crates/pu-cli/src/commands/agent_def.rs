@@ -22,11 +22,7 @@ fn parse_tags(tags: &str) -> Vec<String> {
 pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
     let project_root = commands::cwd_string()?;
-    let resp = client::send_request(
-        socket,
-        &Request::ListAgentDefs { project_root },
-    )
-    .await?;
+    let resp = client::send_request(socket, &Request::ListAgentDefs { project_root }).await?;
     let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json);
     Ok(())

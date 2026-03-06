@@ -106,6 +106,7 @@ final class AgentsHubState {
         do {
             _ = try await client.send(.saveTemplate(projectRoot: projectRoot, name: name, description: description, agent: agent, body: body, scope: scope))
             await loadTemplates(projectRoot: projectRoot)
+            await loadPromptDetail(projectRoot: projectRoot, name: name)
         } catch {
             self.error = "Failed to save template: \(error.localizedDescription)"
         }

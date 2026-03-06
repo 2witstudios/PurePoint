@@ -99,6 +99,4 @@ fn resolve_prompt(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}

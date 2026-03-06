@@ -10,11 +10,7 @@ use pu_core::protocol::{Request, SwarmRosterEntryPayload};
 pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
     let project_root = commands::cwd_string()?;
-    let resp = client::send_request(
-        socket,
-        &Request::ListSwarmDefs { project_root },
-    )
-    .await?;
+    let resp = client::send_request(socket, &Request::ListSwarmDefs { project_root }).await?;
     let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json);
     Ok(())
@@ -64,9 +60,9 @@ fn parse_roster(entries: &[String]) -> Result<Vec<SwarmRosterEntryPayload>, CliE
                 )));
             }
             let quantity = if parts.len() == 3 {
-                parts[2].parse::<u32>().map_err(|_| {
-                    CliError::Other(format!("invalid quantity in --roster: {e}"))
-                })?
+                parts[2]
+                    .parse::<u32>()
+                    .map_err(|_| CliError::Other(format!("invalid quantity in --roster: {e}")))?
             } else {
                 1
             };
@@ -139,4 +135,3 @@ pub async fn run_run(
     output::print_response(&resp, json);
     Ok(())
 }
-

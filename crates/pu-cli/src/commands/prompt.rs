@@ -13,11 +13,7 @@ pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
     // Try daemon first
     if daemon_ctrl::check_daemon_health(socket).await {
         let project_root = commands::cwd_string()?;
-        let resp = client::send_request(
-            socket,
-            &Request::ListTemplates { project_root },
-        )
-        .await?;
+        let resp = client::send_request(socket, &Request::ListTemplates { project_root }).await?;
         let resp = output::check_response(resp, json)?;
         output::print_response(&resp, json);
         return Ok(());

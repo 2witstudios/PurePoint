@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentBlockView: View {
     let block: ContentBlock
+    var allBlocks: [ContentBlock] = []
 
     var body: some View {
         switch block {
@@ -11,8 +12,14 @@ struct ContentBlockView: View {
             CodeBlockView(language: language, code: code)
         case .toolUse(_, let name, let input, let status):
             ToolCallCardView(name: name, input: input, output: nil, isError: false, status: status)
-        case .toolResult(_, _, let output, let isError):
-            ToolCallCardView(name: nil, input: nil, output: output, isError: isError, status: isError ? .failed : .completed)
+        case .toolResult(_, let toolUseId, let output, let isError):
+            let toolName = allBlocks.compactMap { block -> String? in
+                if case .toolUse(let id, let name, _, _) = block, id == toolUseId {
+                    return name
+                }
+                return nil
+            }.first
+            ToolCallCardView(name: toolName, input: nil, output: output, isError: isError, status: isError ? .failed : .completed)
         case .pulse(_, let summary):
             pulseCard(summary)
         }

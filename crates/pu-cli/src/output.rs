@@ -229,7 +229,13 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 println!("No templates");
                 return;
             }
-            println!("{:<20} {:<12} {:<10} {}", "NAME".bold(), "AGENT".bold(), "SOURCE".bold(), "VARIABLES".bold());
+            println!(
+                "{:<20} {:<12} {:<10} {}",
+                "NAME".bold(),
+                "AGENT".bold(),
+                "SOURCE".bold(),
+                "VARIABLES".bold()
+            );
             for t in templates {
                 println!(
                     "{:<20} {:<12} {:<10} {}",
@@ -240,7 +246,14 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 );
             }
         }
-        Response::TemplateDetail { name, description, agent, body, source, variables } => {
+        Response::TemplateDetail {
+            name,
+            description,
+            agent,
+            body,
+            source,
+            variables,
+        } => {
             println!("{} ({})", name.bold(), source.dimmed());
             if !description.is_empty() {
                 println!("  {description}");
@@ -252,7 +265,16 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("---");
             print!("{body}");
         }
-        Response::AgentDefDetail { name, agent_type, template, inline_prompt, tags, scope, available_in_command_dialog, icon } => {
+        Response::AgentDefDetail {
+            name,
+            agent_type,
+            template,
+            inline_prompt,
+            tags,
+            scope,
+            available_in_command_dialog,
+            icon,
+        } => {
             println!("{} ({})", name.bold(), scope.dimmed());
             println!("  Type: {agent_type}");
             if let Some(tpl) = template {
@@ -277,12 +299,24 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 println!("No agent definitions");
                 return;
             }
-            println!("{:<20} {:<12} {:<10}", "NAME".bold(), "TYPE".bold(), "SCOPE".bold());
+            println!(
+                "{:<20} {:<12} {:<10}",
+                "NAME".bold(),
+                "TYPE".bold(),
+                "SCOPE".bold()
+            );
             for d in agent_defs {
                 println!("{:<20} {:<12} {:<10}", d.name, d.agent_type, d.scope);
             }
         }
-        Response::SwarmDefDetail { name, worktree_count, worktree_template, roster, include_terminal, scope } => {
+        Response::SwarmDefDetail {
+            name,
+            worktree_count,
+            worktree_template,
+            roster,
+            include_terminal,
+            scope,
+        } => {
             println!("{} ({})", name.bold(), scope.dimmed());
             println!("  Worktrees: {worktree_count}");
             if !worktree_template.is_empty() {
@@ -301,10 +335,26 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 println!("No swarm definitions");
                 return;
             }
-            println!("{:<20} {:<10} {:<10} {}", "NAME".bold(), "WORKTREES".bold(), "SCOPE".bold(), "ROSTER".bold());
+            println!(
+                "{:<20} {:<10} {:<10} {}",
+                "NAME".bold(),
+                "WORKTREES".bold(),
+                "SCOPE".bold(),
+                "ROSTER".bold()
+            );
             for d in swarm_defs {
-                let roster_summary: Vec<String> = d.roster.iter().map(|r| format!("{}x{}", r.agent_def, r.quantity)).collect();
-                println!("{:<20} {:<10} {:<10} {}", d.name, d.worktree_count, d.scope, roster_summary.join(", "));
+                let roster_summary: Vec<String> = d
+                    .roster
+                    .iter()
+                    .map(|r| format!("{}x{}", r.agent_def, r.quantity))
+                    .collect();
+                println!(
+                    "{:<20} {:<10} {:<10} {}",
+                    d.name,
+                    d.worktree_count,
+                    d.scope,
+                    roster_summary.join(", ")
+                );
             }
         }
         Response::RunSwarmResult { spawned_agents } => {

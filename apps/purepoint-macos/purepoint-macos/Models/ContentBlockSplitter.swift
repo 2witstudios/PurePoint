@@ -1,6 +1,13 @@
 import Foundation
 
 enum ContentBlockSplitter {
+    private static func isClosingFence(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("```") else { return false }
+        let remainder = trimmed.dropFirst(3)
+        return remainder.isEmpty || remainder.allSatisfy(\.isWhitespace)
+    }
+
     static func split(_ text: String) -> [ContentBlock] {
         guard !text.isEmpty else { return [] }
 
@@ -20,7 +27,7 @@ enum ContentBlockSplitter {
                     // Look ahead for a closing fence
                     var hasClosing = false
                     for j in (i + 1)..<lines.count {
-                        if lines[j].trimmingCharacters(in: .whitespaces) == "```" {
+                        if isClosingFence(lines[j]) {
                             hasClosing = true
                             break
                         }
@@ -44,7 +51,7 @@ enum ContentBlockSplitter {
                     currentText.append(line)
                 }
             } else {
-                if line.trimmingCharacters(in: .whitespaces) == "```" {
+                if isClosingFence(line) {
                     let code = codeLines.joined(separator: "\n")
                     blocks.append(.codeBlock(id: UUID().uuidString, language: codeLanguage, code: code))
                     inCodeBlock = false

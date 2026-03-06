@@ -79,6 +79,11 @@ actor ClaudeProcess: ClaudeProcessProvider {
     }
 
     private func launch(args: [String]) throws -> AsyncStream<StreamEvent> {
+        // Cancel any existing process before launching a new one
+        if process != nil {
+            cancel()
+        }
+
         guard let binaryPath = Self.locateBinary() else {
             throw ClaudeProcessError.binaryNotFound
         }
@@ -103,7 +108,9 @@ actor ClaudeProcess: ClaudeProcessProvider {
 
         let fileHandle = stdoutPipe.fileHandleForReading
 
-        // Read stdout lines in a detached task
+        // Start process BEFORE reader to avoid EOF on not-yet-connected pipe
+        try process.run()
+
         Task.detached { [weak self] in
             for try await line in fileHandle.bytes.lines {
                 if let event = StreamEvent.parse(line) {
@@ -113,8 +120,6 @@ actor ClaudeProcess: ClaudeProcessProvider {
             continuation.finish()
             await self?.cleanup()
         }
-
-        try process.run()
 
         return stream
     }

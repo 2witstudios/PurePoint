@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MessageBubbleView: View {
     let message: ChatMessage
+    @State private var animating = false
 
     var body: some View {
         switch message.role {
@@ -33,7 +34,7 @@ struct MessageBubbleView: View {
     private var assistantBubble: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(message.contentBlocks) { block in
-                ContentBlockView(block: block)
+                ContentBlockView(block: block, allBlocks: message.contentBlocks)
             }
 
             if message.isStreaming {
@@ -48,19 +49,19 @@ struct MessageBubbleView: View {
 
     private var streamingCursor: some View {
         HStack(spacing: 4) {
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 6, height: 6)
-                .opacity(0.6)
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 6, height: 6)
-                .opacity(0.4)
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 6, height: 6)
-                .opacity(0.2)
+            ForEach(0..<3) { i in
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+                    .opacity(animating ? 0.8 : 0.2)
+                    .animation(
+                        .easeInOut(duration: 0.6)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.15),
+                        value: animating
+                    )
+            }
         }
-        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: message.isStreaming)
+        .onAppear { animating = true }
     }
 }

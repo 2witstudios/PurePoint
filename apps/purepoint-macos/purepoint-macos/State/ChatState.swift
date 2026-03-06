@@ -141,7 +141,7 @@ final class ChatState {
         guard !activeAgents.isEmpty else { return }
 
         let events = activeAgents.prefix(5).map { agent in
-            (agent: agent.name, event: agent.status == .streaming ? "streaming" : "waiting")
+            PulseEvent(agent: agent.name, event: agent.status == .streaming ? "streaming" : "waiting")
         }
         let summary = PulseSummary(activeAgents: activeAgents.count, recentEvents: events)
         let pulseMessage = ChatMessage(

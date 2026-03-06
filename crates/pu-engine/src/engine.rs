@@ -1770,7 +1770,7 @@ impl Engine {
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: msg,
-                }
+                };
             }
         };
         let n = name.to_string();
@@ -1811,7 +1811,7 @@ impl Engine {
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: msg,
-                }
+                };
             }
         };
         let n = name.to_string();
@@ -1915,7 +1915,7 @@ impl Engine {
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: msg,
-                }
+                };
             }
         };
         let def = pu_core::agent_def::AgentDef {
@@ -1960,7 +1960,7 @@ impl Engine {
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: msg,
-                }
+                };
             }
         };
         let n = name.to_string();
@@ -2074,7 +2074,7 @@ impl Engine {
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: msg,
-                }
+                };
             }
         };
         let def = pu_core::swarm_def::SwarmDef {
@@ -2124,7 +2124,7 @@ impl Engine {
                 return Response::Error {
                     code: "IO_ERROR".into(),
                     message: msg,
-                }
+                };
             }
         };
         let n = name.to_string();
@@ -2177,6 +2177,16 @@ impl Engine {
         let mut spawned_agents = Vec::new();
 
         for wt_index in 0..swarm_def.worktree_count {
+            let wt_name = if swarm_def.worktree_template.is_empty() {
+                format!("{swarm_name}-{wt_index}")
+            } else {
+                swarm_def
+                    .worktree_template
+                    .replace("{index}", &wt_index.to_string())
+            };
+
+            let mut worktree_id: Option<String> = None;
+
             for entry in &swarm_def.roster {
                 // Resolve agent def to get template/inline_prompt
                 let pr2 = project_root.to_string();
@@ -2229,42 +2239,41 @@ impl Engine {
                         }
                     }
                 } else {
-                    agent_def
-                        .inline_prompt
-                        .clone()
-                        .unwrap_or_default()
+                    agent_def.inline_prompt.clone().unwrap_or_default()
                 };
 
                 for q in 0..entry.quantity {
-                    // Build worktree name from template
-                    let wt_name = if swarm_def.worktree_template.is_empty() {
-                        format!("{swarm_name}-{}-{wt_index}-{q}", entry.agent_def)
-                    } else {
-                        swarm_def
-                            .worktree_template
-                            .replace("{index}", &wt_index.to_string())
-                    };
+                    let agent_name = format!("{}-{}-{wt_index}-{q}", swarm_name, entry.agent_def);
 
-                    let agent_name = format!(
-                        "{}-{}-{wt_index}-{q}",
-                        swarm_name, entry.agent_def
-                    );
+                    // First agent creates the worktree; subsequent agents reuse it
+                    let (spawn_name, spawn_worktree) = if worktree_id.is_some() {
+                        (Some(agent_name), worktree_id.clone())
+                    } else {
+                        (Some(wt_name.clone()), None)
+                    };
 
                     let resp = self
                         .handle_spawn(
                             project_root,
                             &prompt,
                             &agent_def.agent_type,
-                            Some(agent_name),
+                            spawn_name,
                             None,
                             false,
-                            Some(wt_name),
+                            spawn_worktree,
                         )
                         .await;
 
                     match resp {
-                        Response::SpawnResult { agent_id, .. } => {
+                        Response::SpawnResult {
+                            agent_id,
+                            worktree_id: wt_id,
+                            ..
+                        } => {
                             spawned_agents.push(agent_id);
+                            if worktree_id.is_none() {
+                                worktree_id = wt_id;
+                            }
                         }
                         Response::Error { code, message } => {
                             return Response::Error { code, message };
@@ -2289,7 +2298,9 @@ impl Engine {
         match scope {
             "global" => global_fn().map_err(|e| e.to_string()),
             "local" => Ok(local_fn(Path::new(project_root))),
-            other => Err(format!("unknown scope: {other} (expected 'local' or 'global')")),
+            other => Err(format!(
+                "unknown scope: {other} (expected 'local' or 'global')"
+            )),
         }
     }
 }

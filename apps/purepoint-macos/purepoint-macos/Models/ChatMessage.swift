@@ -24,9 +24,14 @@ enum ToolUseStatus: Sendable {
     case running, completed, failed
 }
 
+struct PulseEvent: Sendable {
+    let agent: String
+    let event: String
+}
+
 struct PulseSummary: Sendable {
     let activeAgents: Int
-    let recentEvents: [(agent: String, event: String)]
+    let recentEvents: [PulseEvent]
 }
 
 enum ContentBlock: Identifiable, Sendable {

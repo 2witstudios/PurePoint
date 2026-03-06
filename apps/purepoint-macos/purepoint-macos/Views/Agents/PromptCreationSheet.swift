@@ -8,10 +8,10 @@ struct PromptCreationSheet: View {
     @State private var name = ""
     @State private var description = ""
     @State private var scope: PromptScopeChoice = .project
-    @State private var agentType = "claude"
+    @State private var agentType = ""
     @State private var promptBody = ""
 
-    private let agentTypes = ["claude", "codex", "opencode"]
+    private let agentTypes = ["", "claude", "codex", "opencode"]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,7 +55,7 @@ struct PromptCreationSheet: View {
 
             Picker("Agent type", selection: $agentType) {
                 ForEach(agentTypes, id: \.self) { t in
-                    Text(t).tag(t)
+                    Text(t.isEmpty ? "Any" : t).tag(t)
                 }
             }
 

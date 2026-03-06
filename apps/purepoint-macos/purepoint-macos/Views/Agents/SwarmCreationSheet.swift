@@ -112,7 +112,10 @@ struct SwarmCreationSheet: View {
                 }
             }
             .keyboardShortcut(.defaultAction)
-            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(
+                name.trimmingCharacters(in: .whitespaces).isEmpty
+                || rosterItems.isEmpty
+            )
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

@@ -14,7 +14,7 @@ struct AgentsHubModelsTests {
         let info = try! JSONDecoder().decode(TemplateInfo.self, from: json)
         let prompt = SavedPrompt(from: info)
 
-        #expect(prompt.id == "review")
+        #expect(prompt.id == "local:review")
         #expect(prompt.name == "review")
         #expect(prompt.description == "Code review")
         #expect(prompt.agent == "claude")
@@ -48,7 +48,7 @@ struct AgentsHubModelsTests {
         let info = try! JSONDecoder().decode(AgentDefInfo.self, from: json)
         let def = AgentDefinition(from: info)
 
-        #expect(def.id == "reviewer")
+        #expect(def.id == "local:reviewer")
         #expect(def.name == "reviewer")
         #expect(def.agentType == "claude")
         #expect(def.template == "review")
@@ -81,7 +81,7 @@ struct AgentsHubModelsTests {
         let info = try! JSONDecoder().decode(SwarmDefInfo.self, from: json)
         let swarm = SwarmDefinition(from: info)
 
-        #expect(swarm.id == "full-stack")
+        #expect(swarm.id == "local:full-stack")
         #expect(swarm.name == "full-stack")
         #expect(swarm.worktreeCount == 3)
         #expect(swarm.worktreeTemplate == "feature")

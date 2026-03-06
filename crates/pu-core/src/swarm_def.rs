@@ -91,8 +91,7 @@ pub fn save_swarm_def(dir: &Path, def: &SwarmDef) -> Result<(), std::io::Error> 
     crate::validation::validate_name(&def.name)?;
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
-    let yaml = serde_yml::to_string(def)
-        .map_err(std::io::Error::other)?;
+    let yaml = serde_yml::to_string(def).map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 

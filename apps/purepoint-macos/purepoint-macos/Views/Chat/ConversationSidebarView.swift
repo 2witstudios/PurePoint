@@ -61,9 +61,9 @@ struct ConversationSidebarView: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .lineLimit(2)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
 
                 HStack(spacing: 6) {
                     Text(session.projectName)

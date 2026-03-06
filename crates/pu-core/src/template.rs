@@ -19,7 +19,7 @@ pub struct Template {
 }
 
 fn default_agent() -> String {
-    "claude".to_string()
+    String::new()
 }
 
 /// Parse a template from file content. Expects optional YAML frontmatter delimited by `---`.
@@ -166,8 +166,12 @@ pub fn save_template(
         description: &'a str,
         agent: &'a str,
     }
-    let fm = serde_yml::to_string(&TemplateFrontmatter { name, description, agent })
-        .map_err(std::io::Error::other)?;
+    let fm = serde_yml::to_string(&TemplateFrontmatter {
+        name,
+        description,
+        agent,
+    })
+    .map_err(std::io::Error::other)?;
     let content = format!("---\n{fm}---\n{body}");
     std::fs::write(dir.join(format!("{name}.md")), content)
 }
@@ -242,7 +246,7 @@ mod tests {
         let content = "Just a prompt body.\n";
         let tpl = parse_template(content, "my-prompt.md");
         assert_eq!(tpl.name, "my-prompt");
-        assert_eq!(tpl.agent, "claude");
+        assert_eq!(tpl.agent, "");
         assert_eq!(tpl.body, "Just a prompt body.\n");
     }
 
@@ -252,7 +256,7 @@ mod tests {
         let tpl = parse_template(content, "test.md");
         assert_eq!(tpl.name, "test");
         assert_eq!(tpl.description, "A test");
-        assert_eq!(tpl.agent, "claude");
+        assert_eq!(tpl.agent, "");
     }
 
     #[test]
@@ -339,7 +343,14 @@ mod tests {
         let dir = tmp.path().join("templates");
 
         // when
-        save_template(&dir, "review", "Code review", "claude", "Review the code.\n").unwrap();
+        save_template(
+            &dir,
+            "review",
+            "Code review",
+            "claude",
+            "Review the code.\n",
+        )
+        .unwrap();
 
         // then
         let content = std::fs::read_to_string(dir.join("review.md")).unwrap();
@@ -371,7 +382,14 @@ mod tests {
         let dir = tmp.path().join("templates");
 
         // when
-        save_template(&dir, "deploy", "Deploy to prod", "claude", "Deploy {{ENV}}.\n").unwrap();
+        save_template(
+            &dir,
+            "deploy",
+            "Deploy to prod",
+            "claude",
+            "Deploy {{ENV}}.\n",
+        )
+        .unwrap();
         let content = std::fs::read_to_string(dir.join("deploy.md")).unwrap();
         let tpl = parse_template(&content, "deploy.md");
 
