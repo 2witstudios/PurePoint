@@ -72,31 +72,25 @@ pub fn root_agent_name() -> String {
 /// - Collapses consecutive hyphens
 /// - Trims leading/trailing hyphens
 pub fn normalize_worktree_name(input: &str) -> String {
-    let lowered = input.to_lowercase();
-    let mut result = String::with_capacity(lowered.len());
-    for ch in lowered.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' {
+    let mut result = String::with_capacity(input.len());
+    let mut prev_hyphen = true; // treat start as hyphen to trim leading
+    for ch in input.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
             result.push(ch);
-        } else if ch.is_whitespace() || ch == '_' {
-            result.push('-');
+            prev_hyphen = false;
+        } else if ch.is_whitespace() || ch == '_' || ch == '-' {
+            if !prev_hyphen {
+                result.push('-');
+                prev_hyphen = true;
+            }
         }
         // else: strip
     }
-    // Collapse consecutive hyphens
-    let mut collapsed = String::with_capacity(result.len());
-    let mut prev_hyphen = false;
-    for ch in result.chars() {
-        if ch == '-' {
-            if !prev_hyphen {
-                collapsed.push('-');
-            }
-            prev_hyphen = true;
-        } else {
-            collapsed.push(ch);
-            prev_hyphen = false;
-        }
+    // Trim trailing hyphen
+    if result.ends_with('-') {
+        result.pop();
     }
-    collapsed.trim_matches('-').to_string()
+    result
 }
 
 /// Generate a name for worktree agents by mashing up All-NBA names across all positions.

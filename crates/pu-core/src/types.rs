@@ -217,27 +217,19 @@ pub struct AgentConfig {
     pub command: String,
     #[serde(default)]
     pub prompt_flag: Option<String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::serde_defaults::default_true")]
     pub interactive: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    #[serde(default = "default_agent")]
+    #[serde(default = "crate::serde_defaults::default_agent")]
     pub default_agent: String,
     #[serde(default = "default_agents")]
     pub agents: IndexMap<String, AgentConfig>,
     #[serde(default = "default_env_files")]
     pub env_files: Vec<String>,
-}
-
-fn default_agent() -> String {
-    "claude".to_string()
 }
 
 fn default_env_files() -> Vec<String> {
@@ -270,7 +262,7 @@ pub fn default_agents() -> IndexMap<String, AgentConfig> {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_agent: default_agent(),
+            default_agent: crate::serde_defaults::default_agent(),
             agents: default_agents(),
             env_files: default_env_files(),
         }

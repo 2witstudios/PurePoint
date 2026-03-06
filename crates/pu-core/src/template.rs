@@ -210,6 +210,7 @@ fn scan_dir(dir: &Path, source: &str) -> Vec<Template> {
 }
 
 fn find_in_dir(dir: &Path, name: &str, source: &str) -> Option<Template> {
+    crate::validation::validate_name(name).ok()?;
     // Try exact file name first
     let path = dir.join(format!("{name}.md"));
     if path.is_file() {
