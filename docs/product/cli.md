@@ -42,6 +42,24 @@ Key behaviors:
 | `pu health` | `--json` | Check daemon health |
 | `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal |
 | `pu prompt list` | `--json` | List saved prompt templates |
+| `pu prompt show <name>` | `--json` | Show prompt template details |
+| `pu prompt create <name>` | `--body`, `--description`, `--agent`, `--scope`, `--json` | Create prompt template |
+| `pu prompt delete <name>` | `--scope`, `--json` | Delete prompt template |
+| `pu agent list` | `--json` | List agent definitions |
+| `pu agent show <name>` | `--json` | Show agent definition details |
+| `pu agent create <name>` | `--agent-type`, `--template`, `--inline-prompt`, `--tags`, `--scope`, `--json` | Create agent definition |
+| `pu agent delete <name>` | `--scope`, `--json` | Delete agent definition |
+| `pu swarm list` | `--json` | List swarm definitions |
+| `pu swarm show <name>` | `--json` | Show swarm definition details |
+| `pu swarm create <name>` | `--worktrees`, `--worktree-template`, `--roster AGENT:ROLE:QTY`, `--include-terminal`, `--scope`, `--json` | Create swarm definition |
+| `pu swarm delete <name>` | `--scope`, `--json` | Delete swarm definition |
+| `pu swarm run <name>` | `--var KEY=VALUE`, `--json` | Execute a swarm |
+| `pu schedule list` | `--json` | List schedules |
+| `pu schedule show <name>` | `--json` | Show schedule details |
+| `pu schedule create <name>` | `--recurrence`, `--start-at`, `--trigger`, `--trigger-name`, `--trigger-prompt`, `--agent`, `--var KEY=VALUE`, `--scope`, `--json` | Create schedule |
+| `pu schedule delete <name>` | `--scope`, `--json` | Delete schedule |
+| `pu schedule enable <name>` | `--json` | Enable schedule |
+| `pu schedule disable <name>` | `--json` | Disable schedule |
 | `pu grid show` | `--json` | Show current pane grid layout |
 | `pu grid split` | `--axis <v\|h>`, `--leaf <id>` | Split a pane |
 | `pu grid close` | `--leaf <id>` | Close a pane |

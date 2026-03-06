@@ -69,6 +69,46 @@ AgentEntry:
 
 **Manifest shape (proven in the original TypeScript CLI):** The `.pu/manifest.json` file is the source of truth for workspace state. The Rust types mirror the Swift `ManifestModel` from the macOS app, with camelCase serialization for compatibility.
 
+**Orchestration types (pu-core):**
+```
+AgentDefinition:
+  name: String
+  agentType: String (default: "claude")
+  defaultPrompt: Option<String> (template name or inline)
+  tags: Vec<String>
+  scope: Scope (Local | Global)
+
+SwarmDefinition:
+  name: String
+  roster: Vec<RosterEntry> (agent:role:qty)
+  worktreeCount: u32
+  worktreeTemplate: String
+  includeTerminal: bool
+  scope: Scope
+
+SavedPrompt (template):
+  name: String
+  body: String
+  description: String
+  agent: String
+  scope: Scope
+
+ScheduleDef:
+  name: String
+  enabled: bool
+  recurrence: String
+  startAt: Option<DateTime<Utc>>
+  trigger: ScheduleTrigger (AgentDef | SwarmDef | InlinePrompt)
+  triggerName: Option<String>
+  triggerPrompt: Option<String>
+  agent: String
+  variables: HashMap<String, String>
+  projectRoot: Option<String>
+  scope: Scope
+```
+
+**Config extension:** `default_agent_type` field on `.pu/config.yaml` — sets default agent type for spawning.
+
 ## Open Questions
 
 ? [DM-001] Should sessions be explicit user-created boundaries, or implicit based on time gaps in activity?
