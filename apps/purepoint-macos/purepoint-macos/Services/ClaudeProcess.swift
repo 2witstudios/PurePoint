@@ -24,7 +24,9 @@ actor ClaudeProcess: ClaudeProcessProvider {
         // Force kill after 3 seconds if still running
         let pid = process.processIdentifier
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-            kill(pid, SIGKILL)
+            if kill(pid, 0) == 0 {
+                kill(pid, SIGKILL)
+            }
         }
         self.process = nil
     }

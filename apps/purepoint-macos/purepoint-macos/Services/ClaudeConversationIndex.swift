@@ -350,16 +350,6 @@ enum ClaudeConversationIndex {
         }
     }
 
-    private static func parseJSONLine(_ line: String) -> [String: Any]? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any]
-        else {
-            return nil
-        }
-        return dictionary
-    }
-
     private static func readPrefix(from url: URL, byteCount: Int) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
