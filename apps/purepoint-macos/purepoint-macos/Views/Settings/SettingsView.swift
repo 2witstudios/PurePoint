@@ -95,8 +95,7 @@ struct SettingsView: View {
     // MARK: - Helpers
 
     private var versionString: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–"
-        return "v\(version)"
+        "v\(Bundle.main.appVersion)"
     }
 }
 

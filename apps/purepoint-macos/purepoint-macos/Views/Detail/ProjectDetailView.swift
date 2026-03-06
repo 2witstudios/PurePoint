@@ -155,7 +155,7 @@ struct ProjectDetailView: View {
 
                     Spacer()
 
-                    Link(destination: URL(string: pr.url)!) {
+                    Link(destination: URL(string: pr.url) ?? URL(string: "about:blank")!) {
                         Image(systemName: "arrow.up.right.square")
                             .font(.system(size: 12))
                     }
@@ -177,16 +177,6 @@ struct ProjectDetailView: View {
     }
 
     private var ghUnavailableView: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "terminal")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-            Text("Install GitHub CLI for PR diffs")
-                .font(.system(size: 13, weight: .medium))
-            Text("Run `brew install gh && gh auth login`")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GHUnavailableView()
     }
 }

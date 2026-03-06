@@ -114,10 +114,14 @@ struct ScheduleCreationSheet: View {
         return "Next run: \(Self.previewFormatter.string(from: date))"
     }
 
-    private func timeString(_ date: Date) -> String {
+    private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "h:mm a"
-        return f.string(from: date)
+        return f
+    }()
+
+    private func timeString(_ date: Date) -> String {
+        Self.timeFormatter.string(from: date)
     }
 
     // MARK: - Footer

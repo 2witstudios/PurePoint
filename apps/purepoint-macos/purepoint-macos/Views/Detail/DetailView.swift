@@ -97,10 +97,10 @@ private struct AgentTerminalPane: View {
 
             if isHovered {
                 HStack(spacing: 4) {
-                    overlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
+                    OverlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
                         enterGrid(axis: .vertical)
                     }
-                    overlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
+                    OverlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
                         enterGrid(axis: .horizontal)
                     }
                 }
@@ -125,13 +125,4 @@ private struct AgentTerminalPane: View {
         gridState.pendingPaletteLeafId = gridState.focusedLeafId
     }
 
-    private func overlayButton(icon: String, tooltip: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 11))
-                .frame(width: 20, height: 20)
-        }
-        .buttonStyle(.plain)
-        .help(tooltip)
-    }
 }
