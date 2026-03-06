@@ -135,7 +135,7 @@ actor DaemonAttachSession {
                 }
                 let bytes = [UInt8](data)
                 await MainActor.run {
-                    tv?.feed(byteArray: bytes)
+                    tv?.feed(byteArray: ArraySlice(bytes))
                     if shouldForceFullRefresh {
                         tv?.getTerminal().updateFullScreen()
                     }
