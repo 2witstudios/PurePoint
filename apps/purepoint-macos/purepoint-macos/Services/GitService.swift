@@ -9,6 +9,7 @@ nonisolated struct CommandResult: Sendable {
 
 actor GitService {
     static let shared = GitService()
+    private var cachedGhPath: String?
 
     // MARK: - Git Commands
 
@@ -73,15 +74,7 @@ actor GitService {
             let lines = section.components(separatedBy: "\n")
             guard !lines.isEmpty else { continue }
 
-            let headerParts = lines[0].split(separator: " ", maxSplits: 1)
-            var filename = ""
-            if headerParts.count >= 2 {
-                let bPath = String(headerParts[1])
-                filename = bPath.hasPrefix("b/") ? String(bPath.dropFirst(2)) : bPath
-            } else if headerParts.count == 1 {
-                let aPath = String(headerParts[0])
-                filename = aPath.hasPrefix("a/") ? String(aPath.dropFirst(2)) : aPath
-            }
+            let filename = extractFilename(from: lines[0])
             guard !filename.isEmpty else { continue }
 
             // Infer status from diff metadata
@@ -125,16 +118,7 @@ actor GitService {
             guard !sectionLines.isEmpty else { continue }
 
             // First line: "a/path b/path"
-            let headerLine = sectionLines[0]
-            let headerParts = headerLine.split(separator: " ", maxSplits: 1)
-            var filename = ""
-            if headerParts.count >= 2 {
-                let bPath = String(headerParts[1])
-                filename = bPath.hasPrefix("b/") ? String(bPath.dropFirst(2)) : bPath
-            } else if headerParts.count == 1 {
-                let aPath = String(headerParts[0])
-                filename = aPath.hasPrefix("a/") ? String(aPath.dropFirst(2)) : aPath
-            }
+            let filename = extractFilename(from: sectionLines[0])
 
             // Parse hunks
             var hunks: [Hunk] = []
@@ -236,6 +220,19 @@ actor GitService {
         return DiffData(files: files)
     }
 
+    /// Extract filename from a `diff --git a/path b/path` header line (without the `diff --git ` prefix).
+    private func extractFilename(from header: String) -> String {
+        let parts = header.split(separator: " ", maxSplits: 1)
+        if parts.count >= 2 {
+            let bPath = String(parts[1])
+            return bPath.hasPrefix("b/") ? String(bPath.dropFirst(2)) : bPath
+        } else if parts.count == 1 {
+            let aPath = String(parts[0])
+            return aPath.hasPrefix("a/") ? String(aPath.dropFirst(2)) : aPath
+        }
+        return ""
+    }
+
     // MARK: - Process Execution
 
     private func runGit(_ args: [String], cwd: String) -> CommandResult {
@@ -243,11 +240,17 @@ actor GitService {
     }
 
     private func runGh(_ args: [String], cwd: String) -> CommandResult {
-        // Locate gh via PATH
-        let whichResult = runProcess("/usr/bin/env", args: ["which", "gh"], cwd: cwd)
-        let ghPath = whichResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard whichResult.success, !ghPath.isEmpty else {
-            return CommandResult(stdout: "", stderr: "gh not found", exitCode: 1)
+        let ghPath: String
+        if let cached = cachedGhPath {
+            ghPath = cached
+        } else {
+            let whichResult = runProcess("/usr/bin/env", args: ["which", "gh"], cwd: cwd)
+            let resolved = whichResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard whichResult.success, !resolved.isEmpty else {
+                return CommandResult(stdout: "", stderr: "gh not found", exitCode: 1)
+            }
+            cachedGhPath = resolved
+            ghPath = resolved
         }
         return runProcess(ghPath, args: args, cwd: cwd)
     }

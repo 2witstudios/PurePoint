@@ -166,14 +166,6 @@ enum TranscriptParser {
         return contentBlocks
     }
 
-    private static func parseJSONLine(_ line: String) -> [String: Any]? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dict = object as? [String: Any]
-        else { return nil }
-        return dict
-    }
-
     private static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

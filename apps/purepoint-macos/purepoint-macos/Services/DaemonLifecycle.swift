@@ -50,10 +50,11 @@ private actor DaemonLauncher {
 
     func ensureDaemon() async throws {
         let client = DaemonClient()
+        let binaryPath = DaemonLifecycle.findBinary()
 
         // Check if already healthy
         let healthy = await isHealthy(client: client)
-        let restart = shouldRestart()
+        let restart = shouldRestart(binaryPath: binaryPath)
         print("[Daemon] healthy=\(healthy), shouldRestart=\(restart)")
         if healthy {
             if restart {
@@ -65,12 +66,12 @@ private actor DaemonLauncher {
             killExistingDaemon()
         }
 
-        try await launchDaemon()
+        try await launchDaemon(binaryPath: binaryPath)
     }
 
     func restartDaemon() async throws {
         killExistingDaemon()
-        try await launchDaemon()
+        try await launchDaemon(binaryPath: DaemonLifecycle.findBinary())
     }
 
     // MARK: - Private
@@ -109,8 +110,8 @@ private actor DaemonLauncher {
         try? FileManager.default.removeItem(atPath: socketPath)
     }
 
-    private func launchDaemon() async throws {
-        guard let binaryPath = DaemonLifecycle.findBinary() else {
+    private func launchDaemon(binaryPath: String?) async throws {
+        guard let binaryPath else {
             throw DaemonLifecycleError.binaryNotFound
         }
         print("[Daemon] launching: \(binaryPath)")
@@ -148,8 +149,8 @@ private actor DaemonLauncher {
     }
 
     /// Returns true if the app bundle's pu-engine binary is newer than the PID file.
-    private func shouldRestart() -> Bool {
-        guard let binaryPath = DaemonLifecycle.findBinary() else { return false }
+    private func shouldRestart(binaryPath: String?) -> Bool {
+        guard let binaryPath else { return false }
 
         guard let binaryDate = modDate(path: binaryPath),
               let pidDate = modDate(path: pidPath) else {
