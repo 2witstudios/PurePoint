@@ -27,6 +27,16 @@ final class ScheduleState {
     private let calendar = Calendar.current
     @ObservationIgnored private let client: DaemonClient
 
+    @ObservationIgnored private static let monthYearFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f
+    }()
+    @ObservationIgnored private static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d"; return f
+    }()
+    @ObservationIgnored private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEEE, MMMM d"; return f
+    }()
+
     init(client: DaemonClient = DaemonClient()) {
         self.client = client
     }
@@ -100,23 +110,17 @@ final class ScheduleState {
     // MARK: - Date Navigation
 
     var currentMonthYear: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: currentDate)
+        Self.monthYearFormatter.string(from: currentDate)
     }
 
     var currentWeekRange: String {
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: currentDate)?.start ?? currentDate
         let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart) ?? currentDate
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return "\(formatter.string(from: weekStart)) – \(formatter.string(from: weekEnd))"
+        return "\(Self.shortDateFormatter.string(from: weekStart)) – \(Self.shortDateFormatter.string(from: weekEnd))"
     }
 
     var currentDayFormatted: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
-        return formatter.string(from: currentDate)
+        Self.dayFormatter.string(from: currentDate)
     }
 
     var headerDateLabel: String {
@@ -128,30 +132,16 @@ final class ScheduleState {
         }
     }
 
-    func goForward() {
-        switch viewMode {
-        case .month:
-            currentDate = calendar.date(byAdding: .month, value: 1, to: currentDate) ?? currentDate
-        case .week:
-            currentDate = calendar.date(byAdding: .weekOfYear, value: 1, to: currentDate) ?? currentDate
-        case .day:
-            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
-        case .list:
-            currentDate = calendar.date(byAdding: .month, value: 1, to: currentDate) ?? currentDate
-        }
-    }
+    func goForward() { navigate(by: 1) }
+    func goBackward() { navigate(by: -1) }
 
-    func goBackward() {
-        switch viewMode {
-        case .month:
-            currentDate = calendar.date(byAdding: .month, value: -1, to: currentDate) ?? currentDate
-        case .week:
-            currentDate = calendar.date(byAdding: .weekOfYear, value: -1, to: currentDate) ?? currentDate
-        case .day:
-            currentDate = calendar.date(byAdding: .day, value: -1, to: currentDate) ?? currentDate
-        case .list:
-            currentDate = calendar.date(byAdding: .month, value: -1, to: currentDate) ?? currentDate
+    private func navigate(by value: Int) {
+        let component: Calendar.Component = switch viewMode {
+        case .month, .list: .month
+        case .week: .weekOfYear
+        case .day: .day
         }
+        currentDate = calendar.date(byAdding: component, value: value, to: currentDate) ?? currentDate
     }
 
     func goToToday() {
@@ -176,80 +166,22 @@ final class ScheduleState {
                 if event.date >= start && event.date <= end {
                     results.append((event.date, event))
                 }
-            case .hourly:
-                // Show one per day within range at the original time
-                var cursor = max(calendar.startOfDay(for: start), calendar.startOfDay(for: event.date))
-                let endDay = calendar.startOfDay(for: end)
-                let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
-                while cursor <= endDay {
-                    if let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
-                                                     minute: origComps.minute ?? 0,
-                                                     second: 0, of: cursor),
-                       occurrence >= start && occurrence <= end {
-                        results.append((occurrence, event))
-                    }
-                    cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end
-                }
-            case .daily:
-                var cursor = max(calendar.startOfDay(for: start), calendar.startOfDay(for: event.date))
-                let endDay = calendar.startOfDay(for: end)
-                let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
-                while cursor <= endDay {
-                    if let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
-                                                     minute: origComps.minute ?? 0,
-                                                     second: 0, of: cursor),
-                       occurrence >= start && occurrence <= end {
-                        results.append((occurrence, event))
-                    }
-                    cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end
-                }
+            case .hourly, .daily:
+                results += walkDays(from: start, to: end, event: event)
             case .weekdays:
-                var cursor = max(calendar.startOfDay(for: start), calendar.startOfDay(for: event.date))
-                let endDay = calendar.startOfDay(for: end)
-                let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
-                while cursor <= endDay {
-                    let weekday = calendar.component(.weekday, from: cursor)
-                    if weekday >= 2 && weekday <= 6 {
-                        if let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
-                                                         minute: origComps.minute ?? 0,
-                                                         second: 0, of: cursor),
-                           occurrence >= start && occurrence <= end {
-                            results.append((occurrence, event))
-                        }
-                    }
-                    cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end
+                results += walkDays(from: start, to: end, event: event) { [calendar] day in
+                    let weekday = calendar.component(.weekday, from: day)
+                    return weekday >= 2 && weekday <= 6
                 }
             case .weekly:
                 let origWeekday = calendar.component(.weekday, from: event.date)
-                var cursor = max(calendar.startOfDay(for: start), calendar.startOfDay(for: event.date))
-                let endDay = calendar.startOfDay(for: end)
-                let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
-                while cursor <= endDay {
-                    if calendar.component(.weekday, from: cursor) == origWeekday {
-                        if let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
-                                                         minute: origComps.minute ?? 0,
-                                                         second: 0, of: cursor),
-                           occurrence >= start && occurrence <= end {
-                            results.append((occurrence, event))
-                        }
-                    }
-                    cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end
+                results += walkDays(from: start, to: end, event: event) { [calendar] day in
+                    calendar.component(.weekday, from: day) == origWeekday
                 }
             case .monthly:
                 let origDay = calendar.component(.day, from: event.date)
-                var cursor = max(calendar.startOfDay(for: start), calendar.startOfDay(for: event.date))
-                let endDay = calendar.startOfDay(for: end)
-                let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
-                while cursor <= endDay {
-                    if calendar.component(.day, from: cursor) == origDay {
-                        if let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
-                                                         minute: origComps.minute ?? 0,
-                                                         second: 0, of: cursor),
-                           occurrence >= start && occurrence <= end {
-                            results.append((occurrence, event))
-                        }
-                    }
-                    cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end
+                results += walkDays(from: start, to: end, event: event) { [calendar] day in
+                    calendar.component(.day, from: day) == origDay
                 }
             }
         }
@@ -295,5 +227,28 @@ final class ScheduleState {
     var weekDays: [Date] {
         guard let weekInterval = calendar.dateInterval(of: .weekOfYear, for: currentDate) else { return [] }
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekInterval.start) }
+    }
+
+    // MARK: - Occurrence Helpers
+
+    private func walkDays(
+        from start: Date, to end: Date, event: ScheduleEvent,
+        filter: ((Date) -> Bool)? = nil
+    ) -> [(Date, ScheduleEvent)] {
+        var results: [(Date, ScheduleEvent)] = []
+        var cursor = max(calendar.startOfDay(for: start), calendar.startOfDay(for: event.date))
+        let endDay = calendar.startOfDay(for: end)
+        let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
+        while cursor <= endDay {
+            if filter?(cursor) ?? true,
+               let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
+                                              minute: origComps.minute ?? 0,
+                                              second: 0, of: cursor),
+               occurrence >= start && occurrence <= end {
+                results.append((occurrence, event))
+            }
+            cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end
+        }
+        return results
     }
 }

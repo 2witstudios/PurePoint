@@ -20,7 +20,7 @@ struct SavedPrompt: Identifiable {
     }
 
     init(name: String, description: String, agent: String, body: String, source: String, variables: [String]) {
-        self.id = name
+        self.id = "\(source):\(name)"
         self.name = name
         self.description = description
         self.agent = agent
@@ -54,7 +54,7 @@ struct AgentDefinition: Identifiable {
     }
 
     init(name: String, agentType: String = "claude", template: String? = nil, inlinePrompt: String? = nil, tags: [String] = [], scope: String = "local", availableInCommandDialog: Bool = true, icon: String? = nil) {
-        self.id = name
+        self.id = "\(scope):\(name)"
         self.name = name
         self.agentType = agentType
         self.template = template
@@ -90,7 +90,7 @@ struct SwarmDefinition: Identifiable {
     }
 
     init(name: String, worktreeCount: Int = 1, worktreeTemplate: String = "", roster: [SwarmRosterItem] = [], includeTerminal: Bool = false, scope: String = "local") {
-        self.id = name
+        self.id = "\(scope):\(name)"
         self.name = name
         self.worktreeCount = worktreeCount
         self.worktreeTemplate = worktreeTemplate

@@ -173,15 +173,18 @@ final class ChatState {
             // Final authoritative content — replace any streamed deltas
             streamingText = ""
             messages[index].contentBlocks = []
+            var blockCount = 0
             for block in blocks {
                 switch block {
                 case .text(let text):
-                    let split = ContentBlockSplitter.split(text)
+                    let split = ContentBlockSplitter.split(text, startIndex: blockCount)
+                    blockCount += split.count
                     messages[index].contentBlocks.append(contentsOf: split)
                 case .toolUse(let id, let name, let input):
                     messages[index].contentBlocks.append(.toolUse(
                         id: id, name: name, input: input, status: .running
                     ))
+                    blockCount += 1
                 }
             }
 
