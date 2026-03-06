@@ -8,7 +8,7 @@ struct SidebarFooter: View {
         VStack(spacing: 0) {
             Divider()
 
-            HStack {
+            HStack(spacing: 12) {
                 Button {
                     appState.showSettings = true
                 } label: {
@@ -17,10 +17,6 @@ struct SidebarFooter: View {
                 }
                 .buttonStyle(.plain)
 
-                Text("Settings")
-                    .font(PurePointTheme.smallFont)
-                    .foregroundStyle(.secondary)
-
                 Spacer()
 
                 Button {
@@ -28,8 +24,25 @@ struct SidebarFooter: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: "plus")
-                        Text("Add")
+                        Text("New")
                             .font(PurePointTheme.smallFont)
+                        Text("⌘N")
+                            .font(PurePointTheme.smallFont)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    openProjectWithPicker()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("Open")
+                            .font(PurePointTheme.smallFont)
+                        Text("⌘O")
+                            .font(PurePointTheme.smallFont)
+                            .foregroundStyle(.tertiary)
                     }
                     .foregroundStyle(.secondary)
                 }
@@ -50,6 +63,18 @@ struct SidebarFooter: View {
             return appState.projectState(forRoot: root)
         default:
             return appState.projects.first
+        }
+    }
+
+    private func openProjectWithPicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a project directory"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            appState.openProject(url.path)
         }
     }
 
