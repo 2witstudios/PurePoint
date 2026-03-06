@@ -72,21 +72,21 @@ class CommandPalettePanel: NSPanel {
     @discardableResult
     static func show(
         relativeTo window: NSWindow?,
-        variants: [AgentVariant] = AgentVariant.allVariants,
-        onSelect: @escaping (AgentVariant, String?, String?) -> Void
+        items: [CommandPaletteItem] = CommandPaletteItem.buildItems(builtInVariants: AgentVariant.allVariants, agents: [], swarms: []),
+        onSelect: @escaping (CommandPaletteResult) -> Void
     ) -> CommandPalettePanel {
         let panel = CommandPalettePanel()
         guard let vc = panel.contentViewController as? CommandPaletteViewController else {
             return panel
         }
-        vc.onSelect = { variant, prompt, name in
+        vc.onSelect = { result in
             panel.dismiss()
-            onSelect(variant, prompt, name)
+            onSelect(result)
         }
         vc.onDismiss = {
             panel.dismiss()
         }
-        vc.setVariants(variants)
+        vc.setItems(items)
         panel.showRelativeTo(window: window)
         return panel
     }
@@ -96,12 +96,12 @@ class CommandPalettePanel: NSPanel {
 
 class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTextViewDelegate {
 
-    var onSelect: ((AgentVariant, String?, String?) -> Void)?
+    var onSelect: ((CommandPaletteResult) -> Void)?
     var onDismiss: (() -> Void)?
 
     private enum Phase {
         case selection
-        case prompt(AgentVariant)
+        case prompt(CommandPaletteItem)
     }
 
     private var phase: Phase = .selection
@@ -110,8 +110,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private let searchField = NSTextField()
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
-    var availableVariants: [AgentVariant] = AgentVariant.allVariants
-    private var filteredVariants: [AgentVariant] = AgentVariant.allVariants
+    var availableItems: [CommandPaletteItem] = []
+    private var filteredItems: [CommandPaletteItem] = []
     private var selectedIndex = 0
 
     // Phase 2 — Prompt
@@ -123,7 +123,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private let slugPreview = NSTextField(labelWithString: "")
     private let promptScrollView = NSScrollView()
     private let promptTextView = NSTextView()
-    private let promptHint = NSTextField(labelWithString: "Enter to submit · Shift+Enter for newline")
+    private let promptHint = NSTextField(labelWithString: "Enter to submit \u{00B7} Shift+Enter for newline")
     private var promptHeightConstraint: NSLayoutConstraint!
     private var nameFieldConstraints: [NSLayoutConstraint] = []
 
@@ -333,20 +333,20 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     // MARK: - Configuration
 
-    func setVariants(_ variants: [AgentVariant]) {
-        availableVariants = variants
-        filteredVariants = variants
+    func setItems(_ items: [CommandPaletteItem]) {
+        availableItems = items
+        filteredItems = items
         selectedIndex = 0
         tableView.reloadData()
         updateHighlight()
-        resizePanel(rowCount: filteredVariants.count)
+        resizePanel(rowCount: filteredItems.count)
     }
 
     // MARK: - Phase Transitions
 
     private func showSelectionPhase() {
         phase = .selection
-        filteredVariants = availableVariants
+        filteredItems = availableItems
         selectedIndex = 0
 
         searchField.stringValue = ""
@@ -366,29 +366,29 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         tableView.reloadData()
         updateHighlight()
 
-        resizePanel(rowCount: filteredVariants.count)
+        resizePanel(rowCount: filteredItems.count)
 
         DispatchQueue.main.async { [weak self] in
             self?.view.window?.makeFirstResponder(self?.searchField)
         }
     }
 
-    private func showPromptPhase(variant: AgentVariant) {
-        phase = .prompt(variant)
+    private func showPromptPhase(item: CommandPaletteItem) {
+        phase = .prompt(item)
 
         searchField.isHidden = true
         separatorView.isHidden = true
         scrollView.isHidden = true
 
-        let img = NSImage(systemSymbolName: variant.icon, accessibilityDescription: variant.displayName)
+        let img = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.displayName)
         promptHeaderIcon.image = img
         promptHeaderIcon.contentTintColor = .labelColor
-        promptHeaderLabel.stringValue = variant.displayName
+        promptHeaderLabel.stringValue = item.displayName
 
         promptTextView.string = ""
-        promptTextView.setPlaceholder(variant.promptPlaceholder)
+        promptTextView.setPlaceholder(item.promptPlaceholder)
 
-        let showName = variant.kind == .worktree
+        let showName = item.showsNameField
         nameLabel.isHidden = !showName
         nameField.isHidden = !showName
         slugPreview.isHidden = !showName
@@ -447,36 +447,35 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     // MARK: - Filtering
 
-    private func filterVariants(query: String) {
+    private func filterItems(query: String) {
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
         if q.isEmpty {
-            filteredVariants = availableVariants
+            filteredItems = availableItems
         } else {
-            filteredVariants = availableVariants
-                .compactMap { variant -> (AgentVariant, Int)? in
-                    let name = variant.displayName.lowercased()
-                    let id = variant.id.lowercased()
-                    let sub = variant.subtitle.lowercased()
+            filteredItems = availableItems
+                .compactMap { item -> (CommandPaletteItem, Int)? in
+                    let text = item.searchableText.lowercased()
+                    let name = item.displayName.lowercased()
 
                     let score: Int
-                    if name.hasPrefix(q) || id.hasPrefix(q) {
+                    if name.hasPrefix(q) {
                         score = 100
-                    } else if name.contains(q) || id.contains(q) {
+                    } else if name.contains(q) {
                         score = 50
-                    } else if sub.contains(q) {
+                    } else if text.contains(q) {
                         score = 10
                     } else {
                         return nil
                     }
-                    return (variant, score)
+                    return (item, score)
                 }
                 .sorted { $0.1 > $1.1 }
                 .map(\.0)
         }
-        selectedIndex = filteredVariants.isEmpty ? -1 : 0
+        selectedIndex = filteredItems.isEmpty ? -1 : 0
         tableView.reloadData()
         updateHighlight()
-        resizePanel(rowCount: filteredVariants.count)
+        resizePanel(rowCount: filteredItems.count)
     }
 
     // MARK: - Highlight
@@ -496,17 +495,36 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     // MARK: - Actions
 
-    private func selectCurrentVariant() {
-        guard selectedIndex >= 0, selectedIndex < filteredVariants.count else { return }
-        let variant = filteredVariants[selectedIndex]
-        showPromptPhase(variant: variant)
+    private func selectCurrentItem() {
+        guard selectedIndex >= 0, selectedIndex < filteredItems.count else { return }
+        let item = filteredItems[selectedIndex]
+        if item.skipsPromptPhase {
+            let result: CommandPaletteResult
+            switch item {
+            case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: nil)
+            case .swarm(let s): result = .runSwarm(def: s)
+            case .builtIn: return
+            }
+            onSelect?(result)
+        } else {
+            showPromptPhase(item: item)
+        }
     }
 
     private func submitPrompt() {
-        guard case .prompt(let variant) = phase else { return }
+        guard case .prompt(let item) = phase else { return }
         let prompt = promptTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = nameField.isHidden ? nil : nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        onSelect?(variant, prompt.isEmpty ? nil : prompt, name?.isEmpty == true ? nil : name)
+        let promptOrNil = prompt.isEmpty ? nil : prompt
+        let nameOrNil = name?.isEmpty == true ? nil : name
+
+        let result: CommandPaletteResult
+        switch item {
+        case .builtIn(let v): result = .spawnBuiltIn(variant: v, prompt: promptOrNil, name: nameOrNil)
+        case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: promptOrNil)
+        case .swarm(let s): result = .runSwarm(def: s)
+        }
+        onSelect?(result)
     }
 
     func handleEscape() {
@@ -520,10 +538,10 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     @objc private func tableViewDoubleClick() {
         let row = tableView.clickedRow
-        guard row >= 0, row < filteredVariants.count else { return }
+        guard row >= 0, row < filteredItems.count else { return }
         selectedIndex = row
         updateHighlight()
-        selectCurrentVariant()
+        selectCurrentItem()
     }
 
     // MARK: - NSTextFieldDelegate
@@ -531,7 +549,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     func controlTextDidChange(_ obj: Notification) {
         guard let field = obj.object as? NSTextField else { return }
         if field === searchField {
-            filterVariants(query: field.stringValue)
+            filterItems(query: field.stringValue)
         } else if field === nameField {
             updateSlugPreview()
         }
@@ -581,14 +599,14 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
             }
             return true
         case #selector(NSResponder.moveDown(_:)):
-            if selectedIndex < filteredVariants.count - 1 {
+            if selectedIndex < filteredItems.count - 1 {
                 selectedIndex += 1
                 updateHighlight()
                 tableView.scrollRowToVisible(selectedIndex)
             }
             return true
         case #selector(NSResponder.insertNewline(_:)):
-            selectCurrentVariant()
+            selectCurrentItem()
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             handleEscape()
@@ -661,11 +679,11 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 extension CommandPaletteViewController: NSTableViewDataSource, NSTableViewDelegate {
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        filteredVariants.count
+        filteredItems.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let variant = filteredVariants[row]
+        let item = filteredItems[row]
 
         let highlightColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
         let clearColor = NSColor.clear.cgColor
@@ -676,24 +694,36 @@ extension CommandPaletteViewController: NSTableViewDataSource, NSTableViewDelega
         cellView.layer?.cornerRadius = 6
 
         let iconView = NSImageView()
-        iconView.image = NSImage(systemSymbolName: variant.icon, accessibilityDescription: variant.displayName)
+        iconView.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.displayName)
         iconView.contentTintColor = .labelColor
         iconView.imageScaling = .scaleProportionallyDown
         iconView.translatesAutoresizingMaskIntoConstraints = false
 
-        let nameLabel = NSTextField(labelWithString: variant.displayName)
+        let nameLabel = NSTextField(labelWithString: item.displayName)
         nameLabel.font = .boldSystemFont(ofSize: 14)
         nameLabel.textColor = .labelColor
         nameLabel.drawsBackground = false
         nameLabel.isBordered = false
 
-        let subtitleLabel = NSTextField(labelWithString: variant.subtitle)
+        let subtitleLabel = NSTextField(labelWithString: item.subtitle)
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.drawsBackground = false
         subtitleLabel.isBordered = false
 
-        let textStack = NSStackView(views: [nameLabel, subtitleLabel])
+        var textViews: [NSView] = [nameLabel, subtitleLabel]
+
+        // Category badge for non-built-in items
+        if let category = item.categoryLabel {
+            let badge = NSTextField(labelWithString: category)
+            badge.font = .systemFont(ofSize: 10, weight: .medium)
+            badge.textColor = .tertiaryLabelColor
+            badge.drawsBackground = false
+            badge.isBordered = false
+            textViews.append(badge)
+        }
+
+        let textStack = NSStackView(views: textViews)
         textStack.orientation = .horizontal
         textStack.spacing = 8
         textStack.alignment = .firstBaseline

@@ -234,8 +234,18 @@ struct purepoint_macosApp: App {
             project = appState.projects.first
         }
         guard let project else { return }
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, variants: AgentVariant.variantsWithWorktree) { variant, prompt, name in
-            project.createAgent(variant: variant, prompt: prompt, name: name, selection: appState.activeSidebarSelection)
+
+        let hub = appState.agentsHubState
+        let items = CommandPaletteItem.buildItems(
+            builtInVariants: AgentVariant.variantsWithWorktree,
+            agents: hub.agents,
+            swarms: hub.swarms
+        )
+        Task { await hub.loadAll(projectRoot: project.projectRoot) }
+
+        let sel = appState.activeSidebarSelection
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+            project.handlePaletteResult(result, selection: sel, hub: hub)
         }
     }
 

@@ -28,7 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "purepoint-macos.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "purepoint-macos.app"; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFC72F53F1FE00F8E0A1 /* purepoint-macosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFD12F53F1FE00F8E0A1 /* purepoint-macosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -517,7 +517,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/purepoint-macos.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/purepoint-macos";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PurePoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PurePoint";
 			};
 			name = Debug;
 		};
@@ -539,7 +539,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/purepoint-macos.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/purepoint-macos";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PurePoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PurePoint";
 			};
 			name = Release;
 		};

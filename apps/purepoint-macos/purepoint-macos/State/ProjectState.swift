@@ -137,14 +137,13 @@ final class ProjectState: Identifiable {
 
     // MARK: - Agent Operations
 
-    func createAgent(variant: AgentVariant, prompt: String?, name: String? = nil, selection: SidebarSelection?) {
+    func createAgent(agent: String, prompt: String, name: String? = nil, isWorktree: Bool = false, selection: SidebarSelection?) {
         let root = projectRoot
 
         let spawnRoot: Bool
         let spawnWorktree: String?
 
-        if variant.kind == .worktree {
-            // Create a NEW worktree: root=false, worktree=nil triggers daemon worktree creation
+        if isWorktree {
             spawnRoot = false
             spawnWorktree = nil
         } else {
@@ -170,7 +169,7 @@ final class ProjectState: Identifiable {
             do {
                 let client = DaemonClient()
                 let response = try await client.send(.spawn(
-                    projectRoot: root, prompt: prompt ?? "", agent: variant.id,
+                    projectRoot: root, prompt: prompt, agent: agent,
                     name: name, root: spawnRoot, worktree: spawnWorktree
                 ))
                 switch response {
@@ -187,10 +186,9 @@ final class ProjectState: Identifiable {
         }
     }
 
-    func spawnAgentForPane(variant: AgentVariant, prompt: String?, leafId: Int, gridState: GridState) {
+    func spawnAgentForPane(agent: String, prompt: String, leafId: Int, gridState: GridState) {
         let root = projectRoot
 
-        // Mark leaf as pending for sidebar leak prevention
         gridState.pendingSpawnLeafIds.insert(leafId)
 
         Task {
@@ -198,7 +196,7 @@ final class ProjectState: Identifiable {
             do {
                 let client = DaemonClient()
                 let response = try await client.send(.spawn(
-                    projectRoot: root, prompt: prompt ?? "", agent: variant.id,
+                    projectRoot: root, prompt: prompt, agent: agent,
                     root: true, worktree: nil
                 ))
                 switch response {
@@ -212,6 +210,18 @@ final class ProjectState: Identifiable {
             } catch {
                 self.appState?.daemonError = error.localizedDescription
             }
+        }
+    }
+
+    func handlePaletteResult(_ result: CommandPaletteResult, selection: SidebarSelection?, hub: AgentsHubState) {
+        switch result {
+        case .spawnBuiltIn(let variant, let prompt, let name):
+            createAgent(agent: variant.id, prompt: prompt ?? "", name: name, isWorktree: variant.kind == .worktree, selection: selection)
+        case .spawnAgentDef(let def, let prompt):
+            createAgent(agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", selection: selection)
+        case .runSwarm(let def):
+            let root = projectRoot
+            Task { await hub.runSwarm(projectRoot: root, name: def.name) }
         }
     }
 

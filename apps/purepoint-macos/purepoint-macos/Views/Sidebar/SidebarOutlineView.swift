@@ -16,15 +16,23 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             selection = newSelection
         }
 
+        let hub = appState.agentsHubState
         vc.onShowCommandPalette = { project, sel, includeWorktree in
-            let variants = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
-            CommandPalettePanel.show(relativeTo: NSApp.keyWindow, variants: variants) { variant, prompt, name in
-                project.createAgent(variant: variant, prompt: prompt, name: name, selection: sel)
+            let builtIns = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
+            let items = CommandPaletteItem.buildItems(
+                builtInVariants: builtIns,
+                agents: hub.agents,
+                swarms: includeWorktree ? hub.swarms : []
+            )
+            Task { await hub.loadAll(projectRoot: project.projectRoot) }
+
+            CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+                project.handlePaletteResult(result, selection: sel, hub: hub)
             }
         }
 
         vc.onAddTerminal = { project, worktree in
-            project.createAgent(variant: .terminal, prompt: nil, selection: .worktree(worktree.id))
+            project.createAgent(agent: "terminal", prompt: "", selection: .worktree(worktree.id))
         }
 
         vc.onKillAgent = { project, agentId in

@@ -71,9 +71,26 @@ private struct PanePlaceholderView: View {
         let state = appState
         let gs = gridState
         let lid = leafId
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow) { variant, prompt, _ in
+        let hub = state.agentsHubState
+        let items = CommandPaletteItem.buildItems(
+            builtInVariants: AgentVariant.allVariants,
+            agents: hub.agents,
+            swarms: []
+        )
+        if let root = gs.projectRoot {
+            Task { await hub.loadAll(projectRoot: root) }
+        }
+
+        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
             let project = state.projectState(forRoot: gs.projectRoot ?? "")
-            project?.spawnAgentForPane(variant: variant, prompt: prompt, leafId: lid, gridState: gs)
+            switch result {
+            case .spawnBuiltIn(let variant, let prompt, _):
+                project?.spawnAgentForPane(agent: variant.id, prompt: prompt ?? "", leafId: lid, gridState: gs)
+            case .spawnAgentDef(let def, let prompt):
+                project?.spawnAgentForPane(agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", leafId: lid, gridState: gs)
+            case .runSwarm:
+                break
+            }
         }
     }
 }
