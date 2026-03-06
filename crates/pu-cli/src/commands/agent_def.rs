@@ -66,6 +66,22 @@ pub async fn run_create(
     Ok(())
 }
 
+pub async fn run_show(socket: &Path, name: &str, json: bool) -> Result<(), CliError> {
+    daemon_ctrl::ensure_daemon(socket).await?;
+    let project_root = commands::cwd_string()?;
+    let resp = client::send_request(
+        socket,
+        &Request::GetAgentDef {
+            project_root,
+            name: name.to_string(),
+        },
+    )
+    .await?;
+    let resp = output::check_response(resp, json)?;
+    output::print_response(&resp, json);
+    Ok(())
+}
+
 pub async fn run_delete(
     socket: &Path,
     name: &str,

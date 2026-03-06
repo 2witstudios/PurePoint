@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct AgentsHubView: View {
-    @State private var hubState = AgentsHubState()
     @Environment(AppState.self) private var appState
+
+    private var hubState: AgentsHubState {
+        appState.agentsHubState
+    }
 
     @State private var activeTab: AgentsHubTab = .agents
     @State private var promptDraft = ""
@@ -27,13 +30,13 @@ struct AgentsHubView: View {
         .onChange(of: hubState.selectedPromptId) { _, _ in
             syncPromptEditor()
         }
-        .sheet(isPresented: $hubState.showingCreatePrompt) {
+        .sheet(isPresented: Bindable(hubState).showingCreatePrompt) {
             PromptCreationSheet(hubState: hubState, projectRoot: projectRoot)
         }
-        .sheet(isPresented: $hubState.showingCreateAgent) {
+        .sheet(isPresented: Bindable(hubState).showingCreateAgent) {
             AgentCreationSheet(hubState: hubState, projectRoot: projectRoot)
         }
-        .sheet(isPresented: $hubState.showingCreateSwarm) {
+        .sheet(isPresented: Bindable(hubState).showingCreateSwarm) {
             SwarmCreationSheet(hubState: hubState, projectRoot: projectRoot)
         }
     }
@@ -81,13 +84,43 @@ struct AgentsHubView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch activeTab {
-        case .prompts:
-            promptsContent
-        case .agents:
-            agentsContent
-        case .swarms:
-            swarmsContent
+        if hubState.isLoading {
+            VStack {
+                Spacer()
+                ProgressView("Loading...")
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 0) {
+                if let error = hubState.error {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text(error)
+                            .font(.system(size: 12))
+                            .lineLimit(2)
+                        Spacer()
+                        Button("Dismiss") {
+                            hubState.error = nil
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.1))
+                }
+
+                switch activeTab {
+                case .prompts:
+                    promptsContent
+                case .agents:
+                    agentsContent
+                case .swarms:
+                    swarmsContent
+                }
+            }
         }
     }
 
@@ -126,6 +159,18 @@ struct AgentsHubView: View {
                                     Spacer()
 
                                     HStack(spacing: 8) {
+                                        Button("Save") {
+                                            Task {
+                                                await hubState.saveTemplate(
+                                                    projectRoot: projectRoot,
+                                                    name: prompt.name,
+                                                    description: prompt.description,
+                                                    agent: prompt.agent,
+                                                    body: promptDraft,
+                                                    scope: promptScope.wireValue
+                                                )
+                                            }
+                                        }
                                         Button("Delete") {
                                             Task {
                                                 await hubState.deleteTemplate(
@@ -140,8 +185,6 @@ struct AgentsHubView: View {
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
                                 }
-
-                                PromptEditorToolbar()
 
                                 TextEditor(text: $promptDraft)
                                     .font(.system(size: 13, design: .monospaced))
@@ -192,7 +235,7 @@ struct AgentsHubView: View {
                                 usageRow(
                                     title: "Source",
                                     value: prompt.source,
-                                    icon: "scope"
+                                    icon: "globe"
                                 )
                             }
                         }
@@ -544,6 +587,12 @@ struct AgentsHubView: View {
             } else {
                 promptScope = .project
             }
+            Task {
+                await hubState.loadPromptDetail(projectRoot: projectRoot, name: prompt.name)
+                if let updated = hubState.selectedPrompt {
+                    promptDraft = updated.body
+                }
+            }
         }
     }
 
@@ -604,22 +653,6 @@ private struct CommandHintBar: View {
         .padding(.vertical, 10)
         .background(Color.primary.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct PromptEditorToolbar: View {
-    private let items = ["H1", "Bold", "Link", "List", "Code", "Quote"]
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(items, id: \.self) { item in
-                Button(item) {}
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            Spacer()
-            MockBadge(text: "Markdown", tint: .gray)
-        }
     }
 }
 
@@ -697,31 +730,6 @@ private struct SwarmListRow: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct SwarmRosterDraftRow: View {
-    let name: String
-    let role: String
-    @Binding var count: Int
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 12) {
-            MockBadge(text: name, tint: tint)
-            Text(role)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Stepper("x\(count)", value: $count, in: 0 ... 4)
-                .labelsHidden()
-            Text("x\(count)")
-                .font(.system(size: 12, weight: .medium))
-                .frame(width: 28, alignment: .trailing)
-        }
-        .padding(10)
-        .background(Color.primary.opacity(0.035))
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }

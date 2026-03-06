@@ -110,8 +110,10 @@ struct AgentCreationSheet: View {
                     scope: scope.wireValue,
                     availableInCommandDialog: availableInCommandDialog
                 )
-                Task { await hubState.saveAgentDef(projectRoot: projectRoot, def: def) }
-                dismiss()
+                Task {
+                    await hubState.saveAgentDef(projectRoot: projectRoot, def: def)
+                    dismiss()
+                }
             }
             .keyboardShortcut(.defaultAction)
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)

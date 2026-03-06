@@ -218,6 +218,14 @@ enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Show an agent definition
+    Show {
+        /// Agent definition name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete an agent definition
     Delete {
         /// Agent definition name
@@ -249,12 +257,23 @@ enum SwarmAction {
         /// Worktree template name
         #[arg(long, default_value = "")]
         worktree_template: String,
+        /// Roster entry: "agent_def:role:quantity" (repeatable)
+        #[arg(long = "roster", value_name = "AGENT:ROLE:QTY")]
+        roster: Vec<String>,
         /// Include terminal in swarm
         #[arg(long)]
         include_terminal: bool,
         /// Scope: local or global
         #[arg(long, default_value = "local")]
         scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a swarm definition
+    Show {
+        /// Swarm name
+        name: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -423,6 +442,9 @@ async fn main() {
                 )
                 .await
             }
+            AgentAction::Show { name, json } => {
+                commands::agent_def::run_show(&socket, &name, json).await
+            }
             AgentAction::Delete { name, scope, json } => {
                 commands::agent_def::run_delete(&socket, &name, &scope, json).await
             }
@@ -433,6 +455,7 @@ async fn main() {
                 name,
                 worktrees,
                 worktree_template,
+                roster,
                 include_terminal,
                 scope,
                 json,
@@ -442,11 +465,15 @@ async fn main() {
                     &name,
                     worktrees,
                     &worktree_template,
+                    roster,
                     include_terminal,
                     &scope,
                     json,
                 )
                 .await
+            }
+            SwarmAction::Show { name, json } => {
+                commands::swarm::run_show(&socket, &name, json).await
             }
             SwarmAction::Delete { name, scope, json } => {
                 commands::swarm::run_delete(&socket, &name, &scope, json).await

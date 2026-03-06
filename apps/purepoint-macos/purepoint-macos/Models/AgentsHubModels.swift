@@ -10,7 +10,7 @@ struct SavedPrompt: Identifiable {
     var variables: [String]
 
     init(from info: TemplateInfo) {
-        self.id = info.name
+        self.id = "\(info.source):\(info.name)"
         self.name = info.name
         self.description = info.description
         self.agent = info.agent
@@ -42,11 +42,11 @@ struct AgentDefinition: Identifiable {
     var icon: String?
 
     init(from info: AgentDefInfo) {
-        self.id = info.name
+        self.id = "\(info.scope):\(info.name)"
         self.name = info.name
         self.agentType = info.agentType
         self.template = info.template
-        self.inlinePrompt = nil  // not in list response
+        self.inlinePrompt = info.inlinePrompt
         self.tags = info.tags
         self.scope = info.scope
         self.availableInCommandDialog = info.availableInCommandDialog
@@ -80,7 +80,7 @@ struct SwarmDefinition: Identifiable {
     }
 
     init(from info: SwarmDefInfo) {
-        self.id = info.name
+        self.id = "\(info.scope):\(info.name)"
         self.name = info.name
         self.worktreeCount = info.worktreeCount
         self.worktreeTemplate = info.worktreeTemplate

@@ -10,6 +10,9 @@ pub struct SwarmDef {
     pub name: String,
     #[serde(default = "default_worktree_count")]
     pub worktree_count: u32,
+    /// Branch name template for spawned worktrees. Use `{index}` as a placeholder
+    /// for the worktree iteration index (0-based). E.g. `"feature-{index}"` produces
+    /// branches `feature-0`, `feature-1`, etc. Empty string generates automatic names.
     #[serde(default)]
     pub worktree_template: String,
     #[serde(default)]
@@ -17,7 +20,7 @@ pub struct SwarmDef {
     #[serde(default)]
     pub include_terminal: bool,
     /// "local" or "global" — set at load time
-    #[serde(skip_deserializing)]
+    #[serde(skip)]
     pub scope: String,
 }
 
@@ -85,15 +88,17 @@ pub fn find_swarm_def(project_root: &Path, name: &str) -> Option<SwarmDef> {
 
 /// Save a swarm definition as a YAML file. Creates the directory if needed.
 pub fn save_swarm_def(dir: &Path, def: &SwarmDef) -> Result<(), std::io::Error> {
+    crate::validation::validate_name(&def.name)?;
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
     let yaml = serde_yml::to_string(def)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 
 /// Delete a swarm definition file. Returns true if the file existed.
 pub fn delete_swarm_def(dir: &Path, name: &str) -> Result<bool, std::io::Error> {
+    crate::validation::validate_name(name)?;
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
         std::fs::remove_file(path)?;
@@ -113,9 +118,14 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<SwarmDef> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(mut def) = serde_yml::from_str::<SwarmDef>(&content) {
-                    def.scope = scope.to_string();
-                    defs.push(def);
+                match serde_yml::from_str::<SwarmDef>(&content) {
+                    Ok(mut def) => {
+                        def.scope = scope.to_string();
+                        defs.push(def);
+                    }
+                    Err(e) => {
+                        eprintln!("warning: failed to parse {}: {e}", path.display());
+                    }
                 }
             }
         }

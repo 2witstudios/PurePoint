@@ -227,6 +227,9 @@ impl Engine {
             Request::ListAgentDefs { project_root } => {
                 self.handle_list_agent_defs(&project_root).await
             }
+            Request::GetAgentDef { project_root, name } => {
+                self.handle_get_agent_def(&project_root, &name).await
+            }
             Request::SaveAgentDef {
                 project_root,
                 name,
@@ -262,6 +265,9 @@ impl Engine {
             // Swarm def CRUD
             Request::ListSwarmDefs { project_root } => {
                 self.handle_list_swarm_defs(&project_root).await
+            }
+            Request::GetSwarmDef { project_root, name } => {
+                self.handle_get_swarm_def(&project_root, &name).await
             }
             Request::SaveSwarmDef {
                 project_root,
@@ -1699,7 +1705,7 @@ impl Engine {
                 .map(|t| TemplateInfo {
                     name: t.name,
                     description: t.description,
-                    agent: t.agent.clone(),
+                    agent: t.agent,
                     source: t.source,
                     variables: pu_core::template::extract_variables(&t.body),
                 })
@@ -1837,6 +1843,7 @@ impl Engine {
                     name: d.name,
                     agent_type: d.agent_type,
                     template: d.template,
+                    inline_prompt: d.inline_prompt,
                     tags: d.tags,
                     scope: d.scope,
                     available_in_command_dialog: d.available_in_command_dialog,
@@ -1848,6 +1855,35 @@ impl Engine {
         .await
         {
             Ok(agent_defs) => Response::AgentDefList { agent_defs },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_get_agent_def(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::agent_def::find_agent_def(Path::new(&pr), &n)
+        })
+        .await
+        {
+            Ok(Some(d)) => Response::AgentDefDetail {
+                name: d.name,
+                agent_type: d.agent_type,
+                template: d.template,
+                inline_prompt: d.inline_prompt,
+                tags: d.tags,
+                scope: d.scope,
+                available_in_command_dialog: d.available_in_command_dialog,
+                icon: d.icon,
+            },
+            Ok(None) => Response::Error {
+                code: "NOT_FOUND".into(),
+                message: format!("agent def '{name}' not found"),
+            },
             Err(e) => Response::Error {
                 code: "INTERNAL_ERROR".into(),
                 message: format!("task join error: {e}"),
@@ -1974,6 +2010,41 @@ impl Engine {
         .await
         {
             Ok(swarm_defs) => Response::SwarmDefList { swarm_defs },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_get_swarm_def(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::swarm_def::find_swarm_def(Path::new(&pr), &n)
+        })
+        .await
+        {
+            Ok(Some(d)) => Response::SwarmDefDetail {
+                name: d.name,
+                worktree_count: d.worktree_count,
+                worktree_template: d.worktree_template,
+                roster: d
+                    .roster
+                    .into_iter()
+                    .map(|r| SwarmRosterEntryPayload {
+                        agent_def: r.agent_def,
+                        role: r.role,
+                        quantity: r.quantity,
+                    })
+                    .collect(),
+                include_terminal: d.include_terminal,
+                scope: d.scope,
+            },
+            Ok(None) => Response::Error {
+                code: "NOT_FOUND".into(),
+                message: format!("swarm def '{name}' not found"),
+            },
             Err(e) => Response::Error {
                 code: "INTERNAL_ERROR".into(),
                 message: format!("task join error: {e}"),
@@ -2166,7 +2237,7 @@ impl Engine {
 
                 for q in 0..entry.quantity {
                     // Build worktree name from template
-                    let _wt_name = if swarm_def.worktree_template.is_empty() {
+                    let wt_name = if swarm_def.worktree_template.is_empty() {
                         format!("{swarm_name}-{}-{wt_index}-{q}", entry.agent_def)
                     } else {
                         swarm_def
@@ -2187,7 +2258,7 @@ impl Engine {
                             Some(agent_name),
                             None,
                             false,
-                            None,
+                            Some(wt_name),
                         )
                         .await;
 
@@ -2217,7 +2288,8 @@ impl Engine {
     ) -> Result<std::path::PathBuf, String> {
         match scope {
             "global" => global_fn().map_err(|e| e.to_string()),
-            _ => Ok(local_fn(Path::new(project_root))),
+            "local" => Ok(local_fn(Path::new(project_root))),
+            other => Err(format!("unknown scope: {other} (expected 'local' or 'global')")),
         }
     }
 }

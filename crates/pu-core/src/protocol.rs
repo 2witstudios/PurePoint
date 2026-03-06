@@ -130,6 +130,10 @@ pub enum Request {
     ListAgentDefs {
         project_root: String,
     },
+    GetAgentDef {
+        project_root: String,
+        name: String,
+    },
     SaveAgentDef {
         project_root: String,
         name: String,
@@ -154,6 +158,10 @@ pub enum Request {
     // Swarm def CRUD
     ListSwarmDefs {
         project_root: String,
+    },
+    GetSwarmDef {
+        project_root: String,
+        name: String,
     },
     SaveSwarmDef {
         project_root: String,
@@ -255,6 +263,7 @@ pub struct AgentDefInfo {
     pub name: String,
     pub agent_type: String,
     pub template: Option<String>,
+    pub inline_prompt: Option<String>,
     pub tags: Vec<String>,
     pub scope: String,
     pub available_in_command_dialog: bool,
@@ -369,8 +378,26 @@ pub enum Response {
     AgentDefList {
         agent_defs: Vec<AgentDefInfo>,
     },
+    AgentDefDetail {
+        name: String,
+        agent_type: String,
+        template: Option<String>,
+        inline_prompt: Option<String>,
+        tags: Vec<String>,
+        scope: String,
+        available_in_command_dialog: bool,
+        icon: Option<String>,
+    },
     SwarmDefList {
         swarm_defs: Vec<SwarmDefInfo>,
+    },
+    SwarmDefDetail {
+        name: String,
+        worktree_count: u32,
+        worktree_template: String,
+        roster: Vec<SwarmRosterEntryPayload>,
+        include_terminal: bool,
+        scope: String,
     },
     RunSwarmResult {
         spawned_agents: Vec<String>,
@@ -1016,6 +1043,7 @@ mod tests {
             name: "reviewer".into(),
             agent_type: "claude".into(),
             template: Some("review-template".into()),
+            inline_prompt: None,
             tags: vec!["review".into()],
             scope: "local".into(),
             available_in_command_dialog: true,
@@ -1520,6 +1548,7 @@ mod tests {
                 name: "reviewer".into(),
                 agent_type: "claude".into(),
                 template: None,
+                inline_prompt: None,
                 tags: vec![],
                 scope: "local".into(),
                 available_in_command_dialog: true,

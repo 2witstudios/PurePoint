@@ -4,7 +4,6 @@ enum SidebarNavItem: String, CaseIterable, Identifiable {
     case dashboard
     case agents
     case schedule
-    case memory
 
     var id: String { rawValue }
 
@@ -14,10 +13,9 @@ enum SidebarNavItem: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .dashboard: "square.grid.2x2"
+        case .dashboard: "bubble.left.and.bubble.right.fill"
         case .agents:    "cpu"
         case .schedule:  "calendar"
-        case .memory:    "brain"
         }
     }
 }

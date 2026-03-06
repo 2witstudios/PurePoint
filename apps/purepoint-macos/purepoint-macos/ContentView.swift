@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppState.self) private var appState
     @Environment(GridState.self) private var gridState
-    @State private var selection: SidebarSelection?
+    @State private var selection: SidebarSelection? = .nav(.dashboard)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
@@ -17,7 +17,7 @@ struct ContentView: View {
                     max: PurePointTheme.sidebarMaxWidth
                 )
         } detail: {
-            DetailView(selection: selection)
+            DetailView(selection: $selection)
         }
         .navigationTitle("PurePoint")
         .overlay(alignment: .top) {

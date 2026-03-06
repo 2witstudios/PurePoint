@@ -17,7 +17,7 @@ pub struct AgentDef {
     #[serde(default)]
     pub tags: Vec<String>,
     /// "local" or "global" — set at load time
-    #[serde(skip_deserializing)]
+    #[serde(skip)]
     pub scope: String,
     #[serde(default = "default_true")]
     pub available_in_command_dialog: bool,
@@ -81,15 +81,17 @@ pub fn find_agent_def(project_root: &Path, name: &str) -> Option<AgentDef> {
 
 /// Save an agent definition as a YAML file. Creates the directory if needed.
 pub fn save_agent_def(dir: &Path, def: &AgentDef) -> Result<(), std::io::Error> {
+    crate::validation::validate_name(&def.name)?;
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
     let yaml = serde_yml::to_string(def)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 
 /// Delete an agent definition file. Returns true if the file existed.
 pub fn delete_agent_def(dir: &Path, name: &str) -> Result<bool, std::io::Error> {
+    crate::validation::validate_name(name)?;
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
         std::fs::remove_file(path)?;
@@ -109,9 +111,14 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentDef> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(mut def) = serde_yml::from_str::<AgentDef>(&content) {
-                    def.scope = scope.to_string();
-                    defs.push(def);
+                match serde_yml::from_str::<AgentDef>(&content) {
+                    Ok(mut def) => {
+                        def.scope = scope.to_string();
+                        defs.push(def);
+                    }
+                    Err(e) => {
+                        eprintln!("warning: failed to parse {}: {e}", path.display());
+                    }
                 }
             }
         }

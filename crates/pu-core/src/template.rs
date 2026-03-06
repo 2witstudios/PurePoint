@@ -158,13 +158,23 @@ pub fn save_template(
     agent: &str,
     body: &str,
 ) -> Result<(), std::io::Error> {
+    crate::validation::validate_name(name)?;
     std::fs::create_dir_all(dir)?;
-    let content = format!("---\nname: {name}\ndescription: {description}\nagent: {agent}\n---\n{body}");
+    #[derive(Serialize)]
+    struct TemplateFrontmatter<'a> {
+        name: &'a str,
+        description: &'a str,
+        agent: &'a str,
+    }
+    let fm = serde_yml::to_string(&TemplateFrontmatter { name, description, agent })
+        .map_err(std::io::Error::other)?;
+    let content = format!("---\n{fm}---\n{body}");
     std::fs::write(dir.join(format!("{name}.md")), content)
 }
 
 /// Delete a template file. Returns true if the file existed.
 pub fn delete_template(dir: &Path, name: &str) -> Result<bool, std::io::Error> {
+    crate::validation::validate_name(name)?;
     let path = dir.join(format!("{name}.md"));
     if path.is_file() {
         std::fs::remove_file(&path)?;

@@ -15,6 +15,8 @@ final class AppState {
     var pendingSelectAgentId: String?
     var pendingFocusAgentId: String?
 
+    var agentsHubState = AgentsHubState()
+
     weak var gridState: GridState?
 
     @ObservationIgnored private let service: any WorkspaceService
@@ -89,6 +91,27 @@ final class AppState {
 
     func projectState(forRoot root: String) -> ProjectState? {
         projects.first { $0.projectRoot == root }
+    }
+
+    func agentId(forSessionId sessionId: String) -> String? {
+        for project in projects {
+            if let agent = project.allAgents.first(where: { $0.sessionId == sessionId }) {
+                return agent.id
+            }
+        }
+        return nil
+    }
+
+    func worktreeId(forPath path: String) -> String? {
+        let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        for project in projects {
+            if let worktree = project.worktrees.first(where: {
+                URL(fileURLWithPath: $0.path).standardizedFileURL.path == normalizedPath
+            }) {
+                return worktree.id
+            }
+        }
+        return nil
     }
 
     // MARK: - Lifecycle

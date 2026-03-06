@@ -8,3 +8,4 @@ pub mod protocol;
 pub mod swarm_def;
 pub mod template;
 pub mod types;
+pub mod validation;

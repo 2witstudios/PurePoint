@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct DetailView: View {
-    let selection: SidebarSelection?
+    @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
     @Environment(GridState.self) private var gridState
 
@@ -42,10 +42,12 @@ struct DetailView: View {
 
         case .nav(let item):
             switch item {
+            case .dashboard:
+                PointGuardView(selection: $selection)
+            case .agents:
+                AgentsHubView()
             case .schedule:
                 ScheduleView()
-            default:
-                placeholderView(icon: item.icon, title: item.title)
             }
 
         case .worktree(let id):

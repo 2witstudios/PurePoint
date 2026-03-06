@@ -16,6 +16,9 @@ final class AgentsHubState {
     var showingCreateAgent = false
     var showingCreateSwarm = false
 
+    var isLoading = false
+    var error: String?
+
     var selectedPrompt: SavedPrompt? {
         prompts.first { $0.id == selectedPromptId }
     }
@@ -26,12 +29,19 @@ final class AgentsHubState {
         swarms.first { $0.id == selectedSwarmId }
     }
 
-    @ObservationIgnored private let client = DaemonClient()
+    @ObservationIgnored private let client: DaemonClient
+
+    init(client: DaemonClient = DaemonClient()) {
+        self.client = client
+    }
 
     func loadAll(projectRoot: String) async {
+        isLoading = true
+        error = nil
         await loadTemplates(projectRoot: projectRoot)
         await loadAgentDefs(projectRoot: projectRoot)
         await loadSwarmDefs(projectRoot: projectRoot)
+        isLoading = false
     }
 
     func loadTemplates(projectRoot: String) async {
@@ -44,7 +54,7 @@ final class AgentsHubState {
                 }
             }
         } catch {
-            print("[AgentsHubState] loadTemplates error: \(error)")
+            self.error = "Failed to load templates: \(error.localizedDescription)"
         }
     }
 
@@ -58,7 +68,7 @@ final class AgentsHubState {
                 }
             }
         } catch {
-            print("[AgentsHubState] loadAgentDefs error: \(error)")
+            self.error = "Failed to load agent defs: \(error.localizedDescription)"
         }
     }
 
@@ -72,7 +82,23 @@ final class AgentsHubState {
                 }
             }
         } catch {
-            print("[AgentsHubState] loadSwarmDefs error: \(error)")
+            self.error = "Failed to load swarm defs: \(error.localizedDescription)"
+        }
+    }
+
+    func loadPromptDetail(projectRoot: String, name: String) async {
+        do {
+            let response = try await client.send(.getTemplate(projectRoot: projectRoot, name: name))
+            if case .templateDetail(let detailName, let description, let agent, let body, let source, let variables) = response {
+                if let index = prompts.firstIndex(where: { $0.name == detailName && $0.source == source }) {
+                    prompts[index].body = body
+                    prompts[index].description = description
+                    prompts[index].agent = agent
+                    prompts[index].variables = variables
+                }
+            }
+        } catch {
+            self.error = "Failed to load prompt detail: \(error.localizedDescription)"
         }
     }
 
@@ -81,7 +107,7 @@ final class AgentsHubState {
             _ = try await client.send(.saveTemplate(projectRoot: projectRoot, name: name, description: description, agent: agent, body: body, scope: scope))
             await loadTemplates(projectRoot: projectRoot)
         } catch {
-            print("[AgentsHubState] saveTemplate error: \(error)")
+            self.error = "Failed to save template: \(error.localizedDescription)"
         }
     }
 
@@ -90,7 +116,7 @@ final class AgentsHubState {
             _ = try await client.send(.deleteTemplate(projectRoot: projectRoot, name: name, scope: scope))
             await loadTemplates(projectRoot: projectRoot)
         } catch {
-            print("[AgentsHubState] deleteTemplate error: \(error)")
+            self.error = "Failed to delete template: \(error.localizedDescription)"
         }
     }
 
@@ -109,7 +135,7 @@ final class AgentsHubState {
             ))
             await loadAgentDefs(projectRoot: projectRoot)
         } catch {
-            print("[AgentsHubState] saveAgentDef error: \(error)")
+            self.error = "Failed to save agent def: \(error.localizedDescription)"
         }
     }
 
@@ -118,7 +144,7 @@ final class AgentsHubState {
             _ = try await client.send(.deleteAgentDef(projectRoot: projectRoot, name: name, scope: scope))
             await loadAgentDefs(projectRoot: projectRoot)
         } catch {
-            print("[AgentsHubState] deleteAgentDef error: \(error)")
+            self.error = "Failed to delete agent def: \(error.localizedDescription)"
         }
     }
 
@@ -135,7 +161,7 @@ final class AgentsHubState {
             ))
             await loadSwarmDefs(projectRoot: projectRoot)
         } catch {
-            print("[AgentsHubState] saveSwarmDef error: \(error)")
+            self.error = "Failed to save swarm def: \(error.localizedDescription)"
         }
     }
 
@@ -144,7 +170,7 @@ final class AgentsHubState {
             _ = try await client.send(.deleteSwarmDef(projectRoot: projectRoot, name: name, scope: scope))
             await loadSwarmDefs(projectRoot: projectRoot)
         } catch {
-            print("[AgentsHubState] deleteSwarmDef error: \(error)")
+            self.error = "Failed to delete swarm def: \(error.localizedDescription)"
         }
     }
 
@@ -155,7 +181,7 @@ final class AgentsHubState {
                 print("[AgentsHubState] Spawned \(agents.count) agents: \(agents)")
             }
         } catch {
-            print("[AgentsHubState] runSwarm error: \(error)")
+            self.error = "Failed to run swarm: \(error.localizedDescription)"
         }
     }
 }

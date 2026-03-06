@@ -252,6 +252,26 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("---");
             print!("{body}");
         }
+        Response::AgentDefDetail { name, agent_type, template, inline_prompt, tags, scope, available_in_command_dialog, icon } => {
+            println!("{} ({})", name.bold(), scope.dimmed());
+            println!("  Type: {agent_type}");
+            if let Some(tpl) = template {
+                println!("  Template: {tpl}");
+            }
+            if let Some(prompt) = inline_prompt {
+                println!("  Inline prompt:");
+                for line in prompt.lines() {
+                    println!("    {line}");
+                }
+            }
+            if !tags.is_empty() {
+                println!("  Tags: {}", tags.join(", "));
+            }
+            if let Some(ic) = icon {
+                println!("  Icon: {ic}");
+            }
+            println!("  Command dialog: {available_in_command_dialog}");
+        }
         Response::AgentDefList { agent_defs } => {
             if agent_defs.is_empty() {
                 println!("No agent definitions");
@@ -260,6 +280,20 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("{:<20} {:<12} {:<10}", "NAME".bold(), "TYPE".bold(), "SCOPE".bold());
             for d in agent_defs {
                 println!("{:<20} {:<12} {:<10}", d.name, d.agent_type, d.scope);
+            }
+        }
+        Response::SwarmDefDetail { name, worktree_count, worktree_template, roster, include_terminal, scope } => {
+            println!("{} ({})", name.bold(), scope.dimmed());
+            println!("  Worktrees: {worktree_count}");
+            if !worktree_template.is_empty() {
+                println!("  Template: {worktree_template}");
+            }
+            println!("  Terminal: {include_terminal}");
+            if !roster.is_empty() {
+                println!("  Roster:");
+                for r in roster {
+                    println!("    {} ({}) x{}", r.agent_def, r.role, r.quantity);
+                }
             }
         }
         Response::SwarmDefList { swarm_defs } => {

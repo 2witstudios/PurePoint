@@ -6,6 +6,7 @@ struct PromptCreationSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
+    @State private var description = ""
     @State private var scope: PromptScopeChoice = .project
     @State private var agentType = "claude"
     @State private var promptBody = ""
@@ -40,6 +41,9 @@ struct PromptCreationSheet: View {
     private var formContent: some View {
         Form {
             TextField("Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+
+            TextField("Description", text: $description)
                 .textFieldStyle(.roundedBorder)
 
             Picker("Scope", selection: $scope) {
@@ -78,13 +82,13 @@ struct PromptCreationSheet: View {
                     await hubState.saveTemplate(
                         projectRoot: projectRoot,
                         name: name.trimmingCharacters(in: .whitespaces),
-                        description: "",
+                        description: description,
                         agent: agentType,
                         body: promptBody,
                         scope: scope.wireValue
                     )
+                    dismiss()
                 }
-                dismiss()
             }
             .keyboardShortcut(.defaultAction)
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)

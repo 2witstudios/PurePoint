@@ -1,4 +1,5 @@
 use crate::client;
+use crate::commands;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
@@ -27,7 +28,7 @@ pub async fn run(
     let project_root = cwd.to_string_lossy().to_string();
 
     // Parse --var KEY=VALUE pairs
-    let var_map = parse_vars(&vars)?;
+    let var_map = commands::parse_vars(&vars)?;
 
     // Resolve prompt + agent override from template/file/inline
     let (resolved_prompt, agent_override) =
@@ -51,17 +52,6 @@ pub async fn run(
     let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json);
     Ok(())
-}
-
-fn parse_vars(vars: &[String]) -> Result<HashMap<String, String>, CliError> {
-    let mut map = HashMap::new();
-    for v in vars {
-        let (key, value) = v.split_once('=').ok_or_else(|| {
-            CliError::Other(format!("invalid --var format: {v} (expected KEY=VALUE)"))
-        })?;
-        map.insert(key.to_string(), value.to_string());
-    }
-    Ok(map)
 }
 
 /// Resolve the prompt from one of: --template, --file, or inline positional arg.
@@ -111,50 +101,4 @@ fn resolve_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn given_valid_key_value_pairs_should_parse() {
-        let vars = vec!["FOO=bar".to_string(), "BAZ=qux".to_string()];
-        let map = parse_vars(&vars).unwrap();
-        assert_eq!(map.len(), 2);
-        assert_eq!(map["FOO"], "bar");
-        assert_eq!(map["BAZ"], "qux");
-    }
-
-    #[test]
-    fn given_empty_vars_should_return_empty_map() {
-        let vars: Vec<String> = vec![];
-        let map = parse_vars(&vars).unwrap();
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn given_value_with_equals_should_preserve_remainder() {
-        let vars = vec!["KEY=val=ue=extra".to_string()];
-        let map = parse_vars(&vars).unwrap();
-        assert_eq!(map["KEY"], "val=ue=extra");
-    }
-
-    #[test]
-    fn given_missing_equals_should_return_error() {
-        let vars = vec!["NOEQUALS".to_string()];
-        let result = parse_vars(&vars);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("invalid --var format"));
-    }
-
-    #[test]
-    fn given_empty_value_should_parse() {
-        let vars = vec!["KEY=".to_string()];
-        let map = parse_vars(&vars).unwrap();
-        assert_eq!(map["KEY"], "");
-    }
-
-    #[test]
-    fn given_duplicate_keys_should_use_last() {
-        let vars = vec!["KEY=first".to_string(), "KEY=second".to_string()];
-        let map = parse_vars(&vars).unwrap();
-        assert_eq!(map["KEY"], "second");
-    }
 }

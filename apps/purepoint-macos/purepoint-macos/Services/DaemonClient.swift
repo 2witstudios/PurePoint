@@ -440,6 +440,7 @@ nonisolated struct AgentDefInfo: Decodable {
     let name: String
     let agentType: String
     let template: String?
+    let inlinePrompt: String?
     let tags: [String]
     let scope: String
     let availableInCommandDialog: Bool
@@ -448,6 +449,7 @@ nonisolated struct AgentDefInfo: Decodable {
     enum CodingKeys: String, CodingKey {
         case name, template, tags, scope, icon
         case agentType = "agent_type"
+        case inlinePrompt = "inline_prompt"
         case availableInCommandDialog = "available_in_command_dialog"
     }
 }
