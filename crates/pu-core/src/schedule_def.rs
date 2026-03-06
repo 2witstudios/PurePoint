@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Recurrence {
+    #[default]
     None,
     Hourly,
     Daily,
@@ -61,12 +62,6 @@ pub struct ScheduleDef {
     #[serde(skip)]
     pub scope: String,
     pub created_at: DateTime<Utc>,
-}
-
-impl Default for Recurrence {
-    fn default() -> Self {
-        Recurrence::None
-    }
 }
 
 /// Scan both local and global schedule definition directories. Local defs take priority.
@@ -165,7 +160,7 @@ pub fn next_occurrence(
                 .with_nanosecond(0)
                 .unwrap();
             if candidate <= after {
-                candidate = candidate + Duration::hours(1);
+                candidate += Duration::hours(1);
             }
             Some(candidate)
         }
@@ -175,7 +170,7 @@ pub fn next_occurrence(
                 .and_hms_opt(base.hour(), base.minute(), base.second())
                 .unwrap();
             if Utc.from_utc_datetime(&candidate) <= after {
-                candidate = candidate + Duration::days(1);
+                candidate += Duration::days(1);
             }
             Some(Utc.from_utc_datetime(&candidate))
         }
@@ -185,7 +180,7 @@ pub fn next_occurrence(
                 .and_hms_opt(base.hour(), base.minute(), base.second())
                 .unwrap();
             if Utc.from_utc_datetime(&candidate) <= after {
-                candidate = candidate + Duration::days(1);
+                candidate += Duration::days(1);
             }
             // Skip weekends
             loop {
@@ -193,7 +188,7 @@ pub fn next_occurrence(
                 if wd != Weekday::Sat && wd != Weekday::Sun {
                     break;
                 }
-                candidate = candidate + Duration::days(1);
+                candidate += Duration::days(1);
             }
             Some(Utc.from_utc_datetime(&candidate))
         }
@@ -209,9 +204,9 @@ pub fn next_occurrence(
                 - current_weekday.num_days_from_monday() as i64
                 + 7)
                 % 7;
-            candidate = candidate + Duration::days(days_ahead);
+            candidate += Duration::days(days_ahead);
             if Utc.from_utc_datetime(&candidate) <= after {
-                candidate = candidate + Duration::weeks(1);
+                candidate += Duration::weeks(1);
             }
             Some(Utc.from_utc_datetime(&candidate))
         }

@@ -2376,7 +2376,7 @@ impl Engine {
             let defs = pu_core::schedule_def::list_schedule_defs(root);
             let infos: Vec<ScheduleInfo> = defs
                 .into_iter()
-                .map(|d| Self::schedule_def_to_info(d))
+                .map(Self::schedule_def_to_info)
                 .collect();
             infos
         })
