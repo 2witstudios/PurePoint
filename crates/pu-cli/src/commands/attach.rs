@@ -2,7 +2,7 @@ use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
-use pu_core::protocol::{Request, Response};
+use pu_core::protocol::Request;
 use std::path::Path;
 
 pub async fn run(socket: &Path, agent_id: &str) -> Result<(), CliError> {
@@ -17,12 +17,7 @@ pub async fn run(socket: &Path, agent_id: &str) -> Result<(), CliError> {
         },
     )
     .await?;
-    if let Response::Error { code, message } = &resp {
-        return Err(CliError::DaemonError {
-            code: code.clone(),
-            message: message.clone(),
-        });
-    }
+    let resp = output::check_response(resp, false)?;
     output::print_response(&resp, false);
     Ok(())
 }

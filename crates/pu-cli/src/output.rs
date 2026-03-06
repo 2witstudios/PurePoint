@@ -6,13 +6,19 @@ use crate::error::CliError;
 
 /// Check a daemon response for errors. On error, print JSON if requested, then return Err.
 pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> {
-    if let Response::Error { .. } = &resp {
-        if json {
-            print_response(&resp, true);
-        }
-    }
     match resp {
-        Response::Error { code, message } => Err(CliError::DaemonError { code, message }),
+        Response::Error { code, message } => {
+            if json {
+                print_response(
+                    &Response::Error {
+                        code: code.clone(),
+                        message: message.clone(),
+                    },
+                    true,
+                );
+            }
+            Err(CliError::DaemonError { code, message })
+        }
         other => Ok(other),
     }
 }
