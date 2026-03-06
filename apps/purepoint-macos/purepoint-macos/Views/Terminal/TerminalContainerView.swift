@@ -12,16 +12,8 @@ struct TerminalContainerView: NSViewRepresentable {
         container.layer?.backgroundColor = TerminalTheme.background.cgColor
 
         let termView = viewCache.terminalView(for: agent)
-        termView.translatesAutoresizingMaskIntoConstraints = false
         termView.isHidden = false
-        container.addSubview(termView)
-
-        NSLayoutConstraint.activate([
-            termView.topAnchor.constraint(equalTo: container.topAnchor),
-            termView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            termView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            termView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
+        termView.pinToEdges(of: container)
 
         return container
     }
@@ -32,7 +24,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // Already showing the correct agent — just ensure focus
         if termView.superview === nsView && !termView.isHidden {
             if isFocused {
-                makeTerminalFirstResponder(in: nsView)
+                makeTerminalFirstResponder()
             }
             return
         }
@@ -44,34 +36,20 @@ struct TerminalContainerView: NSViewRepresentable {
 
         // Add if not already a child, then show
         if termView.superview !== nsView {
-            termView.translatesAutoresizingMaskIntoConstraints = false
-            nsView.addSubview(termView)
-            NSLayoutConstraint.activate([
-                termView.topAnchor.constraint(equalTo: nsView.topAnchor),
-                termView.leadingAnchor.constraint(equalTo: nsView.leadingAnchor),
-                termView.trailingAnchor.constraint(equalTo: nsView.trailingAnchor),
-                termView.bottomAnchor.constraint(equalTo: nsView.bottomAnchor),
-            ])
+            termView.pinToEdges(of: nsView)
         }
 
         termView.isHidden = false
         viewCache.show(agentId: agent.id)
 
         // Always focus terminal when switching to a new agent
-        makeTerminalFirstResponder(in: nsView)
+        makeTerminalFirstResponder()
     }
 
-    private func makeTerminalFirstResponder(in nsView: NSView) {
+    private func makeTerminalFirstResponder() {
+        let paneView = viewCache.terminalView(for: agent)
         DispatchQueue.main.async {
-            guard let window = nsView.window else { return }
-            // Find the TerminalPaneNSView and make its terminal the first responder
-            for sub in nsView.subviews where !sub.isHidden {
-                if let termPaneView = sub as? TerminalPaneNSView,
-                   let tv = termPaneView.terminal?.terminalView {
-                    window.makeFirstResponder(tv)
-                    return
-                }
-            }
+            paneView.focusTerminal()
         }
     }
 }
