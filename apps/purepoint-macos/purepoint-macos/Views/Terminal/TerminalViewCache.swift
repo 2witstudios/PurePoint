@@ -69,17 +69,6 @@ final class TerminalViewCache {
         views[agentId] != nil
     }
 
-    /// Remove views for agents no longer in the manifest.
-    func clearStale(activeIds: Set<String>) {
-        let staleIds = Set(views.keys).subtracting(activeIds)
-        for id in staleIds {
-            views[id]?.tearDown()
-            views[id]?.removeFromSuperview()
-            views.removeValue(forKey: id)
-            lastAccess.removeValue(forKey: id)
-        }
-    }
-
     /// Evict terminal views for completed/killed/failed agents that haven't
     /// been viewed in evictionDelay seconds and are not currently visible.
     private func evictStale(visibleIds: Set<String> = []) {

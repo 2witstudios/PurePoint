@@ -125,6 +125,7 @@ enum TranscriptParser {
         else { return nil }
 
         var contentBlocks: [ContentBlock] = []
+        var blockCount = 0
 
         for block in contentArray {
             guard let blockType = block["type"] as? String else { continue }
@@ -132,7 +133,8 @@ enum TranscriptParser {
             switch blockType {
             case "text":
                 if let text = block["text"] as? String {
-                    let split = ContentBlockSplitter.split(text)
+                    let split = ContentBlockSplitter.split(text, startIndex: blockCount)
+                    blockCount += split.count
                     contentBlocks.append(contentsOf: split)
                 }
             case "tool_use":
@@ -162,14 +164,6 @@ enum TranscriptParser {
 
         guard !contentBlocks.isEmpty else { return nil }
         return contentBlocks
-    }
-
-    private static func parseJSONLine(_ line: String) -> [String: Any]? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dict = object as? [String: Any]
-        else { return nil }
-        return dict
     }
 
     private static let isoFormatter: ISO8601DateFormatter = {

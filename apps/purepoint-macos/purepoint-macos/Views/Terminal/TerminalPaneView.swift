@@ -28,7 +28,6 @@ class TerminalPaneNSView: NSView {
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
     private var isAttachDone = false
-    private var terminalInstalled = false
     private var heartbeatTimer: Timer?
     private var spinner: NSProgressIndicator?
     private var spinnerShownAt = Date()
@@ -43,21 +42,12 @@ class TerminalPaneNSView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func ensureTerminal() {
-        guard !terminalInstalled else { return }
-        terminalInstalled = true
+        guard terminal == nil else { return }
 
         let tv = ScrollableTerminal(frame: bounds)
         tv.wantsLayer = true
         tv.layer?.masksToBounds = true
-        tv.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(tv)
-
-        NSLayoutConstraint.activate([
-            tv.topAnchor.constraint(equalTo: topAnchor),
-            tv.leadingAnchor.constraint(equalTo: leadingAnchor),
-            tv.trailingAnchor.constraint(equalTo: trailingAnchor),
-            tv.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        tv.pinToEdges(of: self)
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
         terminal = tv
 
@@ -94,7 +84,7 @@ class TerminalPaneNSView: NSView {
     override func layout() {
         super.layout()
         // Create terminal only after we have a real frame, preventing 0-column grids
-        if window != nil && !terminalInstalled && bounds.width > 1 {
+        if window != nil && terminal == nil && bounds.width > 1 {
             ensureTerminal()
         }
         // Start daemon attach only after the first layout pass gives us a real frame.
@@ -148,10 +138,13 @@ class TerminalPaneNSView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    func focusTerminal() {
+        guard let tv = terminal?.terminalView else { return }
+        window?.makeFirstResponder(tv)
+    }
+
     override func mouseDown(with event: NSEvent) {
-        if let tv = terminal?.terminalView {
-            window?.makeFirstResponder(tv)
-        }
+        focusTerminal()
         super.mouseDown(with: event)
     }
 

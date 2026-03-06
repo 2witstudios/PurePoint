@@ -12,7 +12,6 @@ actor DaemonAttachSession {
     private var connection: NWConnection?
     private var stopped = false
     private var onFirstOutput: (() -> Void)?
-    private var hasReceivedOutput = false
     private var lastFullRefreshAtNanos: UInt64 = 0
     private static let fullRefreshIntervalNanos: UInt64 = 200_000_000 // 200ms
 
@@ -125,13 +124,10 @@ actor DaemonAttachSession {
             case .output(_, let data):
                 guard !data.isEmpty else { continue }
                 let now = DispatchTime.now().uptimeNanoseconds
-                if !hasReceivedOutput {
-                    hasReceivedOutput = true
+                if let cb = onFirstOutput {
+                    onFirstOutput = nil
                     print("[DaemonAttach \(agentId.prefix(8))] first output: \(data.count) bytes")
-                    if let cb = onFirstOutput {
-                        onFirstOutput = nil
-                        await MainActor.run { cb() }
-                    }
+                    await MainActor.run { cb() }
                 }
                 let shouldForceFullRefresh = now &- lastFullRefreshAtNanos >= Self.fullRefreshIntervalNanos
                 if shouldForceFullRefresh {

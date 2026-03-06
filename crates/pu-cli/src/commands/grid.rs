@@ -6,6 +6,7 @@ use crate::GridAction;
 use crate::client;
 use crate::daemon_ctrl;
 use crate::error::CliError;
+use crate::output;
 
 pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -22,6 +23,7 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                 },
             )
             .await?;
+            let resp = output::check_response(resp, json)?;
 
             match resp {
                 Response::GridLayout { layout } => {
@@ -34,9 +36,6 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                     } else {
                         print_ascii_grid(&layout);
                     }
-                }
-                Response::Error { code, message } => {
-                    return Err(CliError::DaemonError { code, message });
                 }
                 _ => {
                     println!("No grid layout");
@@ -56,7 +55,7 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                 },
             )
             .await?;
-            check_error(resp)?;
+            output::check_response(resp, false)?;
             println!("Split pane");
         }
 
@@ -69,7 +68,7 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                 },
             )
             .await?;
-            check_error(resp)?;
+            output::check_response(resp, false)?;
             println!("Closed pane");
         }
 
@@ -85,7 +84,7 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                 },
             )
             .await?;
-            check_error(resp)?;
+            output::check_response(resp, false)?;
             println!("Focus moved");
         }
 
@@ -99,20 +98,12 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                 },
             )
             .await?;
-            check_error(resp)?;
+            output::check_response(resp, false)?;
             println!("Agent assigned");
         }
     }
 
     Ok(())
-}
-
-fn check_error(resp: Response) -> Result<(), CliError> {
-    if let Response::Error { code, message } = resp {
-        Err(CliError::DaemonError { code, message })
-    } else {
-        Ok(())
-    }
 }
 
 /// Render the grid layout as an ASCII table.

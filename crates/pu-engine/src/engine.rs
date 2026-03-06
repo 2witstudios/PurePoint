@@ -14,7 +14,8 @@ use pu_core::manifest;
 use pu_core::paths;
 use pu_core::protocol::{
     AgentDefInfo, AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION, Request, Response,
-    SuspendTarget, SwarmDefInfo, SwarmRosterEntryPayload, TemplateInfo,
+    ScheduleInfo, ScheduleTriggerPayload, SuspendTarget, SwarmDefInfo, SwarmRosterEntryPayload,
+    TemplateInfo,
 };
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 use tokio::sync::OnceCell;
@@ -36,6 +37,8 @@ pub struct Engine {
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
+    /// Projects that have been initialized or used — scheduler scans these.
+    registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl Default for Engine {
@@ -55,6 +58,7 @@ impl Engine {
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
+            registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -74,18 +78,18 @@ impl Engine {
 
                 // Reap dead sessions
                 let dead_ids: Vec<String> = {
-                    let sessions = sessions.lock().await;
-                    sessions
+                    let mut sessions = sessions.lock().await;
+                    let dead: Vec<String> = sessions
                         .iter()
                         .filter(|(_, handle)| handle.exit_rx.borrow().is_some())
                         .map(|(id, _)| id.clone())
-                        .collect()
-                };
-                if !dead_ids.is_empty() {
-                    let mut sessions = sessions.lock().await;
-                    for id in &dead_ids {
+                        .collect();
+                    for id in &dead {
                         sessions.remove(id);
                     }
+                    dead
+                };
+                if !dead_ids.is_empty() {
                     let mut pending_initial_inputs = pending_initial_inputs.lock().await;
                     for id in &dead_ids {
                         pending_initial_inputs.remove(id);
@@ -134,7 +138,40 @@ impl Engine {
         }
     }
 
+    fn register_project(&self, project_root: &str) {
+        if !project_root.is_empty() {
+            if let Ok(mut projects) = self.registered_projects.lock() {
+                projects.insert(project_root.to_string());
+            }
+        }
+    }
+
+    pub fn registered_projects(&self) -> Vec<String> {
+        self.registered_projects
+            .lock()
+            .map(|p| p.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub async fn handle_request(&self, request: Request) -> Response {
+        // Register project for any project-scoped request
+        match &request {
+            Request::Init { project_root }
+            | Request::Spawn { project_root, .. }
+            | Request::Status { project_root, .. }
+            | Request::Kill { project_root, .. }
+            | Request::ListTemplates { project_root }
+            | Request::ListAgentDefs { project_root }
+            | Request::ListSwarmDefs { project_root }
+            | Request::ListSchedules { project_root }
+            | Request::SaveSchedule { project_root, .. }
+            | Request::EnableSchedule { project_root, .. }
+            | Request::DisableSchedule { project_root, .. } => {
+                self.register_project(project_root);
+            }
+            _ => {}
+        }
+
         match request {
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => self.handle_init(&project_root).await,
@@ -306,6 +343,49 @@ impl Engine {
                 self.handle_run_swarm(&project_root, &swarm_name, vars)
                     .await
             }
+            // Schedule CRUD
+            Request::ListSchedules { project_root } => {
+                self.handle_list_schedules(&project_root).await
+            }
+            Request::GetSchedule { project_root, name } => {
+                self.handle_get_schedule(&project_root, &name).await
+            }
+            Request::SaveSchedule {
+                project_root,
+                name,
+                enabled,
+                recurrence,
+                start_at,
+                trigger,
+                target,
+                scope,
+            } => {
+                self.handle_save_schedule(
+                    &project_root,
+                    &name,
+                    enabled,
+                    &recurrence,
+                    start_at,
+                    trigger,
+                    &target,
+                    &scope,
+                )
+                .await
+            }
+            Request::DeleteSchedule {
+                project_root,
+                name,
+                scope,
+            } => {
+                self.handle_delete_schedule(&project_root, &name, &scope)
+                    .await
+            }
+            Request::EnableSchedule { project_root, name } => {
+                self.handle_enable_schedule(&project_root, &name).await
+            }
+            Request::DisableSchedule { project_root, name } => {
+                self.handle_disable_schedule(&project_root, &name).await
+            }
         }
     }
 
@@ -408,12 +488,11 @@ impl Engine {
             });
         }
 
-        let m = match self.read_manifest_async(project_root).await {
-            Ok(m) => m,
-            Err(e) => return Self::error_response(&e),
-        };
-
         if let Some(id) = agent_id {
+            let m = match self.read_manifest_async(project_root).await {
+                Ok(m) => m,
+                Err(e) => return Self::error_response(&e),
+            };
             match m.find_agent(id) {
                 Some(loc) => {
                     let (agent, wt_id) = match loc {
@@ -423,65 +502,40 @@ impl Engine {
                         }
                     };
                     let sessions = self.sessions.lock().await;
-                    let (status, exit_code, idle_seconds) =
-                        self.live_agent_status_sync(id, agent, &sessions);
-                    Response::AgentStatus(AgentStatusReport {
-                        id: agent.id.clone(),
-                        name: agent.name.clone(),
-                        agent_type: agent.agent_type.clone(),
-                        status,
-                        pid: agent.pid,
-                        exit_code,
-                        idle_seconds,
-                        worktree_id: wt_id,
-                        started_at: agent.started_at,
-                        session_id: agent.session_id.clone(),
-                        prompt: agent.prompt.clone(),
-                        suspended: agent.suspended,
-                    })
+                    Response::AgentStatus(self.build_agent_status_report(agent, &sessions, wt_id))
                 }
                 None => Self::agent_not_found(id),
             }
         } else {
-            // Compute live status for all agents (root + worktree)
-            let sessions = self.sessions.lock().await;
-            let mut agents: Vec<AgentStatusReport> = m
-                .agents
-                .values()
-                .map(|a| {
-                    let (status, exit_code, idle_seconds) =
-                        self.live_agent_status_sync(&a.id, a, &sessions);
-                    AgentStatusReport {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                        agent_type: a.agent_type.clone(),
-                        status,
-                        pid: a.pid,
-                        exit_code,
-                        idle_seconds,
-                        worktree_id: None,
-                        started_at: a.started_at,
-                        session_id: a.session_id.clone(),
-                        prompt: a.prompt.clone(),
-                        suspended: a.suspended,
-                    }
-                })
-                .collect();
-            agents.sort_by_key(|a| a.started_at);
-            let worktrees: Vec<WorktreeEntry> = m
-                .worktrees
-                .into_values()
-                .map(|mut wt| {
-                    for agent in wt.agents.values_mut() {
-                        let (status, exit_code, _idle) =
-                            self.live_agent_status_sync(&agent.id, agent, &sessions);
-                        agent.status = status;
-                        agent.exit_code = exit_code;
-                    }
-                    wt
-                })
-                .collect();
-            Response::StatusReport { worktrees, agents }
+            match self.compute_full_status(project_root).await {
+                Ok((worktrees, agents)) => Response::StatusReport { worktrees, agents },
+                Err(e) => Self::error_response(&e),
+            }
+        }
+    }
+
+    /// Build a status report for a single agent, using live PTY state when available.
+    fn build_agent_status_report(
+        &self,
+        agent: &AgentEntry,
+        sessions: &HashMap<String, AgentHandle>,
+        worktree_id: Option<String>,
+    ) -> AgentStatusReport {
+        let (status, exit_code, idle_seconds) =
+            self.live_agent_status_sync(&agent.id, agent, sessions);
+        AgentStatusReport {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            agent_type: agent.agent_type.clone(),
+            status,
+            pid: agent.pid,
+            exit_code,
+            idle_seconds,
+            worktree_id,
+            started_at: agent.started_at,
+            session_id: agent.session_id.clone(),
+            prompt: agent.prompt.clone(),
+            suspended: agent.suspended,
         }
     }
 
@@ -649,11 +703,11 @@ impl Engine {
             // Copy env files (e.g., .env, .env.local) into new worktree
             for env_file in &cfg.env_files {
                 let src = root_path.join(env_file);
-                if src.exists() {
-                    let dst = wt_path.join(env_file);
-                    if let Err(e) = tokio::fs::copy(&src, &dst).await {
-                        tracing::warn!("failed to copy {env_file} to worktree: {e}");
-                    }
+                let dst = wt_path.join(env_file);
+                match tokio::fs::copy(&src, &dst).await {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && !src.exists() => {} // source doesn't exist, skip
+                    Err(e) => tracing::warn!("failed to copy {env_file} to worktree: {e}"),
                 }
             }
 
@@ -812,41 +866,20 @@ impl Engine {
             }
         };
 
-        // Extract handles from session map, then DROP the lock before killing.
-        // Killing can take up to 5s per agent — holding the mutex would block
-        // all other operations (status, logs, attach).
-        {
-            let mut pending_inputs = self.pending_initial_inputs.lock().await;
-            for id in &agent_ids {
-                pending_inputs.remove(id);
-            }
-        }
-        let handles_to_kill: Vec<(String, AgentHandle)> = {
-            let mut sessions = self.sessions.lock().await;
-            agent_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
-                .collect()
-        };
-        // Lock is dropped here.
-
-        let mut exit_codes = HashMap::new();
-        for (id, handle) in &handles_to_kill {
-            let state = self
-                .pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
-            exit_codes.insert(id.clone(), state.and_then(|s| s.exit_code));
-        }
+        // Kill agents: remove pending inputs, extract handles, kill PTY processes.
+        let handles_killed = self.kill_agents(&agent_ids).await;
+        let exit_codes: HashMap<String, Option<i32>> = handles_killed
+            .iter()
+            .map(|(id, handle)| (id.clone(), *handle.exit_rx.borrow()))
+            .collect();
 
         // Update manifest: remove all targeted agents (off async runtime)
         let killed = agent_ids.clone();
-        let killed_ids = killed.clone();
         let pr = project_root.to_string();
+        let killed_for_manifest = killed.clone();
         tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
-                for id in &killed_ids {
+                for id in &killed_for_manifest {
                     m.agents.shift_remove(id);
                     for wt in m.worktrees.values_mut() {
                         wt.agents.shift_remove(id);
@@ -882,25 +915,7 @@ impl Engine {
 
         // 1. Kill all agents in the worktree
         let agent_ids: Vec<String> = wt.agents.keys().cloned().collect();
-        {
-            let mut pending_inputs = self.pending_initial_inputs.lock().await;
-            for id in &agent_ids {
-                pending_inputs.remove(id);
-            }
-        }
-        let handles_to_kill: Vec<(String, AgentHandle)> = {
-            let mut sessions = self.sessions.lock().await;
-            agent_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
-                .collect()
-        };
-        for (_, handle) in &handles_to_kill {
-            self.pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
-        }
+        self.kill_agents(&agent_ids).await;
 
         // 2. Remove git worktree directory
         let root_path = Path::new(project_root);
@@ -969,7 +984,7 @@ impl Engine {
             }
             Ok(Err(e)) => Self::error_response(&e),
             Err(e) => Response::Error {
-                code: "INTERNAL".into(),
+                code: "INTERNAL_ERROR".into(),
                 message: format!("rename task failed: {e}"),
             },
         }
@@ -1008,38 +1023,17 @@ impl Engine {
             return Response::SuspendResult { suspended: vec![] };
         }
 
-        {
-            let mut pending_inputs = self.pending_initial_inputs.lock().await;
-            for id in &agent_ids {
-                pending_inputs.remove(id);
-            }
-        }
-
-        // Extract handles from session map, then drop lock before killing
-        let handles_to_kill: Vec<(String, AgentHandle)> = {
-            let mut sessions = self.sessions.lock().await;
-            agent_ids
-                .iter()
-                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
-                .collect()
-        };
-
-        for (_id, handle) in &handles_to_kill {
-            self.pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
-        }
+        self.kill_agents(&agent_ids).await;
 
         // Update manifest: mark as suspended, clear pid, set suspended_at.
         // Status stays as-is (Waiting); suspended flag is metadata.
         let suspended = agent_ids.clone();
-        let suspended_ids = suspended.clone();
         let pr = project_root.to_string();
+        let suspended_for_manifest = suspended.clone();
         tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
                 let now = chrono::Utc::now();
-                for id in &suspended_ids {
+                for id in &suspended_for_manifest {
                     if let Some(agent) = m.find_agent_mut(id) {
                         agent.status = AgentStatus::Waiting;
                         agent.suspended = true;
@@ -1384,10 +1378,7 @@ impl Engine {
     // --- Grid ---
 
     async fn handle_subscribe_grid(&self, project_root: &str) -> Response {
-        let mut channels = self.grid_channels.lock().await;
-        channels
-            .entry(project_root.to_string())
-            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
+        self.ensure_grid_channel(project_root).await;
         Response::GridSubscribed
     }
 
@@ -1396,7 +1387,7 @@ impl Engine {
         if matches!(command, GridCommand::GetLayout) {
             let root = project_root.to_string();
             return match tokio::task::spawn_blocking(move || {
-                let path = format!("{root}/.pu/grid-layout.json");
+                let path = paths::pu_dir(Path::new(&root)).join("grid-layout.json");
                 std::fs::read_to_string(path)
             })
             .await
@@ -1420,6 +1411,13 @@ impl Engine {
             let _ = tx.send(command.clone());
         }
         Response::Ok
+    }
+
+    async fn ensure_grid_channel(&self, project_root: &str) {
+        let mut channels = self.grid_channels.lock().await;
+        channels
+            .entry(project_root.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
     }
 
     /// Get a grid broadcast receiver for a project (used by IPC server for streaming).
@@ -1475,8 +1473,28 @@ impl Engine {
         }
     }
 
-    fn is_pid_alive(pid: u32) -> bool {
-        daemon_lifecycle::is_process_alive(pid)
+    /// Remove pending inputs and session handles for the given agent IDs, then kill their
+    /// PTY processes. Returns the extracted handles (for callers that need exit codes).
+    async fn kill_agents(&self, agent_ids: &[String]) -> Vec<(String, AgentHandle)> {
+        {
+            let mut pending_inputs = self.pending_initial_inputs.lock().await;
+            for id in agent_ids {
+                pending_inputs.remove(id);
+            }
+        }
+        let handles: Vec<(String, AgentHandle)> = {
+            let mut sessions = self.sessions.lock().await;
+            agent_ids
+                .iter()
+                .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
+                .collect()
+        };
+        for (id, handle) in &handles {
+            if let Err(e) = self.pty_host.kill(handle, Duration::from_secs(5)).await {
+                tracing::debug!(agent_id = id, "kill failed: {e}");
+            }
+        }
+        handles
     }
 
     /// On daemon restart, reconcile agents that appear alive in the manifest but have no
@@ -1489,20 +1507,18 @@ impl Engine {
             Ok(m) => m,
             Err(_) => return,
         };
-
-        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
         };
-
-        let has_stale = m.agents.values().any(is_stale)
-            || m.worktrees
-                .values()
-                .any(|wt| wt.agents.values().any(is_stale));
+        let has_stale = m
+            .agents
+            .values()
+            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
+            .any(is_stale);
         if !has_stale {
             return;
         }
-
+        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
         let now = chrono::Utc::now();
         manifest::update_manifest(root, move |mut m| {
             for agent in m.agents.values_mut().chain(
@@ -1538,41 +1554,35 @@ impl Engine {
             Ok(m) => m,
             Err(_) => return,
         };
-
-        let needs_reap = |agent: &AgentEntry| -> bool {
-            !agent.suspended
-                && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
+        let needs_reap = |a: &AgentEntry| {
+            !a.suspended
+                && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
+                && a.pid
+                    .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
         };
-
-        let has_stale = m.agents.values().any(&needs_reap)
-            || m.worktrees
-                .values()
-                .any(|wt| wt.agents.values().any(&needs_reap));
-
+        let has_stale = m
+            .agents
+            .values()
+            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
+            .any(needs_reap);
         if !has_stale {
             return;
         }
-
         manifest::update_manifest(root, move |mut m| {
-            for agent in m.agents.values_mut() {
+            let now = chrono::Utc::now();
+            for agent in m.agents.values_mut().chain(
+                m.worktrees
+                    .values_mut()
+                    .flat_map(|wt| wt.agents.values_mut()),
+            ) {
                 if !agent.suspended
                     && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                    && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
+                    && agent
+                        .pid
+                        .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
                 {
                     agent.status = AgentStatus::Broken;
-                    agent.completed_at = Some(chrono::Utc::now());
-                }
-            }
-            for wt in m.worktrees.values_mut() {
-                for agent in wt.agents.values_mut() {
-                    if !agent.suspended
-                        && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                        && agent.pid.is_none_or(|pid| !Self::is_pid_alive(pid))
-                    {
-                        agent.status = AgentStatus::Broken;
-                        agent.completed_at = Some(chrono::Utc::now());
-                    }
+                    agent.completed_at = Some(now);
                 }
             }
             m
@@ -1620,11 +1630,15 @@ impl Engine {
     // --- Status Push ---
 
     async fn handle_subscribe_status(&self, project_root: &str) -> Response {
+        self.ensure_status_channel(project_root).await;
+        Response::StatusSubscribed
+    }
+
+    async fn ensure_status_channel(&self, project_root: &str) {
         let mut channels = self.status_channels.lock().await;
         channels
             .entry(project_root.to_string())
             .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
-        Response::StatusSubscribed
     }
 
     /// Get a status broadcast receiver for a project (used by IPC server for streaming).
@@ -1651,30 +1665,13 @@ impl Engine {
     pub async fn compute_full_status(
         &self,
         project_root: &str,
-    ) -> Option<(Vec<WorktreeEntry>, Vec<AgentStatusReport>)> {
-        let m = self.read_manifest_async(project_root).await.ok()?;
+    ) -> Result<(Vec<WorktreeEntry>, Vec<AgentStatusReport>), PuError> {
+        let m = self.read_manifest_async(project_root).await?;
         let sessions = self.sessions.lock().await;
         let mut agents: Vec<AgentStatusReport> = m
             .agents
             .values()
-            .map(|a| {
-                let (status, exit_code, idle_seconds) =
-                    self.live_agent_status_sync(&a.id, a, &sessions);
-                AgentStatusReport {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                    agent_type: a.agent_type.clone(),
-                    status,
-                    pid: a.pid,
-                    exit_code,
-                    idle_seconds,
-                    worktree_id: None,
-                    started_at: a.started_at,
-                    session_id: a.session_id.clone(),
-                    prompt: a.prompt.clone(),
-                    suspended: a.suspended,
-                }
-            })
+            .map(|a| self.build_agent_status_report(a, &sessions, None))
             .collect();
         agents.sort_by_key(|a| a.started_at);
         let worktrees: Vec<WorktreeEntry> = m
@@ -1690,7 +1687,7 @@ impl Engine {
                 wt
             })
             .collect();
-        Some((worktrees, agents))
+        Ok((worktrees, agents))
     }
 
     // --- Template CRUD handlers ---
@@ -2293,6 +2290,463 @@ impl Engine {
         }
 
         Response::RunSwarmResult { spawned_agents }
+    }
+
+    // --- Schedule handlers ---
+
+    async fn handle_list_schedules(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        match tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let defs = pu_core::schedule_def::list_schedule_defs(root);
+            let infos: Vec<ScheduleInfo> =
+                defs.into_iter().map(Self::schedule_def_to_info).collect();
+            infos
+        })
+        .await
+        {
+            Ok(schedules) => Response::ScheduleList { schedules },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_get_schedule(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::schedule_def::find_schedule_def(Path::new(&pr), &n)
+        })
+        .await
+        {
+            Ok(Some(d)) => Self::schedule_def_to_detail(d),
+            Ok(None) => Response::Error {
+                code: "NOT_FOUND".into(),
+                message: format!("schedule '{name}' not found"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_save_schedule(
+        &self,
+        project_root: &str,
+        name: &str,
+        enabled: bool,
+        recurrence: &str,
+        start_at: chrono::DateTime<chrono::Utc>,
+        trigger: ScheduleTriggerPayload,
+        target: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::schedules_dir,
+            paths::global_schedules_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                };
+            }
+        };
+        let rec = match Self::parse_recurrence(recurrence) {
+            Ok(r) => r,
+            Err(msg) => {
+                return Response::Error {
+                    code: "INVALID_INPUT".into(),
+                    message: msg,
+                };
+            }
+        };
+        let now = chrono::Utc::now();
+        let next_run = if enabled {
+            pu_core::schedule_def::next_occurrence(start_at, &rec, now)
+        } else {
+            None
+        };
+        let def = pu_core::schedule_def::ScheduleDef {
+            name: name.to_string(),
+            enabled,
+            recurrence: rec,
+            start_at,
+            next_run,
+            trigger: Self::payload_to_trigger(&trigger),
+            project_root: project_root.to_string(),
+            target: target.to_string(),
+            scope: scope.to_string(),
+            created_at: now,
+        };
+        match tokio::task::spawn_blocking(move || {
+            pu_core::schedule_def::save_schedule_def(&dir, &def)
+        })
+        .await
+        {
+            Ok(Ok(())) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to save schedule: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_delete_schedule(
+        &self,
+        project_root: &str,
+        name: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::schedules_dir,
+            paths::global_schedules_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                };
+            }
+        };
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::schedule_def::delete_schedule_def(&dir, &n)
+        })
+        .await
+        {
+            Ok(Ok(_)) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to delete schedule: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_enable_schedule(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let mut def = match pu_core::schedule_def::find_schedule_def(root, &n) {
+                Some(d) => d,
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("schedule '{n}' not found"),
+                    };
+                }
+            };
+            def.enabled = true;
+            let now = chrono::Utc::now();
+            def.next_run =
+                pu_core::schedule_def::next_occurrence(def.start_at, &def.recurrence, now);
+            let dir = paths::schedules_dir(root);
+            match pu_core::schedule_def::save_schedule_def(&dir, &def) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("failed to save schedule: {e}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_disable_schedule(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let mut def = match pu_core::schedule_def::find_schedule_def(root, &n) {
+                Some(d) => d,
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("schedule '{n}' not found"),
+                    };
+                }
+            };
+            def.enabled = false;
+            def.next_run = None;
+            let dir = paths::schedules_dir(root);
+            match pu_core::schedule_def::save_schedule_def(&dir, &def) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("failed to save schedule: {e}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    fn schedule_def_to_info(d: pu_core::schedule_def::ScheduleDef) -> ScheduleInfo {
+        ScheduleInfo {
+            name: d.name,
+            enabled: d.enabled,
+            recurrence: Self::recurrence_to_string(&d.recurrence),
+            start_at: d.start_at,
+            next_run: d.next_run,
+            trigger: Self::trigger_to_payload(&d.trigger),
+            project_root: d.project_root,
+            target: d.target,
+            scope: d.scope,
+            created_at: d.created_at,
+        }
+    }
+
+    fn schedule_def_to_detail(d: pu_core::schedule_def::ScheduleDef) -> Response {
+        Response::ScheduleDetail {
+            name: d.name,
+            enabled: d.enabled,
+            recurrence: Self::recurrence_to_string(&d.recurrence),
+            start_at: d.start_at,
+            next_run: d.next_run,
+            trigger: Self::trigger_to_payload(&d.trigger),
+            project_root: d.project_root,
+            target: d.target,
+            scope: d.scope,
+            created_at: d.created_at,
+        }
+    }
+
+    fn recurrence_to_string(r: &pu_core::schedule_def::Recurrence) -> String {
+        match r {
+            pu_core::schedule_def::Recurrence::None => "none",
+            pu_core::schedule_def::Recurrence::Hourly => "hourly",
+            pu_core::schedule_def::Recurrence::Daily => "daily",
+            pu_core::schedule_def::Recurrence::Weekdays => "weekdays",
+            pu_core::schedule_def::Recurrence::Weekly => "weekly",
+            pu_core::schedule_def::Recurrence::Monthly => "monthly",
+        }
+        .to_string()
+    }
+
+    fn parse_recurrence(s: &str) -> Result<pu_core::schedule_def::Recurrence, String> {
+        match s {
+            "none" => Ok(pu_core::schedule_def::Recurrence::None),
+            "hourly" => Ok(pu_core::schedule_def::Recurrence::Hourly),
+            "daily" => Ok(pu_core::schedule_def::Recurrence::Daily),
+            "weekdays" => Ok(pu_core::schedule_def::Recurrence::Weekdays),
+            "weekly" => Ok(pu_core::schedule_def::Recurrence::Weekly),
+            "monthly" => Ok(pu_core::schedule_def::Recurrence::Monthly),
+            other => Err(format!("unknown recurrence: {other}")),
+        }
+    }
+
+    fn trigger_to_payload(t: &pu_core::schedule_def::ScheduleTrigger) -> ScheduleTriggerPayload {
+        match t {
+            pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
+                ScheduleTriggerPayload::AgentDef { name: name.clone() }
+            }
+            pu_core::schedule_def::ScheduleTrigger::SwarmDef { name, vars } => {
+                ScheduleTriggerPayload::SwarmDef {
+                    name: name.clone(),
+                    vars: vars.clone(),
+                }
+            }
+            pu_core::schedule_def::ScheduleTrigger::InlinePrompt { prompt, agent } => {
+                ScheduleTriggerPayload::InlinePrompt {
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                }
+            }
+        }
+    }
+
+    fn payload_to_trigger(p: &ScheduleTriggerPayload) -> pu_core::schedule_def::ScheduleTrigger {
+        match p {
+            ScheduleTriggerPayload::AgentDef { name } => {
+                pu_core::schedule_def::ScheduleTrigger::AgentDef { name: name.clone() }
+            }
+            ScheduleTriggerPayload::SwarmDef { name, vars } => {
+                pu_core::schedule_def::ScheduleTrigger::SwarmDef {
+                    name: name.clone(),
+                    vars: vars.clone(),
+                }
+            }
+            ScheduleTriggerPayload::InlinePrompt { prompt, agent } => {
+                pu_core::schedule_def::ScheduleTrigger::InlinePrompt {
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                }
+            }
+        }
+    }
+
+    // --- Scheduler ---
+
+    /// Start a background task that periodically checks for due schedules and fires them.
+    pub fn start_scheduler(self: &Arc<Self>) {
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                engine.scheduler_tick().await;
+            }
+        });
+    }
+
+    async fn scheduler_tick(&self) {
+        let projects = self.registered_projects();
+        for project_root in projects {
+            let defs = {
+                let pr = project_root.clone();
+                match tokio::task::spawn_blocking(move || {
+                    pu_core::schedule_def::list_schedule_defs(Path::new(&pr))
+                })
+                .await
+                {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                }
+            };
+
+            let now = chrono::Utc::now();
+            for def in defs {
+                if !def.enabled {
+                    continue;
+                }
+                if let Some(next_run) = def.next_run {
+                    if next_run <= now {
+                        self.fire_schedule(&def).await;
+                        self.advance_schedule(def, now).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn fire_schedule(&self, schedule: &pu_core::schedule_def::ScheduleDef) {
+        let result = match &schedule.trigger {
+            pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
+                // Resolve agent def to get its type and prompt
+                let pr = schedule.project_root.clone();
+                let root = Path::new(&pr);
+                if let Some(def) = pu_core::agent_def::find_agent_def(root, name) {
+                    let prompt = if let Some(ref ip) = def.inline_prompt {
+                        ip.clone()
+                    } else if let Some(ref tpl_name) = def.template {
+                        pu_core::template::find_template(root, tpl_name)
+                            .map(|t| t.body)
+                            .unwrap_or_else(|| {
+                                format!("Scheduled: agent def '{name}' (template not found)")
+                            })
+                    } else {
+                        format!("Scheduled: run agent def '{name}'")
+                    };
+                    self.handle_request(Request::Spawn {
+                        project_root: pr,
+                        prompt,
+                        agent: def.agent_type,
+                        name: None,
+                        base: None,
+                        root: true,
+                        worktree: None,
+                    })
+                    .await
+                } else {
+                    Response::Error {
+                        code: "NOT_FOUND".to_string(),
+                        message: format!("agent def '{name}' not found"),
+                    }
+                }
+            }
+            pu_core::schedule_def::ScheduleTrigger::SwarmDef { name, vars } => {
+                self.handle_request(Request::RunSwarm {
+                    project_root: schedule.project_root.clone(),
+                    swarm_name: name.clone(),
+                    vars: vars.clone(),
+                })
+                .await
+            }
+            pu_core::schedule_def::ScheduleTrigger::InlinePrompt { prompt, agent } => {
+                self.handle_request(Request::Spawn {
+                    project_root: schedule.project_root.clone(),
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                    name: None,
+                    base: None,
+                    root: true,
+                    worktree: None,
+                })
+                .await
+            }
+        };
+
+        if let Response::Error { code, message } = result {
+            tracing::warn!(
+                schedule = schedule.name,
+                code,
+                message,
+                "scheduled task failed"
+            );
+        } else {
+            tracing::info!(schedule = schedule.name, "scheduled task fired");
+        }
+    }
+
+    async fn advance_schedule(
+        &self,
+        mut schedule: pu_core::schedule_def::ScheduleDef,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let is_one_shot = schedule.recurrence == pu_core::schedule_def::Recurrence::None;
+        if is_one_shot {
+            schedule.enabled = false;
+            schedule.next_run = None;
+        } else {
+            schedule.next_run = pu_core::schedule_def::next_occurrence(
+                schedule.start_at,
+                &schedule.recurrence,
+                now,
+            );
+        }
+        let pr = schedule.project_root.clone();
+        let scope = schedule.scope.clone();
+        let def = schedule;
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let dir = if scope == "global" {
+                paths::global_schedules_dir()?
+            } else {
+                paths::schedules_dir(Path::new(&pr))
+            };
+            pu_core::schedule_def::save_schedule_def(&dir, &def)
+        })
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+        {
+            tracing::warn!(error = %e, "failed to advance schedule");
+        }
     }
 
     // --- Scope resolution helper ---

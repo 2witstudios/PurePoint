@@ -111,21 +111,16 @@ impl OutputBuffer {
 
     pub fn read_all(&self) -> Vec<u8> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        inner.data.iter().copied().collect()
+        let (a, b) = inner.data.as_slices();
+        let mut bytes = Vec::with_capacity(inner.data.len());
+        bytes.extend_from_slice(a);
+        bytes.extend_from_slice(b);
+        bytes
     }
 
     pub fn read_tail(&self, n: usize) -> Vec<u8> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        if n >= inner.data.len() {
-            inner.data.iter().copied().collect()
-        } else {
-            inner
-                .data
-                .iter()
-                .skip(inner.data.len() - n)
-                .copied()
-                .collect()
-        }
+        self.read_tail_inner(&inner, n)
     }
 
     pub fn idle_seconds(&self) -> u64 {
@@ -142,23 +137,33 @@ impl OutputBuffer {
         if inner.data.is_empty() {
             return false;
         }
-        // Check the last 256 bytes for shell prompt patterns
-        let tail_bytes: Vec<u8> = if inner.data.len() > 256 {
-            inner
-                .data
-                .iter()
-                .skip(inner.data.len() - 256)
-                .copied()
-                .collect()
+        // Only need the last 16 bytes — prompt patterns are 2 bytes, plus
+        // a short trailing run of \r/\n.
+        let tail = self.read_tail_inner(&inner, 16);
+        let trimmed = tail
+            .iter()
+            .rposition(|&b| b != b'\n' && b != b'\r')
+            .map(|pos| &tail[..=pos])
+            .unwrap_or(&tail);
+        trimmed.ends_with(b"$ ")
+            || trimmed.ends_with(b"% ")
+            || trimmed.ends_with(b"# ")
+            || trimmed.ends_with(b"> ")
+    }
+
+    fn read_tail_inner(&self, inner: &BufferInner, n: usize) -> Vec<u8> {
+        let len = inner.data.len();
+        let take = n.min(len);
+        let skip = len - take;
+        let (a, b) = inner.data.as_slices();
+        let mut bytes = Vec::with_capacity(take);
+        if skip < a.len() {
+            bytes.extend_from_slice(&a[skip..]);
+            bytes.extend_from_slice(b);
         } else {
-            inner.data.iter().copied().collect()
-        };
-        let s = String::from_utf8_lossy(&tail_bytes);
-        let trimmed = s.trim_end_matches('\n').trim_end_matches('\r');
-        trimmed.ends_with("$ ")
-            || trimmed.ends_with("% ")
-            || trimmed.ends_with("# ")
-            || trimmed.ends_with("> ")
+            bytes.extend_from_slice(&b[skip - a.len()..]);
+        }
+        bytes
     }
 }
 
