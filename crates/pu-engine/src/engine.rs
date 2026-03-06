@@ -1302,8 +1302,7 @@ impl Engine {
     // --- Grid ---
 
     async fn handle_subscribe_grid(&self, project_root: &str) -> Response {
-        // Ensure the channel exists (subscribe_grid handles the ensure+subscribe)
-        drop(self.subscribe_grid(project_root).await);
+        self.ensure_grid_channel(project_root).await;
         Response::GridSubscribed
     }
 
@@ -1336,6 +1335,13 @@ impl Engine {
             let _ = tx.send(command.clone());
         }
         Response::Ok
+    }
+
+    async fn ensure_grid_channel(&self, project_root: &str) {
+        let mut channels = self.grid_channels.lock().await;
+        channels
+            .entry(project_root.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
     }
 
     /// Get a grid broadcast receiver for a project (used by IPC server for streaming).
@@ -1407,11 +1413,10 @@ impl Engine {
                 .filter_map(|id| sessions.remove(id).map(|h| (id.clone(), h)))
                 .collect()
         };
-        for (_, handle) in &handles {
-            self.pty_host
-                .kill(handle, Duration::from_secs(5))
-                .await
-                .ok();
+        for (id, handle) in &handles {
+            if let Err(e) = self.pty_host.kill(handle, Duration::from_secs(5)).await {
+                tracing::debug!(agent_id = id, "kill failed: {e}");
+            }
         }
         handles
     }
@@ -1422,6 +1427,21 @@ impl Engine {
     /// Called synchronously inside handle_init so state is correct before the first status read.
     fn reconcile_agents_on_init(project_root: &str) {
         let root = Path::new(project_root);
+        let m = match manifest::read_manifest(root) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let is_stale = |a: &AgentEntry| {
+            !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
+        };
+        let has_stale = m
+            .agents
+            .values()
+            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
+            .any(is_stale);
+        if !has_stale {
+            return;
+        }
         let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
         let now = chrono::Utc::now();
         manifest::update_manifest(root, move |mut m| {
@@ -1454,6 +1474,23 @@ impl Engine {
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
+        let m = match manifest::read_manifest(root) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let needs_reap = |a: &AgentEntry| {
+            !a.suspended
+                && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
+                && a.pid.is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
+        };
+        let has_stale = m
+            .agents
+            .values()
+            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
+            .any(needs_reap);
+        if !has_stale {
+            return;
+        }
         manifest::update_manifest(root, move |mut m| {
             let now = chrono::Utc::now();
             for agent in m
@@ -1514,9 +1551,15 @@ impl Engine {
     // --- Status Push ---
 
     async fn handle_subscribe_status(&self, project_root: &str) -> Response {
-        // Ensure the channel exists (subscribe_status handles the ensure+subscribe)
-        drop(self.subscribe_status(project_root).await);
+        self.ensure_status_channel(project_root).await;
         Response::StatusSubscribed
+    }
+
+    async fn ensure_status_channel(&self, project_root: &str) {
+        let mut channels = self.status_channels.lock().await;
+        channels
+            .entry(project_root.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
     }
 
     /// Get a status broadcast receiver for a project (used by IPC server for streaming).

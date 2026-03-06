@@ -120,18 +120,7 @@ impl OutputBuffer {
 
     pub fn read_tail(&self, n: usize) -> Vec<u8> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        let len = inner.data.len();
-        let take = n.min(len);
-        let skip = len - take;
-        let (a, b) = inner.data.as_slices();
-        let mut bytes = Vec::with_capacity(take);
-        if skip < a.len() {
-            bytes.extend_from_slice(&a[skip..]);
-            bytes.extend_from_slice(b);
-        } else {
-            bytes.extend_from_slice(&b[skip - a.len()..]);
-        }
-        bytes
+        self.read_tail_inner(&inner, n)
     }
 
     pub fn idle_seconds(&self) -> u64 {
@@ -145,46 +134,36 @@ impl OutputBuffer {
 
     pub fn looks_like_shell_prompt(&self) -> bool {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        let len = inner.data.len();
-        if len == 0 {
+        if inner.data.is_empty() {
             return false;
         }
-        // Only need to check the last few bytes (after stripping trailing \r\n).
-        // Prompt patterns are 2 bytes ("$ ", "% ", "# ", "> "), and we allow
-        // a short trailing run of \r / \n, so 16 bytes is more than enough.
-        let take = 16.min(len);
-        let (a, b) = inner.data.as_slices();
-        let start = len - take;
-        // Build a small stack buffer from the tail
-        let tail: &[u8] = if start >= a.len() {
-            &b[start - a.len()..]
-        } else if a.len() >= len {
-            &a[start..]
-        } else {
-            // Tail spans both slices — rare for only 16 bytes, but handle it.
-            // Fall back to a small allocation.
-            return self.looks_like_shell_prompt_slow(a, b, start);
-        };
-        Self::tail_matches_prompt(tail)
-    }
-
-    fn looks_like_shell_prompt_slow(&self, a: &[u8], b: &[u8], start: usize) -> bool {
-        let mut buf = Vec::with_capacity(16);
-        buf.extend_from_slice(&a[start..]);
-        buf.extend_from_slice(b);
-        Self::tail_matches_prompt(&buf)
-    }
-
-    fn tail_matches_prompt(tail: &[u8]) -> bool {
+        // Only need the last 16 bytes — prompt patterns are 2 bytes, plus
+        // a short trailing run of \r/\n.
+        let tail = self.read_tail_inner(&inner, 16);
         let trimmed = tail
             .iter()
             .rposition(|&b| b != b'\n' && b != b'\r')
             .map(|pos| &tail[..=pos])
-            .unwrap_or(tail);
+            .unwrap_or(&tail);
         trimmed.ends_with(b"$ ")
             || trimmed.ends_with(b"% ")
             || trimmed.ends_with(b"# ")
             || trimmed.ends_with(b"> ")
+    }
+
+    fn read_tail_inner(&self, inner: &BufferInner, n: usize) -> Vec<u8> {
+        let len = inner.data.len();
+        let take = n.min(len);
+        let skip = len - take;
+        let (a, b) = inner.data.as_slices();
+        let mut bytes = Vec::with_capacity(take);
+        if skip < a.len() {
+            bytes.extend_from_slice(&a[skip..]);
+            bytes.extend_from_slice(b);
+        } else {
+            bytes.extend_from_slice(&b[skip - a.len()..]);
+        }
+        bytes
     }
 }
 
