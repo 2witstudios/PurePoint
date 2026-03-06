@@ -35,6 +35,8 @@ All agents stream live in the sidebar. Click any worktree to watch its terminal.
 
 PurePoint has two mental models. **Workstations** are persistent — you spawn agents, direct their work, and work alongside them. Three agents reviewing the same PR from different angles, three panes, three perspectives. **Exploratory swarms** are transient — spawn 20 agents with the same greenfield prompt, let them each take a different approach, then compare results. You use the information, not necessarily the code.
 
+![Watch the Game — worktree terminal streaming live](docs/images/single-terminal-with-many-worktrees-in-sidebar.png)
+
 ## Coach the Players
 
 Point Guard is your conversational interface. Ask it to spawn agents, check status, redirect work — without leaving the chat.
