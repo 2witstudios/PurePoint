@@ -13,7 +13,8 @@ use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
 use pu_core::protocol::{
-    AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION, Request, Response, SuspendTarget,
+    AgentDefInfo, AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION, Request, Response,
+    SuspendTarget, SwarmDefInfo, SwarmRosterEntryPayload, TemplateInfo,
 };
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 use tokio::sync::OnceCell;
@@ -194,6 +195,109 @@ impl Engine {
                 worktree_id,
             } => {
                 self.handle_delete_worktree(&project_root, &worktree_id)
+                    .await
+            }
+            // Template CRUD
+            Request::ListTemplates { project_root } => {
+                self.handle_list_templates(&project_root).await
+            }
+            Request::GetTemplate { project_root, name } => {
+                self.handle_get_template(&project_root, &name).await
+            }
+            Request::SaveTemplate {
+                project_root,
+                name,
+                description,
+                agent,
+                body,
+                scope,
+            } => {
+                self.handle_save_template(&project_root, &name, &description, &agent, &body, &scope)
+                    .await
+            }
+            Request::DeleteTemplate {
+                project_root,
+                name,
+                scope,
+            } => {
+                self.handle_delete_template(&project_root, &name, &scope)
+                    .await
+            }
+            // Agent def CRUD
+            Request::ListAgentDefs { project_root } => {
+                self.handle_list_agent_defs(&project_root).await
+            }
+            Request::SaveAgentDef {
+                project_root,
+                name,
+                agent_type,
+                template,
+                inline_prompt,
+                tags,
+                scope,
+                available_in_command_dialog,
+                icon,
+            } => {
+                self.handle_save_agent_def(
+                    &project_root,
+                    &name,
+                    &agent_type,
+                    template,
+                    inline_prompt,
+                    tags,
+                    &scope,
+                    available_in_command_dialog,
+                    icon,
+                )
+                .await
+            }
+            Request::DeleteAgentDef {
+                project_root,
+                name,
+                scope,
+            } => {
+                self.handle_delete_agent_def(&project_root, &name, &scope)
+                    .await
+            }
+            // Swarm def CRUD
+            Request::ListSwarmDefs { project_root } => {
+                self.handle_list_swarm_defs(&project_root).await
+            }
+            Request::SaveSwarmDef {
+                project_root,
+                name,
+                worktree_count,
+                worktree_template,
+                roster,
+                include_terminal,
+                scope,
+            } => {
+                self.handle_save_swarm_def(
+                    &project_root,
+                    &name,
+                    worktree_count,
+                    &worktree_template,
+                    roster,
+                    include_terminal,
+                    &scope,
+                )
+                .await
+            }
+            Request::DeleteSwarmDef {
+                project_root,
+                name,
+                scope,
+            } => {
+                self.handle_delete_swarm_def(&project_root, &name, &scope)
+                    .await
+            }
+            // Execution
+            Request::RunSwarm {
+                project_root,
+                swarm_name,
+                vars,
+            } => {
+                self.handle_run_swarm(&project_root, &swarm_name, vars)
                     .await
             }
         }
@@ -1581,6 +1685,540 @@ impl Engine {
             })
             .collect();
         Some((worktrees, agents))
+    }
+
+    // --- Template CRUD handlers ---
+
+    async fn handle_list_templates(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        match tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let templates = pu_core::template::list_templates(root);
+            let infos: Vec<TemplateInfo> = templates
+                .into_iter()
+                .map(|t| TemplateInfo {
+                    name: t.name,
+                    description: t.description,
+                    agent: t.agent.clone(),
+                    source: t.source,
+                    variables: pu_core::template::extract_variables(&t.body),
+                })
+                .collect();
+            infos
+        })
+        .await
+        {
+            Ok(templates) => Response::TemplateList { templates },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_get_template(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let tpl_name = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            pu_core::template::find_template(root, &tpl_name)
+        })
+        .await
+        {
+            Ok(Some(t)) => Response::TemplateDetail {
+                name: t.name,
+                description: t.description,
+                agent: t.agent,
+                variables: pu_core::template::extract_variables(&t.body),
+                body: t.body,
+                source: t.source,
+            },
+            Ok(None) => Response::Error {
+                code: "NOT_FOUND".into(),
+                message: format!("template '{name}' not found"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_save_template(
+        &self,
+        project_root: &str,
+        name: &str,
+        description: &str,
+        agent: &str,
+        body: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::templates_dir,
+            paths::global_templates_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                }
+            }
+        };
+        let n = name.to_string();
+        let d = description.to_string();
+        let a = agent.to_string();
+        let b = body.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::template::save_template(&dir, &n, &d, &a, &b)
+        })
+        .await
+        {
+            Ok(Ok(())) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to save template: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_delete_template(
+        &self,
+        project_root: &str,
+        name: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::templates_dir,
+            paths::global_templates_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                }
+            }
+        };
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || pu_core::template::delete_template(&dir, &n))
+            .await
+        {
+            Ok(Ok(_)) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to delete template: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    // --- Agent def CRUD handlers ---
+
+    async fn handle_list_agent_defs(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        match tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let defs = pu_core::agent_def::list_agent_defs(root);
+            let infos: Vec<AgentDefInfo> = defs
+                .into_iter()
+                .map(|d| AgentDefInfo {
+                    name: d.name,
+                    agent_type: d.agent_type,
+                    template: d.template,
+                    tags: d.tags,
+                    scope: d.scope,
+                    available_in_command_dialog: d.available_in_command_dialog,
+                    icon: d.icon,
+                })
+                .collect();
+            infos
+        })
+        .await
+        {
+            Ok(agent_defs) => Response::AgentDefList { agent_defs },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_save_agent_def(
+        &self,
+        project_root: &str,
+        name: &str,
+        agent_type: &str,
+        template: Option<String>,
+        inline_prompt: Option<String>,
+        tags: Vec<String>,
+        scope: &str,
+        available_in_command_dialog: bool,
+        icon: Option<String>,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::agents_dir,
+            paths::global_agents_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                }
+            }
+        };
+        let def = pu_core::agent_def::AgentDef {
+            name: name.to_string(),
+            agent_type: agent_type.to_string(),
+            template,
+            inline_prompt,
+            tags,
+            scope: scope.to_string(),
+            available_in_command_dialog,
+            icon,
+        };
+        match tokio::task::spawn_blocking(move || pu_core::agent_def::save_agent_def(&dir, &def))
+            .await
+        {
+            Ok(Ok(())) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to save agent def: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_delete_agent_def(
+        &self,
+        project_root: &str,
+        name: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::agents_dir,
+            paths::global_agents_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                }
+            }
+        };
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || pu_core::agent_def::delete_agent_def(&dir, &n))
+            .await
+        {
+            Ok(Ok(_)) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to delete agent def: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    // --- Swarm def CRUD handlers ---
+
+    async fn handle_list_swarm_defs(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        match tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let defs = pu_core::swarm_def::list_swarm_defs(root);
+            let infos: Vec<SwarmDefInfo> = defs
+                .into_iter()
+                .map(|d| SwarmDefInfo {
+                    name: d.name,
+                    worktree_count: d.worktree_count,
+                    worktree_template: d.worktree_template,
+                    roster: d
+                        .roster
+                        .into_iter()
+                        .map(|r| SwarmRosterEntryPayload {
+                            agent_def: r.agent_def,
+                            role: r.role,
+                            quantity: r.quantity,
+                        })
+                        .collect(),
+                    include_terminal: d.include_terminal,
+                    scope: d.scope,
+                })
+                .collect();
+            infos
+        })
+        .await
+        {
+            Ok(swarm_defs) => Response::SwarmDefList { swarm_defs },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_save_swarm_def(
+        &self,
+        project_root: &str,
+        name: &str,
+        worktree_count: u32,
+        worktree_template: &str,
+        roster: Vec<SwarmRosterEntryPayload>,
+        include_terminal: bool,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::swarms_dir,
+            paths::global_swarms_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                }
+            }
+        };
+        let def = pu_core::swarm_def::SwarmDef {
+            name: name.to_string(),
+            worktree_count,
+            worktree_template: worktree_template.to_string(),
+            roster: roster
+                .into_iter()
+                .map(|r| pu_core::swarm_def::SwarmRosterEntry {
+                    agent_def: r.agent_def,
+                    role: r.role,
+                    quantity: r.quantity,
+                })
+                .collect(),
+            include_terminal,
+            scope: scope.to_string(),
+        };
+        match tokio::task::spawn_blocking(move || pu_core::swarm_def::save_swarm_def(&dir, &def))
+            .await
+        {
+            Ok(Ok(())) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to save swarm def: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_delete_swarm_def(
+        &self,
+        project_root: &str,
+        name: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::swarms_dir,
+            paths::global_swarms_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                }
+            }
+        };
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || pu_core::swarm_def::delete_swarm_def(&dir, &n))
+            .await
+        {
+            Ok(Ok(_)) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to delete swarm def: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    // --- RunSwarm handler ---
+
+    async fn handle_run_swarm(
+        &self,
+        project_root: &str,
+        swarm_name: &str,
+        vars: std::collections::HashMap<String, String>,
+    ) -> Response {
+        // Read the swarm definition
+        let pr = project_root.to_string();
+        let sn = swarm_name.to_string();
+        let swarm_def = match tokio::task::spawn_blocking(move || {
+            pu_core::swarm_def::find_swarm_def(Path::new(&pr), &sn)
+        })
+        .await
+        {
+            Ok(Some(def)) => def,
+            Ok(None) => {
+                return Response::Error {
+                    code: "NOT_FOUND".into(),
+                    message: format!("swarm def '{swarm_name}' not found"),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    code: "INTERNAL_ERROR".into(),
+                    message: format!("task join error: {e}"),
+                };
+            }
+        };
+
+        let mut spawned_agents = Vec::new();
+
+        for wt_index in 0..swarm_def.worktree_count {
+            for entry in &swarm_def.roster {
+                // Resolve agent def to get template/inline_prompt
+                let pr2 = project_root.to_string();
+                let ad_name = entry.agent_def.clone();
+                let agent_def = match tokio::task::spawn_blocking(move || {
+                    pu_core::agent_def::find_agent_def(Path::new(&pr2), &ad_name)
+                })
+                .await
+                {
+                    Ok(Some(def)) => def,
+                    Ok(None) => {
+                        return Response::Error {
+                            code: "NOT_FOUND".into(),
+                            message: format!(
+                                "agent def '{}' referenced by swarm not found",
+                                entry.agent_def
+                            ),
+                        };
+                    }
+                    Err(e) => {
+                        return Response::Error {
+                            code: "INTERNAL_ERROR".into(),
+                            message: format!("task join error: {e}"),
+                        };
+                    }
+                };
+
+                // Resolve prompt: template or inline
+                let prompt = if let Some(ref tpl_name) = agent_def.template {
+                    let pr3 = project_root.to_string();
+                    let tn = tpl_name.clone();
+                    let vars_clone = vars.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        pu_core::template::find_template(Path::new(&pr3), &tn)
+                    })
+                    .await
+                    {
+                        Ok(Some(tpl)) => pu_core::template::render(&tpl, &vars_clone),
+                        Ok(None) => {
+                            return Response::Error {
+                                code: "NOT_FOUND".into(),
+                                message: format!("template '{tpl_name}' not found"),
+                            };
+                        }
+                        Err(e) => {
+                            return Response::Error {
+                                code: "INTERNAL_ERROR".into(),
+                                message: format!("task join error: {e}"),
+                            };
+                        }
+                    }
+                } else {
+                    agent_def
+                        .inline_prompt
+                        .clone()
+                        .unwrap_or_default()
+                };
+
+                for q in 0..entry.quantity {
+                    // Build worktree name from template
+                    let _wt_name = if swarm_def.worktree_template.is_empty() {
+                        format!("{swarm_name}-{}-{wt_index}-{q}", entry.agent_def)
+                    } else {
+                        swarm_def
+                            .worktree_template
+                            .replace("{index}", &wt_index.to_string())
+                    };
+
+                    let agent_name = format!(
+                        "{}-{}-{wt_index}-{q}",
+                        swarm_name, entry.agent_def
+                    );
+
+                    let resp = self
+                        .handle_spawn(
+                            project_root,
+                            &prompt,
+                            &agent_def.agent_type,
+                            Some(agent_name),
+                            None,
+                            false,
+                            None,
+                        )
+                        .await;
+
+                    match resp {
+                        Response::SpawnResult { agent_id, .. } => {
+                            spawned_agents.push(agent_id);
+                        }
+                        Response::Error { code, message } => {
+                            return Response::Error { code, message };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Response::RunSwarmResult { spawned_agents }
+    }
+
+    // --- Scope resolution helper ---
+
+    fn resolve_scope_dir(
+        project_root: &str,
+        scope: &str,
+        local_fn: fn(&Path) -> std::path::PathBuf,
+        global_fn: fn() -> Result<std::path::PathBuf, std::io::Error>,
+    ) -> Result<std::path::PathBuf, String> {
+        match scope {
+            "global" => global_fn().map_err(|e| e.to_string()),
+            _ => Ok(local_fn(Path::new(project_root))),
+        }
     }
 }
 
