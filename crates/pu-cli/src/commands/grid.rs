@@ -23,6 +23,7 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                 },
             )
             .await?;
+            let resp = output::check_response(resp, json)?;
 
             match resp {
                 Response::GridLayout { layout } => {
@@ -35,9 +36,6 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                     } else {
                         print_ascii_grid(&layout);
                     }
-                }
-                Response::Error { code, message } => {
-                    return Err(CliError::DaemonError { code, message });
                 }
                 _ => {
                     println!("No grid layout");
