@@ -73,42 +73,31 @@ enum RecurrenceRule: String, CaseIterable, Identifiable {
     }
 
     func matches(date: Date, originalDate: Date, calendar: Calendar) -> Bool {
+        guard date >= originalDate else { return false }
+
         switch self {
         case .none:
             return calendar.isDate(date, inSameDayAs: originalDate)
         case .hourly:
-            return date >= originalDate
+            return true
         case .daily:
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return timesMatch(date, originalDate, calendar)
         case .weekdays:
             let weekday = calendar.component(.weekday, from: date)
-            let isWeekday = weekday >= 2 && weekday <= 6
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate && isWeekday
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return weekday >= 2 && weekday <= 6 && timesMatch(date, originalDate, calendar)
         case .weekly:
-            let origWeekday = calendar.component(.weekday, from: originalDate)
-            let checkWeekday = calendar.component(.weekday, from: date)
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate && origWeekday == checkWeekday
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return calendar.component(.weekday, from: date) == calendar.component(.weekday, from: originalDate)
+                && timesMatch(date, originalDate, calendar)
         case .monthly:
-            let origDay = calendar.component(.day, from: originalDate)
-            let checkDay = calendar.component(.day, from: date)
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate && origDay == checkDay
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return calendar.component(.day, from: date) == calendar.component(.day, from: originalDate)
+                && timesMatch(date, originalDate, calendar)
         }
+    }
+
+    private func timesMatch(_ a: Date, _ b: Date, _ calendar: Calendar) -> Bool {
+        let t1 = calendar.dateComponents([.hour, .minute], from: a)
+        let t2 = calendar.dateComponents([.hour, .minute], from: b)
+        return t1.hour == t2.hour && t1.minute == t2.minute
     }
 }
 

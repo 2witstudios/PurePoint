@@ -104,22 +104,7 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard let self, !Task.isCancelled else { return }
 
-                // Sidebar leak fix: eagerly assign new root agents to pending grid leaves
-                // before updating rootAgents, so they appear in childAgentIds immediately.
-                if let gs = self.gridState, gs.projectRoot == root {
-                    var pending = gs.pendingSpawnLeafIds
-                    if !pending.isEmpty {
-                        let currentIds = Set(self.rootAgents.map(\.id))
-                        let newAgents = snapshot.rootAgents.filter { !currentIds.contains($0.id) }
-                        for agent in newAgents {
-                            guard let leafId = pending.first else { break }
-                            pending.remove(leafId)
-                            gs.pendingSpawnLeafIds.remove(leafId)
-                            gs.setAgent(agent.id, forLeafId: leafId)
-                        }
-                    }
-                }
-
+                self.assignPendingSpawnsToGrid(snapshot.rootAgents)
                 self.mergeWorktrees(snapshot.worktrees)
                 self.mergeRootAgents(snapshot.rootAgents)
             } catch is CancellationError {
@@ -238,85 +223,30 @@ final class ProjectState: Identifiable {
     }
 
     func killAgent(_ agentId: String) {
-        let root = projectRoot
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.kill(projectRoot: root, target: .agent(agentId)))
-                if case .error(_, let message) = response { self.appState?.daemonError = message }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
-            }
-        }
+        sendDaemonCommand(.kill(projectRoot: projectRoot, target: .agent(agentId)))
     }
 
     func renameAgent(_ agentId: String, to name: String) {
-        let root = projectRoot
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.rename(projectRoot: root, agentId: agentId, name: name))
-                if case .error(_, let message) = response { self.appState?.daemonError = message }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
-            }
-        }
+        sendDaemonCommand(.rename(projectRoot: projectRoot, agentId: agentId, name: name))
     }
 
     func killAllAgents() {
-        let root = projectRoot
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.kill(projectRoot: root, target: .all))
-                if case .error(_, let message) = response { self.appState?.daemonError = message }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
-            }
-        }
+        sendDaemonCommand(.kill(projectRoot: projectRoot, target: .all))
     }
 
     func deleteWorktree(_ worktreeId: String) {
-        let root = projectRoot
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.deleteWorktree(projectRoot: root, worktreeId: worktreeId))
-                if case .error(_, let message) = response { self.appState?.daemonError = message }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
-            }
-        }
+        sendDaemonCommand(.deleteWorktree(projectRoot: projectRoot, worktreeId: worktreeId))
     }
 
     func killWorktreeAgents(_ worktreeId: String) {
-        let root = projectRoot
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.kill(projectRoot: root, target: .worktree(worktreeId)))
-                if case .error(_, let message) = response { self.appState?.daemonError = message }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
-            }
-        }
+        sendDaemonCommand(.kill(projectRoot: projectRoot, target: .worktree(worktreeId)))
     }
 
     // MARK: - Resume
 
     private func resumeSuspendedAgents() {
-        let suspended = allAgents.filter { $0.suspended }
-        guard !suspended.isEmpty else { return }
-        let root = projectRoot
-
-        for agent in suspended {
-            Task {
-                let client = DaemonClient()
-                let response = try? await client.send(.resume(projectRoot: root, agentId: agent.id))
-                if case .error(_, let msg) = response {
-                    self.appState?.daemonError = "Resume failed for \(agent.displayName): \(msg)"
-                }
-            }
+        for agent in allAgents where agent.suspended {
+            sendDaemonCommand(.resume(projectRoot: projectRoot, agentId: agent.id))
         }
     }
 
@@ -342,6 +272,34 @@ final class ProjectState: Identifiable {
     }
 
     // MARK: - Private
+
+    /// Fire-and-forget daemon command with standard error handling.
+    private func sendDaemonCommand(_ request: DaemonRequest) {
+        Task {
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(request)
+                if case .error(_, let message) = response { self.appState?.daemonError = message }
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Eagerly assign newly-appeared agents to pending grid leaves before merging,
+    /// so they appear in childAgentIds immediately (sidebar leak prevention).
+    private func assignPendingSpawnsToGrid(_ incomingAgents: [AgentModel]) {
+        guard let gs = gridState, gs.projectRoot == projectRoot else { return }
+        var pending = gs.pendingSpawnLeafIds
+        guard !pending.isEmpty else { return }
+        let currentIds = Set(rootAgents.map(\.id))
+        for agent in incomingAgents where !currentIds.contains(agent.id) {
+            guard let leafId = pending.first else { break }
+            pending.remove(leafId)
+            gs.pendingSpawnLeafIds.remove(leafId)
+            gs.setAgent(agent.id, forLeafId: leafId)
+        }
+    }
 
     private func startStatusSubscription() {
         statusSubscriptionTask?.cancel()
@@ -379,21 +337,7 @@ final class ProjectState: Identifiable {
                                 )
                             }
 
-                            // Sidebar leak fix: eagerly assign new agents to pending grid leaves
-                            if let gs = self.gridState, gs.projectRoot == root {
-                                var pending = gs.pendingSpawnLeafIds
-                                if !pending.isEmpty {
-                                    let currentIds = Set(self.rootAgents.map(\.id))
-                                    let newAgents = agentModels.filter { !currentIds.contains($0.id) }
-                                    for agent in newAgents {
-                                        guard let leafId = pending.first else { break }
-                                        pending.remove(leafId)
-                                        gs.pendingSpawnLeafIds.remove(leafId)
-                                        gs.setAgent(agent.id, forLeafId: leafId)
-                                    }
-                                }
-                            }
-
+                            self.assignPendingSpawnsToGrid(agentModels)
                             self.mergeWorktrees(worktreeModels)
                             self.mergeRootAgents(agentModels)
                         }

@@ -1,4 +1,4 @@
-import SwiftUI
+import AppKit
 
 enum AgentStatus: String, CaseIterable, Codable, Sendable {
     // New observable states
@@ -19,33 +19,6 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
     case lost
     case suspended
 
-    var color: Color {
-        switch self {
-        case .streaming, .running, .spawning: .green
-        case .waiting, .idle, .suspended:     .cyan
-        case .completed:                      .secondary
-        case .broken, .failed,
-             .killed, .lost:                  .red
-        }
-    }
-
-    var nsColor: NSColor {
-        switch self {
-        case .streaming, .running, .spawning: .systemGreen
-        case .waiting, .idle, .suspended:     .systemCyan
-        case .completed:                      .systemGray
-        case .broken, .failed,
-             .killed, .lost:                  .systemRed
-        }
-    }
-
-    var isAlive: Bool {
-        switch self {
-        case .streaming, .waiting, .running, .idle, .spawning, .suspended: true
-        case .broken, .completed, .failed, .killed, .lost: false
-        }
-    }
-
     /// Normalize legacy status to the three observable states
     var normalized: AgentStatus {
         switch self {
@@ -53,6 +26,22 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
         case .waiting, .idle, .suspended:     .waiting
         case .broken, .completed, .failed,
              .killed, .lost:                  .broken
+        }
+    }
+
+    var nsColor: NSColor {
+        switch normalized {
+        case .streaming: .systemGreen
+        case .waiting:   .systemCyan
+        case .broken:    .systemRed
+        default:         .systemGray
+        }
+    }
+
+    var isAlive: Bool {
+        switch normalized {
+        case .streaming, .waiting: true
+        default: false
         }
     }
 }
