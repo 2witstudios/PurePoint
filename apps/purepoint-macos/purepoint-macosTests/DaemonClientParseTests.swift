@@ -161,4 +161,128 @@ struct DaemonClientParseTests {
         }
         #expect(type == "parse_error")
     }
+
+    // MARK: - Phase 5: Template / AgentDef / SwarmDef / RunSwarm
+
+    @Test func testParseTemplateList() {
+        let json = """
+        {"type":"template_list","templates":[{"name":"review","description":"Code review","agent":"claude","source":"local","variables":["BRANCH"]}]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .templateList(let templates) = response else {
+            Issue.record("expected templateList, got \(response)")
+            return
+        }
+        #expect(templates.count == 1)
+        #expect(templates[0].name == "review")
+        #expect(templates[0].description == "Code review")
+        #expect(templates[0].agent == "claude")
+        #expect(templates[0].source == "local")
+        #expect(templates[0].variables == ["BRANCH"])
+    }
+
+    @Test func testParseTemplateDetail() {
+        let json = """
+        {"type":"template_detail","name":"review","description":"Code review","agent":"claude","body":"Review {{BRANCH}}.","source":"local","variables":["BRANCH"]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .templateDetail(let name, let description, let agent, let body, let source, let variables) = response else {
+            Issue.record("expected templateDetail, got \(response)")
+            return
+        }
+        #expect(name == "review")
+        #expect(description == "Code review")
+        #expect(agent == "claude")
+        #expect(body == "Review {{BRANCH}}.")
+        #expect(source == "local")
+        #expect(variables == ["BRANCH"])
+    }
+
+    @Test func testParseAgentDefList() {
+        let json = """
+        {"type":"agent_def_list","agent_defs":[{"name":"reviewer","agent_type":"claude","template":"review","tags":["review"],"scope":"local","available_in_command_dialog":true,"icon":"shield"}]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .agentDefList(let agentDefs) = response else {
+            Issue.record("expected agentDefList, got \(response)")
+            return
+        }
+        #expect(agentDefs.count == 1)
+        #expect(agentDefs[0].name == "reviewer")
+        #expect(agentDefs[0].agentType == "claude")
+        #expect(agentDefs[0].template == "review")
+        #expect(agentDefs[0].tags == ["review"])
+        #expect(agentDefs[0].scope == "local")
+        #expect(agentDefs[0].availableInCommandDialog == true)
+        #expect(agentDefs[0].icon == "shield")
+    }
+
+    @Test func testParseAgentDefListWithNulls() {
+        let json = """
+        {"type":"agent_def_list","agent_defs":[{"name":"basic","agent_type":"claude","template":null,"tags":[],"scope":"global","available_in_command_dialog":false,"icon":null}]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .agentDefList(let agentDefs) = response else {
+            Issue.record("expected agentDefList, got \(response)")
+            return
+        }
+        #expect(agentDefs.count == 1)
+        #expect(agentDefs[0].name == "basic")
+        #expect(agentDefs[0].template == nil)
+        #expect(agentDefs[0].tags.isEmpty)
+        #expect(agentDefs[0].availableInCommandDialog == false)
+        #expect(agentDefs[0].icon == nil)
+    }
+
+    @Test func testParseSwarmDefList() {
+        let json = """
+        {"type":"swarm_def_list","swarm_defs":[{"name":"full-stack","worktree_count":3,"worktree_template":"feature","roster":[{"agent_def":"reviewer","role":"review","quantity":2}],"include_terminal":true,"scope":"local"}]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .swarmDefList(let swarmDefs) = response else {
+            Issue.record("expected swarmDefList, got \(response)")
+            return
+        }
+        #expect(swarmDefs.count == 1)
+        #expect(swarmDefs[0].name == "full-stack")
+        #expect(swarmDefs[0].worktreeCount == 3)
+        #expect(swarmDefs[0].worktreeTemplate == "feature")
+        #expect(swarmDefs[0].roster.count == 1)
+        #expect(swarmDefs[0].roster[0].agentDef == "reviewer")
+        #expect(swarmDefs[0].roster[0].role == "review")
+        #expect(swarmDefs[0].roster[0].quantity == 2)
+        #expect(swarmDefs[0].includeTerminal == true)
+        #expect(swarmDefs[0].scope == "local")
+    }
+
+    @Test func testParseRunSwarmResult() {
+        let json = """
+        {"type":"run_swarm_result","spawned_agents":["ag-abc","ag-def"]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .runSwarmResult(let spawnedAgents) = response else {
+            Issue.record("expected runSwarmResult, got \(response)")
+            return
+        }
+        #expect(spawnedAgents == ["ag-abc", "ag-def"])
+    }
+
+    @Test func testParseTemplateListEmpty() {
+        let json = """
+        {"type":"template_list","templates":[]}
+        """.data(using: .utf8)!
+
+        let response = DaemonClient.parse(json)
+        guard case .templateList(let templates) = response else {
+            Issue.record("expected templateList, got \(response)")
+            return
+        }
+        #expect(templates.isEmpty)
+    }
 }

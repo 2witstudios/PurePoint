@@ -103,6 +103,17 @@ nonisolated enum GridCommandPayload: Codable {
     }
 }
 
+nonisolated struct SwarmRosterEntryPayload: Codable {
+    let agentDef: String
+    let role: String
+    let quantity: Int
+
+    enum CodingKeys: String, CodingKey {
+        case agentDef = "agent_def"
+        case role, quantity
+    }
+}
+
 nonisolated enum DaemonRequest: Encodable {
     case health
     case initProject(projectRoot: String)
@@ -121,6 +132,17 @@ nonisolated enum DaemonRequest: Encodable {
     case subscribeStatus(projectRoot: String)
     case gridCommand(projectRoot: String, command: GridCommandPayload)
     case deleteWorktree(projectRoot: String, worktreeId: String)
+    case listTemplates(projectRoot: String)
+    case getTemplate(projectRoot: String, name: String)
+    case saveTemplate(projectRoot: String, name: String, description: String, agent: String, body: String, scope: String)
+    case deleteTemplate(projectRoot: String, name: String, scope: String)
+    case listAgentDefs(projectRoot: String)
+    case saveAgentDef(projectRoot: String, name: String, agentType: String, template: String?, inlinePrompt: String?, tags: [String], scope: String, availableInCommandDialog: Bool, icon: String?)
+    case deleteAgentDef(projectRoot: String, name: String, scope: String)
+    case listSwarmDefs(projectRoot: String)
+    case saveSwarmDef(projectRoot: String, name: String, worktreeCount: Int, worktreeTemplate: String, roster: [SwarmRosterEntryPayload], includeTerminal: Bool, scope: String)
+    case deleteSwarmDef(projectRoot: String, name: String, scope: String)
+    case runSwarm(projectRoot: String, swarmName: String, vars: [String: String])
     case shutdown
 
     func encode(to encoder: Encoder) throws {
@@ -187,6 +209,67 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("delete_worktree", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(worktreeId, forKey: .key("worktree_id"))
+        case .listTemplates(let projectRoot):
+            try container.encode("list_templates", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .getTemplate(let projectRoot, let name):
+            try container.encode("get_template", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+        case .saveTemplate(let projectRoot, let name, let description, let agent, let body, let scope):
+            try container.encode("save_template", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(description, forKey: .key("description"))
+            try container.encode(agent, forKey: .key("agent"))
+            try container.encode(body, forKey: .key("body"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .deleteTemplate(let projectRoot, let name, let scope):
+            try container.encode("delete_template", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .listAgentDefs(let projectRoot):
+            try container.encode("list_agent_defs", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .saveAgentDef(let projectRoot, let name, let agentType, let template, let inlinePrompt, let tags, let scope, let availableInCommandDialog, let icon):
+            try container.encode("save_agent_def", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(agentType, forKey: .key("agent_type"))
+            if let template { try container.encode(template, forKey: .key("template")) }
+            if let inlinePrompt { try container.encode(inlinePrompt, forKey: .key("inline_prompt")) }
+            try container.encode(tags, forKey: .key("tags"))
+            try container.encode(scope, forKey: .key("scope"))
+            try container.encode(availableInCommandDialog, forKey: .key("available_in_command_dialog"))
+            if let icon { try container.encode(icon, forKey: .key("icon")) }
+        case .deleteAgentDef(let projectRoot, let name, let scope):
+            try container.encode("delete_agent_def", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .listSwarmDefs(let projectRoot):
+            try container.encode("list_swarm_defs", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .saveSwarmDef(let projectRoot, let name, let worktreeCount, let worktreeTemplate, let roster, let includeTerminal, let scope):
+            try container.encode("save_swarm_def", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(worktreeCount, forKey: .key("worktree_count"))
+            try container.encode(worktreeTemplate, forKey: .key("worktree_template"))
+            try container.encode(roster, forKey: .key("roster"))
+            try container.encode(includeTerminal, forKey: .key("include_terminal"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .deleteSwarmDef(let projectRoot, let name, let scope):
+            try container.encode("delete_swarm_def", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .runSwarm(let projectRoot, let swarmName, let vars):
+            try container.encode("run_swarm", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(swarmName, forKey: .key("swarm_name"))
+            try container.encode(vars, forKey: .key("vars"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
@@ -210,6 +293,11 @@ nonisolated enum DaemonResponse: Decodable {
     case statusSubscribed
     case statusEvent(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
     case deleteWorktreeResult(worktreeId: String, killedAgents: [String])
+    case templateList(templates: [TemplateInfo])
+    case templateDetail(name: String, description: String, agent: String, body: String, source: String, variables: [String])
+    case agentDefList(agentDefs: [AgentDefInfo])
+    case swarmDefList(swarmDefs: [SwarmDefInfo])
+    case runSwarmResult(spawnedAgents: [String])
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -271,6 +359,21 @@ nonisolated enum DaemonResponse: Decodable {
         case "delete_worktree_result":
             let p = try DeleteWorktreeResultPayload(from: decoder)
             self = .deleteWorktreeResult(worktreeId: p.worktreeId, killedAgents: p.killedAgents)
+        case "template_list":
+            let p = try TemplateListPayload(from: decoder)
+            self = .templateList(templates: p.templates)
+        case "template_detail":
+            let p = try TemplateDetailPayload(from: decoder)
+            self = .templateDetail(name: p.name, description: p.description, agent: p.agent, body: p.body, source: p.source, variables: p.variables)
+        case "agent_def_list":
+            let p = try AgentDefListPayload(from: decoder)
+            self = .agentDefList(agentDefs: p.agentDefs)
+        case "swarm_def_list":
+            let p = try SwarmDefListPayload(from: decoder)
+            self = .swarmDefList(swarmDefs: p.swarmDefs)
+        case "run_swarm_result":
+            let p = try RunSwarmResultPayload(from: decoder)
+            self = .runSwarmResult(spawnedAgents: p.spawnedAgents)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -325,7 +428,75 @@ nonisolated struct AgentStatusReport: Decodable {
     }
 }
 
+nonisolated struct TemplateInfo: Decodable {
+    let name: String
+    let description: String
+    let agent: String
+    let source: String
+    let variables: [String]
+}
+
+nonisolated struct AgentDefInfo: Decodable {
+    let name: String
+    let agentType: String
+    let template: String?
+    let tags: [String]
+    let scope: String
+    let availableInCommandDialog: Bool
+    let icon: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name, template, tags, scope, icon
+        case agentType = "agent_type"
+        case availableInCommandDialog = "available_in_command_dialog"
+    }
+}
+
+nonisolated struct SwarmDefInfo: Decodable {
+    let name: String
+    let worktreeCount: Int
+    let worktreeTemplate: String
+    let roster: [SwarmRosterEntryPayload]
+    let includeTerminal: Bool
+    let scope: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, roster, scope
+        case worktreeCount = "worktree_count"
+        case worktreeTemplate = "worktree_template"
+        case includeTerminal = "include_terminal"
+    }
+}
+
 // MARK: - Response payload helpers
+
+private nonisolated struct TemplateListPayload: Decodable {
+    let templates: [TemplateInfo]
+}
+
+private nonisolated struct TemplateDetailPayload: Decodable {
+    let name: String
+    let description: String
+    let agent: String
+    let body: String
+    let source: String
+    let variables: [String]
+}
+
+private nonisolated struct AgentDefListPayload: Decodable {
+    let agentDefs: [AgentDefInfo]
+    enum CodingKeys: String, CodingKey { case agentDefs = "agent_defs" }
+}
+
+private nonisolated struct SwarmDefListPayload: Decodable {
+    let swarmDefs: [SwarmDefInfo]
+    enum CodingKeys: String, CodingKey { case swarmDefs = "swarm_defs" }
+}
+
+private nonisolated struct RunSwarmResultPayload: Decodable {
+    let spawnedAgents: [String]
+    enum CodingKeys: String, CodingKey { case spawnedAgents = "spawned_agents" }
+}
 
 private nonisolated struct InitResultPayload: Decodable {
     let created: Bool
