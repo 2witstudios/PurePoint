@@ -8,7 +8,10 @@ enum ContentBlockSplitter {
         return remainder.isEmpty || remainder.allSatisfy(\.isWhitespace)
     }
 
-    static func split(_ text: String) -> [ContentBlock] {
+    /// Split markdown text into content blocks. Uses stable index-based IDs
+    /// so SwiftUI can diff efficiently across repeated calls.
+    /// Pass `startIndex` to avoid ID collisions when appending multiple split results.
+    static func split(_ text: String, startIndex: Int = 0) -> [ContentBlock] {
         guard !text.isEmpty else { return [] }
 
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -16,60 +19,56 @@ enum ContentBlockSplitter {
         var currentText: [String] = []
         var codeLines: [String] = []
         var codeLanguage: String?
+        var openingFenceLine: String?
         var inCodeBlock = false
-        var i = 0
+        var blockIndex = startIndex
 
-        while i < lines.count {
-            let line = lines[i]
+        func flushText() {
+            let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty {
+                blocks.append(.text(id: "cb-\(blockIndex)", text: joined))
+                blockIndex += 1
+            }
+            currentText = []
+        }
 
+        for line in lines {
             if !inCodeBlock {
                 if line.hasPrefix("```") {
-                    // Look ahead for a closing fence
-                    var hasClosing = false
-                    for j in (i + 1)..<lines.count {
-                        if isClosingFence(lines[j]) {
-                            hasClosing = true
-                            break
-                        }
-                    }
-
-                    if hasClosing {
-                        let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !joined.isEmpty {
-                            blocks.append(.text(id: UUID().uuidString, text: joined))
-                        }
-                        currentText = []
-
-                        let langPart = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                        codeLanguage = langPart.isEmpty ? nil : langPart
-                        inCodeBlock = true
-                        codeLines = []
-                    } else {
-                        currentText.append(line)
-                    }
+                    // Optimistically enter code block (single pass — no look-ahead)
+                    flushText()
+                    let langPart = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    codeLanguage = langPart.isEmpty ? nil : langPart
+                    openingFenceLine = line
+                    inCodeBlock = true
+                    codeLines = []
                 } else {
                     currentText.append(line)
                 }
             } else {
                 if isClosingFence(line) {
                     let code = codeLines.joined(separator: "\n")
-                    blocks.append(.codeBlock(id: UUID().uuidString, language: codeLanguage, code: code))
+                    blocks.append(.codeBlock(id: "cb-\(blockIndex)", language: codeLanguage, code: code))
+                    blockIndex += 1
                     inCodeBlock = false
                     codeLines = []
                     codeLanguage = nil
+                    openingFenceLine = nil
                 } else {
                     codeLines.append(line)
                 }
             }
-
-            i += 1
         }
 
-        let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !joined.isEmpty {
-            blocks.append(.text(id: UUID().uuidString, text: joined))
+        // EOF while in code block: the fence had no closing — treat as plain text
+        if inCodeBlock {
+            if let fence = openingFenceLine {
+                currentText.append(fence)
+            }
+            currentText.append(contentsOf: codeLines)
         }
 
+        flushText()
         return blocks
     }
 }

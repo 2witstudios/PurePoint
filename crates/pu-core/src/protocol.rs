@@ -192,6 +192,39 @@ pub enum Request {
         #[serde(default)]
         vars: std::collections::HashMap<String, String>,
     },
+    // Schedule CRUD
+    ListSchedules {
+        project_root: String,
+    },
+    GetSchedule {
+        project_root: String,
+        name: String,
+    },
+    SaveSchedule {
+        project_root: String,
+        name: String,
+        #[serde(default = "default_enabled")]
+        enabled: bool,
+        recurrence: String,
+        start_at: DateTime<Utc>,
+        trigger: ScheduleTriggerPayload,
+        #[serde(default)]
+        target: String,
+        scope: String,
+    },
+    DeleteSchedule {
+        project_root: String,
+        name: String,
+        scope: String,
+    },
+    EnableSchedule {
+        project_root: String,
+        name: String,
+    },
+    DisableSchedule {
+        project_root: String,
+        name: String,
+    },
     Shutdown,
 }
 
@@ -228,6 +261,11 @@ fn default_axis() -> String {
 fn default_tail() -> usize {
     500
 }
+
+fn default_enabled() -> bool {
+    true
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmRosterEntryPayload {
@@ -266,6 +304,38 @@ pub struct SwarmDefInfo {
     pub roster: Vec<SwarmRosterEntryPayload>,
     pub include_terminal: bool,
     pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleInfo {
+    pub name: String,
+    pub enabled: bool,
+    pub recurrence: String,
+    pub start_at: DateTime<Utc>,
+    pub next_run: Option<DateTime<Utc>>,
+    pub trigger: ScheduleTriggerPayload,
+    pub project_root: String,
+    pub target: String,
+    pub scope: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ScheduleTriggerPayload {
+    AgentDef {
+        name: String,
+    },
+    SwarmDef {
+        name: String,
+        #[serde(default)]
+        vars: std::collections::HashMap<String, String>,
+    },
+    InlinePrompt {
+        prompt: String,
+        #[serde(default = "crate::serde_defaults::default_agent_type")]
+        agent: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,6 +464,21 @@ pub enum Response {
         spawned_agents: Vec<String>,
         error_code: String,
         error_message: String,
+    },
+    ScheduleList {
+        schedules: Vec<ScheduleInfo>,
+    },
+    ScheduleDetail {
+        name: String,
+        enabled: bool,
+        recurrence: String,
+        start_at: DateTime<Utc>,
+        next_run: Option<DateTime<Utc>>,
+        trigger: ScheduleTriggerPayload,
+        project_root: String,
+        target: String,
+        scope: String,
+        created_at: DateTime<Utc>,
     },
     Ok,
     ShuttingDown,
@@ -1609,6 +1694,154 @@ mod tests {
                 assert_eq!(spawned_agents, vec!["ag-abc", "ag-def"]);
             }
             _ => panic!("expected RunSwarmResult"),
+        }
+    }
+
+    // --- Schedule round-trips ---
+
+    #[test]
+    fn given_list_schedules_request_should_round_trip() {
+        let req = Request::ListSchedules {
+            project_root: "/test".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::ListSchedules { project_root } => assert_eq!(project_root, "/test"),
+            _ => panic!("expected ListSchedules"),
+        }
+    }
+
+    #[test]
+    fn given_save_schedule_request_should_round_trip() {
+        let req = Request::SaveSchedule {
+            project_root: "/test".into(),
+            name: "nightly".into(),
+            enabled: true,
+            recurrence: "daily".into(),
+            start_at: Utc::now(),
+            trigger: ScheduleTriggerPayload::AgentDef {
+                name: "reviewer".into(),
+            },
+            target: String::new(),
+            scope: "local".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::SaveSchedule {
+                name, recurrence, ..
+            } => {
+                assert_eq!(name, "nightly");
+                assert_eq!(recurrence, "daily");
+            }
+            _ => panic!("expected SaveSchedule"),
+        }
+    }
+
+    #[test]
+    fn given_delete_schedule_request_should_round_trip() {
+        let req = Request::DeleteSchedule {
+            project_root: "/test".into(),
+            name: "nightly".into(),
+            scope: "local".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::DeleteSchedule { name, scope, .. } => {
+                assert_eq!(name, "nightly");
+                assert_eq!(scope, "local");
+            }
+            _ => panic!("expected DeleteSchedule"),
+        }
+    }
+
+    #[test]
+    fn given_enable_schedule_request_should_round_trip() {
+        let req = Request::EnableSchedule {
+            project_root: "/test".into(),
+            name: "nightly".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::EnableSchedule { name, .. } => assert_eq!(name, "nightly"),
+            _ => panic!("expected EnableSchedule"),
+        }
+    }
+
+    #[test]
+    fn given_disable_schedule_request_should_round_trip() {
+        let req = Request::DisableSchedule {
+            project_root: "/test".into(),
+            name: "nightly".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::DisableSchedule { name, .. } => assert_eq!(name, "nightly"),
+            _ => panic!("expected DisableSchedule"),
+        }
+    }
+
+    #[test]
+    fn given_schedule_list_response_should_round_trip() {
+        let resp = Response::ScheduleList {
+            schedules: vec![ScheduleInfo {
+                name: "nightly".into(),
+                enabled: true,
+                recurrence: "daily".into(),
+                start_at: Utc::now(),
+                next_run: Some(Utc::now()),
+                trigger: ScheduleTriggerPayload::AgentDef {
+                    name: "reviewer".into(),
+                },
+                project_root: "/test".into(),
+                target: String::new(),
+                scope: "local".into(),
+                created_at: Utc::now(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::ScheduleList { schedules } => {
+                assert_eq!(schedules.len(), 1);
+                assert_eq!(schedules[0].name, "nightly");
+            }
+            _ => panic!("expected ScheduleList"),
+        }
+    }
+
+    #[test]
+    fn given_schedule_detail_response_should_round_trip() {
+        let resp = Response::ScheduleDetail {
+            name: "nightly".into(),
+            enabled: true,
+            recurrence: "daily".into(),
+            start_at: Utc::now(),
+            next_run: None,
+            trigger: ScheduleTriggerPayload::InlinePrompt {
+                prompt: "Review deps".into(),
+                agent: "claude".into(),
+            },
+            project_root: "/test".into(),
+            target: String::new(),
+            scope: "local".into(),
+            created_at: Utc::now(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::ScheduleDetail { name, trigger, .. } => {
+                assert_eq!(name, "nightly");
+                assert!(matches!(
+                    trigger,
+                    ScheduleTriggerPayload::InlinePrompt { .. }
+                ));
+            }
+            _ => panic!("expected ScheduleDetail"),
         }
     }
 

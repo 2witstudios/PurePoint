@@ -2,16 +2,19 @@ import SwiftUI
 
 struct ScheduleCreationSheet: View {
     @Bindable var state: ScheduleState
+    let projectRoot: String
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
-    @State private var type: ScheduleType = .swarm
+    @State private var type: ScheduleType = .agent
     @State private var date = Date()
     @State private var recurrence: RecurrenceRule = .none
-    @State private var projectName = "purepoint"
     @State private var target = ""
 
-    private let mockProjects = ["purepoint", "acme-app", "data-pipeline", "analytics", "docs-site"]
+    // Trigger fields
+    @State private var triggerName = ""
+    @State private var triggerPrompt = ""
+    @State private var triggerAgent = "claude"
 
     private static let previewFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -29,7 +32,7 @@ struct ScheduleCreationSheet: View {
             Divider()
             sheetFooter
         }
-        .frame(width: 400, height: 480)
+        .frame(width: 400, height: 520)
         .onAppear {
             if let prefill = state.creationPrefillDate {
                 date = prefill
@@ -56,24 +59,33 @@ struct ScheduleCreationSheet: View {
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
 
-            Picker("Type", selection: $type) {
+            Picker("Trigger", selection: $type) {
                 ForEach(ScheduleType.allCases) { t in
                     Label(t.label, systemImage: t.icon).tag(t)
                 }
             }
             .pickerStyle(.segmented)
 
+            // Trigger-specific fields
+            switch type {
+            case .agent:
+                TextField("Agent Definition Name", text: $triggerName)
+                    .textFieldStyle(.roundedBorder)
+            case .swarm:
+                TextField("Swarm Definition Name", text: $triggerName)
+                    .textFieldStyle(.roundedBorder)
+            case .inlinePrompt:
+                TextField("Prompt", text: $triggerPrompt)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Agent Type", text: $triggerAgent)
+                    .textFieldStyle(.roundedBorder)
+            }
+
             DatePicker("Time", selection: $date)
 
             Picker("Repeats", selection: $recurrence) {
                 ForEach(RecurrenceRule.allCases) { rule in
                     Text(rule.rawValue).tag(rule)
-                }
-            }
-
-            Picker("Project", selection: $projectName) {
-                ForEach(mockProjects, id: \.self) { project in
-                    Text(project).tag(project)
                 }
             }
 
@@ -132,21 +144,36 @@ struct ScheduleCreationSheet: View {
             Spacer()
 
             Button("Create") {
-                let event = ScheduleEvent(
-                    name: name.isEmpty ? "Untitled Schedule" : name,
-                    type: type,
-                    date: date,
-                    recurrence: recurrence,
-                    projectName: projectName,
-                    target: target
-                )
-                state.addEvent(event)
-                dismiss()
+                Task {
+                    let trigger = buildTrigger()
+                    await state.saveSchedule(
+                        projectRoot: projectRoot,
+                        name: name.isEmpty ? "Untitled Schedule" : name,
+                        enabled: true,
+                        recurrence: recurrence,
+                        startAt: date,
+                        trigger: trigger,
+                        target: target,
+                        scope: "local"
+                    )
+                    dismiss()
+                }
             }
             .keyboardShortcut(.defaultAction)
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+
+    private func buildTrigger() -> ScheduleTriggerPayload {
+        switch type {
+        case .agent:
+            return .agentDef(name: triggerName)
+        case .swarm:
+            return .swarmDef(name: triggerName, vars: [:])
+        case .inlinePrompt:
+            return .inlinePrompt(prompt: triggerPrompt, agent: triggerAgent)
+        }
     }
 }

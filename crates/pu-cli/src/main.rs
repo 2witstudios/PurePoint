@@ -136,6 +136,11 @@ enum Commands {
         #[command(subcommand)]
         action: GridAction,
     },
+    /// Manage scheduled tasks
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -344,6 +349,83 @@ enum GridAction {
     },
 }
 
+#[derive(Subcommand)]
+enum ScheduleAction {
+    /// List schedules
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a schedule
+    Create {
+        /// Schedule name
+        name: String,
+        /// Recurrence: none, hourly, daily, weekdays, weekly, monthly
+        #[arg(long, default_value = "none")]
+        recurrence: String,
+        /// Start time (RFC 3339 or YYYY-MM-DDTHH:MM:SS)
+        #[arg(long)]
+        start_at: String,
+        /// Trigger type: agent-def, swarm-def, inline-prompt
+        #[arg(long = "trigger")]
+        trigger_type: String,
+        /// Trigger name (for agent-def or swarm-def triggers)
+        #[arg(long)]
+        trigger_name: Option<String>,
+        /// Trigger prompt (for inline-prompt trigger)
+        #[arg(long)]
+        trigger_prompt: Option<String>,
+        /// Agent type for inline-prompt trigger
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Variable substitution (KEY=VALUE), repeatable
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a schedule
+    Show {
+        /// Schedule name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a schedule
+    Delete {
+        /// Schedule name
+        name: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enable a schedule
+    Enable {
+        /// Schedule name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable a schedule
+    Disable {
+        /// Schedule name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -490,6 +572,48 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Schedule { action } => match action {
+            ScheduleAction::List { json } => commands::schedule::run_list(&socket, json).await,
+            ScheduleAction::Create {
+                name,
+                recurrence,
+                start_at,
+                trigger_type,
+                trigger_name,
+                trigger_prompt,
+                agent,
+                vars,
+                scope,
+                json,
+            } => {
+                commands::schedule::run_create(
+                    &socket,
+                    &name,
+                    &recurrence,
+                    &start_at,
+                    &trigger_type,
+                    trigger_name.as_deref(),
+                    trigger_prompt.as_deref(),
+                    &agent,
+                    vars,
+                    &scope,
+                    json,
+                )
+                .await
+            }
+            ScheduleAction::Show { name, json } => {
+                commands::schedule::run_show(&socket, &name, json).await
+            }
+            ScheduleAction::Delete { name, scope, json } => {
+                commands::schedule::run_delete(&socket, &name, &scope, json).await
+            }
+            ScheduleAction::Enable { name, json } => {
+                commands::schedule::run_enable(&socket, &name, json).await
+            }
+            ScheduleAction::Disable { name, json } => {
+                commands::schedule::run_disable(&socket, &name, json).await
+            }
+        },
     };
 
     if let Err(e) = result {

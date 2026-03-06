@@ -5,6 +5,7 @@ import SwiftUI
 enum ScheduleType: String, CaseIterable, Identifiable {
     case swarm
     case agent
+    case inlinePrompt
 
     var id: String { rawValue }
 
@@ -12,11 +13,16 @@ enum ScheduleType: String, CaseIterable, Identifiable {
         switch self {
         case .swarm: "person.3.fill"
         case .agent: "cpu"
+        case .inlinePrompt: "text.bubble"
         }
     }
 
     var label: String {
-        rawValue.capitalized
+        switch self {
+        case .swarm: "Swarm"
+        case .agent: "Agent"
+        case .inlinePrompt: "Inline Prompt"
+        }
     }
 }
 
@@ -43,43 +49,55 @@ enum RecurrenceRule: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Backend string matching Rust recurrence field.
+    var backendString: String {
+        switch self {
+        case .none: "none"
+        case .hourly: "hourly"
+        case .daily: "daily"
+        case .weekdays: "weekdays"
+        case .weekly: "weekly"
+        case .monthly: "monthly"
+        }
+    }
+
+    init(backendString: String) {
+        switch backendString {
+        case "hourly": self = .hourly
+        case "daily": self = .daily
+        case "weekdays": self = .weekdays
+        case "weekly": self = .weekly
+        case "monthly": self = .monthly
+        default: self = .none
+        }
+    }
+
     func matches(date: Date, originalDate: Date, calendar: Calendar) -> Bool {
+        guard date >= originalDate else { return false }
+
         switch self {
         case .none:
             return calendar.isDate(date, inSameDayAs: originalDate)
         case .hourly:
-            return date >= originalDate
+            return true
         case .daily:
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return timesMatch(date, originalDate, calendar)
         case .weekdays:
             let weekday = calendar.component(.weekday, from: date)
-            let isWeekday = weekday >= 2 && weekday <= 6
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate && isWeekday
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return weekday >= 2 && weekday <= 6 && timesMatch(date, originalDate, calendar)
         case .weekly:
-            let origWeekday = calendar.component(.weekday, from: originalDate)
-            let checkWeekday = calendar.component(.weekday, from: date)
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate && origWeekday == checkWeekday
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return calendar.component(.weekday, from: date) == calendar.component(.weekday, from: originalDate)
+                && timesMatch(date, originalDate, calendar)
         case .monthly:
-            let origDay = calendar.component(.day, from: originalDate)
-            let checkDay = calendar.component(.day, from: date)
-            let origTime = calendar.dateComponents([.hour, .minute], from: originalDate)
-            let checkTime = calendar.dateComponents([.hour, .minute], from: date)
-            return date >= originalDate && origDay == checkDay
-                && origTime.hour == checkTime.hour
-                && origTime.minute == checkTime.minute
+            return calendar.component(.day, from: date) == calendar.component(.day, from: originalDate)
+                && timesMatch(date, originalDate, calendar)
         }
+    }
+
+    private func timesMatch(_ a: Date, _ b: Date, _ calendar: Calendar) -> Bool {
+        let t1 = calendar.dateComponents([.hour, .minute], from: a)
+        let t2 = calendar.dateComponents([.hour, .minute], from: b)
+        return t1.hour == t2.hour && t1.minute == t2.minute
     }
 }
 
@@ -117,6 +135,9 @@ struct ScheduleEvent: Identifiable {
     var projectName: String
     var target: String
     var color: Color
+    var enabled: Bool
+    var scope: String
+    var trigger: ScheduleTriggerPayload?
 
     init(
         id: UUID = UUID(),
@@ -125,7 +146,10 @@ struct ScheduleEvent: Identifiable {
         date: Date,
         recurrence: RecurrenceRule = .none,
         projectName: String,
-        target: String = ""
+        target: String = "",
+        enabled: Bool = true,
+        scope: String = "local",
+        trigger: ScheduleTriggerPayload? = nil
     ) {
         self.id = id
         self.name = name
@@ -135,5 +159,41 @@ struct ScheduleEvent: Identifiable {
         self.projectName = projectName
         self.target = target
         self.color = EventColor.forProject(projectName)
+        self.enabled = enabled
+        self.scope = scope
+        self.trigger = trigger
+    }
+
+    /// Initialize from a daemon ScheduleInfoPayload.
+    init(from payload: ScheduleInfoPayload) {
+        self.id = UUID()
+        self.name = payload.name
+        self.enabled = payload.enabled
+        self.recurrence = RecurrenceRule(backendString: payload.recurrence)
+        self.projectName = payload.projectRoot
+        self.target = payload.target
+        self.scope = payload.scope
+        self.color = EventColor.forProject(payload.projectRoot)
+        self.trigger = payload.trigger
+
+        // Parse start_at ISO 8601 date (with or without fractional seconds)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = formatter.date(from: payload.startAt) {
+            self.date = parsed
+        } else {
+            formatter.formatOptions = [.withInternetDateTime]
+            self.date = formatter.date(from: payload.startAt) ?? Date()
+        }
+
+        // Determine type from trigger
+        switch payload.trigger {
+        case .agentDef:
+            self.type = .agent
+        case .swarmDef:
+            self.type = .swarm
+        case .inlinePrompt:
+            self.type = .inlinePrompt
+        }
     }
 }

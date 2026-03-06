@@ -24,8 +24,8 @@ pub async fn run(_socket: &std::path::Path, json: bool) -> Result<(), CliError> 
 
     config::write_default_config(project_root).map_err(|e| CliError::Other(e.to_string()))?;
 
-    // Register skills
-    skill::register_all_skills();
+    // Ensure skill file is up to date
+    skill::ensure_skill_current();
 
     // Write agent-context.md for non-Claude tools
     write_agent_context(project_root);

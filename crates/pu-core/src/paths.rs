@@ -64,6 +64,14 @@ pub fn global_swarms_dir() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("swarms"))
 }
 
+pub fn schedules_dir(project_root: &Path) -> PathBuf {
+    pu_dir(project_root).join("schedules")
+}
+
+pub fn global_schedules_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("schedules"))
+}
+
 fn home_dir() -> Result<PathBuf, std::io::Error> {
     std::env::var("HOME")
         .map(PathBuf::from)
@@ -194,6 +202,24 @@ mod tests {
         let path = global_swarms_dir().unwrap();
         assert!(
             path.to_string_lossy().contains(".pu/swarms"),
+            "unexpected path: {path:?}"
+        );
+    }
+
+    #[test]
+    fn given_project_root_should_build_schedules_dir() {
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            schedules_dir(root),
+            PathBuf::from("/projects/myapp/.pu/schedules")
+        );
+    }
+
+    #[test]
+    fn given_global_schedules_dir_should_live_under_home_pu() {
+        let path = global_schedules_dir().unwrap();
+        assert!(
+            path.to_string_lossy().contains(".pu/schedules"),
             "unexpected path: {path:?}"
         );
     }

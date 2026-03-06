@@ -48,6 +48,7 @@ struct AgentVariant: Identifiable {
         kind: .terminal
     )
 
+    // id matches claude variant — it's passed to the daemon as the agent type to spawn
     static let worktree = AgentVariant(
         id: "claude",
         displayName: "Worktree",

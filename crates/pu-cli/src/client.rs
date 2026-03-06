@@ -25,9 +25,10 @@ pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, 
 
         let json = serde_json::to_string(request)?;
         writer
-            .write_all(format!("{json}\n").as_bytes())
+            .write_all(json.as_bytes())
             .await
             .map_err(CliError::Io)?;
+        writer.write_all(b"\n").await.map_err(CliError::Io)?;
 
         let mut line = String::new();
         reader.read_line(&mut line).await.map_err(CliError::Io)?;
