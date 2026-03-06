@@ -71,7 +71,7 @@ struct ConversationSidebarView: View {
                                     .padding(.top, 8)
                                     .padding(.bottom, 2)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color(NSColor.controlBackgroundColor))
+                                    .background(.background)
                             }
                         }
                     }
@@ -79,7 +79,6 @@ struct ConversationSidebarView: View {
                 }
             }
         }
-        .background(Color(NSColor.controlBackgroundColor))
     }
 
     private func sessionRow(_ session: ClaudeConversation, agentName matchedAgentName: String?) -> some View {

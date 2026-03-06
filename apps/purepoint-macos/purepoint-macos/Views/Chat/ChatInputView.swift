@@ -7,12 +7,11 @@ struct ChatInputView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Divider()
-            HStack(alignment: .bottom, spacing: 10) {
-                TextEditor(text: $chatState.inputText)
+            HStack(alignment: .center, spacing: 0) {
+                TextField("Message Point Guard...", text: $chatState.inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
                     .font(.system(size: 14))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 36, maxHeight: 140)
+                    .lineLimit(1...10)
                     .fixedSize(horizontal: false, vertical: true)
                     .focused($isFocused)
                     .onKeyPress(.return) {
@@ -26,11 +25,21 @@ struct ChatInputView: View {
                     }
 
                 actionButton
+                    .padding(.leading, 4)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(NSColor.controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
+            )
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(Color(NSColor.windowBackgroundColor))
         .onAppear { isFocused = true }
     }
 
