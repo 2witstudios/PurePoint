@@ -30,6 +30,7 @@ PurePoint has two mental models:
 ## Features
 
 - **Pane grid** — split your workspace into any arrangement of terminal panes, each showing a live agent
+- **Diff viewer** — review unstaged changes and PR diffs across worktrees without leaving the app
 - **Swarms** — named plays defining which agents run, what prompts they get, and how worktrees are allocated
 - **Prompt templates** — reusable prompts with variable substitution that resolve at spawn time
 - **Agent definitions** — save custom agent configurations with specific types, prompts, and tags
@@ -39,8 +40,10 @@ PurePoint has two mental models:
 - **Auto-resume** — agents and layout persist across app restarts
 - **Schedules** — swarms on cron; a nightly security review or weekly dependency audit, results waiting when you open the app
 
-| ![Agent definitions](docs/images/agents-screen.png) | ![Weekly schedule](docs/images/weekly-cal-schedule.png) |
+| ![Agent definitions](docs/images/agents-screen.png) | ![Diff viewer](docs/images/diff-viewer.png) |
 |---|---|
+| ![Point Guard chat](docs/images/past-convo-view.png) | ![Customizable hotkeys](docs/images/hotkeys-menu.png) |
+| ![Weekly schedule](docs/images/weekly-cal-schedule.png) | ![Point Guard](docs/images/point-guard-agent.png) |
 
 ## Getting Started
 
