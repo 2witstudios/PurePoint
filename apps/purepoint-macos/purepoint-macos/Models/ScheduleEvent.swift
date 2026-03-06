@@ -5,6 +5,7 @@ import SwiftUI
 enum ScheduleType: String, CaseIterable, Identifiable {
     case swarm
     case agent
+    case inlinePrompt
 
     var id: String { rawValue }
 
@@ -12,11 +13,16 @@ enum ScheduleType: String, CaseIterable, Identifiable {
         switch self {
         case .swarm: "person.3.fill"
         case .agent: "cpu"
+        case .inlinePrompt: "text.bubble"
         }
     }
 
     var label: String {
-        rawValue.capitalized
+        switch self {
+        case .swarm: "Swarm"
+        case .agent: "Agent"
+        case .inlinePrompt: "Inline Prompt"
+        }
     }
 }
 
@@ -40,6 +46,29 @@ enum RecurrenceRule: String, CaseIterable, Identifiable {
         case .weekdays: "Weekdays"
         case .weekly: "Weekly"
         case .monthly: "Monthly"
+        }
+    }
+
+    /// Backend string matching Rust recurrence field.
+    var backendString: String {
+        switch self {
+        case .none: "none"
+        case .hourly: "hourly"
+        case .daily: "daily"
+        case .weekdays: "weekdays"
+        case .weekly: "weekly"
+        case .monthly: "monthly"
+        }
+    }
+
+    init(backendString: String) {
+        switch backendString {
+        case "hourly": self = .hourly
+        case "daily": self = .daily
+        case "weekdays": self = .weekdays
+        case "weekly": self = .weekly
+        case "monthly": self = .monthly
+        default: self = .none
         }
     }
 
@@ -117,6 +146,9 @@ struct ScheduleEvent: Identifiable {
     var projectName: String
     var target: String
     var color: Color
+    var enabled: Bool
+    var scope: String
+    var trigger: ScheduleTriggerPayload?
 
     init(
         id: UUID = UUID(),
@@ -125,7 +157,10 @@ struct ScheduleEvent: Identifiable {
         date: Date,
         recurrence: RecurrenceRule = .none,
         projectName: String,
-        target: String = ""
+        target: String = "",
+        enabled: Bool = true,
+        scope: String = "local",
+        trigger: ScheduleTriggerPayload? = nil
     ) {
         self.id = id
         self.name = name
@@ -135,5 +170,36 @@ struct ScheduleEvent: Identifiable {
         self.projectName = projectName
         self.target = target
         self.color = EventColor.forProject(projectName)
+        self.enabled = enabled
+        self.scope = scope
+        self.trigger = trigger
+    }
+
+    /// Initialize from a daemon ScheduleInfoPayload.
+    init(from payload: ScheduleInfoPayload) {
+        self.id = UUID()
+        self.name = payload.name
+        self.enabled = payload.enabled
+        self.recurrence = RecurrenceRule(backendString: payload.recurrence)
+        self.projectName = payload.projectRoot
+        self.target = payload.target
+        self.scope = payload.scope
+        self.color = EventColor.forProject(payload.projectRoot)
+        self.trigger = payload.trigger
+
+        // Parse start_at ISO 8601 date
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.date = formatter.date(from: payload.startAt) ?? Date()
+
+        // Determine type from trigger
+        switch payload.trigger {
+        case .agentDef:
+            self.type = .agent
+        case .swarmDef:
+            self.type = .swarm
+        case .inlinePrompt:
+            self.type = .inlinePrompt
+        }
     }
 }

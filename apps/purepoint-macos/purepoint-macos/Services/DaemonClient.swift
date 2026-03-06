@@ -114,6 +114,74 @@ nonisolated struct SwarmRosterEntryPayload: Codable {
     }
 }
 
+/// Schedule trigger payload matching Rust ScheduleTriggerPayload.
+/// Tagged with "type" field: agent_def, swarm_def, inline_prompt.
+nonisolated enum ScheduleTriggerPayload: Codable {
+    case agentDef(name: String)
+    case swarmDef(name: String, vars: [String: String])
+    case inlinePrompt(prompt: String, agent: String)
+
+    private enum CodingKeys: String, CodingKey { case type }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        switch self {
+        case .agentDef(let name):
+            try container.encode("agent_def", forKey: .key("type"))
+            try container.encode(name, forKey: .key("name"))
+        case .swarmDef(let name, let vars):
+            try container.encode("swarm_def", forKey: .key("type"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(vars, forKey: .key("vars"))
+        case .inlinePrompt(let prompt, let agent):
+            try container.encode("inline_prompt", forKey: .key("type"))
+            try container.encode(prompt, forKey: .key("prompt"))
+            try container.encode(agent, forKey: .key("agent"))
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let type = try container.decode(String.self, forKey: .key("type"))
+        switch type {
+        case "agent_def":
+            let name = try container.decode(String.self, forKey: .key("name"))
+            self = .agentDef(name: name)
+        case "swarm_def":
+            let name = try container.decode(String.self, forKey: .key("name"))
+            let vars = try container.decodeIfPresent([String: String].self, forKey: .key("vars")) ?? [:]
+            self = .swarmDef(name: name, vars: vars)
+        case "inline_prompt":
+            let prompt = try container.decode(String.self, forKey: .key("prompt"))
+            let agent = try container.decodeIfPresent(String.self, forKey: .key("agent")) ?? "claude"
+            self = .inlinePrompt(prompt: prompt, agent: agent)
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Unknown trigger type: \(type)"))
+        }
+    }
+}
+
+nonisolated struct ScheduleInfoPayload: Decodable {
+    let name: String
+    let enabled: Bool
+    let recurrence: String
+    let startAt: String
+    let nextRun: String?
+    let trigger: ScheduleTriggerPayload
+    let projectRoot: String
+    let target: String
+    let scope: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, enabled, recurrence, trigger, target, scope
+        case startAt = "start_at"
+        case nextRun = "next_run"
+        case projectRoot = "project_root"
+        case createdAt = "created_at"
+    }
+}
+
 nonisolated enum DaemonRequest: Encodable {
     case health
     case initProject(projectRoot: String)
@@ -143,6 +211,11 @@ nonisolated enum DaemonRequest: Encodable {
     case saveSwarmDef(projectRoot: String, name: String, worktreeCount: Int, worktreeTemplate: String, roster: [SwarmRosterEntryPayload], includeTerminal: Bool, scope: String)
     case deleteSwarmDef(projectRoot: String, name: String, scope: String)
     case runSwarm(projectRoot: String, swarmName: String, vars: [String: String])
+    case listSchedules(projectRoot: String)
+    case saveSchedule(projectRoot: String, name: String, enabled: Bool, recurrence: String, startAt: String, trigger: ScheduleTriggerPayload, target: String, scope: String)
+    case deleteSchedule(projectRoot: String, name: String, scope: String)
+    case enableSchedule(projectRoot: String, name: String)
+    case disableSchedule(projectRoot: String, name: String)
     case shutdown
 
     func encode(to encoder: Encoder) throws {
@@ -270,6 +343,32 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(swarmName, forKey: .key("swarm_name"))
             try container.encode(vars, forKey: .key("vars"))
+        case .listSchedules(let projectRoot):
+            try container.encode("list_schedules", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .saveSchedule(let projectRoot, let name, let enabled, let recurrence, let startAt, let trigger, let target, let scope):
+            try container.encode("save_schedule", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(enabled, forKey: .key("enabled"))
+            try container.encode(recurrence, forKey: .key("recurrence"))
+            try container.encode(startAt, forKey: .key("start_at"))
+            try container.encode(trigger, forKey: .key("trigger"))
+            try container.encode(target, forKey: .key("target"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .deleteSchedule(let projectRoot, let name, let scope):
+            try container.encode("delete_schedule", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .enableSchedule(let projectRoot, let name):
+            try container.encode("enable_schedule", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+        case .disableSchedule(let projectRoot, let name):
+            try container.encode("disable_schedule", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
@@ -298,6 +397,8 @@ nonisolated enum DaemonResponse: Decodable {
     case agentDefList(agentDefs: [AgentDefInfo])
     case swarmDefList(swarmDefs: [SwarmDefInfo])
     case runSwarmResult(spawnedAgents: [String])
+    case scheduleList(schedules: [ScheduleInfoPayload])
+    case scheduleDetail(schedule: ScheduleInfoPayload)
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -374,6 +475,12 @@ nonisolated enum DaemonResponse: Decodable {
         case "run_swarm_result":
             let p = try RunSwarmResultPayload(from: decoder)
             self = .runSwarmResult(spawnedAgents: p.spawnedAgents)
+        case "schedule_list":
+            let p = try ScheduleListPayload(from: decoder)
+            self = .scheduleList(schedules: p.schedules)
+        case "schedule_detail":
+            let p = try ScheduleInfoPayload(from: decoder)
+            self = .scheduleDetail(schedule: p)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -493,6 +600,10 @@ private nonisolated struct AgentDefListPayload: Decodable {
 private nonisolated struct SwarmDefListPayload: Decodable {
     let swarmDefs: [SwarmDefInfo]
     enum CodingKeys: String, CodingKey { case swarmDefs = "swarm_defs" }
+}
+
+private nonisolated struct ScheduleListPayload: Decodable {
+    let schedules: [ScheduleInfoPayload]
 }
 
 private nonisolated struct RunSwarmResultPayload: Decodable {

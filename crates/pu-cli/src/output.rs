@@ -363,6 +363,70 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 println!("  {}", id.dimmed());
             }
         }
+        Response::ScheduleList { schedules } => {
+            if schedules.is_empty() {
+                println!("No schedules");
+                return;
+            }
+            println!(
+                "{:<20} {:<10} {:<10} {:<10} {}",
+                "NAME".bold(),
+                "RECURRENCE".bold(),
+                "ENABLED".bold(),
+                "SCOPE".bold(),
+                "NEXT RUN".bold()
+            );
+            for s in schedules {
+                let next = s
+                    .next_run
+                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                let enabled_str = if s.enabled {
+                    "yes".green().to_string()
+                } else {
+                    "no".dimmed().to_string()
+                };
+                println!(
+                    "{:<20} {:<10} {:<10} {:<10} {}",
+                    s.name, s.recurrence, enabled_str, s.scope, next
+                );
+            }
+        }
+        Response::ScheduleDetail {
+            name,
+            enabled,
+            recurrence,
+            start_at,
+            next_run,
+            trigger,
+            scope,
+            ..
+        } => {
+            println!("{} ({})", name.bold(), scope.dimmed());
+            println!("  Enabled:    {enabled}");
+            println!("  Recurrence: {recurrence}");
+            println!("  Start at:   {}", start_at.format("%Y-%m-%d %H:%M UTC"));
+            if let Some(nr) = next_run {
+                println!("  Next run:   {}", nr.format("%Y-%m-%d %H:%M UTC"));
+            }
+            match trigger {
+                pu_core::protocol::ScheduleTriggerPayload::AgentDef { name } => {
+                    println!("  Trigger:    agent-def ({name})");
+                }
+                pu_core::protocol::ScheduleTriggerPayload::SwarmDef { name, vars } => {
+                    println!("  Trigger:    swarm-def ({name})");
+                    if !vars.is_empty() {
+                        for (k, v) in vars {
+                            println!("    {k}={v}");
+                        }
+                    }
+                }
+                pu_core::protocol::ScheduleTriggerPayload::InlinePrompt { prompt, agent } => {
+                    println!("  Trigger:    inline-prompt ({agent})");
+                    println!("  Prompt:     {prompt}");
+                }
+            }
+        }
     }
 }
 
@@ -704,5 +768,56 @@ mod tests {
     fn given_waiting_should_show_waiting() {
         let s = status_colored(AgentStatus::Waiting, None);
         assert!(s.contains("waiting"));
+    }
+
+    // --- schedule output ---
+
+    #[test]
+    fn given_schedule_list_response_should_not_panic() {
+        let resp = Response::ScheduleList {
+            schedules: vec![pu_core::protocol::ScheduleInfo {
+                name: "nightly".into(),
+                enabled: true,
+                recurrence: "daily".into(),
+                start_at: chrono::Utc::now(),
+                next_run: Some(chrono::Utc::now()),
+                trigger: pu_core::protocol::ScheduleTriggerPayload::AgentDef {
+                    name: "reviewer".into(),
+                },
+                project_root: "/test".into(),
+                target: String::new(),
+                scope: "local".into(),
+                created_at: chrono::Utc::now(),
+            }],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_empty_schedule_list_should_not_panic() {
+        let resp = Response::ScheduleList {
+            schedules: vec![],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_schedule_detail_response_should_not_panic() {
+        let resp = Response::ScheduleDetail {
+            name: "nightly".into(),
+            enabled: true,
+            recurrence: "daily".into(),
+            start_at: chrono::Utc::now(),
+            next_run: None,
+            trigger: pu_core::protocol::ScheduleTriggerPayload::InlinePrompt {
+                prompt: "Review deps".into(),
+                agent: "claude".into(),
+            },
+            project_root: "/test".into(),
+            target: String::new(),
+            scope: "local".into(),
+            created_at: chrono::Utc::now(),
+        };
+        print_response(&resp, false);
     }
 }

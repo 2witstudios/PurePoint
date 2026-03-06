@@ -1,7 +1,15 @@
 import SwiftUI
 
 struct ScheduleView: View {
-    @State private var state = ScheduleState()
+    @Environment(AppState.self) private var appState
+
+    private var state: ScheduleState {
+        appState.scheduleState
+    }
+
+    private var projectRoot: String {
+        appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,8 +19,11 @@ struct ScheduleView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .sheet(isPresented: $state.showingCreationSheet) {
-            ScheduleCreationSheet(state: state)
+        .sheet(isPresented: Bindable(state).showingCreationSheet) {
+            ScheduleCreationSheet(state: state, projectRoot: projectRoot)
+        }
+        .task {
+            await state.loadSchedules(projectRoot: projectRoot)
         }
     }
 

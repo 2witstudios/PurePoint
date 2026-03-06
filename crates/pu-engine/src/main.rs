@@ -73,6 +73,9 @@ async fn main() {
     // Start background reaper for dead sessions and orphaned channels
     server.engine().start_session_reaper();
 
+    // Start background scheduler for recurring tasks
+    server.engine().start_scheduler();
+
     if let Err(e) = server.run().await {
         tracing::error!("server error: {e}");
     }
