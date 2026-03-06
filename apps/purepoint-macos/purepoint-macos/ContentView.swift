@@ -22,7 +22,20 @@ struct ContentView: View {
         } detail: {
             DetailView(selection: $selection)
         }
-        .navigationTitle("PurePoint")
+        .navigationTitle("")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 6) {
+                    Image("PurePointLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 16, height: 16)
+                    Text("PurePoint")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .padding(.horizontal, 4)
+            }
+        }
         .overlay(alignment: .top) {
             if let error = appState.daemonError {
                 DaemonErrorBanner(message: error) {

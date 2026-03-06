@@ -6,9 +6,11 @@ struct SettingsAboutView: View {
             Spacer()
 
             VStack(spacing: 12) {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.secondary)
+                Image("PurePointLogo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 Text("PurePoint")
                     .font(.system(size: 22, weight: .bold))
@@ -27,6 +29,7 @@ struct SettingsAboutView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
+                .padding(.vertical, 4)
                 Divider()
                 HStack {
                     Text("Build")
@@ -36,6 +39,7 @@ struct SettingsAboutView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
+                .padding(.vertical, 4)
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
             .frame(maxWidth: 300)

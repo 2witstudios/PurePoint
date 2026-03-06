@@ -1,10 +1,8 @@
 {
   "images" : [
     {
-      "filename" : "AppIcon.png",
-      "idiom" : "mac",
-      "platform" : "macos",
-      "size" : "512x512"
+      "filename" : "PurePointLogo.png",
+      "idiom" : "universal"
     },
     {
       "appearances" : [
@@ -13,10 +11,8 @@
           "value" : "dark"
         }
       ],
-      "filename" : "AppIcon-Dark.png",
-      "idiom" : "mac",
-      "platform" : "macos",
-      "size" : "512x512"
+      "filename" : "PurePointLogo-Dark.png",
+      "idiom" : "universal"
     }
   ],
   "info" : {
