@@ -2374,10 +2374,8 @@ impl Engine {
         match tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             let defs = pu_core::schedule_def::list_schedule_defs(root);
-            let infos: Vec<ScheduleInfo> = defs
-                .into_iter()
-                .map(Self::schedule_def_to_info)
-                .collect();
+            let infos: Vec<ScheduleInfo> =
+                defs.into_iter().map(Self::schedule_def_to_info).collect();
             infos
         })
         .await
