@@ -4,6 +4,7 @@ struct SidebarView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
     @Environment(GridState.self) private var gridState
+    var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,7 +30,8 @@ struct SidebarView: View {
                 SidebarOutlineView(
                     selection: $selection,
                     appState: appState,
-                    gridState: gridState
+                    gridState: gridState,
+                    onOutlineViewReady: onOutlineViewReady
                 )
                 .padding(.top, 8)
             } else {

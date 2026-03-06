@@ -19,12 +19,8 @@ struct PointGuardView: View {
         .task {
             await chatState.refreshSessions()
         }
-        .onKeyPress(characters: .init(charactersIn: "s"), phases: .down) { press in
-            if press.modifiers.contains([.command, .shift]) {
-                showSidebar.toggle()
-                return .handled
-            }
-            return .ignored
+        .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
+            showSidebar.toggle()
         }
     }
 }
