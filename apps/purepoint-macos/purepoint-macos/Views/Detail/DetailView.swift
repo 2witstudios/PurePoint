@@ -124,5 +124,4 @@ private struct AgentTerminalPane: View {
         gridState.enterGridMode(agentId: agentId, axis: axis)
         gridState.pendingPaletteLeafId = gridState.focusedLeafId
     }
-
 }

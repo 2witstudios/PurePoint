@@ -125,5 +125,4 @@ private struct HoverOverlay: View {
             }
         }
     }
-
 }

@@ -85,7 +85,7 @@ struct WorktreeDetailView: View {
 
         case .prDiffs:
             if !diffState.ghAvailable {
-                ghUnavailableView
+                GHUnavailableView()
             } else if diffState.isLoadingPRs && diffState.pullRequests.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -119,8 +119,8 @@ struct WorktreeDetailView: View {
                 }
                 .labelsHidden()
 
-                if let pr = diffState.selectedPR {
-                    Link(destination: URL(string: pr.url) ?? URL(string: "about:blank")!) {
+                if let pr = diffState.selectedPR, let url = URL(string: pr.url) {
+                    Link(destination: url) {
                         Image(systemName: "arrow.up.right.square")
                             .font(.system(size: 12))
                     }
@@ -152,7 +152,4 @@ struct WorktreeDetailView: View {
         )
     }
 
-    private var ghUnavailableView: some View {
-        GHUnavailableView()
-    }
 }

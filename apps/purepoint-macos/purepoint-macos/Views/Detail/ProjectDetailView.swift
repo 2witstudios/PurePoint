@@ -81,7 +81,7 @@ struct ProjectDetailView: View {
 
         case .prDiffs:
             if !diffState.ghAvailable {
-                ghUnavailableView
+                GHUnavailableView()
             } else {
                 prListContent
             }
@@ -155,11 +155,13 @@ struct ProjectDetailView: View {
 
                     Spacer()
 
-                    Link(destination: URL(string: pr.url) ?? URL(string: "about:blank")!) {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 12))
+                    if let url = URL(string: pr.url) {
+                        Link(destination: url) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 12))
+                        }
+                        .help("Open in browser")
                     }
-                    .help("Open in browser")
                 }
             }
             .padding(.horizontal, 16)
@@ -176,7 +178,4 @@ struct ProjectDetailView: View {
         }
     }
 
-    private var ghUnavailableView: some View {
-        GHUnavailableView()
-    }
 }
