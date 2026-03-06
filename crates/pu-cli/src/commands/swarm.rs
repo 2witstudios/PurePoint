@@ -166,7 +166,10 @@ mod tests {
         let result = parse_roster(&input);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("justname"), "error should mention the bad input");
+        assert!(
+            err.contains("justname"),
+            "error should mention the bad input"
+        );
     }
 
     #[test]

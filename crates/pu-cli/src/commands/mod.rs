@@ -6,6 +6,7 @@ pub mod init;
 pub mod kill;
 pub mod logs;
 pub mod prompt;
+pub mod schedule;
 pub mod send;
 pub mod spawn;
 pub mod status;
@@ -57,7 +58,10 @@ mod tests {
         let result = parse_vars(&input);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("NOEQUALS"), "error should mention the bad input");
+        assert!(
+            err.contains("NOEQUALS"),
+            "error should mention the bad input"
+        );
     }
 
     #[test]

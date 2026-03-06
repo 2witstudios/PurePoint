@@ -25,9 +25,76 @@ final class ScheduleState {
     var selectedEvent: ScheduleEvent?
 
     private let calendar = Calendar.current
+    @ObservationIgnored private let client: DaemonClient
 
-    init() {
-        generateMockData()
+    init(client: DaemonClient = DaemonClient()) {
+        self.client = client
+    }
+
+    // MARK: - Backend Integration
+
+    func loadSchedules(projectRoot: String) async {
+        do {
+            let response = try await client.send(.listSchedules(projectRoot: projectRoot))
+            if case .scheduleList(let schedules) = response {
+                self.events = schedules.map { ScheduleEvent(from: $0) }
+            }
+        } catch {
+            print("Failed to load schedules: \(error)")
+        }
+    }
+
+    func saveSchedule(
+        projectRoot: String,
+        name: String,
+        enabled: Bool,
+        recurrence: RecurrenceRule,
+        startAt: Date,
+        trigger: ScheduleTriggerPayload,
+        target: String,
+        scope: String
+    ) async {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let startAtString = formatter.string(from: startAt)
+
+        do {
+            _ = try await client.send(.saveSchedule(
+                projectRoot: projectRoot,
+                name: name,
+                enabled: enabled,
+                recurrence: recurrence.backendString,
+                startAt: startAtString,
+                trigger: trigger,
+                target: target,
+                scope: scope
+            ))
+            await loadSchedules(projectRoot: projectRoot)
+        } catch {
+            print("Failed to save schedule: \(error)")
+        }
+    }
+
+    func deleteSchedule(projectRoot: String, name: String, scope: String) async {
+        do {
+            _ = try await client.send(.deleteSchedule(projectRoot: projectRoot, name: name, scope: scope))
+            await loadSchedules(projectRoot: projectRoot)
+        } catch {
+            print("Failed to delete schedule: \(error)")
+        }
+    }
+
+    func toggleSchedule(projectRoot: String, name: String, currentlyEnabled: Bool) async {
+        do {
+            if currentlyEnabled {
+                _ = try await client.send(.disableSchedule(projectRoot: projectRoot, name: name))
+            } else {
+                _ = try await client.send(.enableSchedule(projectRoot: projectRoot, name: name))
+            }
+            await loadSchedules(projectRoot: projectRoot)
+        } catch {
+            print("Failed to toggle schedule: \(error)")
+        }
     }
 
     // MARK: - Date Navigation
@@ -95,7 +162,7 @@ final class ScheduleState {
 
     func events(for date: Date) -> [ScheduleEvent] {
         events.filter { event in
-            event.recurrence.matches(date: date, originalDate: event.date, calendar: calendar)
+            event.enabled && event.recurrence.matches(date: date, originalDate: event.date, calendar: calendar)
         }
     }
 
@@ -103,7 +170,7 @@ final class ScheduleState {
     func expandedOccurrences(from start: Date, to end: Date) -> [(date: Date, event: ScheduleEvent)] {
         var results: [(Date, ScheduleEvent)] = []
 
-        for event in events {
+        for event in events where event.enabled {
             switch event.recurrence {
             case .none:
                 if event.date >= start && event.date <= end {
@@ -228,85 +295,5 @@ final class ScheduleState {
     var weekDays: [Date] {
         guard let weekInterval = calendar.dateInterval(of: .weekOfYear, for: currentDate) else { return [] }
         return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekInterval.start) }
-    }
-
-    // MARK: - Mock Data
-
-    private func generateMockData() {
-        let today = Date()
-        let cal = calendar
-
-        // Doc review swarm — daily at 9am
-        if let date = cal.date(bySettingHour: 9, minute: 0, second: 0, of: today) {
-            events.append(ScheduleEvent(
-                name: "Doc Review Swarm",
-                type: .swarm,
-                date: date,
-                recurrence: .daily,
-                projectName: "purepoint",
-                target: "docs/"
-            ))
-        }
-
-        // Feature generation — hourly
-        if let date = cal.date(bySettingHour: 10, minute: 0, second: 0, of: today) {
-            events.append(ScheduleEvent(
-                name: "Feature Gen Agents",
-                type: .agent,
-                date: date,
-                recurrence: .hourly,
-                projectName: "acme-app",
-                target: "src/features/"
-            ))
-        }
-
-        // Pre-dinner batch — weekdays at 5:30pm
-        if let date = cal.date(bySettingHour: 17, minute: 30, second: 0, of: today) {
-            events.append(ScheduleEvent(
-                name: "Pre-Dinner Batch",
-                type: .swarm,
-                date: date,
-                recurrence: .weekdays,
-                projectName: "purepoint",
-                target: "crates/"
-            ))
-        }
-
-        // Weekly review — weekly
-        if let date = cal.date(bySettingHour: 14, minute: 0, second: 0, of: today) {
-            events.append(ScheduleEvent(
-                name: "Weekly Code Review",
-                type: .swarm,
-                date: date,
-                recurrence: .weekly,
-                projectName: "data-pipeline",
-                target: "src/"
-            ))
-        }
-
-        // Monthly report — monthly
-        if let firstOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: today)),
-           let date = cal.date(bySettingHour: 10, minute: 0, second: 0, of: firstOfMonth) {
-            events.append(ScheduleEvent(
-                name: "Monthly Report Gen",
-                type: .agent,
-                date: date,
-                recurrence: .monthly,
-                projectName: "analytics",
-                target: "reports/"
-            ))
-        }
-
-        // Nightly lint — daily at 11pm
-        if let date = cal.date(bySettingHour: 23, minute: 0, second: 0, of: today) {
-            events.append(ScheduleEvent(
-                name: "Nightly Lint",
-                type: .agent,
-                date: date,
-                recurrence: .daily,
-                projectName: "acme-app",
-                target: "."
-            ))
-        }
     }
 }

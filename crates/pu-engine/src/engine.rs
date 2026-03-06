@@ -14,7 +14,8 @@ use pu_core::manifest;
 use pu_core::paths;
 use pu_core::protocol::{
     AgentDefInfo, AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION, Request, Response,
-    SuspendTarget, SwarmDefInfo, SwarmRosterEntryPayload, TemplateInfo,
+    ScheduleInfo, ScheduleTriggerPayload, SuspendTarget, SwarmDefInfo, SwarmRosterEntryPayload,
+    TemplateInfo,
 };
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 use tokio::sync::OnceCell;
@@ -36,6 +37,8 @@ pub struct Engine {
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
+    /// Projects that have been initialized or used — scheduler scans these.
+    registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl Default for Engine {
@@ -55,6 +58,7 @@ impl Engine {
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
+            registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -134,7 +138,40 @@ impl Engine {
         }
     }
 
+    fn register_project(&self, project_root: &str) {
+        if !project_root.is_empty() {
+            if let Ok(mut projects) = self.registered_projects.lock() {
+                projects.insert(project_root.to_string());
+            }
+        }
+    }
+
+    pub fn registered_projects(&self) -> Vec<String> {
+        self.registered_projects
+            .lock()
+            .map(|p| p.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub async fn handle_request(&self, request: Request) -> Response {
+        // Register project for any project-scoped request
+        match &request {
+            Request::Init { project_root }
+            | Request::Spawn { project_root, .. }
+            | Request::Status { project_root, .. }
+            | Request::Kill { project_root, .. }
+            | Request::ListTemplates { project_root }
+            | Request::ListAgentDefs { project_root }
+            | Request::ListSwarmDefs { project_root }
+            | Request::ListSchedules { project_root }
+            | Request::SaveSchedule { project_root, .. }
+            | Request::EnableSchedule { project_root, .. }
+            | Request::DisableSchedule { project_root, .. } => {
+                self.register_project(project_root);
+            }
+            _ => {}
+        }
+
         match request {
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => self.handle_init(&project_root).await,
@@ -305,6 +342,49 @@ impl Engine {
             } => {
                 self.handle_run_swarm(&project_root, &swarm_name, vars)
                     .await
+            }
+            // Schedule CRUD
+            Request::ListSchedules { project_root } => {
+                self.handle_list_schedules(&project_root).await
+            }
+            Request::GetSchedule { project_root, name } => {
+                self.handle_get_schedule(&project_root, &name).await
+            }
+            Request::SaveSchedule {
+                project_root,
+                name,
+                enabled,
+                recurrence,
+                start_at,
+                trigger,
+                target,
+                scope,
+            } => {
+                self.handle_save_schedule(
+                    &project_root,
+                    &name,
+                    enabled,
+                    &recurrence,
+                    start_at,
+                    trigger,
+                    &target,
+                    &scope,
+                )
+                .await
+            }
+            Request::DeleteSchedule {
+                project_root,
+                name,
+                scope,
+            } => {
+                self.handle_delete_schedule(&project_root, &name, &scope)
+                    .await
+            }
+            Request::EnableSchedule { project_root, name } => {
+                self.handle_enable_schedule(&project_root, &name).await
+            }
+            Request::DisableSchedule { project_root, name } => {
+                self.handle_disable_schedule(&project_root, &name).await
             }
         }
     }
@@ -2293,6 +2373,463 @@ impl Engine {
         }
 
         Response::RunSwarmResult { spawned_agents }
+    }
+
+    // --- Schedule handlers ---
+
+    async fn handle_list_schedules(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        match tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let defs = pu_core::schedule_def::list_schedule_defs(root);
+            let infos: Vec<ScheduleInfo> =
+                defs.into_iter().map(Self::schedule_def_to_info).collect();
+            infos
+        })
+        .await
+        {
+            Ok(schedules) => Response::ScheduleList { schedules },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_get_schedule(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::schedule_def::find_schedule_def(Path::new(&pr), &n)
+        })
+        .await
+        {
+            Ok(Some(d)) => Self::schedule_def_to_detail(d),
+            Ok(None) => Response::Error {
+                code: "NOT_FOUND".into(),
+                message: format!("schedule '{name}' not found"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_save_schedule(
+        &self,
+        project_root: &str,
+        name: &str,
+        enabled: bool,
+        recurrence: &str,
+        start_at: chrono::DateTime<chrono::Utc>,
+        trigger: ScheduleTriggerPayload,
+        target: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::schedules_dir,
+            paths::global_schedules_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                };
+            }
+        };
+        let rec = match Self::parse_recurrence(recurrence) {
+            Ok(r) => r,
+            Err(msg) => {
+                return Response::Error {
+                    code: "INVALID_INPUT".into(),
+                    message: msg,
+                };
+            }
+        };
+        let now = chrono::Utc::now();
+        let next_run = if enabled {
+            pu_core::schedule_def::next_occurrence(start_at, &rec, now)
+        } else {
+            None
+        };
+        let def = pu_core::schedule_def::ScheduleDef {
+            name: name.to_string(),
+            enabled,
+            recurrence: rec,
+            start_at,
+            next_run,
+            trigger: Self::payload_to_trigger(&trigger),
+            project_root: project_root.to_string(),
+            target: target.to_string(),
+            scope: scope.to_string(),
+            created_at: now,
+        };
+        match tokio::task::spawn_blocking(move || {
+            pu_core::schedule_def::save_schedule_def(&dir, &def)
+        })
+        .await
+        {
+            Ok(Ok(())) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to save schedule: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_delete_schedule(
+        &self,
+        project_root: &str,
+        name: &str,
+        scope: &str,
+    ) -> Response {
+        let dir = match Self::resolve_scope_dir(
+            project_root,
+            scope,
+            paths::schedules_dir,
+            paths::global_schedules_dir,
+        ) {
+            Ok(d) => d,
+            Err(msg) => {
+                return Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: msg,
+                };
+            }
+        };
+        let n = name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            pu_core::schedule_def::delete_schedule_def(&dir, &n)
+        })
+        .await
+        {
+            Ok(Ok(_)) => Response::Ok,
+            Ok(Err(e)) => Response::Error {
+                code: "IO_ERROR".into(),
+                message: format!("failed to delete schedule: {e}"),
+            },
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            },
+        }
+    }
+
+    async fn handle_enable_schedule(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let mut def = match pu_core::schedule_def::find_schedule_def(root, &n) {
+                Some(d) => d,
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("schedule '{n}' not found"),
+                    };
+                }
+            };
+            def.enabled = true;
+            let now = chrono::Utc::now();
+            def.next_run =
+                pu_core::schedule_def::next_occurrence(def.start_at, &def.recurrence, now);
+            let dir = paths::schedules_dir(root);
+            match pu_core::schedule_def::save_schedule_def(&dir, &def) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("failed to save schedule: {e}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_disable_schedule(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let n = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            let mut def = match pu_core::schedule_def::find_schedule_def(root, &n) {
+                Some(d) => d,
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("schedule '{n}' not found"),
+                    };
+                }
+            };
+            def.enabled = false;
+            def.next_run = None;
+            let dir = paths::schedules_dir(root);
+            match pu_core::schedule_def::save_schedule_def(&dir, &def) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("failed to save schedule: {e}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    fn schedule_def_to_info(d: pu_core::schedule_def::ScheduleDef) -> ScheduleInfo {
+        ScheduleInfo {
+            name: d.name,
+            enabled: d.enabled,
+            recurrence: Self::recurrence_to_string(&d.recurrence),
+            start_at: d.start_at,
+            next_run: d.next_run,
+            trigger: Self::trigger_to_payload(&d.trigger),
+            project_root: d.project_root,
+            target: d.target,
+            scope: d.scope,
+            created_at: d.created_at,
+        }
+    }
+
+    fn schedule_def_to_detail(d: pu_core::schedule_def::ScheduleDef) -> Response {
+        Response::ScheduleDetail {
+            name: d.name,
+            enabled: d.enabled,
+            recurrence: Self::recurrence_to_string(&d.recurrence),
+            start_at: d.start_at,
+            next_run: d.next_run,
+            trigger: Self::trigger_to_payload(&d.trigger),
+            project_root: d.project_root,
+            target: d.target,
+            scope: d.scope,
+            created_at: d.created_at,
+        }
+    }
+
+    fn recurrence_to_string(r: &pu_core::schedule_def::Recurrence) -> String {
+        match r {
+            pu_core::schedule_def::Recurrence::None => "none",
+            pu_core::schedule_def::Recurrence::Hourly => "hourly",
+            pu_core::schedule_def::Recurrence::Daily => "daily",
+            pu_core::schedule_def::Recurrence::Weekdays => "weekdays",
+            pu_core::schedule_def::Recurrence::Weekly => "weekly",
+            pu_core::schedule_def::Recurrence::Monthly => "monthly",
+        }
+        .to_string()
+    }
+
+    fn parse_recurrence(s: &str) -> Result<pu_core::schedule_def::Recurrence, String> {
+        match s {
+            "none" => Ok(pu_core::schedule_def::Recurrence::None),
+            "hourly" => Ok(pu_core::schedule_def::Recurrence::Hourly),
+            "daily" => Ok(pu_core::schedule_def::Recurrence::Daily),
+            "weekdays" => Ok(pu_core::schedule_def::Recurrence::Weekdays),
+            "weekly" => Ok(pu_core::schedule_def::Recurrence::Weekly),
+            "monthly" => Ok(pu_core::schedule_def::Recurrence::Monthly),
+            other => Err(format!("unknown recurrence: {other}")),
+        }
+    }
+
+    fn trigger_to_payload(t: &pu_core::schedule_def::ScheduleTrigger) -> ScheduleTriggerPayload {
+        match t {
+            pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
+                ScheduleTriggerPayload::AgentDef { name: name.clone() }
+            }
+            pu_core::schedule_def::ScheduleTrigger::SwarmDef { name, vars } => {
+                ScheduleTriggerPayload::SwarmDef {
+                    name: name.clone(),
+                    vars: vars.clone(),
+                }
+            }
+            pu_core::schedule_def::ScheduleTrigger::InlinePrompt { prompt, agent } => {
+                ScheduleTriggerPayload::InlinePrompt {
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                }
+            }
+        }
+    }
+
+    fn payload_to_trigger(p: &ScheduleTriggerPayload) -> pu_core::schedule_def::ScheduleTrigger {
+        match p {
+            ScheduleTriggerPayload::AgentDef { name } => {
+                pu_core::schedule_def::ScheduleTrigger::AgentDef { name: name.clone() }
+            }
+            ScheduleTriggerPayload::SwarmDef { name, vars } => {
+                pu_core::schedule_def::ScheduleTrigger::SwarmDef {
+                    name: name.clone(),
+                    vars: vars.clone(),
+                }
+            }
+            ScheduleTriggerPayload::InlinePrompt { prompt, agent } => {
+                pu_core::schedule_def::ScheduleTrigger::InlinePrompt {
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                }
+            }
+        }
+    }
+
+    // --- Scheduler ---
+
+    /// Start a background task that periodically checks for due schedules and fires them.
+    pub fn start_scheduler(self: &Arc<Self>) {
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                engine.scheduler_tick().await;
+            }
+        });
+    }
+
+    async fn scheduler_tick(&self) {
+        let projects = self.registered_projects();
+        for project_root in projects {
+            let defs = {
+                let pr = project_root.clone();
+                match tokio::task::spawn_blocking(move || {
+                    pu_core::schedule_def::list_schedule_defs(Path::new(&pr))
+                })
+                .await
+                {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                }
+            };
+
+            let now = chrono::Utc::now();
+            for def in defs {
+                if !def.enabled {
+                    continue;
+                }
+                if let Some(next_run) = def.next_run {
+                    if next_run <= now {
+                        self.fire_schedule(&def).await;
+                        self.advance_schedule(def, now).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn fire_schedule(&self, schedule: &pu_core::schedule_def::ScheduleDef) {
+        let result = match &schedule.trigger {
+            pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
+                // Resolve agent def to get its type and prompt
+                let pr = schedule.project_root.clone();
+                let root = Path::new(&pr);
+                if let Some(def) = pu_core::agent_def::find_agent_def(root, name) {
+                    let prompt = if let Some(ref ip) = def.inline_prompt {
+                        ip.clone()
+                    } else if let Some(ref tpl_name) = def.template {
+                        pu_core::template::find_template(root, tpl_name)
+                            .map(|t| t.body)
+                            .unwrap_or_else(|| {
+                                format!("Scheduled: agent def '{name}' (template not found)")
+                            })
+                    } else {
+                        format!("Scheduled: run agent def '{name}'")
+                    };
+                    self.handle_request(Request::Spawn {
+                        project_root: pr,
+                        prompt,
+                        agent: def.agent_type,
+                        name: None,
+                        base: None,
+                        root: true,
+                        worktree: None,
+                    })
+                    .await
+                } else {
+                    Response::Error {
+                        code: "NOT_FOUND".to_string(),
+                        message: format!("agent def '{name}' not found"),
+                    }
+                }
+            }
+            pu_core::schedule_def::ScheduleTrigger::SwarmDef { name, vars } => {
+                self.handle_request(Request::RunSwarm {
+                    project_root: schedule.project_root.clone(),
+                    swarm_name: name.clone(),
+                    vars: vars.clone(),
+                })
+                .await
+            }
+            pu_core::schedule_def::ScheduleTrigger::InlinePrompt { prompt, agent } => {
+                self.handle_request(Request::Spawn {
+                    project_root: schedule.project_root.clone(),
+                    prompt: prompt.clone(),
+                    agent: agent.clone(),
+                    name: None,
+                    base: None,
+                    root: true,
+                    worktree: None,
+                })
+                .await
+            }
+        };
+
+        if let Response::Error { code, message } = result {
+            tracing::warn!(
+                schedule = schedule.name,
+                code,
+                message,
+                "scheduled task failed"
+            );
+        } else {
+            tracing::info!(schedule = schedule.name, "scheduled task fired");
+        }
+    }
+
+    async fn advance_schedule(
+        &self,
+        mut schedule: pu_core::schedule_def::ScheduleDef,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let is_one_shot = schedule.recurrence == pu_core::schedule_def::Recurrence::None;
+        if is_one_shot {
+            schedule.enabled = false;
+            schedule.next_run = None;
+        } else {
+            schedule.next_run = pu_core::schedule_def::next_occurrence(
+                schedule.start_at,
+                &schedule.recurrence,
+                now,
+            );
+        }
+        let pr = schedule.project_root.clone();
+        let scope = schedule.scope.clone();
+        let def = schedule;
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let dir = if scope == "global" {
+                paths::global_schedules_dir()?
+            } else {
+                paths::schedules_dir(Path::new(&pr))
+            };
+            pu_core::schedule_def::save_schedule_def(&dir, &def)
+        })
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+        {
+            tracing::warn!(error = %e, "failed to advance schedule");
+        }
     }
 
     // --- Scope resolution helper ---
