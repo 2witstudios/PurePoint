@@ -61,6 +61,9 @@ private struct EditableHotkeyRow: View {
         .onTapGesture {
             startRecording()
         }
+        .onDisappear {
+            if isRecording { stopRecording() }
+        }
     }
 
     @ViewBuilder
@@ -101,7 +104,9 @@ private struct EditableHotkeyRow: View {
                     HStack(spacing: 8) {
                         Button("Override") {
                             if let binding = pendingBinding {
-                                keyBindingState.resetBinding(for: conflict)
+                                // Swap: give conflicting action our current binding
+                                let oldBinding = keyBindingState.binding(for: action)
+                                keyBindingState.setBinding(oldBinding, for: conflict)
                                 keyBindingState.setBinding(binding, for: action)
                             }
                             stopRecording()

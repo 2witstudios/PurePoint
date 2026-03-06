@@ -112,7 +112,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .focusSidebar, .focusContent, .toggleSidebar,
              .navDashboard, .navAgents, .navSchedule,
-             .closeAgent, .toggleChatSidebar:
+             .toggleChatSidebar:
             return true
         default:
             return false
