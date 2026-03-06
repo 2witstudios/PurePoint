@@ -43,7 +43,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
             id: entry.id,
             name: entry.name,
             agentType: entry.agentType,
-            status: AgentStatus(rawValue: entry.status) ?? .lost,
+            status: entry.status,
             prompt: entry.prompt ?? "",
             startedAt: entry.startedAt,
             sessionId: entry.sessionId,
