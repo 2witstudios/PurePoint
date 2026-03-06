@@ -573,9 +573,7 @@ async fn main() {
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
         Commands::Schedule { action } => match action {
-            ScheduleAction::List { json } => {
-                commands::schedule::run_list(&socket, json).await
-            }
+            ScheduleAction::List { json } => commands::schedule::run_list(&socket, json).await,
             ScheduleAction::Create {
                 name,
                 recurrence,

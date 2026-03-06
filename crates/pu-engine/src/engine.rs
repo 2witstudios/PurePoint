@@ -380,14 +380,12 @@ impl Engine {
                 self.handle_delete_schedule(&project_root, &name, &scope)
                     .await
             }
-            Request::EnableSchedule {
-                project_root,
-                name,
-            } => self.handle_enable_schedule(&project_root, &name).await,
-            Request::DisableSchedule {
-                project_root,
-                name,
-            } => self.handle_disable_schedule(&project_root, &name).await,
+            Request::EnableSchedule { project_root, name } => {
+                self.handle_enable_schedule(&project_root, &name).await
+            }
+            Request::DisableSchedule { project_root, name } => {
+                self.handle_disable_schedule(&project_root, &name).await
+            }
         }
     }
 
@@ -2640,9 +2638,7 @@ impl Engine {
         }
     }
 
-    fn trigger_to_payload(
-        t: &pu_core::schedule_def::ScheduleTrigger,
-    ) -> ScheduleTriggerPayload {
+    fn trigger_to_payload(t: &pu_core::schedule_def::ScheduleTrigger) -> ScheduleTriggerPayload {
         match t {
             pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
                 ScheduleTriggerPayload::AgentDef { name: name.clone() }
@@ -2662,9 +2658,7 @@ impl Engine {
         }
     }
 
-    fn payload_to_trigger(
-        p: &ScheduleTriggerPayload,
-    ) -> pu_core::schedule_def::ScheduleTrigger {
+    fn payload_to_trigger(p: &ScheduleTriggerPayload) -> pu_core::schedule_def::ScheduleTrigger {
         match p {
             ScheduleTriggerPayload::AgentDef { name } => {
                 pu_core::schedule_def::ScheduleTrigger::AgentDef { name: name.clone() }
@@ -2787,14 +2781,16 @@ impl Engine {
         mut schedule: pu_core::schedule_def::ScheduleDef,
         now: chrono::DateTime<chrono::Utc>,
     ) {
-        let is_one_shot =
-            schedule.recurrence == pu_core::schedule_def::Recurrence::None;
+        let is_one_shot = schedule.recurrence == pu_core::schedule_def::Recurrence::None;
         if is_one_shot {
             schedule.enabled = false;
             schedule.next_run = None;
         } else {
-            schedule.next_run =
-                pu_core::schedule_def::next_occurrence(schedule.start_at, &schedule.recurrence, now);
+            schedule.next_run = pu_core::schedule_def::next_occurrence(
+                schedule.start_at,
+                &schedule.recurrence,
+                now,
+            );
         }
         let pr = schedule.project_root.clone();
         let def = schedule;

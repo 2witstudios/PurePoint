@@ -205,8 +205,10 @@ pub fn next_occurrence(
             // Align to same weekday as base
             let target_weekday = base.weekday();
             let current_weekday = candidate.weekday();
-            let days_ahead =
-                (target_weekday.num_days_from_monday() as i64 - current_weekday.num_days_from_monday() as i64 + 7) % 7;
+            let days_ahead = (target_weekday.num_days_from_monday() as i64
+                - current_weekday.num_days_from_monday() as i64
+                + 7)
+                % 7;
             candidate = candidate + Duration::days(days_ahead);
             if Utc.from_utc_datetime(&candidate) <= after {
                 candidate = candidate + Duration::weeks(1);
@@ -329,7 +331,9 @@ created_at: "2025-01-01T00:00:00Z"
         assert_eq!(def.name, "nightly-review");
         assert!(def.enabled);
         assert_eq!(def.recurrence, Recurrence::Daily);
-        assert!(matches!(def.trigger, ScheduleTrigger::AgentDef { ref name } if name == "security-review"));
+        assert!(
+            matches!(def.trigger, ScheduleTrigger::AgentDef { ref name } if name == "security-review")
+        );
         assert_eq!(def.project_root, "/projects/myapp");
     }
 

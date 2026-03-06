@@ -1735,7 +1735,9 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
-            Request::SaveSchedule { name, recurrence, .. } => {
+            Request::SaveSchedule {
+                name, recurrence, ..
+            } => {
                 assert_eq!(name, "nightly");
                 assert_eq!(recurrence, "daily");
             }
@@ -1840,7 +1842,10 @@ mod tests {
         match parsed {
             Response::ScheduleDetail { name, trigger, .. } => {
                 assert_eq!(name, "nightly");
-                assert!(matches!(trigger, ScheduleTriggerPayload::InlinePrompt { .. }));
+                assert!(matches!(
+                    trigger,
+                    ScheduleTriggerPayload::InlinePrompt { .. }
+                ));
             }
             _ => panic!("expected ScheduleDetail"),
         }

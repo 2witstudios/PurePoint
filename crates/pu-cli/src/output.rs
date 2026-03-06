@@ -795,9 +795,7 @@ mod tests {
 
     #[test]
     fn given_empty_schedule_list_should_not_panic() {
-        let resp = Response::ScheduleList {
-            schedules: vec![],
-        };
+        let resp = Response::ScheduleList { schedules: vec![] };
         print_response(&resp, false);
     }
 

@@ -55,8 +55,9 @@ pub async fn run_create(
             }
         }
         "inline-prompt" => {
-            let p = trigger_prompt
-                .ok_or_else(|| CliError::Other("--trigger-prompt required for inline-prompt".into()))?;
+            let p = trigger_prompt.ok_or_else(|| {
+                CliError::Other("--trigger-prompt required for inline-prompt".into())
+            })?;
             ScheduleTriggerPayload::InlinePrompt {
                 prompt: p.to_string(),
                 agent: agent.to_string(),
