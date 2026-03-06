@@ -38,9 +38,10 @@ final class AgentsHubState {
     func loadAll(projectRoot: String) async {
         isLoading = true
         error = nil
-        await loadTemplates(projectRoot: projectRoot)
-        await loadAgentDefs(projectRoot: projectRoot)
-        await loadSwarmDefs(projectRoot: projectRoot)
+        async let t: () = loadTemplates(projectRoot: projectRoot)
+        async let a: () = loadAgentDefs(projectRoot: projectRoot)
+        async let s: () = loadSwarmDefs(projectRoot: projectRoot)
+        _ = await (t, a, s)
         isLoading = false
     }
 

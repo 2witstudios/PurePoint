@@ -561,6 +561,74 @@ nonisolated struct AgentDefInfo: Decodable {
     }
 }
 
+nonisolated enum ScheduleTriggerPayload: Codable {
+    case agentDef(name: String)
+    case swarmDef(name: String, vars: [String: String])
+    case inlinePrompt(prompt: String, agent: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case type, name, vars, prompt, agent
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "agent_def":
+            let name = try container.decode(String.self, forKey: .name)
+            self = .agentDef(name: name)
+        case "swarm_def":
+            let name = try container.decode(String.self, forKey: .name)
+            let vars = try container.decodeIfPresent([String: String].self, forKey: .vars) ?? [:]
+            self = .swarmDef(name: name, vars: vars)
+        case "inline_prompt":
+            let prompt = try container.decode(String.self, forKey: .prompt)
+            let agent = try container.decodeIfPresent(String.self, forKey: .agent) ?? "claude"
+            self = .inlinePrompt(prompt: prompt, agent: agent)
+        default:
+            self = .agentDef(name: "unknown")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        switch self {
+        case .agentDef(let name):
+            try container.encode("agent_def", forKey: .key("type"))
+            try container.encode(name, forKey: .key("name"))
+        case .swarmDef(let name, let vars):
+            try container.encode("swarm_def", forKey: .key("type"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(vars, forKey: .key("vars"))
+        case .inlinePrompt(let prompt, let agent):
+            try container.encode("inline_prompt", forKey: .key("type"))
+            try container.encode(prompt, forKey: .key("prompt"))
+            try container.encode(agent, forKey: .key("agent"))
+        }
+    }
+}
+
+nonisolated struct ScheduleInfoPayload: Decodable {
+    let name: String
+    let enabled: Bool
+    let recurrence: String
+    let startAt: String
+    let nextRun: String?
+    let trigger: ScheduleTriggerPayload
+    let projectRoot: String
+    let target: String
+    let scope: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, enabled, recurrence, trigger, target, scope
+        case startAt = "start_at"
+        case nextRun = "next_run"
+        case projectRoot = "project_root"
+        case createdAt = "created_at"
+    }
+}
+
 nonisolated struct SwarmDefInfo: Decodable {
     let name: String
     let worktreeCount: Int

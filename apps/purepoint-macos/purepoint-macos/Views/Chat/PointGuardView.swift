@@ -16,15 +16,23 @@ struct PointGuardView: View {
             ChatAreaView(chatState: chatState)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showSidebar.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .help(showSidebar ? "Hide conversations (⌘⇧S)" : "Show conversations (⌘⇧S)")
+            }
+        }
         .task {
             await chatState.refreshSessions()
         }
-        .onKeyPress(characters: .init(charactersIn: "s"), phases: .down) { press in
-            if press.modifiers.contains([.command, .shift]) {
-                showSidebar.toggle()
-                return .handled
-            }
-            return .ignored
+        .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
+            showSidebar.toggle()
         }
     }
 }

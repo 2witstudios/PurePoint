@@ -363,6 +363,22 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 println!("  {}", id.dimmed());
             }
         }
+        Response::RunSwarmPartial {
+            spawned_agents,
+            error_code,
+            error_message,
+        } => {
+            println!(
+                "{}: {error_message} ({error_code})",
+                "Swarm partially failed".red().bold()
+            );
+            if !spawned_agents.is_empty() {
+                println!("Spawned {} agent(s) before failure:", spawned_agents.len());
+                for id in spawned_agents {
+                    println!("  {}", id.dimmed());
+                }
+            }
+        }
         Response::ScheduleList { schedules } => {
             if schedules.is_empty() {
                 println!("No schedules");

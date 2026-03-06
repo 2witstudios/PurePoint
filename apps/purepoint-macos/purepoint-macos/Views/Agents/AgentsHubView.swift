@@ -594,8 +594,10 @@ struct AgentsHubView: View {
         if !prompt.body.isEmpty {
             promptDraft = prompt.body
         }
+        let capturedId = hubState.selectedPromptId
         Task {
             await hubState.loadPromptDetail(projectRoot: projectRoot, name: prompt.name)
+            guard hubState.selectedPromptId == capturedId else { return }
             if let updated = hubState.selectedPrompt {
                 promptDraft = updated.body
                 promptAgent = updated.agent

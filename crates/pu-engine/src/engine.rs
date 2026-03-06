@@ -2254,6 +2254,64 @@ impl Engine {
             }
         };
 
+        // Pre-resolve all agent defs and their prompts once, before iterating worktrees.
+        let mut resolved_roster: Vec<(pu_core::agent_def::AgentDef, String, u32)> = Vec::new();
+        for entry in &swarm_def.roster {
+            let pr2 = project_root.to_string();
+            let ad_name = entry.agent_def.clone();
+            let agent_def = match tokio::task::spawn_blocking(move || {
+                pu_core::agent_def::find_agent_def(Path::new(&pr2), &ad_name)
+            })
+            .await
+            {
+                Ok(Some(def)) => def,
+                Ok(None) => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!(
+                            "agent def '{}' referenced by swarm not found",
+                            entry.agent_def
+                        ),
+                    };
+                }
+                Err(e) => {
+                    return Response::Error {
+                        code: "INTERNAL_ERROR".into(),
+                        message: format!("task join error: {e}"),
+                    };
+                }
+            };
+
+            let prompt = if let Some(ref tpl_name) = agent_def.template {
+                let pr3 = project_root.to_string();
+                let tn = tpl_name.clone();
+                let vars_clone = vars.clone();
+                match tokio::task::spawn_blocking(move || {
+                    pu_core::template::find_template(Path::new(&pr3), &tn)
+                })
+                .await
+                {
+                    Ok(Some(tpl)) => pu_core::template::render(&tpl, &vars_clone),
+                    Ok(None) => {
+                        return Response::Error {
+                            code: "NOT_FOUND".into(),
+                            message: format!("template '{tpl_name}' not found"),
+                        };
+                    }
+                    Err(e) => {
+                        return Response::Error {
+                            code: "INTERNAL_ERROR".into(),
+                            message: format!("task join error: {e}"),
+                        };
+                    }
+                }
+            } else {
+                agent_def.inline_prompt.clone().unwrap_or_default()
+            };
+
+            resolved_roster.push((agent_def, prompt, entry.quantity));
+        }
+
         let mut spawned_agents = Vec::new();
 
         for wt_index in 0..swarm_def.worktree_count {
@@ -2267,63 +2325,9 @@ impl Engine {
 
             let mut worktree_id: Option<String> = None;
 
-            for entry in &swarm_def.roster {
-                // Resolve agent def to get template/inline_prompt
-                let pr2 = project_root.to_string();
-                let ad_name = entry.agent_def.clone();
-                let agent_def = match tokio::task::spawn_blocking(move || {
-                    pu_core::agent_def::find_agent_def(Path::new(&pr2), &ad_name)
-                })
-                .await
-                {
-                    Ok(Some(def)) => def,
-                    Ok(None) => {
-                        return Response::Error {
-                            code: "NOT_FOUND".into(),
-                            message: format!(
-                                "agent def '{}' referenced by swarm not found",
-                                entry.agent_def
-                            ),
-                        };
-                    }
-                    Err(e) => {
-                        return Response::Error {
-                            code: "INTERNAL_ERROR".into(),
-                            message: format!("task join error: {e}"),
-                        };
-                    }
-                };
-
-                // Resolve prompt: template or inline
-                let prompt = if let Some(ref tpl_name) = agent_def.template {
-                    let pr3 = project_root.to_string();
-                    let tn = tpl_name.clone();
-                    let vars_clone = vars.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        pu_core::template::find_template(Path::new(&pr3), &tn)
-                    })
-                    .await
-                    {
-                        Ok(Some(tpl)) => pu_core::template::render(&tpl, &vars_clone),
-                        Ok(None) => {
-                            return Response::Error {
-                                code: "NOT_FOUND".into(),
-                                message: format!("template '{tpl_name}' not found"),
-                            };
-                        }
-                        Err(e) => {
-                            return Response::Error {
-                                code: "INTERNAL_ERROR".into(),
-                                message: format!("task join error: {e}"),
-                            };
-                        }
-                    }
-                } else {
-                    agent_def.inline_prompt.clone().unwrap_or_default()
-                };
-
-                for q in 0..entry.quantity {
-                    let agent_name = format!("{}-{}-{wt_index}-{q}", swarm_name, entry.agent_def);
+            for (agent_def, prompt, quantity) in &resolved_roster {
+                for q in 0..*quantity {
+                    let agent_name = format!("{}-{}-{wt_index}-{q}", swarm_name, agent_def.name);
 
                     // First agent creates the worktree; subsequent agents reuse it
                     let (spawn_name, spawn_worktree) = if worktree_id.is_some() {
@@ -2335,7 +2339,7 @@ impl Engine {
                     let resp = self
                         .handle_spawn(
                             project_root,
-                            &prompt,
+                            prompt,
                             &agent_def.agent_type,
                             spawn_name,
                             None,
@@ -2356,7 +2360,11 @@ impl Engine {
                             }
                         }
                         Response::Error { code, message } => {
-                            return Response::Error { code, message };
+                            return Response::RunSwarmPartial {
+                                spawned_agents,
+                                error_code: code,
+                                error_message: message,
+                            };
                         }
                         _ => {}
                     }

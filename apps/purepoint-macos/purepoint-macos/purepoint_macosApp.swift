@@ -6,6 +6,8 @@ struct purepoint_macosApp: App {
     @State private var settingsState = SettingsState()
     @State private var viewCache = TerminalViewCache()
     @State private var gridState = GridState()
+    @State private var keyBindingState = KeyBindingState()
+    @State private var hotkeyMonitor = HotkeyMonitor()
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +16,7 @@ struct purepoint_macosApp: App {
                 .environment(settingsState)
                 .environment(viewCache)
                 .environment(gridState)
+                .environment(keyBindingState)
                 .preferredColorScheme(settingsState.appearance.colorScheme)
                 .frame(
                     minWidth: PurePointTheme.windowMinWidth,
@@ -24,6 +27,8 @@ struct purepoint_macosApp: App {
                     gridState.onCloseAgent = { agentId in
                         appState.projectState(forRoot: gridState.projectRoot ?? "")?.removeAndKillAgent(agentId)
                     }
+                    hotkeyMonitor.keyBindingState = keyBindingState
+                    hotkeyMonitor.start()
                     CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
                 }
@@ -41,39 +46,120 @@ struct purepoint_macosApp: App {
                 Button("New Agent\u{2026}") {
                     showNewAgentPalette()
                 }
-                .keyboardShortcut("n")
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .newAgent),
+                    modifiers: keyBindingState.eventModifiers(for: .newAgent)
+                )
                 .disabled(appState.projects.isEmpty)
 
                 Button("Open Project\u{2026}") {
                     openProjectWithPicker()
                 }
-                .keyboardShortcut("o")
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .openProject),
+                    modifiers: keyBindingState.eventModifiers(for: .openProject)
+                )
             }
 
             CommandGroup(replacing: .appSettings) {
                 Button("Settings\u{2026}") {
                     appState.showSettings = true
                 }
-                .keyboardShortcut(",")
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .settings),
+                    modifiers: keyBindingState.eventModifiers(for: .settings)
+                )
+            }
+
+            CommandMenu("Navigation") {
+                Button("Focus Sidebar") {
+                    postHotkeyAction(.focusSidebar)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .focusSidebar),
+                    modifiers: keyBindingState.eventModifiers(for: .focusSidebar)
+                )
+
+                Button("Focus Content") {
+                    postHotkeyAction(.focusContent)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .focusContent),
+                    modifiers: keyBindingState.eventModifiers(for: .focusContent)
+                )
+
+                Button("Toggle Sidebar") {
+                    postHotkeyAction(.toggleSidebar)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .toggleSidebar),
+                    modifiers: keyBindingState.eventModifiers(for: .toggleSidebar)
+                )
+
+                Divider()
+
+                Button("Dashboard") {
+                    postHotkeyAction(.navDashboard)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .navDashboard),
+                    modifiers: keyBindingState.eventModifiers(for: .navDashboard)
+                )
+
+                Button("Agents") {
+                    postHotkeyAction(.navAgents)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .navAgents),
+                    modifiers: keyBindingState.eventModifiers(for: .navAgents)
+                )
+
+                Button("Schedule") {
+                    postHotkeyAction(.navSchedule)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .navSchedule),
+                    modifiers: keyBindingState.eventModifiers(for: .navSchedule)
+                )
+
+                Divider()
+
+                Button("Close Agent") {
+                    postHotkeyAction(.closeAgent)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .closeAgent),
+                    modifiers: keyBindingState.eventModifiers(for: .closeAgent)
+                )
+                .disabled(appState.selectedAgentId == nil && !gridState.isActive)
             }
 
             CommandMenu("Panes") {
                 Button("Split Below") {
                     splitOrEnterGrid(axis: .horizontal)
                 }
-                .keyboardShortcut("d")
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .splitBelow),
+                    modifiers: keyBindingState.eventModifiers(for: .splitBelow)
+                )
                 .disabled(!canSplitBelow)
 
                 Button("Split Right") {
                     splitOrEnterGrid(axis: .vertical)
                 }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .splitRight),
+                    modifiers: keyBindingState.eventModifiers(for: .splitRight)
+                )
                 .disabled(!canSplitRight)
 
                 Button("Close Pane") {
                     gridState.closeFocused()
                 }
-                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .closePane),
+                    modifiers: keyBindingState.eventModifiers(for: .closePane)
+                )
                 .disabled(!gridState.isActive || gridState.leafCount <= 1)
 
                 Divider()
@@ -81,25 +167,37 @@ struct purepoint_macosApp: App {
                 Button("Focus Up") {
                     gridState.moveFocus(direction: .up)
                 }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .focusUp),
+                    modifiers: keyBindingState.eventModifiers(for: .focusUp)
+                )
                 .disabled(!gridState.isActive)
 
                 Button("Focus Down") {
                     gridState.moveFocus(direction: .down)
                 }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .focusDown),
+                    modifiers: keyBindingState.eventModifiers(for: .focusDown)
+                )
                 .disabled(!gridState.isActive)
 
                 Button("Focus Left") {
                     gridState.moveFocus(direction: .left)
                 }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .focusLeft),
+                    modifiers: keyBindingState.eventModifiers(for: .focusLeft)
+                )
                 .disabled(!gridState.isActive)
 
                 Button("Focus Right") {
                     gridState.moveFocus(direction: .right)
                 }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .focusRight),
+                    modifiers: keyBindingState.eventModifiers(for: .focusRight)
+                )
                 .disabled(!gridState.isActive)
             }
         }
@@ -166,6 +264,14 @@ struct purepoint_macosApp: App {
             gridState.enterGridMode(agentId: agentId, axis: axis)
         }
         gridState.pendingPaletteLeafId = gridState.focusedLeafId
+    }
+
+    private func postHotkeyAction(_ action: HotkeyAction) {
+        NotificationCenter.default.post(
+            name: .hotkeyAction,
+            object: nil,
+            userInfo: ["action": action]
+        )
     }
 
     private func openProjectWithPicker() {

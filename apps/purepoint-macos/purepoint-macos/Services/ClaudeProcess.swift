@@ -5,13 +5,13 @@ actor ClaudeProcess: ClaudeProcessProvider {
     private var continuation: AsyncStream<StreamEvent>.Continuation?
 
     nonisolated func start(prompt: String, cwd: String, sessionId: String?) async throws -> AsyncStream<StreamEvent> {
-        try await launch(args: buildArgs(prompt: prompt, cwd: cwd, sessionId: sessionId))
+        try await launch(args: buildArgs(prompt: prompt, sessionId: sessionId), cwd: cwd)
     }
 
     nonisolated func resume(sessionId: String, prompt: String, cwd: String) async throws -> AsyncStream<StreamEvent> {
-        var args = buildArgs(prompt: prompt, cwd: cwd, sessionId: nil)
+        var args = buildArgs(prompt: prompt, sessionId: nil)
         args.insert(contentsOf: ["--resume", sessionId], at: 0)
-        return try await launch(args: args)
+        return try await launch(args: args, cwd: cwd)
     }
 
     func cancel() {
@@ -65,12 +65,13 @@ actor ClaudeProcess: ClaudeProcessProvider {
 
     // MARK: - Private
 
-    private nonisolated func buildArgs(prompt: String, cwd: String, sessionId: String?) -> [String] {
+    private nonisolated func buildArgs(prompt: String, sessionId: String?) -> [String] {
         var args = [
             "-p", prompt,
             "--output-format", "stream-json",
-            "--verbose",
-            "--cwd", cwd
+            "--include-partial-messages",
+            "--dangerously-skip-permissions",
+            "--verbose"
         ]
         if let sessionId {
             args.append(contentsOf: ["--session-id", sessionId])
@@ -78,7 +79,7 @@ actor ClaudeProcess: ClaudeProcessProvider {
         return args
     }
 
-    private func launch(args: [String]) throws -> AsyncStream<StreamEvent> {
+    private func launch(args: [String], cwd: String) throws -> AsyncStream<StreamEvent> {
         // Cancel any existing process before launching a new one
         if process != nil {
             cancel()
@@ -95,11 +96,13 @@ actor ClaudeProcess: ClaudeProcessProvider {
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "CLAUDECODE")
         process.environment = env
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        process.standardInput = FileHandle.nullDevice
 
         self.process = process
 
@@ -112,10 +115,25 @@ actor ClaudeProcess: ClaudeProcessProvider {
         try process.run()
 
         Task.detached { [weak self] in
-            for try await line in fileHandle.bytes.lines {
-                if let event = StreamEvent.parse(line) {
-                    continuation.yield(event)
+            do {
+                for try await line in fileHandle.bytes.lines {
+                    if let event = StreamEvent.parse(line) {
+                        continuation.yield(event)
+                    }
                 }
+                process.waitUntilExit()
+                let status = process.terminationStatus
+                if status != 0 {
+                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                    let stderrText = String(decoding: stderrData, as: UTF8.self)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let message = stderrText.isEmpty
+                        ? "Claude exited with code \(status)"
+                        : stderrText
+                    continuation.yield(.error(message: message))
+                }
+            } catch {
+                continuation.yield(.error(message: "Stream read error: \(error.localizedDescription)"))
             }
             continuation.finish()
             await self?.cleanup()
