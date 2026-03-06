@@ -55,7 +55,7 @@ nonisolated struct AgentEntry: Codable, Sendable {
     let id: String
     let name: String
     let agentType: String
-    let status: String
+    let status: AgentStatus
     let prompt: String?
     let startedAt: String
     let completedAt: String?
