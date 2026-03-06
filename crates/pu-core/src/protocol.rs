@@ -402,6 +402,11 @@ pub enum Response {
     RunSwarmResult {
         spawned_agents: Vec<String>,
     },
+    RunSwarmPartial {
+        spawned_agents: Vec<String>,
+        error_code: String,
+        error_message: String,
+    },
     Ok,
     ShuttingDown,
     Error {
@@ -1616,6 +1621,34 @@ mod tests {
                 assert_eq!(spawned_agents, vec!["ag-abc", "ag-def"]);
             }
             _ => panic!("expected RunSwarmResult"),
+        }
+    }
+
+    #[test]
+    fn given_run_swarm_partial_response_should_round_trip() {
+        // given
+        let resp = Response::RunSwarmPartial {
+            spawned_agents: vec!["ag-abc".into()],
+            error_code: "SPAWN_FAILED".into(),
+            error_message: "could not spawn agent ag-def".into(),
+        };
+
+        // when
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+
+        // then
+        match parsed {
+            Response::RunSwarmPartial {
+                spawned_agents,
+                error_code,
+                error_message,
+            } => {
+                assert_eq!(spawned_agents, vec!["ag-abc"]);
+                assert_eq!(error_code, "SPAWN_FAILED");
+                assert_eq!(error_message, "could not spawn agent ag-def");
+            }
+            _ => panic!("expected RunSwarmPartial"),
         }
     }
 }

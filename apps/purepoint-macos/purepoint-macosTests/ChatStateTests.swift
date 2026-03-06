@@ -131,6 +131,67 @@ struct ChatStateTests {
         #expect(state.canSend == false)
     }
 
+    @Test func givenErrorEventShouldSetStreamError() async {
+        let mock = MockClaudeProcess()
+        mock.events = [
+            .error(message: "Claude exited with code 1")
+        ]
+        let state = ChatState(processProvider: mock)
+
+        await state.send("Hello", cwd: "/tmp")
+
+        #expect(state.streamError == "Claude exited with code 1")
+    }
+
+    @Test func givenEmptyStreamShouldSetStreamError() async {
+        let mock = MockClaudeProcess()
+        mock.events = []
+        let state = ChatState(processProvider: mock)
+
+        await state.send("Hello", cwd: "/tmp")
+
+        #expect(state.streamError == "No response received. Check that Claude CLI is working correctly.")
+    }
+
+    @Test func givenContentBlockDeltasShouldAccumulateText() async {
+        let mock = MockClaudeProcess()
+        mock.events = [
+            .contentBlockDelta(index: 0, delta: "Hello "),
+            .contentBlockDelta(index: 0, delta: "world!"),
+            .result(sessionId: "sess-delta", durationMs: 100)
+        ]
+        let state = ChatState(processProvider: mock)
+
+        await state.send("Hi", cwd: "/tmp")
+
+        let assistant = state.messages.first(where: { $0.role == .assistant })
+        #expect(assistant != nil)
+        let textBlocks = assistant?.contentBlocks.filter {
+            if case .text = $0 { return true }
+            return false
+        }
+        #expect(textBlocks?.isEmpty == false)
+    }
+
+    @Test func givenAssistantEventAfterDeltasShouldReplaceContent() async {
+        let mock = MockClaudeProcess()
+        mock.events = [
+            .contentBlockDelta(index: 0, delta: "partial "),
+            .contentBlockDelta(index: 0, delta: "text"),
+            .assistant(content: [.text("final authoritative text")]),
+            .result(sessionId: "sess-replace", durationMs: 100)
+        ]
+        let state = ChatState(processProvider: mock)
+
+        await state.send("Test", cwd: "/tmp")
+
+        let assistant = state.messages.first(where: { $0.role == .assistant })
+        guard case .text(_, let text) = assistant?.contentBlocks.first else {
+            Issue.record("Expected text block"); return
+        }
+        #expect(text == "final authoritative text")
+    }
+
     @Test func givenStopStreamingShouldCancelProcess() async {
         let mock = MockClaudeProcess()
         mock.events = []  // No events - will wait forever

@@ -40,6 +40,7 @@ final class ChatState {
         }
     }
 
+    @ObservationIgnored private var streamingText = ""
     @ObservationIgnored private let processProvider: any ClaudeProcessProvider
 
     init(processProvider: any ClaudeProcessProvider) {
@@ -73,6 +74,7 @@ final class ChatState {
 
         isStreaming = true
         streamError = nil
+        streamingText = ""
 
         do {
             let stream: AsyncStream<StreamEvent>
@@ -84,6 +86,16 @@ final class ChatState {
 
             for await event in stream {
                 handleStreamEvent(event, assistantMessageId: assistantId)
+            }
+
+            // Refresh sidebar sessions after conversation completes
+            Task { await refreshSessions() }
+
+            // Surface error if stream produced no content
+            if let index = messages.lastIndex(where: { $0.id == assistantId }),
+               messages[index].contentBlocks.isEmpty,
+               streamError == nil {
+                streamError = "No response received. Check that Claude CLI is working correctly."
             }
         } catch {
             streamError = error.localizedDescription
@@ -158,6 +170,9 @@ final class ChatState {
 
         switch event {
         case .assistant(let blocks):
+            // Final authoritative content — replace any streamed deltas
+            streamingText = ""
+            messages[index].contentBlocks = []
             for block in blocks {
                 switch block {
                 case .text(let text):
@@ -169,6 +184,17 @@ final class ChatState {
                     ))
                 }
             }
+
+        case .contentBlockDelta(_, let delta):
+            streamingText += delta
+            // Replace all text blocks with re-split accumulated text
+            let textStartIndex = messages[index].contentBlocks.indices.first(where: {
+                if case .text = messages[index].contentBlocks[$0] { return true }
+                return false
+            }) ?? messages[index].contentBlocks.endIndex
+            messages[index].contentBlocks.removeSubrange(textStartIndex...)
+            let split = ContentBlockSplitter.split(streamingText)
+            messages[index].contentBlocks.append(contentsOf: split)
 
         case .toolResult(let toolUseId, let content, let isError):
             // Update the matching tool_use status
@@ -191,6 +217,9 @@ final class ChatState {
 
         case .result(let sessionId, _):
             currentSessionId = sessionId
+
+        case .error(let message):
+            streamError = message
 
         case .unknown:
             break

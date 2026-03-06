@@ -134,6 +134,7 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<SwarmDef> {
 }
 
 fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<SwarmDef> {
+    crate::validation::validate_name(name).ok()?;
     // Try exact file name first
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
@@ -305,5 +306,20 @@ mod tests {
         // find_swarm_def checks local first
         let def = find_swarm_def(root, "full-stack").unwrap();
         assert_eq!(def.scope, "local");
+    }
+
+    #[test]
+    fn given_path_traversal_name_should_return_none() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let local_dir = paths::swarms_dir(root);
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(local_dir.join("legit.yaml"), "name: legit\n").unwrap();
+
+        // Path traversal attempts should return None
+        assert!(find_swarm_def(root, "../../etc/passwd").is_none());
+        assert!(find_swarm_def(root, "../evil").is_none());
+        assert!(find_swarm_def(root, "foo/bar").is_none());
+        assert!(find_swarm_def(root, ".hidden").is_none());
     }
 }

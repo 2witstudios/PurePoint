@@ -63,13 +63,8 @@ final class AppState {
             guard FileManager.default.fileExists(atPath: path) else { continue }
             openProject(path)
         }
-        // Restore grid layout from whichever project has a saved layout
-        if let gs = gridState {
-            for project in projects {
-                gs.restore(projectRoot: project.projectRoot)
-                if gs.isActive { break }
-            }
-        }
+        // Grid layout is restored on-demand when user clicks the owner agent
+        // (via ContentView.onChange → gridState.restoreIfOwner)
     }
 
     // MARK: - Cross-Project Queries

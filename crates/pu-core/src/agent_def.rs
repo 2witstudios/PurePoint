@@ -127,6 +127,7 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentDef> {
 }
 
 fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<AgentDef> {
+    crate::validation::validate_name(name).ok()?;
     // Try exact file name first
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
@@ -286,5 +287,20 @@ mod tests {
         // find_agent_def checks local first
         let def = find_agent_def(root, "reviewer").unwrap();
         assert_eq!(def.scope, "local");
+    }
+
+    #[test]
+    fn given_path_traversal_name_should_return_none() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let local_dir = paths::agents_dir(root);
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(local_dir.join("legit.yaml"), "name: legit\n").unwrap();
+
+        // Path traversal attempts should return None
+        assert!(find_agent_def(root, "../../etc/passwd").is_none());
+        assert!(find_agent_def(root, "../evil").is_none());
+        assert!(find_agent_def(root, "foo/bar").is_none());
+        assert!(find_agent_def(root, ".hidden").is_none());
     }
 }

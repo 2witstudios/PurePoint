@@ -7,8 +7,10 @@ enum StreamContentBlock: Sendable {
 
 enum StreamEvent: Sendable {
     case assistant(content: [StreamContentBlock])
+    case contentBlockDelta(index: Int, delta: String)
     case toolResult(toolUseId: String, content: String, isError: Bool)
     case result(sessionId: String, durationMs: Int?)
+    case error(message: String)
     case unknown
 
     static func parse(_ jsonLine: String) -> StreamEvent? {
@@ -23,6 +25,8 @@ enum StreamEvent: Sendable {
         switch type {
         case "assistant":
             return parseAssistant(dict)
+        case "content_block_delta":
+            return parseContentBlockDelta(dict)
         case "tool_result":
             return parseToolResult(dict)
         case "result":
@@ -67,6 +71,14 @@ enum StreamEvent: Sendable {
         }
 
         return .assistant(content: blocks)
+    }
+
+    private static func parseContentBlockDelta(_ dict: [String: Any]) -> StreamEvent {
+        let index = dict["index"] as? Int ?? 0
+        guard let delta = dict["delta"] as? [String: Any],
+              let text = delta["text"] as? String
+        else { return .unknown }
+        return .contentBlockDelta(index: index, delta: text)
     }
 
     private static func parseToolResult(_ dict: [String: Any]) -> StreamEvent {
