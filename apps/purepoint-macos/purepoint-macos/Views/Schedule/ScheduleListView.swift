@@ -7,6 +7,7 @@ struct ScheduleListView: View {
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
         f.dateFormat = "h:mm a"
         return f
     }()
@@ -121,6 +122,7 @@ struct ScheduleListView: View {
 
     private static let dayLabelFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
         f.dateFormat = "EEEE, MMMM d"
         return f
     }()

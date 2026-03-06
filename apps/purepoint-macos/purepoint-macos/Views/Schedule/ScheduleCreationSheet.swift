@@ -15,6 +15,7 @@ struct ScheduleCreationSheet: View {
 
     private static let previewFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
         f.dateFormat = "EEEE 'at' h:mm a"
         return f
     }()
@@ -116,6 +117,7 @@ struct ScheduleCreationSheet: View {
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
+        f.locale = .autoupdatingCurrent
         f.dateFormat = "h:mm a"
         return f
     }()
