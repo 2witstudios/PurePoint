@@ -67,8 +67,11 @@ Rebind every action. Navigate without a mouse. The settings panel lets you custo
 
 ## And More
 
+Spawn any agent type from the command palette — Claude, Codex, OpenCode, a raw terminal, or an isolated worktree. One keystroke to filter, one to launch.
+
+![Command palette — spawn agents by type](docs/images/command-bar.png)
+
 - **Pane grid** — split your workspace into any arrangement of terminal panes
-- **Command palette** — keyboard-driven control over your entire workspace
 - **Prompt templates** — reusable prompts with variable substitution, resolved at spawn time
 - **Auto-resume** — agents and layout persist across app restarts
 
