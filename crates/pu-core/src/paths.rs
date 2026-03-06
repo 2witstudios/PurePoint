@@ -48,6 +48,22 @@ pub fn global_templates_dir() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("templates"))
 }
 
+pub fn agents_dir(project_root: &Path) -> PathBuf {
+    pu_dir(project_root).join("agents")
+}
+
+pub fn global_agents_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("agents"))
+}
+
+pub fn swarms_dir(project_root: &Path) -> PathBuf {
+    pu_dir(project_root).join("swarms")
+}
+
+pub fn global_swarms_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("swarms"))
+}
+
 fn home_dir() -> Result<PathBuf, std::io::Error> {
     std::env::var("HOME")
         .map(PathBuf::from)
@@ -142,6 +158,42 @@ mod tests {
         let path = daemon_log_path().unwrap();
         assert!(
             path.to_string_lossy().contains(".pu/daemon.log"),
+            "unexpected path: {path:?}"
+        );
+    }
+
+    #[test]
+    fn given_project_root_should_build_agents_dir() {
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            agents_dir(root),
+            PathBuf::from("/projects/myapp/.pu/agents")
+        );
+    }
+
+    #[test]
+    fn given_global_agents_dir_should_live_under_home_pu() {
+        let path = global_agents_dir().unwrap();
+        assert!(
+            path.to_string_lossy().contains(".pu/agents"),
+            "unexpected path: {path:?}"
+        );
+    }
+
+    #[test]
+    fn given_project_root_should_build_swarms_dir() {
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            swarms_dir(root),
+            PathBuf::from("/projects/myapp/.pu/swarms")
+        );
+    }
+
+    #[test]
+    fn given_global_swarms_dir_should_live_under_home_pu() {
+        let path = global_swarms_dir().unwrap();
+        assert!(
+            path.to_string_lossy().contains(".pu/swarms"),
             "unexpected path: {path:?}"
         );
     }

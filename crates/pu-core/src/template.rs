@@ -149,6 +149,31 @@ pub fn extract_variables(body: &str) -> Vec<String> {
     vars
 }
 
+/// Save a template as a markdown file with YAML frontmatter.
+/// Creates the directory if it doesn't exist.
+pub fn save_template(
+    dir: &Path,
+    name: &str,
+    description: &str,
+    agent: &str,
+    body: &str,
+) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(dir)?;
+    let content = format!("---\nname: {name}\ndescription: {description}\nagent: {agent}\n---\n{body}");
+    std::fs::write(dir.join(format!("{name}.md")), content)
+}
+
+/// Delete a template file. Returns true if the file existed.
+pub fn delete_template(dir: &Path, name: &str) -> Result<bool, std::io::Error> {
+    let path = dir.join(format!("{name}.md"));
+    if path.is_file() {
+        std::fs::remove_file(&path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 fn scan_dir(dir: &Path, source: &str) -> Vec<Template> {
     let mut templates = Vec::new();
     let entries = match std::fs::read_dir(dir) {
@@ -295,5 +320,85 @@ mod tests {
         assert_eq!(tpl.name, "minimal");
         assert_eq!(tpl.agent, "codex");
         assert_eq!(tpl.body, "");
+    }
+
+    #[test]
+    fn given_save_template_should_write_markdown_with_frontmatter() {
+        // given
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("templates");
+
+        // when
+        save_template(&dir, "review", "Code review", "claude", "Review the code.\n").unwrap();
+
+        // then
+        let content = std::fs::read_to_string(dir.join("review.md")).unwrap();
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("name: review"));
+        assert!(content.contains("description: Code review"));
+        assert!(content.contains("agent: claude"));
+        assert!(content.contains("---\nReview the code.\n"));
+    }
+
+    #[test]
+    fn given_save_template_should_create_dir_if_missing() {
+        // given
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("deep").join("nested").join("templates");
+        assert!(!dir.exists());
+
+        // when
+        save_template(&dir, "test", "A test", "codex", "Body.\n").unwrap();
+
+        // then
+        assert!(dir.join("test.md").is_file());
+    }
+
+    #[test]
+    fn given_saved_template_should_round_trip_through_parse() {
+        // given
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("templates");
+
+        // when
+        save_template(&dir, "deploy", "Deploy to prod", "claude", "Deploy {{ENV}}.\n").unwrap();
+        let content = std::fs::read_to_string(dir.join("deploy.md")).unwrap();
+        let tpl = parse_template(&content, "deploy.md");
+
+        // then
+        assert_eq!(tpl.name, "deploy");
+        assert_eq!(tpl.description, "Deploy to prod");
+        assert_eq!(tpl.agent, "claude");
+        assert_eq!(tpl.body, "Deploy {{ENV}}.\n");
+    }
+
+    #[test]
+    fn given_existing_template_should_delete_and_return_true() {
+        // given
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("templates");
+        save_template(&dir, "old", "Old template", "claude", "Old body.\n").unwrap();
+        assert!(dir.join("old.md").is_file());
+
+        // when
+        let result = delete_template(&dir, "old").unwrap();
+
+        // then
+        assert!(result);
+        assert!(!dir.join("old.md").exists());
+    }
+
+    #[test]
+    fn given_nonexistent_template_should_return_false() {
+        // given
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("templates");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // when
+        let result = delete_template(&dir, "nope").unwrap();
+
+        // then
+        assert!(!result);
     }
 }

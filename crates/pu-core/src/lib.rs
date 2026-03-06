@@ -1,8 +1,10 @@
+pub mod agent_def;
 pub mod config;
 pub mod error;
 pub mod id;
 pub mod manifest;
 pub mod paths;
 pub mod protocol;
+pub mod swarm_def;
 pub mod template;
 pub mod types;
