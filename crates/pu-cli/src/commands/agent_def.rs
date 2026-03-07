@@ -35,6 +35,7 @@ pub async fn run_create(
     agent_type: &str,
     template: Option<String>,
     inline_prompt: Option<String>,
+    command: Option<String>,
     tags: &str,
     scope: &str,
     json: bool,
@@ -54,6 +55,7 @@ pub async fn run_create(
             scope: scope.to_string(),
             available_in_command_dialog: true,
             icon: None,
+            command,
         },
     )
     .await?;

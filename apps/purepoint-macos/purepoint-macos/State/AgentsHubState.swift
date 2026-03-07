@@ -90,14 +90,16 @@ final class AgentsHubState {
     func loadPromptDetail(projectRoot: String, name: String) async {
         do {
             let response = try await client.send(.getTemplate(projectRoot: projectRoot, name: name))
-            if case .templateDetail(let detailName, let description, let agent, let body, let source, let variables) =
-                response
+            if case .templateDetail(
+                let detailName, let description, let agent, let body,
+                let source, let variables, let command) = response
             {
                 if let index = prompts.firstIndex(where: { $0.name == detailName && $0.source == source }) {
                     prompts[index].body = body
                     prompts[index].description = description
                     prompts[index].agent = agent
                     prompts[index].variables = variables
+                    prompts[index].command = command
                 }
             }
         } catch {
@@ -106,13 +108,14 @@ final class AgentsHubState {
     }
 
     func saveTemplate(
-        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String
+        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String,
+        command: String? = nil
     ) async {
         do {
             _ = try await client.send(
                 .saveTemplate(
                     projectRoot: projectRoot, name: name, description: description, agent: agent, body: body,
-                    scope: scope))
+                    scope: scope, command: command))
             await loadTemplates(projectRoot: projectRoot)
             await loadPromptDetail(projectRoot: projectRoot, name: name)
         } catch {
@@ -141,7 +144,8 @@ final class AgentsHubState {
                     tags: def.tags,
                     scope: def.scope,
                     availableInCommandDialog: def.availableInCommandDialog,
-                    icon: def.icon
+                    icon: def.icon,
+                    command: def.command
                 ))
             await loadAgentDefs(projectRoot: projectRoot)
         } catch {

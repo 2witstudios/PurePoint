@@ -11,6 +11,7 @@ struct AgentsHubView: View {
     @State private var promptDraft = ""
     @State private var promptScope: PromptScopeChoice = .project
     @State private var promptAgent = ""
+    @State private var promptCommand = ""
 
     private var projectRoot: String {
         appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
@@ -148,22 +149,37 @@ struct AgentsHubView: View {
                                     Spacer()
 
                                     Picker("Agent", selection: $promptAgent) {
-                                        ForEach(["", "claude", "codex", "opencode"], id: \.self) { t in
+                                        ForEach(AgentTypes.withAny, id: \.self) { t in
                                             Text(t.isEmpty ? "Any" : t).tag(t)
                                         }
                                     }
                                     .frame(maxWidth: 140)
 
+                                    if promptAgent == "terminal" {
+                                        TextField("Command (e.g. npm run dev)", text: $promptCommand)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(maxWidth: 200)
+                                    }
+
                                     HStack(spacing: 8) {
                                         Button("Save") {
                                             Task {
+                                                let trimmed =
+                                                    promptCommand
+                                                    .trimmingCharacters(
+                                                        in: .whitespaces)
+                                                let cmd =
+                                                    promptAgent == "terminal"
+                                                        && !trimmed.isEmpty
+                                                    ? trimmed : nil
                                                 await hubState.saveTemplate(
                                                     projectRoot: projectRoot,
                                                     name: prompt.name,
                                                     description: prompt.description,
                                                     agent: promptAgent,
                                                     body: promptDraft,
-                                                    scope: promptScope.wireValue
+                                                    scope: promptScope.wireValue,
+                                                    command: cmd
                                                 )
                                             }
                                         }
@@ -301,6 +317,21 @@ struct AgentsHubView: View {
                                             .foregroundStyle(.secondary)
 
                                         Text(inline)
+                                            .font(.system(size: 12, design: .monospaced))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(12)
+                                            .background(Color.primary.opacity(0.035))
+                                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    }
+                                }
+
+                                if let cmd = agent.command, !cmd.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Command")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(.secondary)
+
+                                        Text(cmd)
                                             .font(.system(size: 12, design: .monospaced))
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .padding(12)
@@ -579,6 +610,7 @@ struct AgentsHubView: View {
         guard let prompt = hubState.selectedPrompt else { return }
         promptScope = prompt.source == "global" ? .global : .project
         promptAgent = prompt.agent
+        promptCommand = prompt.command ?? ""
         if !prompt.body.isEmpty {
             promptDraft = prompt.body
         }
@@ -589,6 +621,7 @@ struct AgentsHubView: View {
             if let updated = hubState.selectedPrompt {
                 promptDraft = updated.body
                 promptAgent = updated.agent
+                promptCommand = updated.command ?? ""
             }
         }
     }

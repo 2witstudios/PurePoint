@@ -13,8 +13,9 @@ struct AgentCreationSheet: View {
     @State private var tags = ""
     @State private var scope: PromptScopeChoice = .project
     @State private var availableInCommandDialog = true
+    @State private var command = ""
 
-    private let agentTypes = ["claude", "codex", "opencode"]
+    private let agentTypes = AgentTypes.all
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,23 +53,30 @@ struct AgentCreationSheet: View {
                 }
             }
 
-            Picker("Prompt source", selection: $promptMode) {
-                ForEach(AgentPromptSourceMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            if promptMode == .library {
-                TextField("Template name", text: $templateName)
+            if agentType == "terminal" {
+                TextField("Command (e.g. npm run dev)", text: $command)
                     .textFieldStyle(.roundedBorder)
-            } else {
-                TextEditor(text: $inlinePrompt)
-                    .font(.system(size: 13, design: .monospaced))
-                    .frame(minHeight: 100)
-                    .padding(4)
-                    .background(Color.primary.opacity(0.035))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            if agentType != "terminal" {
+                Picker("Prompt source", selection: $promptMode) {
+                    ForEach(AgentPromptSourceMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if promptMode == .library {
+                    TextField("Template name", text: $templateName)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    TextEditor(text: $inlinePrompt)
+                        .font(.system(size: 13, design: .monospaced))
+                        .frame(minHeight: 100)
+                        .padding(4)
+                        .background(Color.primary.opacity(0.035))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
             }
 
             TextField("Tags (comma-separated)", text: $tags)
@@ -102,14 +110,16 @@ struct AgentCreationSheet: View {
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
 
+                let trimmedCommand = command.trimmingCharacters(in: .whitespaces)
                 let def = AgentDefinition(
                     name: name.trimmingCharacters(in: .whitespaces),
                     agentType: agentType,
-                    template: promptMode == .library ? templateName : nil,
-                    inlinePrompt: promptMode == .inline ? inlinePrompt : nil,
+                    template: agentType != "terminal" && promptMode == .library ? templateName : nil,
+                    inlinePrompt: agentType != "terminal" && promptMode == .inline ? inlinePrompt : nil,
                     tags: parsedTags,
                     scope: scope.wireValue,
-                    availableInCommandDialog: availableInCommandDialog
+                    availableInCommandDialog: availableInCommandDialog,
+                    command: agentType == "terminal" && !trimmedCommand.isEmpty ? trimmedCommand : nil
                 )
                 Task {
                     await hubState.saveAgentDef(projectRoot: projectRoot, def: def)

@@ -10,8 +10,9 @@ struct PromptCreationSheet: View {
     @State private var scope: PromptScopeChoice = .project
     @State private var agentType = ""
     @State private var promptBody = ""
+    @State private var command = ""
 
-    private let agentTypes = ["", "claude", "codex", "opencode"]
+    private let agentTypes = AgentTypes.withAny
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,6 +60,11 @@ struct PromptCreationSheet: View {
                 }
             }
 
+            if agentType == "terminal" {
+                TextField("Command (e.g. npm run dev)", text: $command)
+                    .textFieldStyle(.roundedBorder)
+            }
+
             TextEditor(text: $promptBody)
                 .font(.system(size: 13, design: .monospaced))
                 .frame(minHeight: 140)
@@ -77,6 +83,8 @@ struct PromptCreationSheet: View {
                 .keyboardShortcut(.cancelAction)
             Spacer()
             Button("Create") {
+                let trimmedCommand = command.trimmingCharacters(in: .whitespaces)
+                let cmd = agentType == "terminal" && !trimmedCommand.isEmpty ? trimmedCommand : nil
                 Task {
                     await hubState.saveTemplate(
                         projectRoot: projectRoot,
@@ -84,7 +92,8 @@ struct PromptCreationSheet: View {
                         description: description,
                         agent: agentType,
                         body: promptBody,
-                        scope: scope.wireValue
+                        scope: scope.wireValue,
+                        command: cmd
                     )
                     dismiss()
                 }

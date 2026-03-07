@@ -23,6 +23,8 @@ pub struct AgentDef {
     pub available_in_command_dialog: bool,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// Scan both local and global agent definition directories. Local defs take priority.
@@ -232,6 +234,7 @@ mod tests {
             scope: "local".to_string(),
             available_in_command_dialog: true,
             icon: None,
+            command: None,
         };
 
         save_agent_def(&dir, &def).unwrap();
@@ -285,6 +288,41 @@ mod tests {
         // find_agent_def checks local first
         let def = find_agent_def(root, "reviewer").unwrap();
         assert_eq!(def.scope, "local");
+    }
+
+    #[test]
+    fn given_agent_def_with_command_should_deserialize() {
+        let yaml = "name: dev-server\nagent_type: terminal\ncommand: \"npm run dev\"\n";
+        let def: AgentDef = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(def.name, "dev-server");
+        assert_eq!(def.agent_type, "terminal");
+        assert_eq!(def.command, Some("npm run dev".to_string()));
+    }
+
+    #[test]
+    fn given_agent_def_without_command_should_default_to_none() {
+        let yaml = "name: basic\n";
+        let def: AgentDef = serde_yml::from_str(yaml).unwrap();
+        assert!(def.command.is_none());
+    }
+
+    #[test]
+    fn given_agent_def_with_command_should_round_trip_yaml() {
+        let def = AgentDef {
+            name: "test".to_string(),
+            agent_type: "terminal".to_string(),
+            template: None,
+            inline_prompt: None,
+            tags: vec![],
+            scope: "local".to_string(),
+            available_in_command_dialog: true,
+            icon: None,
+            command: Some("cargo test".to_string()),
+        };
+        let yaml = serde_yml::to_string(&def).unwrap();
+        assert!(yaml.contains("command: cargo test"));
+        let loaded: AgentDef = serde_yml::from_str(&yaml).unwrap();
+        assert_eq!(loaded.command, Some("cargo test".to_string()));
     }
 
     #[test]

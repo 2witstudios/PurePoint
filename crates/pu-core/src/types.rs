@@ -82,6 +82,8 @@ pub struct AgentEntry {
     /// atomically on suspend/resume.
     #[serde(default)]
     pub suspended: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for AgentEntry {
@@ -103,6 +105,8 @@ impl<'de> Deserialize<'de> for AgentEntry {
             suspended_at: Option<DateTime<Utc>>,
             #[serde(default)]
             suspended: bool,
+            #[serde(default)]
+            command: Option<String>,
         }
         let raw = Raw::deserialize(deserializer)?;
         // Backward compat: old manifests have suspended_at set but no suspended field.
@@ -122,6 +126,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             session_id: raw.session_id,
             suspended_at: raw.suspended_at,
             suspended,
+            command: raw.command,
         })
     }
 }
@@ -394,6 +399,7 @@ mod tests {
             session_id: None,
             suspended_at: None,
             suspended: false,
+            command: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -462,6 +468,7 @@ mod tests {
                 session_id: None,
                 suspended_at: None,
                 suspended: false,
+                command: None,
             },
         );
         let entry = WorktreeEntry {
@@ -512,6 +519,7 @@ mod tests {
                 session_id: None,
                 suspended_at: None,
                 suspended: false,
+                command: None,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -538,6 +546,7 @@ mod tests {
                 session_id: None,
                 suspended_at: None,
                 suspended: false,
+                command: None,
             },
         );
         m.worktrees.insert(
@@ -578,6 +587,7 @@ mod tests {
             session_id: None,
             suspended_at: None,
             suspended: false,
+            command: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();

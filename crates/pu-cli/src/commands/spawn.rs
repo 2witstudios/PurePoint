@@ -19,6 +19,7 @@ pub async fn run(
     worktree: Option<String>,
     template_name: Option<String>,
     file: Option<String>,
+    command: Option<String>,
     vars: Vec<String>,
     json: bool,
 ) -> Result<(), CliError> {
@@ -30,22 +31,33 @@ pub async fn run(
     // Parse --var KEY=VALUE pairs
     let var_map = commands::parse_vars(&vars)?;
 
-    // Resolve prompt + agent override from template/file/inline
-    let (resolved_prompt, agent_override) =
+    // Resolve prompt + agent override + command override from template/file/inline
+    let (resolved_prompt, agent_override, command_override) =
         resolve_prompt(prompt, template_name, file, &var_map, &cwd)?;
 
     let agent = agent.or(agent_override).unwrap_or_else(|| "claude".into());
+
+    // --command flag takes precedence, then template command
+    let resolved_command = command.or(command_override);
+
+    // Terminal agents with a command don't require a prompt
+    let final_prompt = if resolved_prompt.is_none() && resolved_command.is_some() {
+        String::new()
+    } else {
+        resolved_prompt.unwrap_or_default()
+    };
 
     let resp = client::send_request(
         socket,
         &Request::Spawn {
             project_root,
-            prompt: resolved_prompt,
+            prompt: final_prompt,
             agent,
             name,
             base,
             root,
             worktree,
+            command: resolved_command,
         },
     )
     .await?;
@@ -55,22 +67,23 @@ pub async fn run(
 }
 
 /// Resolve the prompt from one of: --template, --file, or inline positional arg.
-/// Returns (prompt_text, optional_agent_override).
+/// Returns (optional_prompt, optional_agent_override, optional_command_override).
 fn resolve_prompt(
     inline: Option<String>,
     template_name: Option<String>,
     file: Option<String>,
     vars: &HashMap<String, String>,
     project_root: &Path,
-) -> Result<(String, Option<String>), CliError> {
+) -> Result<(Option<String>, Option<String>, Option<String>), CliError> {
     match (inline, template_name, file) {
-        (Some(prompt), None, None) => Ok((prompt, None)),
+        (Some(prompt), None, None) => Ok((Some(prompt), None, None)),
         (None, Some(name), None) => {
             let tpl = template::find_template(project_root, &name)
                 .ok_or_else(|| CliError::Other(format!("template not found: {name}")))?;
             let agent_override = Some(tpl.agent.clone());
             let rendered = template::render(&tpl, vars);
-            Ok((rendered, agent_override))
+            let command_override = template::render_command(&tpl, vars);
+            Ok((Some(rendered), agent_override, command_override))
         }
         (None, None, Some(path)) => {
             let content = std::fs::read_to_string(&path)
@@ -87,11 +100,11 @@ fn resolve_prompt(
                 None
             };
             let rendered = template::render(&tpl, vars);
-            Ok((rendered, agent_override))
+            let command_override = template::render_command(&tpl, vars);
+            Ok((Some(rendered), agent_override, command_override))
         }
-        (None, None, None) => Err(CliError::Other(
-            "prompt required — provide inline, --template, or --file".into(),
-        )),
+        // No prompt source — allowed when --command is set (terminal agent)
+        (None, None, None) => Ok((None, None, None)),
         _ => Err(CliError::Other(
             "provide only one of: inline prompt, --template, or --file".into(),
         )),
