@@ -53,7 +53,7 @@ struct AgentVariant: Identifiable {
         id: "claude",
         displayName: "Worktree",
         icon: "arrow.triangle.branch",
-        subtitle: "Isolated branch with agent",
+        subtitle: "Isolated branch",
         promptPlaceholder: "Enter prompt...",
         kind: .worktree
     )

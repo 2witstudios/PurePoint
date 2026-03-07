@@ -161,6 +161,9 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::RenameResult { agent_id, name } => {
             println!("Renamed agent {} to {}", agent_id.bold(), name.green());
         }
+        Response::CreateWorktreeResult { worktree_id } => {
+            println!("Created worktree {}", worktree_id.bold());
+        }
         Response::DeleteWorktreeResult {
             worktree_id,
             killed_agents,

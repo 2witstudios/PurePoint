@@ -61,6 +61,11 @@ struct ContentView: View {
                 appState.pendingFocusAgentId = nil
             }
         }
+        .onChange(of: appState.pendingSelectWorktreeId) { _, worktreeId in
+            guard let worktreeId else { return }
+            appState.pendingSelectWorktreeId = nil
+            selection = .worktree(worktreeId)
+        }
         .onChange(of: selection) { _, newValue in
             appState.activeSidebarSelection = newValue
 

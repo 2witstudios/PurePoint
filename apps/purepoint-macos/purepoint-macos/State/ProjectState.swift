@@ -217,6 +217,27 @@ final class ProjectState: Identifiable {
         }
     }
 
+    func createWorktree(name: String?) {
+        let root = projectRoot
+
+        Task {
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(.createWorktree(projectRoot: root, name: name))
+                switch response {
+                case .createWorktreeResult(let worktreeId):
+                    self.appState?.pendingSelectWorktreeId = worktreeId
+                case .error(_, let message):
+                    self.appState?.daemonError = message
+                default:
+                    break
+                }
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
     func handlePaletteResult(_ result: CommandPaletteResult, selection: SidebarSelection?, hub: AgentsHubState) {
         switch result {
         case .spawnBuiltIn(let variant, let prompt, let name):
@@ -228,6 +249,8 @@ final class ProjectState: Identifiable {
         case .runSwarm(let def):
             let root = projectRoot
             Task { await hub.runSwarm(projectRoot: root, name: def.name) }
+        case .createWorktree(let name):
+            createWorktree(name: name)
         }
     }
 

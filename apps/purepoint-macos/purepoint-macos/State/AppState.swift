@@ -13,6 +13,7 @@ final class AppState {
     var daemonError: String?
     var showSettings = false
     var pendingSelectAgentId: String?
+    var pendingSelectWorktreeId: String?
     var pendingFocusAgentId: String?
 
     var agentsHubState = AgentsHubState()

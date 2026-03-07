@@ -94,6 +94,16 @@ enum CommandPaletteItem: Identifiable {
         }
     }
 
+    /// Whether the prompt text field should be shown in the prompt phase.
+    /// Worktree items only need a name, not a prompt.
+    var showsPromptField: Bool {
+        switch self {
+        case .builtIn(let v): v.kind != .worktree
+        case .agentDef: true
+        case .swarm: false
+        }
+    }
+
     static func buildItems(
         builtInVariants: [AgentVariant],
         agents: [AgentDefinition],
@@ -115,4 +125,5 @@ enum CommandPaletteResult {
     case spawnBuiltIn(variant: AgentVariant, prompt: String?, name: String?)
     case spawnAgentDef(def: AgentDefinition, prompt: String?)
     case runSwarm(def: SwarmDefinition)
+    case createWorktree(name: String?)
 }

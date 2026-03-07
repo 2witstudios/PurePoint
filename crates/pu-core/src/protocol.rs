@@ -107,6 +107,13 @@ pub enum Request {
         agent_id: String,
         name: String,
     },
+    CreateWorktree {
+        project_root: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        base: Option<String>,
+    },
     DeleteWorktree {
         project_root: String,
         worktree_id: String,
@@ -419,6 +426,9 @@ pub enum Response {
     RenameResult {
         agent_id: String,
         name: String,
+    },
+    CreateWorktreeResult {
+        worktree_id: String,
     },
     DeleteWorktreeResult {
         worktree_id: String,
