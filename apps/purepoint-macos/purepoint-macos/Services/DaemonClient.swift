@@ -200,7 +200,7 @@ nonisolated enum DaemonRequest: Encodable {
     case subscribeGrid(projectRoot: String)
     case subscribeStatus(projectRoot: String)
     case gridCommand(projectRoot: String, command: GridCommandPayload)
-    case createWorktree(projectRoot: String, name: String?)
+    case createWorktree(projectRoot: String, name: String?, base: String? = nil)
     case deleteWorktree(projectRoot: String, worktreeId: String)
     case listTemplates(projectRoot: String)
     case getTemplate(projectRoot: String, name: String)
@@ -287,10 +287,11 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("grid_command", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(command, forKey: .key("command"))
-        case .createWorktree(let projectRoot, let name):
+        case .createWorktree(let projectRoot, let name, let base):
             try container.encode("create_worktree", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             if let name { try container.encode(name, forKey: .key("name")) }
+            if let base { try container.encode(base, forKey: .key("base")) }
         case .deleteWorktree(let projectRoot, let worktreeId):
             try container.encode("delete_worktree", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
