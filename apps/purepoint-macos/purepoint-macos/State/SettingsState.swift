@@ -29,14 +29,6 @@ enum AppAppearance: String, CaseIterable {
 final class SettingsState {
     // MARK: - General
 
-    var defaultAgentVariant: String = "claude" {
-        didSet { UserDefaults.standard.set(defaultAgentVariant, forKey: "PP_defaultAgentVariant") }
-    }
-
-    var defaultProjectDirectory: String = "~" {
-        didSet { UserDefaults.standard.set(defaultProjectDirectory, forKey: "PP_defaultProjectDirectory") }
-    }
-
     var restoreProjectsOnLaunch: Bool = true {
         didSet { UserDefaults.standard.set(restoreProjectsOnLaunch, forKey: "PP_restoreProjectsOnLaunch") }
     }
@@ -64,12 +56,6 @@ final class SettingsState {
     init() {
         let defaults = UserDefaults.standard
 
-        if let v = defaults.string(forKey: "PP_defaultAgentVariant") {
-            defaultAgentVariant = v
-        }
-        if let v = defaults.string(forKey: "PP_defaultProjectDirectory") {
-            defaultProjectDirectory = v
-        }
         if defaults.object(forKey: "PP_restoreProjectsOnLaunch") != nil {
             restoreProjectsOnLaunch = defaults.bool(forKey: "PP_restoreProjectsOnLaunch")
         }
