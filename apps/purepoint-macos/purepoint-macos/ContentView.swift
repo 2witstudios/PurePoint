@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppState.self) private var appState
     @Environment(GridState.self) private var gridState
+    @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var sidebarOutlineView: NSOutlineView?
@@ -145,6 +146,7 @@ struct ContentView: View {
             if gridState.isActive {
                 gridState.closeFocused()
             } else if let agentId = appState.selectedAgentId {
+                viewCache.remove(agentId: agentId)
                 let projectRoot = appState.projectState(forAgentId: agentId)?.projectRoot ?? ""
                 appState.projectState(forRoot: projectRoot)?.removeAndKillAgent(agentId)
                 selection = .nav(.dashboard)

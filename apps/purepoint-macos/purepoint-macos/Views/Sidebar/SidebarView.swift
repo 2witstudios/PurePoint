@@ -4,6 +4,7 @@ struct SidebarView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
     @Environment(GridState.self) private var gridState
+    @Environment(TerminalViewCache.self) private var viewCache
     var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
     var body: some View {
@@ -57,6 +58,7 @@ struct SidebarView: View {
                     selection: $selection,
                     appState: appState,
                     gridState: gridState,
+                    viewCache: viewCache,
                     onOutlineViewReady: onOutlineViewReady
                 )
                 .padding(.top, 8)

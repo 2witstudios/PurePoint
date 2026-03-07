@@ -29,6 +29,7 @@ class TerminalPaneNSView: NSView {
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
     private var isAttachDone = false
+    private(set) var isAgentGone = false
     private var heartbeatTimer: Timer?
     private var spinner: NSProgressIndicator?
     private var spinnerShownAt = Date()
@@ -127,12 +128,21 @@ class TerminalPaneNSView: NSView {
 
         attachTask = Task { [weak self] in
             await session.start()
-            await MainActor.run { self?.isAttachDone = true }
+            let agentGone = await session.isAgentGone
+            await MainActor.run {
+                self?.isAttachDone = true
+                if agentGone {
+                    self?.isAgentGone = true
+                    self?.heartbeatTimer?.invalidate()
+                    self?.heartbeatTimer = nil
+                }
+            }
         }
     }
 
     /// Restart the attach session if it has died and the view has a valid frame.
     func reconnectIfNeeded() {
+        guard !isAgentGone else { return }
         guard isAttachDone, let tv = terminal, tv.bounds.width > 1 else { return }
         startDaemonAttach()
     }

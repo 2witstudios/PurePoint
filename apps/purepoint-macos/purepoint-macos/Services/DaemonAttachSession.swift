@@ -11,6 +11,7 @@ actor DaemonAttachSession {
     private weak var terminalView: TerminalView?
     private var connection: NWConnection?
     private var stopped = false
+    private(set) var isAgentGone = false
     private var onFirstOutput: (() -> Void)?
     private var lastFullRefreshAtNanos: UInt64 = 0
     private static let fullRefreshIntervalNanos: UInt64 = 200_000_000  // 200ms
@@ -37,6 +38,10 @@ actor DaemonAttachSession {
                 // Normal exit (agent completed) — don't reconnect
                 break
             } catch is CancellationError {
+                break
+            } catch DaemonAttachError.agentGone {
+                print("[DaemonAttach \(agentId.prefix(8))] agent gone — stopping retries")
+                isAgentGone = true
                 break
             } catch {
                 // Connection lost — attempt reconnect with backoff
@@ -91,8 +96,11 @@ actor DaemonAttachSession {
         let firstLine = try await reader.readLine()
         let firstResponse = DaemonClient.parse(firstLine)
         guard case .attachReady = firstResponse else {
-            if case .error(_, let msg) = firstResponse {
+            if case .error(let code, let msg) = firstResponse {
                 print("[DaemonAttach \(agentId.prefix(8))] attach error: \(msg)")
+                if code == "AGENT_NOT_FOUND" {
+                    throw DaemonAttachError.agentGone
+                }
                 throw DaemonAttachError.attachFailed(msg)
             }
             print("[DaemonAttach \(agentId.prefix(8))] unexpected response: \(firstLine.prefix(100))")
@@ -141,7 +149,10 @@ actor DaemonAttachSession {
                     }
                     tv?.needsDisplay = true
                 }
-            case .error(_, let message):
+            case .error(let code, let message):
+                if code == "AGENT_NOT_FOUND" {
+                    throw DaemonAttachError.agentGone
+                }
                 throw DaemonAttachError.attachFailed(message)
             default:
                 break
@@ -153,11 +164,13 @@ actor DaemonAttachSession {
 enum DaemonAttachError: Error, LocalizedError {
     case attachFailed(String)
     case unexpectedResponse
+    case agentGone
 
     var errorDescription: String? {
         switch self {
         case .attachFailed(let msg): "Attach failed: \(msg)"
         case .unexpectedResponse: "Unexpected response during attach"
+        case .agentGone: "Agent no longer exists"
         }
     }
 }
