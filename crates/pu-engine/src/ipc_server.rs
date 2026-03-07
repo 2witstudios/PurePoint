@@ -1,7 +1,5 @@
-use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -207,39 +205,18 @@ impl IpcServer {
         tracing::debug!(agent_id, "attach stream started");
 
         let mut watcher = buffer.subscribe();
-        let mut pending_initial_input = engine.take_initial_input(agent_id).await;
-        let far_future = tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60);
-        let inject_timeout = tokio::time::sleep_until(far_future);
-        tokio::pin!(inject_timeout);
-        if pending_initial_input.is_some() {
-            // Fallback: if readiness signals do not arrive, inject after a short delay.
-            inject_timeout
-                .as_mut()
-                .reset(tokio::time::Instant::now() + Duration::from_millis(1800));
-        }
 
         // Send buffered output in fixed-size chunks so the client can start rendering quickly.
         let mut offset = 0;
         let (data, new_offset) = buffer.read_from(offset);
         offset = new_offset;
-        if !data.is_empty() {
-            if Self::write_output_chunks(writer, agent_id, &data)
+        if !data.is_empty()
+            && Self::write_output_chunks(writer, agent_id, &data)
                 .await
                 .is_err()
-            {
-                if let Some(data) = pending_initial_input.take() {
-                    engine.restore_initial_input(agent_id, data).await;
-                }
-                tracing::debug!(agent_id, "attach stream ended: write error on initial data");
-                return;
-            }
-            if pending_initial_input.is_some() {
-                // When we receive startup output, wait for a brief quiet period
-                // before injecting so the target TUI has time to finish mounting.
-                inject_timeout
-                    .as_mut()
-                    .reset(tokio::time::Instant::now() + Duration::from_millis(450));
-            }
+        {
+            tracing::debug!(agent_id, "attach stream ended: write error on initial data");
+            return;
         }
 
         let process_exited = exit_rx.borrow().is_some();
@@ -247,9 +224,6 @@ impl IpcServer {
         // immediately. Without this, the streaming loop deadlocks: watcher never fires
         // (no new output), exit_rx.changed() is disabled, and reader blocks forever.
         if process_exited {
-            if let Some(data) = pending_initial_input.take() {
-                engine.restore_initial_input(agent_id, data).await;
-            }
             tracing::debug!(agent_id, "attach stream: process already exited");
             return;
         }
@@ -257,14 +231,6 @@ impl IpcServer {
         let mut line = String::new();
         loop {
             tokio::select! {
-                _ = &mut inject_timeout, if pending_initial_input.is_some() => {
-                    if let Some(data) = pending_initial_input.take() {
-                        if !Self::inject_initial_prompt(engine, &master_fd, agent_id, &data).await {
-                            engine.restore_initial_input(agent_id, data).await;
-                        }
-                    }
-                    inject_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60));
-                }
                 Ok(()) = watcher.changed() => {
                     let (data, new_offset) = buffer.read_from(offset);
                     offset = new_offset;
@@ -273,11 +239,6 @@ impl IpcServer {
                     {
                         tracing::debug!(agent_id, "attach stream ended: write error");
                         break;
-                    }
-                    if !data.is_empty() && pending_initial_input.is_some() {
-                        inject_timeout
-                            .as_mut()
-                            .reset(tokio::time::Instant::now() + Duration::from_millis(450));
                     }
                 }
                 Ok(()) = exit_rx.changed(), if !process_exited => {
@@ -309,11 +270,6 @@ impl IpcServer {
                                 }
                                 Request::Resize { cols, rows, .. } => {
                                     engine.resize_pty(&master_fd, cols, rows).await.ok();
-                                    if pending_initial_input.is_some() {
-                                        inject_timeout
-                                            .as_mut()
-                                            .reset(tokio::time::Instant::now() + Duration::from_millis(300));
-                                    }
                                 }
                                 _ => break, // Any other request exits the attach loop
                             }
@@ -322,9 +278,6 @@ impl IpcServer {
                     }
                 }
             }
-        }
-        if let Some(data) = pending_initial_input.take() {
-            engine.restore_initial_input(agent_id, data).await;
         }
         tracing::debug!(agent_id, "attach stream ended");
     }
@@ -469,40 +422,6 @@ impl IpcServer {
             Self::write_response(writer, &resp).await?;
         }
         Ok(())
-    }
-
-    async fn inject_initial_prompt(
-        engine: &Engine,
-        master_fd: &Arc<OwnedFd>,
-        agent_id: &str,
-        prompt: &[u8],
-    ) -> bool {
-        if prompt.is_empty() {
-            return true;
-        }
-        // Write in small chunks to mimic typing and avoid TUI paste-mode behaviors.
-        for chunk in prompt.chunks(8) {
-            if let Err(e) = engine.write_to_pty(master_fd, chunk).await {
-                tracing::warn!(
-                    "failed to inject initial prompt text for {}: {}",
-                    agent_id,
-                    e
-                );
-                return false;
-            }
-            tokio::time::sleep(Duration::from_millis(6)).await;
-        }
-        // Give the input widget a moment to process buffered bytes before submit.
-        tokio::time::sleep(Duration::from_millis(180)).await;
-        if let Err(e) = engine.write_to_pty(master_fd, b"\r").await {
-            tracing::warn!(
-                "failed to inject initial prompt submit key for {}: {}",
-                agent_id,
-                e
-            );
-            return false;
-        }
-        true
     }
 
     async fn write_response(

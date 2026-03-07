@@ -752,11 +752,53 @@ impl Engine {
         };
 
         if inject_prompt_via_stdin {
-            let input = prompt.as_bytes().to_vec();
-            self.pending_initial_inputs
+            let prompt_bytes = prompt.as_bytes().to_vec();
+            let pending = self.pending_initial_inputs.clone();
+            pending
                 .lock()
                 .await
-                .insert(agent_id.clone(), input);
+                .insert(agent_id.clone(), prompt_bytes.clone());
+
+            let output_buffer = handle.output_buffer.clone();
+            let master_fd = handle.master_fd();
+            let mut exit_rx = handle.exit_rx.clone();
+            let pty_host = NativePtyHost::new();
+            let aid = agent_id.clone();
+
+            tokio::spawn(async move {
+                let mut watcher = output_buffer.subscribe();
+                let timeout = tokio::time::sleep(Duration::from_millis(1800));
+                tokio::pin!(timeout);
+
+                loop {
+                    tokio::select! {
+                        _ = &mut timeout => {
+                            // Fallback or quiet-period expired — inject now
+                            break;
+                        }
+                        Ok(()) = exit_rx.changed() => {
+                            // Process exited before we could inject — abort
+                            pending.lock().await.remove(&aid);
+                            tracing::debug!(agent_id = %aid, "prompt injection aborted: process exited");
+                            return;
+                        }
+                        Ok(()) = watcher.changed() => {
+                            // Got output — reset to a 450ms quiet period
+                            timeout
+                                .as_mut()
+                                .reset(tokio::time::Instant::now() + Duration::from_millis(450));
+                        }
+                    }
+                }
+
+                // Inject the prompt
+                if inject_initial_prompt(&pty_host, &master_fd, &aid, &prompt_bytes).await {
+                    tracing::debug!(agent_id = %aid, "prompt injected at spawn time");
+                } else {
+                    tracing::warn!(agent_id = %aid, "failed to inject prompt at spawn time");
+                }
+                pending.lock().await.remove(&aid);
+            });
         }
 
         let pid = handle.pid;
@@ -1291,20 +1333,6 @@ impl Engine {
     /// Write data to a PTY fd via the pty host (avoids duplicating unsafe write logic).
     pub async fn write_to_pty(&self, fd: &Arc<OwnedFd>, data: &[u8]) -> Result<(), std::io::Error> {
         self.pty_host.write_to_fd(fd, data).await
-    }
-
-    /// Take and clear any queued initial input for an agent.
-    pub async fn take_initial_input(&self, agent_id: &str) -> Option<Vec<u8>> {
-        self.pending_initial_inputs.lock().await.remove(agent_id)
-    }
-
-    /// Re-queue initial input if an attach session ended before delivery.
-    pub async fn restore_initial_input(&self, agent_id: &str, data: Vec<u8>) {
-        self.pending_initial_inputs
-            .lock()
-            .await
-            .entry(agent_id.to_string())
-            .or_insert(data);
     }
 
     /// Resize a PTY fd via the pty host (avoids duplicating unsafe ioctl logic).
@@ -2780,6 +2808,42 @@ impl Drop for Engine {
     }
 }
 
+/// Inject prompt text into a PTY in small chunks to mimic typing, avoiding
+/// TUI paste-mode behaviors. Returns `true` on success.
+async fn inject_initial_prompt(
+    pty_host: &NativePtyHost,
+    master_fd: &Arc<OwnedFd>,
+    agent_id: &str,
+    prompt: &[u8],
+) -> bool {
+    if prompt.is_empty() {
+        return true;
+    }
+    // Write in small chunks to mimic typing and avoid TUI paste-mode behaviors.
+    for chunk in prompt.chunks(8) {
+        if let Err(e) = pty_host.write_to_fd(master_fd, chunk).await {
+            tracing::warn!(
+                "failed to inject initial prompt text for {}: {}",
+                agent_id,
+                e
+            );
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(6)).await;
+    }
+    // Give the input widget a moment to process buffered bytes before submit.
+    tokio::time::sleep(Duration::from_millis(180)).await;
+    if let Err(e) = pty_host.write_to_fd(master_fd, b"\r").await {
+        tracing::warn!(
+            "failed to inject initial prompt submit key for {}: {}",
+            agent_id,
+            e
+        );
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2809,8 +2873,8 @@ mod tests {
         assert!(handles.is_none());
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn given_spawn_with_prompt_should_queue_initial_input() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_spawn_with_prompt_should_inject_in_background() {
         let tmp = TempDir::new().unwrap();
         let project_root = tmp.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
@@ -2840,8 +2904,24 @@ mod tests {
             other => panic!("expected SpawnResult, got {other:?}"),
         };
 
-        let initial_input = engine.take_initial_input(&agent_id).await;
-        assert_eq!(initial_input, Some(b"hello world".to_vec()));
+        // The background task should eventually drain pending_initial_inputs.
+        // Allow up to 5s for the injection to complete (includes readiness
+        // timeout + chunked write delays).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let still_pending = engine
+                .pending_initial_inputs
+                .lock()
+                .await
+                .contains_key(&agent_id);
+            if !still_pending {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("prompt was never consumed from pending_initial_inputs");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     #[test]
