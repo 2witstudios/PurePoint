@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConversationSidebarView: View {
     @Bindable var chatState: ChatState
+    @Binding var showSidebar: Bool
     @Environment(AppState.self) private var appState
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -26,18 +27,30 @@ struct ConversationSidebarView: View {
         let namesBySid = agentNamesBySessionId
 
         VStack(spacing: 0) {
-            // New Chat button
-            Button {
-                chatState.newConversation()
-            } label: {
-                Label("New Chat", systemImage: "plus.bubble")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+            // Header: sidebar toggle + New Chat
+            HStack {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showSidebar = false
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .buttonStyle(.plain)
+                .help("Hide conversations (⌘⇧S)")
+
+                Spacer()
+
+                Button {
+                    chatState.newConversation()
+                } label: {
+                    Label("New Chat", systemImage: "plus.bubble")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 12)
             .padding(.top, 8)
+            .padding(.bottom, 4)
 
             // Search
             TextField("Search conversations...", text: $chatState.searchQuery)

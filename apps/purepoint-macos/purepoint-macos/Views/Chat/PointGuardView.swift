@@ -9,7 +9,7 @@ struct PointGuardView: View {
     var body: some View {
         HSplitView {
             if showSidebar {
-                ConversationSidebarView(chatState: chatState)
+                ConversationSidebarView(chatState: chatState, showSidebar: $showSidebar)
                     .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
             }
 
@@ -17,15 +17,17 @@ struct PointGuardView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showSidebar.toggle()
+            if !showSidebar {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showSidebar = true
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.left")
                     }
-                } label: {
-                    Image(systemName: "sidebar.left")
+                    .help("Show conversations (⌘⇧S)")
                 }
-                .help(showSidebar ? "Hide conversations (⌘⇧S)" : "Show conversations (⌘⇧S)")
             }
         }
         .task {

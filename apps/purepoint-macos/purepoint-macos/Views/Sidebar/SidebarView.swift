@@ -8,9 +8,35 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // App branding — doubles as Dashboard button
+            Button {
+                selection = .nav(.dashboard)
+            } label: {
+                HStack(spacing: 6) {
+                    Image("PurePointLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 16, height: 16)
+                    Text("PurePoint")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    selection == .nav(.dashboard)
+                        ? AnyShapeStyle(.selection)
+                        : AnyShapeStyle(.clear)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+
             // Nav items — fixed, non-scrollable
             VStack(spacing: 2) {
-                ForEach(SidebarNavItem.allCases) { item in
+                ForEach(SidebarNavItem.allCases.filter { $0 != .dashboard }) { item in
                     SidebarNavButton(
                         item: item,
                         isSelected: selection == .nav(item)
@@ -20,7 +46,7 @@ struct SidebarView: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
 
             Divider()
                 .padding(.horizontal, 8)
