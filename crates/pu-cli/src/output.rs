@@ -458,17 +458,11 @@ pub fn print_response(response: &Response, json_mode: bool) {
             next_run,
             trigger,
             scope,
-            root,
-            agent_name,
             ..
         } => {
             println!("{} ({})", name.bold(), scope.dimmed());
             println!("  Enabled:    {enabled}");
             println!("  Recurrence: {recurrence}");
-            println!("  Root:       {root}");
-            if let Some(an) = agent_name {
-                println!("  Agent name: {an}");
-            }
             println!("  Start at:   {}", start_at.format("%Y-%m-%d %H:%M UTC"));
             if let Some(nr) = next_run {
                 println!("  Next run:   {}", nr.format("%Y-%m-%d %H:%M UTC"));
@@ -896,8 +890,6 @@ mod tests {
                 project_root: "/test".into(),
                 target: String::new(),
                 scope: "local".into(),
-                root: true,
-                agent_name: None,
                 created_at: chrono::Utc::now(),
             }],
         };
@@ -925,8 +917,6 @@ mod tests {
             project_root: "/test".into(),
             target: String::new(),
             scope: "local".into(),
-            root: true,
-            agent_name: None,
             created_at: chrono::Utc::now(),
         };
         print_response(&resp, false);
