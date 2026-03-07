@@ -418,6 +418,12 @@ enum ScheduleAction {
         /// Scope: local or global
         #[arg(long, default_value = "local")]
         scope: String,
+        /// Spawn as root agent (in project root, not a worktree)
+        #[arg(long)]
+        root: bool,
+        /// Worktree/branch name (required when not --root)
+        #[arg(long = "name")]
+        agent_name: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -632,6 +638,8 @@ async fn main() {
                 agent,
                 vars,
                 scope,
+                root,
+                agent_name,
                 json,
             } => {
                 commands::schedule::run_create(
@@ -645,6 +653,8 @@ async fn main() {
                     &agent,
                     vars,
                     &scope,
+                    root,
+                    agent_name,
                     json,
                 )
                 .await

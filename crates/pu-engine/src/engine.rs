@@ -388,6 +388,8 @@ impl Engine {
                 trigger,
                 target,
                 scope,
+                root,
+                agent_name,
             } => {
                 self.handle_save_schedule(
                     &project_root,
@@ -398,6 +400,8 @@ impl Engine {
                     trigger,
                     &target,
                     &scope,
+                    root,
+                    agent_name,
                 )
                 .await
             }
@@ -2626,6 +2630,8 @@ impl Engine {
         trigger: ScheduleTriggerPayload,
         target: &str,
         scope: &str,
+        root: bool,
+        agent_name: Option<String>,
     ) -> Response {
         let dir = match Self::resolve_scope_dir(
             project_root,
@@ -2665,6 +2671,8 @@ impl Engine {
             trigger: Self::payload_to_trigger(&trigger),
             project_root: project_root.to_string(),
             target: target.to_string(),
+            root,
+            agent_name,
             scope: scope.to_string(),
             created_at: now,
         };
@@ -2800,6 +2808,8 @@ impl Engine {
             project_root: d.project_root,
             target: d.target,
             scope: d.scope,
+            root: d.root,
+            agent_name: d.agent_name,
             created_at: d.created_at,
         }
     }
@@ -2815,6 +2825,8 @@ impl Engine {
             project_root: d.project_root,
             target: d.target,
             scope: d.scope,
+            root: d.root,
+            agent_name: d.agent_name,
             created_at: d.created_at,
         }
     }
@@ -2933,13 +2945,13 @@ impl Engine {
             pu_core::schedule_def::ScheduleTrigger::AgentDef { name } => {
                 // Resolve agent def to get its type and prompt
                 let pr = schedule.project_root.clone();
-                let root = Path::new(&pr);
-                if let Some(def) = pu_core::agent_def::find_agent_def(root, name) {
+                let project_path = Path::new(&pr);
+                if let Some(def) = pu_core::agent_def::find_agent_def(project_path, name) {
                     let empty_vars = std::collections::HashMap::new();
                     let (prompt, template_command) = if let Some(ref ip) = def.inline_prompt {
                         (ip.clone(), None)
                     } else if let Some(ref tpl_name) = def.template {
-                        match pu_core::template::find_template(root, tpl_name) {
+                        match pu_core::template::find_template(project_path, tpl_name) {
                             Some(tpl) => {
                                 let rendered = pu_core::template::render(&tpl, &empty_vars);
                                 let cmd = pu_core::template::render_command(&tpl, &empty_vars);
@@ -2957,9 +2969,9 @@ impl Engine {
                         project_root: pr,
                         prompt,
                         agent: def.agent_type,
-                        name: None,
+                        name: schedule.agent_name.clone(),
                         base: None,
-                        root: true,
+                        root: schedule.root,
                         worktree: None,
                         command: def.command.or(template_command),
                     })
@@ -2984,9 +2996,9 @@ impl Engine {
                     project_root: schedule.project_root.clone(),
                     prompt: prompt.clone(),
                     agent: agent.clone(),
-                    name: None,
+                    name: schedule.agent_name.clone(),
                     base: None,
-                    root: true,
+                    root: schedule.root,
                     worktree: None,
                     command: None,
                 })
