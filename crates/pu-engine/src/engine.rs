@@ -200,7 +200,8 @@ impl Engine {
             Request::Kill {
                 project_root,
                 target,
-            } => self.handle_kill(&project_root, target).await,
+                exclude,
+            } => self.handle_kill(&project_root, target, &exclude).await,
             Request::Suspend {
                 project_root,
                 target,
@@ -715,11 +716,13 @@ impl Engine {
         };
 
         // Spawn PTY process
+        let mut env = self.agent_env().await;
+        env.push(("PU_AGENT_ID".into(), agent_id.clone()));
         let spawn_config = SpawnConfig {
             command,
             args,
             cwd: cwd.clone(),
-            env: self.agent_env().await,
+            env,
             env_remove: vec!["CLAUDECODE".into()],
             cols: 120,
             rows: 40,
@@ -882,13 +885,18 @@ impl Engine {
         }
     }
 
-    async fn handle_kill(&self, project_root: &str, target: KillTarget) -> Response {
+    async fn handle_kill(
+        &self,
+        project_root: &str,
+        target: KillTarget,
+        exclude: &[String],
+    ) -> Response {
         let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
         };
 
-        let agent_ids: Vec<String> = match &target {
+        let all_ids: Vec<String> = match &target {
             KillTarget::Agent(id) => vec![id.clone()],
             KillTarget::Worktree(wt_id) => match m.worktrees.get(wt_id) {
                 Some(wt) => wt.agents.keys().cloned().collect(),
@@ -906,7 +914,18 @@ impl Engine {
                 }
                 ids
             }
+            KillTarget::AllWorktrees => {
+                let mut ids: Vec<String> = Vec::new();
+                for wt in m.worktrees.values() {
+                    ids.extend(wt.agents.keys().cloned());
+                }
+                ids
+            }
         };
+
+        // Apply exclusions (self-protection + root-protection)
+        let (agent_ids, skipped): (Vec<String>, Vec<String>) =
+            all_ids.into_iter().partition(|id| !exclude.contains(id));
 
         // Kill agents: remove pending inputs, extract handles, kill PTY processes.
         let handles_killed = self.kill_agents(&agent_ids).await;
@@ -936,7 +955,11 @@ impl Engine {
 
         self.notify_status_change(project_root).await;
 
-        Response::KillResult { killed, exit_codes }
+        Response::KillResult {
+            killed,
+            exit_codes,
+            skipped,
+        }
     }
 
     async fn handle_delete_worktree(&self, project_root: &str, worktree_id: &str) -> Response {
@@ -1154,11 +1177,13 @@ impl Engine {
         };
 
         // 4. Spawn PTY process
+        let mut env = self.agent_env().await;
+        env.push(("PU_AGENT_ID".into(), agent_id.to_string()));
         let spawn_config = SpawnConfig {
             command,
             args,
             cwd,
-            env: self.agent_env().await,
+            env,
             env_remove: vec!["CLAUDECODE".into()],
             cols: 120,
             rows: 40,

@@ -18,6 +18,17 @@ Agents have three observable states:
 | `waiting` | Process alive but idle — likely awaiting a prompt or input |
 | `broken` | Process exited or gone — check exit_code for details |
 
+## Agent Lifecycle Rules
+
+**When operating as an agent, follow these rules:**
+
+1. **Never clean up existing agents or worktrees unless the user explicitly asks.** When given a task, spawn ADDITIONAL agents/worktrees. Do not remove existing ones first.
+2. **Never run `pu kill` preemptively.** Only kill agents the user specifically asks you to stop.
+3. **Prefer targeted kills.** Use `pu kill --agent <id>` or `pu kill --worktree <id>` for specific cleanup. Avoid `pu kill --all`.
+4. **`pu kill --all` preserves root agents** (point guards/conductors). Use `--include-root` only if the user explicitly requests it.
+5. **Check status before spawning.** Run `pu status --json` to see what exists. Add alongside it — don't replace it.
+6. **You cannot kill yourself.** The CLI refuses to kill the calling agent's own process.
+
 ## Commands
 
 ### Spawn agents
@@ -54,10 +65,11 @@ pu send <agent_id> --keys "C-c"             # send Ctrl+C
 
 ### Kill agents
 ```bash
-pu kill --agent <agent_id>         # kill one agent
-pu kill --worktree <wt_id>         # kill all in worktree
-pu kill --all                      # kill everything
-pu kill --agent <agent_id> --json  # machine output
+pu kill --agent <agent_id>                    # kill one agent
+pu kill --worktree <wt_id>                    # kill all agents in worktree
+pu kill --all                                 # kill worktree agents (preserves root/point guard agents)
+pu kill --all --include-root                  # kill everything including root agents
+pu kill --agent <agent_id> --json             # machine output
 ```
 
 ### Other

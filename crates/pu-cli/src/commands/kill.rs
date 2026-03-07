@@ -10,11 +10,24 @@ pub async fn run(
     agent: Option<String>,
     worktree: Option<String>,
     all: bool,
+    include_root: bool,
     json: bool,
 ) -> Result<(), CliError> {
+    let self_agent_id = std::env::var("PU_AGENT_ID").ok();
+
     let target = if all {
-        KillTarget::All
+        if include_root {
+            KillTarget::All
+        } else {
+            KillTarget::AllWorktrees
+        }
     } else if let Some(a) = agent {
+        // Self-protection: refuse to kill own agent
+        if let Some(ref self_id) = self_agent_id {
+            if &a == self_id {
+                return Err(CliError::Other("cannot kill self".into()));
+            }
+        }
         KillTarget::Agent(a)
     } else if let Some(wt) = worktree {
         KillTarget::Worktree(wt)
@@ -22,6 +35,12 @@ pub async fn run(
         return Err(CliError::Other(
             "kill target required — use --agent, --worktree, or --all".into(),
         ));
+    };
+
+    // Auto-exclude self from bulk kills
+    let exclude = match self_agent_id {
+        Some(id) if !matches!(target, KillTarget::Agent(_)) => vec![id],
+        _ => vec![],
     };
 
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -32,6 +51,7 @@ pub async fn run(
         &Request::Kill {
             project_root,
             target,
+            exclude,
         },
     )
     .await?;

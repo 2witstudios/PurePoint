@@ -758,6 +758,7 @@ mod tests {
         let kill_req = serde_json::to_string(&Request::Kill {
             project_root: pr,
             target: KillTarget::Agent(agent_id.clone()),
+            exclude: vec![],
         })
         .unwrap();
         writer

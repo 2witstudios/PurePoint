@@ -74,6 +74,9 @@ enum Commands {
         /// Kill all agents
         #[arg(long)]
         all: bool,
+        /// Also kill root-level agents (point guards). By default --all only kills worktree agents.
+        #[arg(long, requires = "all")]
+        include_root: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -464,8 +467,9 @@ async fn main() {
             agent,
             worktree,
             all,
+            include_root,
             json,
-        } => commands::kill::run(&socket, agent, worktree, all, json).await,
+        } => commands::kill::run(&socket, agent, worktree, all, include_root, json).await,
         Commands::Attach { agent_id } => commands::attach::run(&socket, &agent_id).await,
         Commands::Logs {
             agent_id,

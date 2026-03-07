@@ -63,6 +63,8 @@ pub enum Request {
     Kill {
         project_root: String,
         target: KillTarget,
+        #[serde(default)]
+        exclude: Vec<String>,
     },
     Suspend {
         project_root: String,
@@ -343,6 +345,7 @@ pub enum KillTarget {
     Agent(String),
     Worktree(String),
     All,
+    AllWorktrees,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -378,6 +381,8 @@ pub enum Response {
     KillResult {
         killed: Vec<String>,
         exit_codes: std::collections::HashMap<String, Option<i32>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<String>,
     },
     SuspendResult {
         suspended: Vec<String>,
@@ -594,6 +599,7 @@ mod tests {
         let req = Request::Kill {
             project_root: "/test".into(),
             target: KillTarget::Agent("ag-abc".into()),
+            exclude: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -717,15 +723,87 @@ mod tests {
         let resp = Response::KillResult {
             killed: vec!["ag-abc".into()],
             exit_codes,
+            skipped: vec![],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: Response = serde_json::from_str(&json).unwrap();
         match parsed {
-            Response::KillResult { killed, exit_codes } => {
+            Response::KillResult {
+                killed,
+                exit_codes,
+                skipped,
+            } => {
                 assert_eq!(killed, vec!["ag-abc"]);
                 assert_eq!(exit_codes["ag-abc"], Some(0));
+                assert!(skipped.is_empty());
             }
             _ => panic!("expected KillResult"),
+        }
+    }
+
+    #[test]
+    fn given_kill_result_with_skipped_should_round_trip() {
+        let resp = Response::KillResult {
+            killed: vec!["ag-abc".into()],
+            exit_codes: std::collections::HashMap::new(),
+            skipped: vec!["ag-root".into()],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::KillResult { skipped, .. } => {
+                assert_eq!(skipped, vec!["ag-root"]);
+            }
+            _ => panic!("expected KillResult"),
+        }
+    }
+
+    #[test]
+    fn given_kill_result_without_skipped_field_should_default_empty() {
+        let json = r#"{"type":"kill_result","killed":["ag-abc"],"exit_codes":{}}"#;
+        let parsed: Response = serde_json::from_str(json).unwrap();
+        match parsed {
+            Response::KillResult { skipped, .. } => {
+                assert!(skipped.is_empty());
+            }
+            _ => panic!("expected KillResult"),
+        }
+    }
+
+    #[test]
+    fn given_kill_target_all_worktrees_should_round_trip() {
+        let target = KillTarget::AllWorktrees;
+        let json = serde_json::to_string(&target).unwrap();
+        let parsed: KillTarget = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, KillTarget::AllWorktrees));
+    }
+
+    #[test]
+    fn given_kill_request_with_exclude_should_round_trip() {
+        let req = Request::Kill {
+            project_root: "/test".into(),
+            target: KillTarget::All,
+            exclude: vec!["ag-self".into()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Kill { exclude, .. } => {
+                assert_eq!(exclude, vec!["ag-self"]);
+            }
+            _ => panic!("expected Kill"),
+        }
+    }
+
+    #[test]
+    fn given_kill_request_without_exclude_should_default_empty() {
+        let json = r#"{"type":"kill","project_root":"/test","target":"all"}"#;
+        let parsed: Request = serde_json::from_str(json).unwrap();
+        match parsed {
+            Request::Kill { exclude, .. } => {
+                assert!(exclude.is_empty());
+            }
+            _ => panic!("expected Kill"),
         }
     }
 

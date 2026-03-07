@@ -638,6 +638,7 @@ mod tests {
         let resp = Response::KillResult {
             killed: vec!["ag-1".into(), "ag-2".into()],
             exit_codes: std::collections::HashMap::new(),
+            skipped: vec![],
         };
         print_response(&resp, false);
     }

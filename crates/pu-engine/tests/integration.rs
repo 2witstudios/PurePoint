@@ -211,6 +211,7 @@ async fn given_kill_all_on_empty_project_should_return_empty_killed() {
         .send(&Request::Kill {
             project_root: h.project_root(),
             target: pu_core::protocol::KillTarget::All,
+            exclude: vec![],
         })
         .await;
     match resp {
@@ -232,6 +233,7 @@ async fn given_kill_nonexistent_agent_should_return_kill_result() {
         .send(&Request::Kill {
             project_root: h.project_root(),
             target: pu_core::protocol::KillTarget::Agent("ag-nonexistent".into()),
+            exclude: vec![],
         })
         .await;
     match resp {
@@ -364,6 +366,7 @@ async fn given_uninitialised_project_kill_should_return_error() {
         .send(&Request::Kill {
             project_root: "/nonexistent/project".into(),
             target: pu_core::protocol::KillTarget::All,
+            exclude: vec![],
         })
         .await;
     assert!(
