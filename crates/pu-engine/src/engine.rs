@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1487,6 +1487,9 @@ impl Engine {
 
         // Step 2: Starting from the original session file, follow the chain
         let mut current_file = sessions_dir.join(format!("{}.jsonl", original_session_id));
+        if !current_file.exists() {
+            return None;
+        }
         let mut current_id = original_session_id.to_string();
 
         loop {
@@ -3113,15 +3116,15 @@ async fn inject_initial_prompt(
     true
 }
 
-/// Check if a session file contains a given UUID string anywhere in its content.
-/// Used to determine if a continuation's `parentUuid` references a message in this file.
+/// Check if a session file contains a given UUID string in its message lines.
+/// Skips the first line (metadata with parentUuid/sessionId) to avoid false
+/// positives where a file's own parentUuid matches the search term.
 fn file_contains_uuid(path: &std::path::Path, uuid: &str) -> bool {
     let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
     let reader = std::io::BufReader::new(file);
-    use std::io::BufRead;
-    for line in reader.lines() {
+    for line in reader.lines().skip(1) {
         let Ok(line) = line else { break };
         if line.contains(uuid) {
             return true;
@@ -3367,5 +3370,44 @@ mod tests {
 
         // then: follows real chain, ignores stub
         assert_eq!(result, Some("bbb".to_string()));
+    }
+
+    #[test]
+    fn given_missing_original_file_should_return_none() {
+        // given: candidates exist but the original session file is missing
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // A continuation that references a non-existent original
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &[]);
+
+        // when: original "aaa" doesn't exist on disk
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_forked_chain_should_pick_newest_continuation() {
+        // given: two continuations both reference the same parent message
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // older fork
+        write_session_file(&sessions_dir, "older", "older", Some("msg-1"), &[]);
+        // sleep to ensure different mod times (1.1s covers HFS+ 1s granularity)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // newer fork
+        write_session_file(&sessions_dir, "newer", "newer", Some("msg-1"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: should pick the newer fork
+        assert_eq!(result, Some("newer".to_string()));
     }
 }
