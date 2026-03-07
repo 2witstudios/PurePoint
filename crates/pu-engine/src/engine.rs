@@ -1277,10 +1277,21 @@ impl Engine {
         };
 
         // 3. Resolve latest session file (handles Claude Code session splitting)
-        let effective_session_id: Option<String> = agent_entry
-            .session_id
-            .as_ref()
-            .map(|sid| Self::find_latest_session_file(&cwd, sid).unwrap_or_else(|| sid.clone()));
+        //    This does synchronous file I/O, so run on the blocking pool.
+        let effective_session_id = match agent_entry.session_id.clone() {
+            Some(sid) => {
+                let cwd = cwd.clone();
+                let fallback = sid.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        Self::find_latest_session_file(&cwd, &sid).unwrap_or(sid)
+                    })
+                    .await
+                    .unwrap_or(fallback),
+                )
+            }
+            None => None,
+        };
 
         // 4. Construct resume command based on agent type
         let (command, args, session_id) = match self.build_resume_command(
@@ -1479,19 +1490,37 @@ impl Engine {
         let mut current_id = original_session_id.to_string();
 
         loop {
-            // Find which candidate has a parentUuid that exists inside the current file
-            let next = candidates
+            // Collect all candidates whose parentUuid exists inside the current file
+            let matching: Vec<usize> = candidates
                 .iter()
-                .position(|(_, parent_uuid, _)| file_contains_uuid(&current_file, parent_uuid));
+                .enumerate()
+                .filter(|(_, (_, parent_uuid, _))| file_contains_uuid(&current_file, parent_uuid))
+                .map(|(i, _)| i)
+                .collect();
 
-            match next {
-                Some(idx) => {
-                    let (next_id, _, next_path) = candidates.remove(idx);
-                    current_id = next_id;
-                    current_file = next_path;
-                }
-                None => break,
+            if matching.is_empty() {
+                break;
             }
+
+            // Pick the newest by modification time (fall back to lexicographic path order)
+            let best = matching
+                .into_iter()
+                .max_by(|&a, &b| {
+                    let mod_a = std::fs::metadata(&candidates[a].2)
+                        .and_then(|m| m.modified())
+                        .ok();
+                    let mod_b = std::fs::metadata(&candidates[b].2)
+                        .and_then(|m| m.modified())
+                        .ok();
+                    mod_a
+                        .cmp(&mod_b)
+                        .then_with(|| candidates[a].2.cmp(&candidates[b].2))
+                })
+                .unwrap(); // safe: matching is non-empty
+
+            let (next_id, _, next_path) = candidates.remove(best);
+            current_id = next_id;
+            current_file = next_path;
         }
 
         // Only return if we actually followed at least one hop
