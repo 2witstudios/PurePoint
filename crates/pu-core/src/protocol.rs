@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Serde helper: encode Vec<u8> as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -54,6 +54,8 @@ pub enum Request {
         root: bool,
         #[serde(default)]
         worktree: Option<String>,
+        #[serde(default)]
+        command: Option<String>,
     },
     Status {
         project_root: String,
@@ -133,6 +135,8 @@ pub enum Request {
         agent: String,
         body: String,
         scope: String,
+        #[serde(default)]
+        command: Option<String>,
     },
     DeleteTemplate {
         project_root: String,
@@ -162,6 +166,8 @@ pub enum Request {
         available_in_command_dialog: bool,
         #[serde(default)]
         icon: Option<String>,
+        #[serde(default)]
+        command: Option<String>,
     },
     DeleteAgentDef {
         project_root: String,
@@ -220,6 +226,10 @@ pub enum Request {
         #[serde(default)]
         target: String,
         scope: String,
+        #[serde(default = "crate::serde_defaults::default_true")]
+        root: bool,
+        #[serde(default)]
+        agent_name: Option<String>,
     },
     DeleteSchedule {
         project_root: String,
@@ -235,6 +245,13 @@ pub enum Request {
         name: String,
     },
     Shutdown,
+    Diff {
+        project_root: String,
+        #[serde(default)]
+        worktree_id: Option<String>,
+        #[serde(default)]
+        stat: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,6 +307,8 @@ pub struct TemplateInfo {
     pub agent: String,
     pub source: String,
     pub variables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +321,8 @@ pub struct AgentDefInfo {
     pub scope: String,
     pub available_in_command_dialog: bool,
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +346,10 @@ pub struct ScheduleInfo {
     pub project_root: String,
     pub target: String,
     pub scope: String,
+    #[serde(default = "crate::serde_defaults::default_true")]
+    pub root: bool,
+    #[serde(default)]
+    pub agent_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -446,6 +471,8 @@ pub enum Response {
         body: String,
         source: String,
         variables: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
     AgentDefList {
         agent_defs: Vec<AgentDefInfo>,
@@ -459,6 +486,8 @@ pub enum Response {
         scope: String,
         available_in_command_dialog: bool,
         icon: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
     SwarmDefList {
         swarm_defs: Vec<SwarmDefInfo>,
@@ -492,7 +521,14 @@ pub enum Response {
         project_root: String,
         target: String,
         scope: String,
+        #[serde(default = "crate::serde_defaults::default_true")]
+        root: bool,
+        #[serde(default)]
+        agent_name: Option<String>,
         created_at: DateTime<Utc>,
+    },
+    DiffResult {
+        diffs: Vec<WorktreeDiffEntry>,
     },
     Ok,
     ShuttingDown,
@@ -520,6 +556,21 @@ pub struct AgentStatusReport {
     pub prompt: Option<String>,
     #[serde(default)]
     pub suspended: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WorktreeDiffEntry {
+    pub worktree_id: String,
+    pub worktree_name: String,
+    pub branch: String,
+    pub base_branch: Option<String>,
+    pub diff_output: String,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[cfg(test)]
@@ -575,6 +626,7 @@ mod tests {
             base: Some("develop".into()),
             root: false,
             worktree: None,
+            command: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -659,6 +711,84 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, Request::Shutdown));
+    }
+
+    #[test]
+    fn given_diff_request_should_round_trip() {
+        let req = Request::Diff {
+            project_root: "/test".into(),
+            worktree_id: Some("wt-abc".into()),
+            stat: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Diff {
+                project_root,
+                worktree_id,
+                stat,
+            } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(worktree_id.unwrap(), "wt-abc");
+                assert!(stat);
+            }
+            _ => panic!("expected Diff"),
+        }
+    }
+
+    #[test]
+    fn given_diff_request_with_defaults_should_round_trip() {
+        let json = r#"{"type":"diff","project_root":"/test"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::Diff {
+                worktree_id, stat, ..
+            } => {
+                assert!(worktree_id.is_none());
+                assert!(!stat);
+            }
+            _ => panic!("expected Diff"),
+        }
+    }
+
+    #[test]
+    fn given_diff_result_should_round_trip() {
+        let resp = Response::DiffResult {
+            diffs: vec![WorktreeDiffEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "fix-bug".into(),
+                branch: "pu/fix-bug".into(),
+                base_branch: Some("main".into()),
+                diff_output: "+added line\n-removed line\n".into(),
+                files_changed: 2,
+                insertions: 5,
+                deletions: 3,
+                error: None,
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::DiffResult { diffs } => {
+                assert_eq!(diffs.len(), 1);
+                assert_eq!(diffs[0].worktree_id, "wt-1");
+                assert_eq!(diffs[0].files_changed, 2);
+                assert_eq!(diffs[0].insertions, 5);
+                assert_eq!(diffs[0].deletions, 3);
+            }
+            _ => panic!("expected DiffResult"),
+        }
+    }
+
+    #[test]
+    fn given_empty_diff_result_should_round_trip() {
+        let resp = Response::DiffResult { diffs: vec![] };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::DiffResult { diffs } => assert!(diffs.is_empty()),
+            _ => panic!("expected DiffResult"),
+        }
     }
 
     // --- Response round-trips ---
@@ -818,8 +948,8 @@ mod tests {
     }
 
     #[test]
-    fn given_protocol_version_should_be_1() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+    fn given_protocol_version_should_be_current() {
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 
     // --- GridCommand round-trips ---
@@ -1185,6 +1315,7 @@ mod tests {
             agent: "claude".into(),
             source: "local".into(),
             variables: vec!["BRANCH".into()],
+            command: None,
         };
 
         // when
@@ -1213,6 +1344,7 @@ mod tests {
             scope: "local".into(),
             available_in_command_dialog: true,
             icon: Some("magnifyingglass".into()),
+            command: None,
         };
 
         // when
@@ -1313,6 +1445,7 @@ mod tests {
             agent: "claude".into(),
             body: "Review {{BRANCH}}.".into(),
             scope: "local".into(),
+            command: None,
         };
 
         // when
@@ -1328,6 +1461,7 @@ mod tests {
                 agent,
                 body,
                 scope,
+                ..
             } => {
                 assert_eq!(project_root, "/test");
                 assert_eq!(name, "review");
@@ -1399,6 +1533,7 @@ mod tests {
             scope: "local".into(),
             available_in_command_dialog: true,
             icon: Some("magnifyingglass".into()),
+            command: None,
         };
 
         // when
@@ -1650,6 +1785,7 @@ mod tests {
                 agent: "claude".into(),
                 source: "local".into(),
                 variables: vec!["BRANCH".into()],
+                command: None,
             }],
         };
 
@@ -1678,6 +1814,7 @@ mod tests {
             body: "Review {{BRANCH}}.".into(),
             source: "local".into(),
             variables: vec!["BRANCH".into()],
+            command: None,
         };
 
         // when
@@ -1693,6 +1830,7 @@ mod tests {
                 body,
                 source,
                 variables,
+                ..
             } => {
                 assert_eq!(name, "review");
                 assert_eq!(description, "Code review");
@@ -1718,6 +1856,7 @@ mod tests {
                 scope: "local".into(),
                 available_in_command_dialog: true,
                 icon: None,
+                command: None,
             }],
         };
 
@@ -1812,6 +1951,8 @@ mod tests {
             },
             target: String::new(),
             scope: "local".into(),
+            root: true,
+            agent_name: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -1887,6 +2028,8 @@ mod tests {
                 project_root: "/test".into(),
                 target: String::new(),
                 scope: "local".into(),
+                root: true,
+                agent_name: None,
                 created_at: Utc::now(),
             }],
         };
@@ -1916,6 +2059,8 @@ mod tests {
             project_root: "/test".into(),
             target: String::new(),
             scope: "local".into(),
+            root: false,
+            agent_name: Some("overnight-build".into()),
             created_at: Utc::now(),
         };
         let json = serde_json::to_string(&resp).unwrap();

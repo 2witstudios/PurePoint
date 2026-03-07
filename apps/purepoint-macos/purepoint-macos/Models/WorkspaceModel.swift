@@ -22,6 +22,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
     let startedAt: String
     let sessionId: String?
     let suspended: Bool
+    let command: String?
 
     var displayName: String {
         name.isEmpty ? id : name
@@ -29,7 +30,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
 
     init(
         id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String,
-        sessionId: String? = nil, suspended: Bool = false
+        sessionId: String? = nil, suspended: Bool = false, command: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -39,6 +40,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
         self.startedAt = startedAt
         self.sessionId = sessionId
         self.suspended = suspended
+        self.command = command
     }
 
     init(from entry: AgentEntry) {
@@ -50,7 +52,8 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
             prompt: entry.prompt ?? "",
             startedAt: entry.startedAt,
             sessionId: entry.sessionId,
-            suspended: entry.suspended ?? false
+            suspended: entry.suspended ?? false,
+            command: entry.command
         )
     }
 

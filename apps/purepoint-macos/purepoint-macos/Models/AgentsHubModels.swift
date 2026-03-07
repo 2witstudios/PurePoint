@@ -8,6 +8,7 @@ struct SavedPrompt: Identifiable {
     var body: String
     var source: String
     var variables: [String]
+    var command: String?
 
     init(from info: TemplateInfo) {
         self.id = "\(info.source):\(info.name)"
@@ -17,9 +18,13 @@ struct SavedPrompt: Identifiable {
         self.body = ""  // TemplateInfo doesn't include body (list response)
         self.source = info.source
         self.variables = info.variables
+        self.command = info.command
     }
 
-    init(name: String, description: String, agent: String, body: String, source: String, variables: [String]) {
+    init(
+        name: String, description: String, agent: String, body: String, source: String,
+        variables: [String], command: String? = nil
+    ) {
         self.id = "\(source):\(name)"
         self.name = name
         self.description = description
@@ -27,6 +32,7 @@ struct SavedPrompt: Identifiable {
         self.body = body
         self.source = source
         self.variables = variables
+        self.command = command
     }
 }
 
@@ -40,6 +46,7 @@ struct AgentDefinition: Identifiable {
     var scope: String
     var availableInCommandDialog: Bool
     var icon: String?
+    var command: String?
 
     init(from info: AgentDefInfo) {
         self.id = "\(info.scope):\(info.name)"
@@ -51,11 +58,13 @@ struct AgentDefinition: Identifiable {
         self.scope = info.scope
         self.availableInCommandDialog = info.availableInCommandDialog
         self.icon = info.icon
+        self.command = info.command
     }
 
     init(
         name: String, agentType: String = "claude", template: String? = nil, inlinePrompt: String? = nil,
-        tags: [String] = [], scope: String = "local", availableInCommandDialog: Bool = true, icon: String? = nil
+        tags: [String] = [], scope: String = "local", availableInCommandDialog: Bool = true, icon: String? = nil,
+        command: String? = nil
     ) {
         self.id = "\(scope):\(name)"
         self.name = name
@@ -66,6 +75,7 @@ struct AgentDefinition: Identifiable {
         self.scope = scope
         self.availableInCommandDialog = availableInCommandDialog
         self.icon = icon
+        self.command = command
     }
 }
 
@@ -124,6 +134,11 @@ enum PromptScopeChoice: String, CaseIterable, Identifiable {
         case .project: "local"
         }
     }
+}
+
+enum AgentTypes {
+    static let all = ["claude", "codex", "opencode", "terminal"]
+    static let withAny = [""] + all
 }
 
 enum AgentPromptSourceMode: String, CaseIterable, Identifiable {

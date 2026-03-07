@@ -262,12 +262,16 @@ pub fn print_response(response: &Response, json_mode: bool) {
             body,
             source,
             variables,
+            command,
         } => {
             println!("{} ({})", name.bold(), source.dimmed());
             if !description.is_empty() {
                 println!("  {description}");
             }
             println!("  Agent: {agent}");
+            if let Some(cmd) = &command {
+                println!("  Command: {cmd}");
+            }
             if !variables.is_empty() {
                 println!("  Variables: {}", variables.join(", "));
             }
@@ -283,9 +287,13 @@ pub fn print_response(response: &Response, json_mode: bool) {
             scope,
             available_in_command_dialog,
             icon,
+            command,
         } => {
             println!("{} ({})", name.bold(), scope.dimmed());
             println!("  Type: {agent_type}");
+            if let Some(cmd) = &command {
+                println!("  Command: {cmd}");
+            }
             if let Some(tpl) = template {
                 println!("  Template: {tpl}");
             }
@@ -388,6 +396,39 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 }
             }
         }
+        Response::DiffResult { diffs } => {
+            if diffs.is_empty() {
+                println!("No worktree diffs");
+                return;
+            }
+            for (i, d) in diffs.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                let base = d.base_branch.as_deref().unwrap_or("(unknown)");
+                println!(
+                    "{} {} ({} -> {})",
+                    "Worktree".bold(),
+                    d.worktree_name.bold(),
+                    base.dimmed(),
+                    d.branch.green()
+                );
+                if let Some(ref err) = d.error {
+                    println!("  {}: {}", "error".red().bold(), err);
+                } else if d.files_changed == 0 && d.diff_output.trim().is_empty() {
+                    println!("  {}", "No changes".dimmed());
+                } else {
+                    println!(
+                        "  {} file(s) changed, {} insertion(s), {} deletion(s)",
+                        d.files_changed, d.insertions, d.deletions
+                    );
+                    if !d.diff_output.trim().is_empty() {
+                        println!();
+                        print!("{}", d.diff_output);
+                    }
+                }
+            }
+        }
         Response::ScheduleList { schedules } => {
             if schedules.is_empty() {
                 println!("No schedules");
@@ -425,11 +466,17 @@ pub fn print_response(response: &Response, json_mode: bool) {
             next_run,
             trigger,
             scope,
+            root,
+            agent_name,
             ..
         } => {
             println!("{} ({})", name.bold(), scope.dimmed());
             println!("  Enabled:    {enabled}");
             println!("  Recurrence: {recurrence}");
+            println!("  Root:       {root}");
+            if let Some(an) = agent_name {
+                println!("  Agent name: {an}");
+            }
             println!("  Start at:   {}", start_at.format("%Y-%m-%d %H:%M UTC"));
             if let Some(nr) = next_run {
                 println!("  Next run:   {}", nr.format("%Y-%m-%d %H:%M UTC"));
@@ -796,6 +843,50 @@ mod tests {
         assert!(s.contains("waiting"));
     }
 
+    // --- diff output ---
+
+    #[test]
+    fn given_diff_result_should_not_panic() {
+        let resp = Response::DiffResult {
+            diffs: vec![pu_core::protocol::WorktreeDiffEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "fix-bug".into(),
+                branch: "pu/fix-bug".into(),
+                base_branch: Some("main".into()),
+                diff_output: "+line\n".into(),
+                files_changed: 1,
+                insertions: 1,
+                deletions: 0,
+                error: None,
+            }],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_empty_diff_result_should_not_panic() {
+        let resp = Response::DiffResult { diffs: vec![] };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_diff_result_no_changes_should_not_panic() {
+        let resp = Response::DiffResult {
+            diffs: vec![pu_core::protocol::WorktreeDiffEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "clean".into(),
+                branch: "pu/clean".into(),
+                base_branch: None,
+                diff_output: String::new(),
+                files_changed: 0,
+                insertions: 0,
+                deletions: 0,
+                error: None,
+            }],
+        };
+        print_response(&resp, false);
+    }
+
     // --- schedule output ---
 
     #[test]
@@ -813,6 +904,8 @@ mod tests {
                 project_root: "/test".into(),
                 target: String::new(),
                 scope: "local".into(),
+                root: true,
+                agent_name: None,
                 created_at: chrono::Utc::now(),
             }],
         };
@@ -840,6 +933,8 @@ mod tests {
             project_root: "/test".into(),
             target: String::new(),
             scope: "local".into(),
+            root: true,
+            agent_name: None,
             created_at: chrono::Utc::now(),
         };
         print_response(&resp, false);

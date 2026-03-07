@@ -6,6 +6,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
     @Binding var selection: SidebarSelection?
     var appState: AppState
     var gridState: GridState
+    var viewCache: TerminalViewCache
     var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
     func makeNSViewController(context: Context) -> SidebarOutlineViewController {
@@ -35,11 +36,15 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             project.createAgent(agent: "terminal", prompt: "", selection: .worktree(worktree.id))
         }
 
-        vc.onKillAgent = { project, agentId in
+        vc.onKillAgent = { [viewCache] project, agentId in
+            viewCache.remove(agentId: agentId)
             project.killAgent(agentId)
         }
 
-        vc.onKillWorktreeAgents = { project, worktreeId in
+        vc.onKillWorktreeAgents = { [viewCache] project, worktreeId in
+            for agent in project.allAgents where project.worktreeId(forAgentId: agent.id) == worktreeId {
+                viewCache.remove(agentId: agent.id)
+            }
             project.killWorktreeAgents(worktreeId)
         }
 
@@ -47,11 +52,17 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             project.renameAgent(agentId, to: newName)
         }
 
-        vc.onDeleteWorktree = { project, worktreeId in
+        vc.onDeleteWorktree = { [viewCache] project, worktreeId in
+            for agent in project.allAgents where project.worktreeId(forAgentId: agent.id) == worktreeId {
+                viewCache.remove(agentId: agent.id)
+            }
             project.deleteWorktree(worktreeId)
         }
 
-        vc.onKillAllProjectAgents = { project in
+        vc.onKillAllProjectAgents = { [viewCache] project in
+            for agent in project.allAgents {
+                viewCache.remove(agentId: agent.id)
+            }
             project.killAllAgents()
         }
 

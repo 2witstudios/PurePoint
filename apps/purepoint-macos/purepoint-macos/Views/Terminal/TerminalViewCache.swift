@@ -69,6 +69,14 @@ final class TerminalViewCache {
         views[agentId] != nil
     }
 
+    /// Remove a specific agent's terminal view immediately.
+    func remove(agentId: String) {
+        views[agentId]?.tearDown()
+        views[agentId]?.removeFromSuperview()
+        views.removeValue(forKey: agentId)
+        lastAccess.removeValue(forKey: agentId)
+    }
+
     /// Evict terminal views for completed/killed/failed agents that haven't
     /// been viewed in evictionDelay seconds and are not currently visible.
     private func evictStale(visibleIds: Set<String> = []) {
@@ -76,6 +84,11 @@ final class TerminalViewCache {
         var toEvict: [String] = []
 
         for (id, view) in views {
+            // Agent confirmed gone by daemon — evict immediately
+            if view.isAgentGone {
+                toEvict.append(id)
+                continue
+            }
             guard !visibleIds.contains(id) else { continue }
             guard !view.agent.status.isAlive else { continue }
             guard let access = lastAccess[id],

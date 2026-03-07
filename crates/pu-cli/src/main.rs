@@ -47,6 +47,9 @@ enum Commands {
         /// Read prompt from a file path
         #[arg(long, conflicts_with = "template")]
         file: Option<String>,
+        /// Command to run in the terminal (for terminal agents)
+        #[arg(long)]
+        command: Option<String>,
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
@@ -144,6 +147,18 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Show git diffs across agent worktrees
+    Diff {
+        /// Diff a specific worktree
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Show file summary instead of full diff
+        #[arg(long)]
+        stat: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove worktrees, their agents, and branches
     Clean {
         /// Remove a specific worktree
@@ -228,6 +243,9 @@ enum AgentAction {
         /// Inline prompt text
         #[arg(long)]
         inline_prompt: Option<String>,
+        /// Command to run (for terminal agents)
+        #[arg(long)]
+        command: Option<String>,
         /// Comma-separated tags
         #[arg(long, default_value = "")]
         tags: String,
@@ -400,6 +418,12 @@ enum ScheduleAction {
         /// Scope: local or global
         #[arg(long, default_value = "local")]
         scope: String,
+        /// Spawn as root agent (in project root, not a worktree)
+        #[arg(long)]
+        root: bool,
+        /// Worktree/branch name (required when not --root)
+        #[arg(long = "name")]
+        agent_name: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -466,11 +490,13 @@ async fn main() {
             worktree,
             template,
             file,
+            command,
             vars,
             json,
         } => {
             commands::spawn::run(
-                &socket, prompt, agent, name, base, root, worktree, template, file, vars, json,
+                &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
+                json,
             )
             .await
         }
@@ -524,6 +550,7 @@ async fn main() {
                 agent_type,
                 template,
                 inline_prompt,
+                command,
                 tags,
                 scope,
                 json,
@@ -534,6 +561,7 @@ async fn main() {
                     &agent_type,
                     template,
                     inline_prompt,
+                    command,
                     &tags,
                     &scope,
                     json,
@@ -588,6 +616,11 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Diff {
+            worktree,
+            stat,
+            json,
+        } => commands::diff::run(&socket, worktree, stat, json).await,
         Commands::Clean {
             worktree,
             all,
@@ -605,6 +638,8 @@ async fn main() {
                 agent,
                 vars,
                 scope,
+                root,
+                agent_name,
                 json,
             } => {
                 commands::schedule::run_create(
@@ -618,6 +653,8 @@ async fn main() {
                     &agent,
                     vars,
                     &scope,
+                    root,
+                    agent_name,
                     json,
                 )
                 .await

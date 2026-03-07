@@ -27,7 +27,8 @@ struct purepoint_macosApp: App {
                 )
                 .onAppear {
                     appState.gridState = gridState
-                    gridState.onCloseAgent = { agentId in
+                    gridState.onCloseAgent = { [viewCache] agentId in
+                        viewCache.remove(agentId: agentId)
                         appState.projectState(forRoot: gridState.projectRoot ?? "")?.removeAndKillAgent(agentId)
                     }
                     hotkeyMonitor.keyBindingState = keyBindingState

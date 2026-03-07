@@ -97,6 +97,7 @@ pub async fn run_create(
             agent: agent.to_string(),
             body: body.to_string(),
             scope: scope.to_string(),
+            command: None,
         },
     )
     .await?;

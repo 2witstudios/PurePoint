@@ -192,7 +192,7 @@ nonisolated enum DaemonRequest: Encodable {
     case spawn(
         projectRoot: String, prompt: String, agent: String = "claude",
         name: String? = nil, base: String? = nil, root: Bool = false,
-        worktree: String? = nil)
+        worktree: String? = nil, command: String? = nil)
     case kill(projectRoot: String, target: KillTarget)
     case rename(projectRoot: String, agentId: String, name: String)
     case suspend(projectRoot: String, target: SuspendTarget)
@@ -205,12 +205,13 @@ nonisolated enum DaemonRequest: Encodable {
     case listTemplates(projectRoot: String)
     case getTemplate(projectRoot: String, name: String)
     case saveTemplate(
-        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String)
+        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String,
+        command: String? = nil)
     case deleteTemplate(projectRoot: String, name: String, scope: String)
     case listAgentDefs(projectRoot: String)
     case saveAgentDef(
         projectRoot: String, name: String, agentType: String, template: String?, inlinePrompt: String?, tags: [String],
-        scope: String, availableInCommandDialog: Bool, icon: String?)
+        scope: String, availableInCommandDialog: Bool, icon: String?, command: String? = nil)
     case deleteAgentDef(projectRoot: String, name: String, scope: String)
     case listSwarmDefs(projectRoot: String)
     case saveSwarmDef(
@@ -251,7 +252,7 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(agentId, forKey: .key("agent_id"))
             try container.encode(cols, forKey: .key("cols"))
             try container.encode(rows, forKey: .key("rows"))
-        case .spawn(let projectRoot, let prompt, let agent, let name, let base, let root, let worktree):
+        case .spawn(let projectRoot, let prompt, let agent, let name, let base, let root, let worktree, let command):
             try container.encode("spawn", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(prompt, forKey: .key("prompt"))
@@ -260,6 +261,7 @@ nonisolated enum DaemonRequest: Encodable {
             if let base { try container.encode(base, forKey: .key("base")) }
             if root { try container.encode(root, forKey: .key("root")) }
             if let worktree { try container.encode(worktree, forKey: .key("worktree")) }
+            if let command { try container.encode(command, forKey: .key("command")) }
         case .kill(let projectRoot, let target):
             try container.encode("kill", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -303,7 +305,7 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("get_template", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
-        case .saveTemplate(let projectRoot, let name, let description, let agent, let body, let scope):
+        case .saveTemplate(let projectRoot, let name, let description, let agent, let body, let scope, let command):
             try container.encode("save_template", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
@@ -311,6 +313,7 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(agent, forKey: .key("agent"))
             try container.encode(body, forKey: .key("body"))
             try container.encode(scope, forKey: .key("scope"))
+            if let command { try container.encode(command, forKey: .key("command")) }
         case .deleteTemplate(let projectRoot, let name, let scope):
             try container.encode("delete_template", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -321,7 +324,7 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(projectRoot, forKey: .key("project_root"))
         case .saveAgentDef(
             let projectRoot, let name, let agentType, let template, let inlinePrompt, let tags, let scope,
-            let availableInCommandDialog, let icon):
+            let availableInCommandDialog, let icon, let command):
             try container.encode("save_agent_def", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
@@ -332,6 +335,7 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(scope, forKey: .key("scope"))
             try container.encode(availableInCommandDialog, forKey: .key("available_in_command_dialog"))
             if let icon { try container.encode(icon, forKey: .key("icon")) }
+            if let command { try container.encode(command, forKey: .key("command")) }
         case .deleteAgentDef(let projectRoot, let name, let scope):
             try container.encode("delete_agent_def", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -414,7 +418,8 @@ nonisolated enum DaemonResponse: Decodable {
     case deleteWorktreeResult(worktreeId: String, killedAgents: [String])
     case templateList(templates: [TemplateInfo])
     case templateDetail(
-        name: String, description: String, agent: String, body: String, source: String, variables: [String])
+        name: String, description: String, agent: String, body: String, source: String, variables: [String],
+        command: String?)
     case agentDefList(agentDefs: [AgentDefInfo])
     case swarmDefList(swarmDefs: [SwarmDefInfo])
     case runSwarmResult(spawnedAgents: [String])
@@ -492,7 +497,7 @@ nonisolated enum DaemonResponse: Decodable {
             let p = try TemplateDetailPayload(from: decoder)
             self = .templateDetail(
                 name: p.name, description: p.description, agent: p.agent, body: p.body, source: p.source,
-                variables: p.variables)
+                variables: p.variables, command: p.command)
         case "agent_def_list":
             let p = try AgentDefListPayload(from: decoder)
             self = .agentDefList(agentDefs: p.agentDefs)
@@ -568,6 +573,7 @@ nonisolated struct TemplateInfo: Decodable {
     let agent: String
     let source: String
     let variables: [String]
+    let command: String?
 }
 
 nonisolated struct AgentDefInfo: Decodable {
@@ -579,9 +585,10 @@ nonisolated struct AgentDefInfo: Decodable {
     let scope: String
     let availableInCommandDialog: Bool
     let icon: String?
+    let command: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, template, tags, scope, icon
+        case name, template, tags, scope, icon, command
         case agentType = "agent_type"
         case inlinePrompt = "inline_prompt"
         case availableInCommandDialog = "available_in_command_dialog"
@@ -617,6 +624,7 @@ private nonisolated struct TemplateDetailPayload: Decodable {
     let body: String
     let source: String
     let variables: [String]
+    let command: String?
 }
 
 private nonisolated struct AgentDefListPayload: Decodable {
