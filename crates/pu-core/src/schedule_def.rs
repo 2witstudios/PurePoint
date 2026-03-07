@@ -82,7 +82,7 @@ impl ScheduleDef {
                     "agent_name must not be set when root is true",
                 ));
             }
-        } else if !self.agent_name.as_ref().is_some_and(|n| !n.is_empty()) {
+        } else if self.agent_name.as_ref().is_none_or(|n| n.is_empty()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agent_name is required when root is false",
