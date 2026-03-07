@@ -78,11 +78,9 @@ pub fn normalize_worktree_name(input: &str) -> String {
         if ch.is_ascii_alphanumeric() {
             result.push(ch);
             prev_hyphen = false;
-        } else if ch.is_whitespace() || ch == '_' || ch == '-' {
-            if !prev_hyphen {
-                result.push('-');
-                prev_hyphen = true;
-            }
+        } else if (ch.is_whitespace() || ch == '_' || ch == '-') && !prev_hyphen {
+            result.push('-');
+            prev_hyphen = true;
         }
         // else: strip
     }
