@@ -56,7 +56,7 @@ final class GridState {
         focusedLeafId = 0
         nextLeafId = 1
         ownerAgentId = agentId
-        splitFocused(axis: axis) // Creates second empty pane
+        splitFocused(axis: axis)  // Creates second empty pane
         isActive = true
         scheduleSave()
     }
@@ -159,12 +159,13 @@ final class GridState {
     }
 
     func moveFocus(direction: Direction) {
-        let (axis, forward): (PaneSplitNode.Axis, Bool) = switch direction {
-        case .up: (.horizontal, false)
-        case .down: (.horizontal, true)
-        case .left: (.vertical, false)
-        case .right: (.vertical, true)
-        }
+        let (axis, forward): (PaneSplitNode.Axis, Bool) =
+            switch direction {
+            case .up: (.horizontal, false)
+            case .down: (.horizontal, true)
+            case .left: (.vertical, false)
+            case .right: (.vertical, true)
+            }
 
         if let adjacent = root.findAdjacentLeaf(from: focusedLeafId, axis: axis, forward: forward) {
             focusedLeafId = adjacent
@@ -186,18 +187,19 @@ final class GridState {
             if let leafId {
                 focusedLeafId = leafId
             } else if let directionStr {
-                let dir: Direction = switch directionStr {
-                case "up": .up
-                case "down": .down
-                case "left": .left
-                default: .right
-                }
+                let dir: Direction =
+                    switch directionStr {
+                    case "up": .up
+                    case "down": .down
+                    case "left": .left
+                    default: .right
+                    }
                 moveFocus(direction: dir)
             }
         case .setAgent(let leafId, let agentId):
             setAgent(agentId, forLeafId: Int(leafId))
         case .getLayout:
-            break // Daemon handles directly from file
+            break  // Daemon handles directly from file
         }
     }
 

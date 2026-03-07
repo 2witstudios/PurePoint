@@ -42,7 +42,7 @@ struct SwarmCreationSheet: View {
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
 
-            Stepper("Worktrees: \(worktreeCount)", value: $worktreeCount, in: 1 ... 8)
+            Stepper("Worktrees: \(worktreeCount)", value: $worktreeCount, in: 1...8)
 
             TextField("Worktree template", text: $worktreeTemplate)
                 .textFieldStyle(.roundedBorder)
@@ -114,7 +114,7 @@ struct SwarmCreationSheet: View {
             .keyboardShortcut(.defaultAction)
             .disabled(
                 name.trimmingCharacters(in: .whitespaces).isEmpty
-                || rosterItems.isEmpty
+                    || rosterItems.isEmpty
             )
         }
         .padding(.horizontal, 20)

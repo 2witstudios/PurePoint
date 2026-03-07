@@ -26,7 +26,8 @@ final class KeyBindingState {
         // Load overrides from UserDefaults
         var loadedOverrides: [HotkeyAction: KeyBinding] = [:]
         if let data = UserDefaults.standard.data(forKey: Self.userDefaultsKey),
-           let saved = try? JSONDecoder().decode([String: KeyBinding].self, from: data) {
+            let saved = try? JSONDecoder().decode([String: KeyBinding].self, from: data)
+        {
             for (rawAction, binding) in saved {
                 if let action = HotkeyAction(rawValue: rawAction) {
                     result[action] = binding

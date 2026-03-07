@@ -22,7 +22,10 @@ enum CLIInstaller {
         let target = installDir.appendingPathComponent("pu")
 
         if FileManager.default.isExecutableFile(atPath: target.path),
-           isUpToDate(source: bundled, target: target) { return }
+            isUpToDate(source: bundled, target: target)
+        {
+            return
+        }
 
         try? FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: target)
@@ -30,7 +33,8 @@ enum CLIInstaller {
     }
 
     private static func installSkill(from macosDir: URL) {
-        let bundled = macosDir
+        let bundled =
+            macosDir
             .deletingLastPathComponent()
             .appendingPathComponent("Resources/pu-skill.md")
         guard FileManager.default.fileExists(atPath: bundled.path) else { return }
@@ -38,7 +42,10 @@ enum CLIInstaller {
         let target = skillDir.appendingPathComponent("SKILL.md")
 
         if FileManager.default.fileExists(atPath: target.path),
-           isUpToDate(source: bundled, target: target) { return }
+            isUpToDate(source: bundled, target: target)
+        {
+            return
+        }
 
         try? FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: target)
@@ -47,9 +54,10 @@ enum CLIInstaller {
 
     private static func isUpToDate(source: URL, target: URL) -> Bool {
         guard let sourceAttrs = try? FileManager.default.attributesOfItem(atPath: source.path),
-              let targetAttrs = try? FileManager.default.attributesOfItem(atPath: target.path),
-              let sourceDate = sourceAttrs[.modificationDate] as? Date,
-              let targetDate = targetAttrs[.modificationDate] as? Date else { return false }
+            let targetAttrs = try? FileManager.default.attributesOfItem(atPath: target.path),
+            let sourceDate = sourceAttrs[.modificationDate] as? Date,
+            let targetDate = targetAttrs[.modificationDate] as? Date
+        else { return false }
         return targetDate >= sourceDate
     }
 }

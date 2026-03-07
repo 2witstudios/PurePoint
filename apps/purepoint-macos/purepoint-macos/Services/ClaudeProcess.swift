@@ -36,7 +36,7 @@ actor ClaudeProcess: ClaudeProcessProvider {
             "\(NSHomeDirectory())/.pu/bin/claude",
             "\(NSHomeDirectory())/.local/bin/claude",
             "/usr/local/bin/claude",
-            "/opt/homebrew/bin/claude"
+            "/opt/homebrew/bin/claude",
         ]
 
         for path in candidates {
@@ -73,7 +73,7 @@ actor ClaudeProcess: ClaudeProcessProvider {
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--dangerously-skip-permissions",
-            "--verbose"
+            "--verbose",
         ]
         if let sessionId {
             args.append(contentsOf: ["--session-id", sessionId])
@@ -129,7 +129,8 @@ actor ClaudeProcess: ClaudeProcessProvider {
                     let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                     let stderrText = String(decoding: stderrData, as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let message = stderrText.isEmpty
+                    let message =
+                        stderrText.isEmpty
                         ? "Claude exited with code \(status)"
                         : stderrText
                     continuation.yield(.error(message: message))

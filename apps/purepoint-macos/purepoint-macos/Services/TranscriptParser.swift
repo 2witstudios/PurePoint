@@ -23,15 +23,17 @@ enum TranscriptParser {
                 if let blocks = parseAssistantBlocks(record) {
                     // Merge consecutive assistant records into one message
                     if let lastIndex = messages.indices.last,
-                       messages[lastIndex].role == .assistant {
+                        messages[lastIndex].role == .assistant
+                    {
                         messages[lastIndex].contentBlocks.append(contentsOf: blocks)
                     } else {
                         let timestamp = parseTimestamp(record["timestamp"] as? String)
-                        messages.append(ChatMessage(
-                            role: .assistant,
-                            timestamp: timestamp,
-                            contentBlocks: blocks
-                        ))
+                        messages.append(
+                            ChatMessage(
+                                role: .assistant,
+                                timestamp: timestamp,
+                                contentBlocks: blocks
+                            ))
                     }
                 }
             default:
@@ -44,8 +46,8 @@ enum TranscriptParser {
 
     private static func parseUserRecord(_ record: [String: Any]) -> ChatMessage? {
         guard let message = record["message"] as? [String: Any],
-              let role = message["role"] as? String,
-              role == "user"
+            let role = message["role"] as? String,
+            role == "user"
         else { return nil }
 
         let content = message["content"]
@@ -82,22 +84,25 @@ enum TranscriptParser {
                     } else {
                         output = ""
                     }
-                    contentBlocks.append(.toolResult(
-                        id: UUID().uuidString,
-                        toolUseId: toolUseId,
-                        output: output,
-                        isError: isError
-                    ))
+                    contentBlocks.append(
+                        .toolResult(
+                            id: UUID().uuidString,
+                            toolUseId: toolUseId,
+                            output: output,
+                            isError: isError
+                        ))
                 default:
                     break
                 }
             }
 
             // Skip user messages that only contain tool_results (they're system messages)
-            if hasToolResult && contentBlocks.allSatisfy({ block in
-                if case .toolResult = block { return true }
-                return false
-            }) {
+            if hasToolResult
+                && contentBlocks.allSatisfy({ block in
+                    if case .toolResult = block { return true }
+                    return false
+                })
+            {
                 // Still include as a separate message so tool results can be displayed
                 return ChatMessage(
                     role: .user,
@@ -119,9 +124,9 @@ enum TranscriptParser {
 
     private static func parseAssistantBlocks(_ record: [String: Any]) -> [ContentBlock]? {
         guard let message = record["message"] as? [String: Any],
-              let role = message["role"] as? String,
-              role == "assistant",
-              let contentArray = message["content"] as? [[String: Any]]
+            let role = message["role"] as? String,
+            role == "assistant",
+            let contentArray = message["content"] as? [[String: Any]]
         else { return nil }
 
         var contentBlocks: [ContentBlock] = []
@@ -143,7 +148,8 @@ enum TranscriptParser {
                 let input: String
                 if let inputObj = block["input"] {
                     if let inputData = try? JSONSerialization.data(withJSONObject: inputObj),
-                       let inputStr = String(data: inputData, encoding: .utf8) {
+                        let inputStr = String(data: inputData, encoding: .utf8)
+                    {
                         input = inputStr
                     } else {
                         input = "{}"
@@ -151,14 +157,15 @@ enum TranscriptParser {
                 } else {
                     input = "{}"
                 }
-                contentBlocks.append(.toolUse(
-                    id: id,
-                    name: name,
-                    input: input,
-                    status: .completed
-                ))
+                contentBlocks.append(
+                    .toolUse(
+                        id: id,
+                        name: name,
+                        input: input,
+                        status: .completed
+                    ))
             default:
-                break // Skip thinking blocks etc.
+                break  // Skip thinking blocks etc.
             }
         }
 

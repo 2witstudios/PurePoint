@@ -16,7 +16,7 @@ struct ChatInputView: View {
                     .focused($isFocused)
                     .onKeyPress(.return) {
                         if NSEvent.modifierFlags.contains(.shift) {
-                            return .ignored // Let shift+enter create newline
+                            return .ignored  // Let shift+enter create newline
                         }
                         if chatState.canSend {
                             sendMessage()
@@ -76,10 +76,13 @@ struct ChatInputView: View {
         // Use the resumed session's project path if available, otherwise fall back to active project
         let cwd: String
         if let sessionId = chatState.currentSessionId,
-           let session = chatState.sessions.first(where: { $0.sessionId == sessionId }) {
+            let session = chatState.sessions.first(where: { $0.sessionId == sessionId })
+        {
             cwd = session.projectPath
         } else {
-            cwd = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? FileManager.default.currentDirectoryPath
+            cwd =
+                appState.activeProjectRoot ?? appState.projects.first?.projectRoot
+                ?? FileManager.default.currentDirectoryPath
         }
         Task {
             await chatState.send(text, cwd: cwd)

@@ -77,11 +77,13 @@ struct ScheduleListView: View {
                     }
                 }
 
-                Text(occurrence.event.target.isEmpty
-                     ? occurrence.event.projectName
-                     : "\(occurrence.event.projectName) · \(occurrence.event.target)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                Text(
+                    occurrence.event.target.isEmpty
+                        ? occurrence.event.projectName
+                        : "\(occurrence.event.projectName) · \(occurrence.event.target)"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
             }
 
             Spacer()

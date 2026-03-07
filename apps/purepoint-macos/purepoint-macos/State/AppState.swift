@@ -148,7 +148,8 @@ final class AppState {
 
     func restoreSelectedAgent() {
         if let savedId = UserDefaults.standard.string(forKey: Self.selectedAgentKey),
-           agent(byId: savedId) != nil {
+            agent(byId: savedId) != nil
+        {
             selectedAgentId = savedId
         }
     }

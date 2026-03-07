@@ -36,7 +36,8 @@ class CommandPalettePanel: NSPanel {
         parentWindow.addChildWindow(self, ordered: .above)
         makeKeyAndOrderFront(nil)
 
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            [weak self] event in
             guard let self else { return event }
             if event.window !== self {
                 self.dismiss()
@@ -72,7 +73,8 @@ class CommandPalettePanel: NSPanel {
     @discardableResult
     static func show(
         relativeTo window: NSWindow?,
-        items: [CommandPaletteItem] = CommandPaletteItem.buildItems(builtInVariants: AgentVariant.allVariants, agents: [], swarms: []),
+        items: [CommandPaletteItem] = CommandPaletteItem.buildItems(
+            builtInVariants: AgentVariant.allVariants, agents: [], swarms: []),
         onSelect: @escaping (CommandPaletteResult) -> Void
     ) -> CommandPalettePanel {
         let panel = CommandPalettePanel()
@@ -400,10 +402,12 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptScrollTopConstraint?.isActive = false
         if showName {
             NSLayoutConstraint.activate(nameFieldConstraints)
-            promptScrollTopConstraint = promptScrollView.topAnchor.constraint(equalTo: slugPreview.bottomAnchor, constant: 12)
+            promptScrollTopConstraint = promptScrollView.topAnchor.constraint(
+                equalTo: slugPreview.bottomAnchor, constant: 12)
         } else {
             NSLayoutConstraint.deactivate(nameFieldConstraints)
-            promptScrollTopConstraint = promptScrollView.topAnchor.constraint(equalTo: promptHeader.bottomAnchor, constant: 16)
+            promptScrollTopConstraint = promptScrollView.topAnchor.constraint(
+                equalTo: promptHeader.bottomAnchor, constant: 16)
         }
         promptScrollTopConstraint?.isActive = true
 
@@ -453,7 +457,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         if q.isEmpty {
             filteredItems = availableItems
         } else {
-            filteredItems = availableItems
+            filteredItems =
+                availableItems
                 .compactMap { item -> (CommandPaletteItem, Int)? in
                     let text = item.searchableText.lowercased()
                     let name = item.displayName.lowercased()
@@ -487,7 +492,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
         for row in 0..<tableView.numberOfRows {
             if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) {
-                cellView.layer?.backgroundColor = row == selectedIndex
+                cellView.layer?.backgroundColor =
+                    row == selectedIndex
                     ? highlightColor
                     : clearColor
             }
@@ -620,7 +626,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private func handleNameFieldCommand(_ sel: Selector) -> Bool {
         switch sel {
         case #selector(NSResponder.insertNewline(_:)),
-             #selector(NSResponder.insertTab(_:)):
+            #selector(NSResponder.insertTab(_:)):
             view.window?.makeFirstResponder(promptTextView)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
@@ -657,7 +663,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     private func adjustPromptHeight() {
         guard let layoutManager = promptTextView.layoutManager,
-              let textContainer = promptTextView.textContainer else { return }
+            let textContainer = promptTextView.textContainer
+        else { return }
         layoutManager.ensureLayout(for: textContainer)
         let textHeight = layoutManager.usedRect(for: textContainer).height
         let insets = promptTextView.textContainerInset
@@ -764,7 +771,8 @@ private extension NSTextView {
             .foregroundColor: NSColor.placeholderTextColor,
             .font: font ?? NSFont.systemFont(ofSize: 16),
         ]
-        setValue(NSAttributedString(string: text, attributes: attrs),
-                forKey: "placeholderAttributedString")
+        setValue(
+            NSAttributedString(string: text, attributes: attrs),
+            forKey: "placeholderAttributedString")
     }
 }

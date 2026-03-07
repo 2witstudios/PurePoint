@@ -106,7 +106,7 @@ enum RecurrenceRule: String, CaseIterable, Identifiable {
 enum EventColor {
     private static let palette: [Color] = [
         .blue, .purple, .teal, .indigo,
-        .orange, .pink, .green, .yellow
+        .orange, .pink, .green, .yellow,
     ]
 
     /// Stable djb2 hash — deterministic across app launches.

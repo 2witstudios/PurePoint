@@ -6,8 +6,8 @@ struct StreamEventTests {
 
     @Test func givenAssistantTextEventShouldParseMessageContent() {
         let json = """
-        {"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"text","text":"Hello, world!"}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn"}}
-        """
+            {"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"text","text":"Hello, world!"}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn"}}
+            """
 
         let event = StreamEvent.parse(json)
 
@@ -25,8 +25,8 @@ struct StreamEventTests {
 
     @Test func givenToolUseEventShouldParseNameAndInput() {
         let json = """
-        {"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant","content":[{"type":"text","text":"Let me read that."},{"type":"tool_use","id":"toolu_abc123","name":"Read","input":{"file_path":"/etc/hosts"}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use"}}
-        """
+            {"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant","content":[{"type":"text","text":"Let me read that."},{"type":"tool_use","id":"toolu_abc123","name":"Read","input":{"file_path":"/etc/hosts"}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use"}}
+            """
 
         let event = StreamEvent.parse(json)
 
@@ -45,8 +45,8 @@ struct StreamEventTests {
 
     @Test func givenToolResultEventShouldParseContentAndErrorFlag() {
         let json = """
-        {"type":"tool_result","tool_use_id":"toolu_abc123","content":"127.0.0.1 localhost","is_error":false}
-        """
+            {"type":"tool_result","tool_use_id":"toolu_abc123","content":"127.0.0.1 localhost","is_error":false}
+            """
 
         let event = StreamEvent.parse(json)
 
@@ -61,8 +61,8 @@ struct StreamEventTests {
 
     @Test func givenResultEventShouldParseSessionIdAndDuration() {
         let json = """
-        {"type":"result","subtype":"success","session_id":"sess-abc-123","duration_ms":4567,"is_error":false,"num_turns":3}
-        """
+            {"type":"result","subtype":"success","session_id":"sess-abc-123","duration_ms":4567,"is_error":false,"num_turns":3}
+            """
 
         let event = StreamEvent.parse(json)
 
@@ -76,8 +76,8 @@ struct StreamEventTests {
 
     @Test func givenUnknownEventTypeShouldReturnUnknown() {
         let json = """
-        {"type":"system","message":"some internal event"}
-        """
+            {"type":"system","message":"some internal event"}
+            """
 
         let event = StreamEvent.parse(json)
 

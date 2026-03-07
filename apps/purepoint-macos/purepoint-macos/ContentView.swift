@@ -11,14 +11,17 @@ struct ContentView: View {
         @Bindable var appState = appState
 
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(selection: $selection, onOutlineViewReady: { outlineView in
-                sidebarOutlineView = outlineView
-            })
-                .navigationSplitViewColumnWidth(
-                    min: PurePointTheme.sidebarMinWidth,
-                    ideal: PurePointTheme.sidebarIdealWidth,
-                    max: PurePointTheme.sidebarMaxWidth
-                )
+            SidebarView(
+                selection: $selection,
+                onOutlineViewReady: { outlineView in
+                    sidebarOutlineView = outlineView
+                }
+            )
+            .navigationSplitViewColumnWidth(
+                min: PurePointTheme.sidebarMinWidth,
+                ideal: PurePointTheme.sidebarIdealWidth,
+                max: PurePointTheme.sidebarMaxWidth
+            )
         } detail: {
             DetailView(selection: $selection)
         }
@@ -70,7 +73,7 @@ struct ContentView: View {
             case .project(let root):
                 appState.activeProjectRoot = root
             default:
-                break // keep last known project
+                break  // keep last known project
             }
 
             guard case .agent(let agentId) = newValue else {
@@ -154,7 +157,8 @@ struct ContentView: View {
         // Walk the view hierarchy to find a visible TerminalView
         func findTerminalView(in view: NSView) -> NSView? {
             if let pane = view as? TerminalPaneNSView,
-               let tv = pane.terminal?.terminalView {
+                let tv = pane.terminal?.terminalView
+            {
                 return tv
             }
             for sub in view.subviews where !sub.isHidden {
@@ -164,7 +168,8 @@ struct ContentView: View {
         }
 
         guard let contentView = window.contentView,
-              let tv = findTerminalView(in: contentView) else { return }
+            let tv = findTerminalView(in: contentView)
+        else { return }
         window.makeFirstResponder(tv)
     }
 }

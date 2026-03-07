@@ -79,7 +79,8 @@ final class TerminalViewCache {
             guard !visibleIds.contains(id) else { continue }
             guard !view.agent.status.isAlive else { continue }
             guard let access = lastAccess[id],
-                  now.timeIntervalSince(access) > Self.evictionDelay else { continue }
+                now.timeIntervalSince(access) > Self.evictionDelay
+            else { continue }
             toEvict.append(id)
         }
 

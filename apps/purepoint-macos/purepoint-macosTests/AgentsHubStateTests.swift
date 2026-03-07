@@ -27,8 +27,10 @@ struct AgentsHubStateTests {
     @Test @MainActor func testSelectedPromptReturnsMatchingPrompt() {
         let state = AgentsHubState()
         state.prompts = [
-            SavedPrompt(name: "review", description: "Review", agent: "claude", body: "", source: "local", variables: []),
-            SavedPrompt(name: "deploy", description: "Deploy", agent: "claude", body: "", source: "global", variables: []),
+            SavedPrompt(
+                name: "review", description: "Review", agent: "claude", body: "", source: "local", variables: []),
+            SavedPrompt(
+                name: "deploy", description: "Deploy", agent: "claude", body: "", source: "global", variables: []),
         ]
         state.selectedPromptId = "deploy"
 
@@ -60,7 +62,8 @@ struct AgentsHubStateTests {
     @Test @MainActor func testSelectedPromptReturnsNilForMismatchId() {
         let state = AgentsHubState()
         state.prompts = [
-            SavedPrompt(name: "review", description: "Review", agent: "claude", body: "", source: "local", variables: []),
+            SavedPrompt(
+                name: "review", description: "Review", agent: "claude", body: "", source: "local", variables: [])
         ]
         state.selectedPromptId = "nonexistent"
 

@@ -15,9 +15,9 @@ enum StreamEvent: Sendable {
 
     static func parse(_ jsonLine: String) -> StreamEvent? {
         guard let data = jsonLine.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let dict = object as? [String: Any],
-              let type = dict["type"] as? String
+            let object = try? JSONSerialization.jsonObject(with: data),
+            let dict = object as? [String: Any],
+            let type = dict["type"] as? String
         else {
             return nil
         }
@@ -38,7 +38,7 @@ enum StreamEvent: Sendable {
 
     private static func parseAssistant(_ dict: [String: Any]) -> StreamEvent {
         guard let message = dict["message"] as? [String: Any],
-              let contentArray = message["content"] as? [[String: Any]]
+            let contentArray = message["content"] as? [[String: Any]]
         else {
             return .assistant(content: [])
         }
@@ -51,12 +51,13 @@ enum StreamEvent: Sendable {
                 return .text(text)
             case "tool_use":
                 guard let id = block["id"] as? String,
-                      let name = block["name"] as? String
+                    let name = block["name"] as? String
                 else { return nil }
                 let input: String
                 if let inputObj = block["input"] {
                     if let inputData = try? JSONSerialization.data(withJSONObject: inputObj),
-                       let inputStr = String(data: inputData, encoding: .utf8) {
+                        let inputStr = String(data: inputData, encoding: .utf8)
+                    {
                         input = inputStr
                     } else {
                         input = "{}"
@@ -76,7 +77,7 @@ enum StreamEvent: Sendable {
     private static func parseContentBlockDelta(_ dict: [String: Any]) -> StreamEvent {
         let index = dict["index"] as? Int ?? 0
         guard let delta = dict["delta"] as? [String: Any],
-              let text = delta["text"] as? String
+            let text = delta["text"] as? String
         else { return .unknown }
         return .contentBlockDelta(index: index, delta: text)
     }

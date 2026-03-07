@@ -189,9 +189,10 @@ nonisolated enum DaemonRequest: Encodable {
     case attach(agentId: String)
     case input(agentId: String, data: Data)
     case resize(agentId: String, cols: Int, rows: Int)
-    case spawn(projectRoot: String, prompt: String, agent: String = "claude",
-               name: String? = nil, base: String? = nil, root: Bool = false,
-               worktree: String? = nil)
+    case spawn(
+        projectRoot: String, prompt: String, agent: String = "claude",
+        name: String? = nil, base: String? = nil, root: Bool = false,
+        worktree: String? = nil)
     case kill(projectRoot: String, target: KillTarget)
     case rename(projectRoot: String, agentId: String, name: String)
     case suspend(projectRoot: String, target: SuspendTarget)
@@ -202,17 +203,24 @@ nonisolated enum DaemonRequest: Encodable {
     case deleteWorktree(projectRoot: String, worktreeId: String)
     case listTemplates(projectRoot: String)
     case getTemplate(projectRoot: String, name: String)
-    case saveTemplate(projectRoot: String, name: String, description: String, agent: String, body: String, scope: String)
+    case saveTemplate(
+        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String)
     case deleteTemplate(projectRoot: String, name: String, scope: String)
     case listAgentDefs(projectRoot: String)
-    case saveAgentDef(projectRoot: String, name: String, agentType: String, template: String?, inlinePrompt: String?, tags: [String], scope: String, availableInCommandDialog: Bool, icon: String?)
+    case saveAgentDef(
+        projectRoot: String, name: String, agentType: String, template: String?, inlinePrompt: String?, tags: [String],
+        scope: String, availableInCommandDialog: Bool, icon: String?)
     case deleteAgentDef(projectRoot: String, name: String, scope: String)
     case listSwarmDefs(projectRoot: String)
-    case saveSwarmDef(projectRoot: String, name: String, worktreeCount: Int, worktreeTemplate: String, roster: [SwarmRosterEntryPayload], includeTerminal: Bool, scope: String)
+    case saveSwarmDef(
+        projectRoot: String, name: String, worktreeCount: Int, worktreeTemplate: String,
+        roster: [SwarmRosterEntryPayload], includeTerminal: Bool, scope: String)
     case deleteSwarmDef(projectRoot: String, name: String, scope: String)
     case runSwarm(projectRoot: String, swarmName: String, vars: [String: String])
     case listSchedules(projectRoot: String)
-    case saveSchedule(projectRoot: String, name: String, enabled: Bool, recurrence: String, startAt: String, trigger: ScheduleTriggerPayload, target: String, scope: String)
+    case saveSchedule(
+        projectRoot: String, name: String, enabled: Bool, recurrence: String, startAt: String,
+        trigger: ScheduleTriggerPayload, target: String, scope: String)
     case deleteSchedule(projectRoot: String, name: String, scope: String)
     case enableSchedule(projectRoot: String, name: String)
     case disableSchedule(projectRoot: String, name: String)
@@ -305,7 +313,9 @@ nonisolated enum DaemonRequest: Encodable {
         case .listAgentDefs(let projectRoot):
             try container.encode("list_agent_defs", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
-        case .saveAgentDef(let projectRoot, let name, let agentType, let template, let inlinePrompt, let tags, let scope, let availableInCommandDialog, let icon):
+        case .saveAgentDef(
+            let projectRoot, let name, let agentType, let template, let inlinePrompt, let tags, let scope,
+            let availableInCommandDialog, let icon):
             try container.encode("save_agent_def", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
@@ -324,7 +334,9 @@ nonisolated enum DaemonRequest: Encodable {
         case .listSwarmDefs(let projectRoot):
             try container.encode("list_swarm_defs", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
-        case .saveSwarmDef(let projectRoot, let name, let worktreeCount, let worktreeTemplate, let roster, let includeTerminal, let scope):
+        case .saveSwarmDef(
+            let projectRoot, let name, let worktreeCount, let worktreeTemplate, let roster, let includeTerminal,
+            let scope):
             try container.encode("save_swarm_def", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
@@ -346,7 +358,8 @@ nonisolated enum DaemonRequest: Encodable {
         case .listSchedules(let projectRoot):
             try container.encode("list_schedules", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
-        case .saveSchedule(let projectRoot, let name, let enabled, let recurrence, let startAt, let trigger, let target, let scope):
+        case .saveSchedule(
+            let projectRoot, let name, let enabled, let recurrence, let startAt, let trigger, let target, let scope):
             try container.encode("save_schedule", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
@@ -393,7 +406,8 @@ nonisolated enum DaemonResponse: Decodable {
     case statusEvent(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
     case deleteWorktreeResult(worktreeId: String, killedAgents: [String])
     case templateList(templates: [TemplateInfo])
-    case templateDetail(name: String, description: String, agent: String, body: String, source: String, variables: [String])
+    case templateDetail(
+        name: String, description: String, agent: String, body: String, source: String, variables: [String])
     case agentDefList(agentDefs: [AgentDefInfo])
     case swarmDefList(swarmDefs: [SwarmDefInfo])
     case runSwarmResult(spawnedAgents: [String])
@@ -415,8 +429,9 @@ nonisolated enum DaemonResponse: Decodable {
         switch type {
         case "health_report":
             let p = try HealthReportPayload(from: decoder)
-            self = .healthReport(pid: p.pid, uptimeSeconds: p.uptimeSeconds,
-                                 protocolVersion: p.protocolVersion, agentCount: p.agentCount)
+            self = .healthReport(
+                pid: p.pid, uptimeSeconds: p.uptimeSeconds,
+                protocolVersion: p.protocolVersion, agentCount: p.agentCount)
         case "init_result":
             let p = try InitResultPayload(from: decoder)
             self = .initResult(created: p.created)
@@ -465,7 +480,9 @@ nonisolated enum DaemonResponse: Decodable {
             self = .templateList(templates: p.templates)
         case "template_detail":
             let p = try TemplateDetailPayload(from: decoder)
-            self = .templateDetail(name: p.name, description: p.description, agent: p.agent, body: p.body, source: p.source, variables: p.variables)
+            self = .templateDetail(
+                name: p.name, description: p.description, agent: p.agent, body: p.body, source: p.source,
+                variables: p.variables)
         case "agent_def_list":
             let p = try AgentDefListPayload(from: decoder)
             self = .agentDefList(agentDefs: p.agentDefs)
@@ -778,10 +795,12 @@ nonisolated final class DaemonClient: @unchecked Sendable {
     private let socketPath: String
 
     init(socketPath: String? = nil) {
-        self.socketPath = socketPath ?? {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            return "\(home)/.pu/daemon.sock"
-        }()
+        self.socketPath =
+            socketPath
+            ?? {
+                let home = FileManager.default.homeDirectoryForCurrentUser.path
+                return "\(home)/.pu/daemon.sock"
+            }()
     }
 
     /// Send a single request and return the response.
@@ -835,16 +854,18 @@ nonisolated final class DaemonClient: @unchecked Sendable {
     static func write(_ request: DaemonRequest, to connection: NWConnection) async throws {
         let json = try JSONEncoder().encode(request)
         var message = json
-        message.append(0x0A) // newline
+        message.append(0x0A)  // newline
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(content: message, completion: .contentProcessed { error in
-                if let error {
-                    cont.resume(throwing: error)
-                } else {
-                    cont.resume()
-                }
-            })
+            connection.send(
+                content: message,
+                completion: .contentProcessed { error in
+                    if let error {
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume()
+                    }
+                })
         }
     }
 

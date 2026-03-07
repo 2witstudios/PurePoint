@@ -90,7 +90,9 @@ final class AgentsHubState {
     func loadPromptDetail(projectRoot: String, name: String) async {
         do {
             let response = try await client.send(.getTemplate(projectRoot: projectRoot, name: name))
-            if case .templateDetail(let detailName, let description, let agent, let body, let source, let variables) = response {
+            if case .templateDetail(let detailName, let description, let agent, let body, let source, let variables) =
+                response
+            {
                 if let index = prompts.firstIndex(where: { $0.name == detailName && $0.source == source }) {
                     prompts[index].body = body
                     prompts[index].description = description
@@ -103,9 +105,14 @@ final class AgentsHubState {
         }
     }
 
-    func saveTemplate(projectRoot: String, name: String, description: String, agent: String, body: String, scope: String) async {
+    func saveTemplate(
+        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String
+    ) async {
         do {
-            _ = try await client.send(.saveTemplate(projectRoot: projectRoot, name: name, description: description, agent: agent, body: body, scope: scope))
+            _ = try await client.send(
+                .saveTemplate(
+                    projectRoot: projectRoot, name: name, description: description, agent: agent, body: body,
+                    scope: scope))
             await loadTemplates(projectRoot: projectRoot)
             await loadPromptDetail(projectRoot: projectRoot, name: name)
         } catch {
@@ -124,17 +131,18 @@ final class AgentsHubState {
 
     func saveAgentDef(projectRoot: String, def: AgentDefinition) async {
         do {
-            _ = try await client.send(.saveAgentDef(
-                projectRoot: projectRoot,
-                name: def.name,
-                agentType: def.agentType,
-                template: def.template,
-                inlinePrompt: def.inlinePrompt,
-                tags: def.tags,
-                scope: def.scope,
-                availableInCommandDialog: def.availableInCommandDialog,
-                icon: def.icon
-            ))
+            _ = try await client.send(
+                .saveAgentDef(
+                    projectRoot: projectRoot,
+                    name: def.name,
+                    agentType: def.agentType,
+                    template: def.template,
+                    inlinePrompt: def.inlinePrompt,
+                    tags: def.tags,
+                    scope: def.scope,
+                    availableInCommandDialog: def.availableInCommandDialog,
+                    icon: def.icon
+                ))
             await loadAgentDefs(projectRoot: projectRoot)
         } catch {
             self.error = "Failed to save agent def: \(error.localizedDescription)"
@@ -152,15 +160,18 @@ final class AgentsHubState {
 
     func saveSwarmDef(projectRoot: String, def: SwarmDefinition) async {
         do {
-            _ = try await client.send(.saveSwarmDef(
-                projectRoot: projectRoot,
-                name: def.name,
-                worktreeCount: def.worktreeCount,
-                worktreeTemplate: def.worktreeTemplate,
-                roster: def.roster.map { SwarmRosterEntryPayload(agentDef: $0.agentDef, role: $0.role, quantity: $0.quantity) },
-                includeTerminal: def.includeTerminal,
-                scope: def.scope
-            ))
+            _ = try await client.send(
+                .saveSwarmDef(
+                    projectRoot: projectRoot,
+                    name: def.name,
+                    worktreeCount: def.worktreeCount,
+                    worktreeTemplate: def.worktreeTemplate,
+                    roster: def.roster.map {
+                        SwarmRosterEntryPayload(agentDef: $0.agentDef, role: $0.role, quantity: $0.quantity)
+                    },
+                    includeTerminal: def.includeTerminal,
+                    scope: def.scope
+                ))
             await loadSwarmDefs(projectRoot: projectRoot)
         } catch {
             self.error = "Failed to save swarm def: \(error.localizedDescription)"

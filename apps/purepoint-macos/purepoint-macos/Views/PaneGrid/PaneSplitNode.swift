@@ -7,8 +7,8 @@ indirect enum PaneSplitNode: Equatable {
     case split(axis: Axis, ratio: CGFloat, first: PaneSplitNode, second: PaneSplitNode)
 
     enum Axis: String, Codable, Equatable {
-        case horizontal // top/bottom
-        case vertical   // left/right
+        case horizontal  // top/bottom
+        case vertical  // left/right
     }
 
     // MARK: - Queries
@@ -175,7 +175,8 @@ indirect enum PaneSplitNode: Equatable {
         for i in stride(from: path.count - 1, through: 0, by: -1) {
             let step = path[i]
             guard case .split(let splitAxis, _, let first, let second) = step.node,
-                  splitAxis == axis else { continue }
+                splitAxis == axis
+            else { continue }
 
             let isInFirst = step.wentFirst
             // If forward and in first child, go to second's nearest leaf (front edge)
@@ -201,7 +202,7 @@ indirect enum PaneSplitNode: Equatable {
 
     private struct PathStep {
         let node: PaneSplitNode
-        let wentFirst: Bool // true if we descended into 'first' child
+        let wentFirst: Bool  // true if we descended into 'first' child
     }
 
     /// Build the path from root to the leaf with the given ID.
@@ -227,7 +228,9 @@ indirect enum PaneSplitNode: Equatable {
         case .leaf(_, let agentId):
             return GridLayoutNode(type: .leaf, agentId: agentId, axis: nil, ratio: nil, first: nil, second: nil)
         case .split(let axis, let ratio, let first, let second):
-            return GridLayoutNode(type: .split, agentId: nil, axis: axis, ratio: ratio, first: first.toLayoutNode(), second: second.toLayoutNode())
+            return GridLayoutNode(
+                type: .split, agentId: nil, axis: axis, ratio: ratio, first: first.toLayoutNode(),
+                second: second.toLayoutNode())
         }
     }
 
@@ -239,7 +242,8 @@ indirect enum PaneSplitNode: Equatable {
             return .leaf(id: id, agentId: node.agentId)
         case .split:
             guard let axis = node.axis, let ratio = node.ratio,
-                  let first = node.first, let second = node.second else {
+                let first = node.first, let second = node.second
+            else {
                 let id = nextId
                 nextId += 1
                 return .leaf(id: id, agentId: nil)

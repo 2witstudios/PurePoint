@@ -23,18 +23,19 @@ enum AgentStatus: String, CaseIterable, Codable, Sendable {
     var normalized: AgentStatus {
         switch self {
         case .streaming, .running, .spawning: .streaming
-        case .waiting, .idle, .suspended:     .waiting
+        case .waiting, .idle, .suspended: .waiting
         case .broken, .completed, .failed,
-             .killed, .lost:                  .broken
+            .killed, .lost:
+            .broken
         }
     }
 
     var nsColor: NSColor {
         switch normalized {
         case .streaming: .systemGreen
-        case .waiting:   .systemCyan
-        case .broken:    .systemRed
-        default:         .systemGray
+        case .waiting: .systemCyan
+        case .broken: .systemRed
+        default: .systemGray
         }
     }
 

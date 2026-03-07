@@ -54,8 +54,9 @@ class DiffContentNSView: NSView {
         // never calls ensureLayout — that was causing freezes during rapid scroll
         // as SwiftUI queries intrinsicContentSize repeatedly during layout.
         if let container = textView.textContainer,
-           let layoutManager = textView.layoutManager,
-           textView.textStorage?.length ?? 0 > 0 {
+            let layoutManager = textView.layoutManager,
+            textView.textStorage?.length ?? 0 > 0
+        {
             layoutManager.ensureLayout(for: container)
             cachedHeight = layoutManager.usedRect(for: container).height + 12
         } else {
@@ -92,12 +93,15 @@ class DiffContentNSView: NSView {
                 sepPara.alignment = .center
                 sepPara.paragraphSpacingBefore = 4
                 sepPara.paragraphSpacing = 4
-                result.append(NSAttributedString(string: "···\n", attributes: [
-                    .font: NSFont.systemFont(ofSize: 11),
-                    .foregroundColor: NSColor.tertiaryLabelColor,
-                    .paragraphStyle: sepPara,
-                    .backgroundColor: Theme.hunkSeparator,
-                ]))
+                result.append(
+                    NSAttributedString(
+                        string: "···\n",
+                        attributes: [
+                            .font: NSFont.systemFont(ofSize: 11),
+                            .foregroundColor: NSColor.tertiaryLabelColor,
+                            .paragraphStyle: sepPara,
+                            .backgroundColor: Theme.hunkSeparator,
+                        ]))
             }
 
             for line in hunk.lines {
@@ -120,27 +124,36 @@ class DiffContentNSView: NSView {
 
                 // Old line number
                 let oldNo = line.oldLineNo.map { String($0) } ?? ""
-                result.append(NSAttributedString(string: "\t\(oldNo)", attributes: [
-                    .font: lineNoFont,
-                    .foregroundColor: NSColor.tertiaryLabelColor,
-                    .backgroundColor: bgColor,
-                    .paragraphStyle: para,
-                ]))
+                result.append(
+                    NSAttributedString(
+                        string: "\t\(oldNo)",
+                        attributes: [
+                            .font: lineNoFont,
+                            .foregroundColor: NSColor.tertiaryLabelColor,
+                            .backgroundColor: bgColor,
+                            .paragraphStyle: para,
+                        ]))
 
                 // New line number
                 let newNo = line.newLineNo.map { String($0) } ?? ""
-                result.append(NSAttributedString(string: "\t\(newNo)", attributes: [
-                    .font: lineNoFont,
-                    .foregroundColor: NSColor.tertiaryLabelColor,
-                    .backgroundColor: bgColor,
-                ]))
+                result.append(
+                    NSAttributedString(
+                        string: "\t\(newNo)",
+                        attributes: [
+                            .font: lineNoFont,
+                            .foregroundColor: NSColor.tertiaryLabelColor,
+                            .backgroundColor: bgColor,
+                        ]))
 
                 // Code content
-                result.append(NSAttributedString(string: "\t\(line.content)\n", attributes: [
-                    .font: monoFont,
-                    .foregroundColor: fgColor,
-                    .backgroundColor: bgColor,
-                ]))
+                result.append(
+                    NSAttributedString(
+                        string: "\t\(line.content)\n",
+                        attributes: [
+                            .font: monoFont,
+                            .foregroundColor: fgColor,
+                            .backgroundColor: bgColor,
+                        ]))
             }
         }
 

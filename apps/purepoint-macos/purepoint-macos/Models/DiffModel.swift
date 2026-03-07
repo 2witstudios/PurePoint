@@ -8,7 +8,7 @@ nonisolated struct DiffData: Sendable {
 
 nonisolated struct FileDiff: Identifiable, Sendable {
     let filename: String
-    let statusCode: String   // M, A, D, ??
+    let statusCode: String  // M, A, D, ??
     let added: Int
     let removed: Int
     let hunks: [Hunk]
@@ -17,13 +17,13 @@ nonisolated struct FileDiff: Identifiable, Sendable {
 }
 
 nonisolated struct Hunk: Sendable, Equatable {
-    let header: String       // e.g. "@@ -10,6 +10,8 @@ func login()"
+    let header: String  // e.g. "@@ -10,6 +10,8 @@ func login()"
     let lines: [DiffLine]
 }
 
 nonisolated struct DiffLine: Sendable, Equatable {
     let type: LineType
-    let content: String      // code without +/- prefix
+    let content: String  // code without +/- prefix
     let oldLineNo: Int?
     let newLineNo: Int?
 }

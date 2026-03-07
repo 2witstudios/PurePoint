@@ -9,12 +9,14 @@ struct TranscriptParserTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let path = tempDir.appendingPathComponent("session.jsonl")
-        try Self.writeTranscript(to: path, lines: [
-            .user("Hello, how are you?"),
-            .assistant("I'm doing well! How can I help?"),
-            .user("Tell me a joke"),
-            .assistant("Why did the programmer quit? Because they didn't get arrays.")
-        ])
+        try Self.writeTranscript(
+            to: path,
+            lines: [
+                .user("Hello, how are you?"),
+                .assistant("I'm doing well! How can I help?"),
+                .user("Tell me a joke"),
+                .assistant("Why did the programmer quit? Because they didn't get arrays."),
+            ])
 
         let messages = try TranscriptParser.parse(transcriptPath: path.path)
 
@@ -36,10 +38,13 @@ struct TranscriptParserTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let path = tempDir.appendingPathComponent("session.jsonl")
-        try Self.writeTranscript(to: path, lines: [
-            .user("Read my config file"),
-            .assistantWithToolUse(toolId: "toolu_abc", toolName: "Read", toolInput: "{\"file_path\":\"/etc/hosts\"}")
-        ])
+        try Self.writeTranscript(
+            to: path,
+            lines: [
+                .user("Read my config file"),
+                .assistantWithToolUse(
+                    toolId: "toolu_abc", toolName: "Read", toolInput: "{\"file_path\":\"/etc/hosts\"}"),
+            ])
 
         let messages = try TranscriptParser.parse(transcriptPath: path.path)
 
@@ -55,12 +60,14 @@ struct TranscriptParserTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let path = tempDir.appendingPathComponent("session.jsonl")
-        try Self.writeTranscript(to: path, lines: [
-            .user("Read the file"),
-            .assistantWithToolUse(toolId: "toolu_xyz", toolName: "Read", toolInput: "{}"),
-            .toolResult(toolUseId: "toolu_xyz", content: "file contents here", isError: false),
-            .assistant("Here is the file content.")
-        ])
+        try Self.writeTranscript(
+            to: path,
+            lines: [
+                .user("Read the file"),
+                .assistantWithToolUse(toolId: "toolu_xyz", toolName: "Read", toolInput: "{}"),
+                .toolResult(toolUseId: "toolu_xyz", content: "file contents here", isError: false),
+                .assistant("Here is the file content."),
+            ])
 
         let messages = try TranscriptParser.parse(transcriptPath: path.path)
 
@@ -78,10 +85,12 @@ struct TranscriptParserTests {
 
         let path = tempDir.appendingPathComponent("session.jsonl")
         let codeResponse = "Here is the code:\\n\\n```swift\\nlet x = 42\\n```\\n\\nThat should work."
-        try Self.writeTranscript(to: path, lines: [
-            .user("Write some code"),
-            .assistantRaw(codeResponse)
-        ])
+        try Self.writeTranscript(
+            to: path,
+            lines: [
+                .user("Write some code"),
+                .assistantRaw(codeResponse),
+            ])
 
         let messages = try TranscriptParser.parse(transcriptPath: path.path)
 
@@ -136,7 +145,7 @@ struct TranscriptParserTests {
     private enum TranscriptLine {
         case user(String)
         case assistant(String)
-        case assistantRaw(String) // pre-escaped text
+        case assistantRaw(String)  // pre-escaped text
         case assistantWithToolUse(toolId: String, toolName: String, toolInput: String)
         case toolResult(toolUseId: String, content: String, isError: Bool)
     }
@@ -144,9 +153,10 @@ struct TranscriptParserTests {
     private static func writeTranscript(to url: URL, lines: [TranscriptLine]) throws {
         var payloads: [String] = []
 
-        payloads.append("""
-        {"type":"progress","cwd":"/tmp/test","sessionId":"test-session","gitBranch":"main","timestamp":"2026-03-01T09:00:00.000Z"}
-        """)
+        payloads.append(
+            """
+            {"type":"progress","cwd":"/tmp/test","sessionId":"test-session","gitBranch":"main","timestamp":"2026-03-01T09:00:00.000Z"}
+            """)
 
         for (index, line) in lines.enumerated() {
             let timestamp = String(format: "2026-03-01T09:%02d:00.000Z", index + 1)
@@ -156,17 +166,20 @@ struct TranscriptParserTests {
             case .assistant(let content):
                 payloads.append(assistantLine(content, timestamp: timestamp))
             case .assistantRaw(let content):
-                payloads.append("""
-                {"type":"assistant","sessionId":"test-session","timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"\(content)"}]}}
-                """)
+                payloads.append(
+                    """
+                    {"type":"assistant","sessionId":"test-session","timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"\(content)"}]}}
+                    """)
             case .assistantWithToolUse(let toolId, let toolName, let toolInput):
-                payloads.append("""
-                {"type":"assistant","sessionId":"test-session","timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"tool_use","id":"\(toolId)","name":"\(toolName)","input":\(toolInput)}]}}
-                """)
+                payloads.append(
+                    """
+                    {"type":"assistant","sessionId":"test-session","timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"tool_use","id":"\(toolId)","name":"\(toolName)","input":\(toolInput)}]}}
+                    """)
             case .toolResult(let toolUseId, let content, let isError):
-                payloads.append("""
-                {"type":"user","sessionId":"test-session","timestamp":"\(timestamp)","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"\(toolUseId)","content":"\(escaped(content))","is_error":\(isError)}]}}
-                """)
+                payloads.append(
+                    """
+                    {"type":"user","sessionId":"test-session","timestamp":"\(timestamp)","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"\(toolUseId)","content":"\(escaped(content))","is_error":\(isError)}]}}
+                    """)
             }
         }
 

@@ -69,16 +69,17 @@ final class ScheduleState {
         let startAtString = formatter.string(from: startAt)
 
         do {
-            _ = try await client.send(.saveSchedule(
-                projectRoot: projectRoot,
-                name: name,
-                enabled: enabled,
-                recurrence: recurrence.backendString,
-                startAt: startAtString,
-                trigger: trigger,
-                target: target,
-                scope: scope
-            ))
+            _ = try await client.send(
+                .saveSchedule(
+                    projectRoot: projectRoot,
+                    name: name,
+                    enabled: enabled,
+                    recurrence: recurrence.backendString,
+                    startAt: startAtString,
+                    trigger: trigger,
+                    target: target,
+                    scope: scope
+                ))
             await loadSchedules(projectRoot: projectRoot)
         } catch {
             print("Failed to save schedule: \(error)")
@@ -136,11 +137,12 @@ final class ScheduleState {
     func goBackward() { navigate(by: -1) }
 
     private func navigate(by value: Int) {
-        let component: Calendar.Component = switch viewMode {
-        case .month, .list: .month
-        case .week: .weekOfYear
-        case .day: .day
-        }
+        let component: Calendar.Component =
+            switch viewMode {
+            case .month, .list: .month
+            case .week: .weekOfYear
+            case .day: .day
+            }
         currentDate = calendar.date(byAdding: component, value: value, to: currentDate) ?? currentDate
     }
 
@@ -241,10 +243,12 @@ final class ScheduleState {
         let origComps = calendar.dateComponents([.hour, .minute], from: event.date)
         while cursor <= endDay {
             if filter?(cursor) ?? true,
-               let occurrence = calendar.date(bySettingHour: origComps.hour ?? 0,
-                                              minute: origComps.minute ?? 0,
-                                              second: 0, of: cursor),
-               occurrence >= start && occurrence <= end {
+                let occurrence = calendar.date(
+                    bySettingHour: origComps.hour ?? 0,
+                    minute: origComps.minute ?? 0,
+                    second: 0, of: cursor),
+                occurrence >= start && occurrence <= end
+            {
                 results.append((occurrence, event))
             }
             cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end

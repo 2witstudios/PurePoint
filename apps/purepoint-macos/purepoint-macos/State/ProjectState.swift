@@ -137,7 +137,9 @@ final class ProjectState: Identifiable {
 
     // MARK: - Agent Operations
 
-    func createAgent(agent: String, prompt: String, name: String? = nil, isWorktree: Bool = false, selection: SidebarSelection?) {
+    func createAgent(
+        agent: String, prompt: String, name: String? = nil, isWorktree: Bool = false, selection: SidebarSelection?
+    ) {
         let root = projectRoot
 
         let spawnRoot: Bool
@@ -168,10 +170,11 @@ final class ProjectState: Identifiable {
         Task {
             do {
                 let client = DaemonClient()
-                let response = try await client.send(.spawn(
-                    projectRoot: root, prompt: prompt, agent: agent,
-                    name: name, root: spawnRoot, worktree: spawnWorktree
-                ))
+                let response = try await client.send(
+                    .spawn(
+                        projectRoot: root, prompt: prompt, agent: agent,
+                        name: name, root: spawnRoot, worktree: spawnWorktree
+                    ))
                 switch response {
                 case .spawnResult(_, let agentId, _):
                     self.appState?.pendingSelectAgentId = agentId
@@ -195,10 +198,11 @@ final class ProjectState: Identifiable {
             defer { gridState.pendingSpawnLeafIds.remove(leafId) }
             do {
                 let client = DaemonClient()
-                let response = try await client.send(.spawn(
-                    projectRoot: root, prompt: prompt, agent: agent,
-                    root: true, worktree: nil
-                ))
+                let response = try await client.send(
+                    .spawn(
+                        projectRoot: root, prompt: prompt, agent: agent,
+                        root: true, worktree: nil
+                    ))
                 switch response {
                 case .spawnResult(_, let agentId, _):
                     gridState.setAgent(agentId, forLeafId: leafId)
@@ -216,7 +220,9 @@ final class ProjectState: Identifiable {
     func handlePaletteResult(_ result: CommandPaletteResult, selection: SidebarSelection?, hub: AgentsHubState) {
         switch result {
         case .spawnBuiltIn(let variant, let prompt, let name):
-            createAgent(agent: variant.id, prompt: prompt ?? "", name: name, isWorktree: variant.kind == .worktree, selection: selection)
+            createAgent(
+                agent: variant.id, prompt: prompt ?? "", name: name, isWorktree: variant.kind == .worktree,
+                selection: selection)
         case .spawnAgentDef(let def, let prompt):
             createAgent(agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", selection: selection)
         case .runSwarm(let def):

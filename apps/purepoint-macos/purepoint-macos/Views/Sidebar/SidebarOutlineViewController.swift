@@ -137,10 +137,12 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         // Restore expansion — auto-expand new items
         for node in projectNodes {
-            outlineView.expandItem(node) // Always expand projects
+            outlineView.expandItem(node)  // Always expand projects
             for child in node.children {
                 if case .worktree = child.kind {
-                    if oldExpanded.contains(child.id) || !oldExpanded.contains(child.id) && isNewWorktree(child.id, oldExpanded: oldExpanded) {
+                    if oldExpanded.contains(child.id)
+                        || !oldExpanded.contains(child.id) && isNewWorktree(child.id, oldExpanded: oldExpanded)
+                    {
                         outlineView.expandItem(child)
                     }
                 }
@@ -309,7 +311,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        let icon = NSImageView(image: NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "Worktree")!)
+        let icon = NSImageView(
+            image: NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "Worktree")!)
         icon.contentTintColor = .secondaryLabelColor
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
         icon.setContentHuggingPriority(.required, for: .horizontal)
@@ -378,7 +381,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         // Grid owner icon
         if agent.id == gridOwnerAgentId {
-            let gridIcon = NSImageView(image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Grid owner")!)
+            let gridIcon = NSImageView(
+                image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Grid owner")!)
             gridIcon.contentTintColor = .tertiaryLabelColor
             gridIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
             gridIcon.setContentHuggingPriority(.required, for: .horizontal)
@@ -435,12 +439,14 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         let menu = NSMenu()
 
-        let agentItem = NSMenuItem(title: "New Agent", action: #selector(menuNewAgentForWorktree(_:)), keyEquivalent: "")
+        let agentItem = NSMenuItem(
+            title: "New Agent", action: #selector(menuNewAgentForWorktree(_:)), keyEquivalent: "")
         agentItem.target = self
         agentItem.representedObject = WorktreeMenuContext(project: project, worktreeId: worktreeId)
         menu.addItem(agentItem)
 
-        let termItem = NSMenuItem(title: "New Terminal", action: #selector(menuNewTerminalForWorktree(_:)), keyEquivalent: "")
+        let termItem = NSMenuItem(
+            title: "New Terminal", action: #selector(menuNewTerminalForWorktree(_:)), keyEquivalent: "")
         termItem.target = self
         termItem.representedObject = WorktreeMenuContext(project: project, worktreeId: worktreeId)
         menu.addItem(termItem)
@@ -566,7 +572,8 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         guard let node = contextClickedNode, case .worktree(let worktree) = node.kind else { return }
         guard let project = findProject(forWorktreeId: worktree.id) else { return }
         let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
-        let agentNote = aliveCount > 0
+        let agentNote =
+            aliveCount > 0
             ? "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s"), "
             : "This will "
         showConfirmation(
@@ -617,9 +624,10 @@ extension SidebarOutlineViewController: NSMenuDelegate {
             if let stack = subview as? NSStackView {
                 for arranged in stack.arrangedSubviews {
                     if let tf = arranged as? NSTextField,
-                       tf.isKind(of: NSTextField.self),
-                       !tf.stringValue.isEmpty,
-                       tf.font?.pointSize == 11 { // Agent name font size
+                        tf.isKind(of: NSTextField.self),
+                        !tf.stringValue.isEmpty,
+                        tf.font?.pointSize == 11
+                    {  // Agent name font size
                         return tf
                     }
                 }
@@ -630,7 +638,9 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     // MARK: - Confirmation Dialog
 
-    private func showConfirmation(title: String, message: String, confirmTitle: String = "Kill All", action: @escaping () -> Void) {
+    private func showConfirmation(
+        title: String, message: String, confirmTitle: String = "Kill All", action: @escaping () -> Void
+    ) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message

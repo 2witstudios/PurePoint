@@ -41,7 +41,9 @@ enum ClaudeConversationIndex {
     }
 
     /// Phase 2: slower — scans .jsonl files, skipping already-indexed session IDs.
-    static func loadLooseSessions(baseURL: URL = defaultBaseURL, excluding excludedIds: Set<String> = []) throws -> [ClaudeConversation] {
+    static func loadLooseSessions(baseURL: URL = defaultBaseURL, excluding excludedIds: Set<String> = []) throws
+        -> [ClaudeConversation]
+    {
         let directories = try projectDirectories(baseURL: baseURL)
         var conversations: [ClaudeConversation] = []
         var seenSessionIds = excludedIds
@@ -68,8 +70,8 @@ enum ClaudeConversationIndex {
         var snippets: [String] = []
         for line in tail.split(separator: "\n").reversed() {
             guard let record = parseJSONLine(String(line)),
-                  let snippet = messageSnippet(from: record, maxLength: 180),
-                  !snippets.contains(snippet)
+                let snippet = messageSnippet(from: record, maxLength: 180),
+                !snippets.contains(snippet)
             else {
                 continue
             }
@@ -151,8 +153,7 @@ enum ClaudeConversationIndex {
         let indexURL = directory.appendingPathComponent("sessions-index.json")
 
         let data: Data
-        do { data = try Data(contentsOf: indexURL) }
-        catch { return [] }
+        do { data = try Data(contentsOf: indexURL) } catch { return [] }
         let index = try JSONDecoder().decode(SessionIndexFile.self, from: data)
 
         return index.entries.compactMap { entry in
@@ -253,9 +254,10 @@ enum ClaudeConversationIndex {
             guard let record = parseJSONLine(String(line)) else { continue }
             updateMetadata(&metadata, with: record)
             if metadata.projectPath != nil,
-               metadata.sessionId != nil,
-               metadata.firstPrompt != nil,
-               metadata.createdAt != nil {
+                metadata.sessionId != nil,
+                metadata.firstPrompt != nil,
+                metadata.createdAt != nil
+            {
                 break
             }
         }
@@ -282,14 +284,16 @@ enum ClaudeConversationIndex {
             metadata.gitBranch = branch
         }
         if metadata.createdAt == nil,
-           let timestamp = record["timestamp"] as? String,
-           let parsed = parseTimestamp(timestamp) {
+            let timestamp = record["timestamp"] as? String,
+            let parsed = parseTimestamp(timestamp)
+        {
             metadata.createdAt = parsed
         }
         if metadata.firstPrompt == nil,
-           let type = record["type"] as? String,
-           type == "user",
-           let snippet = messageSnippet(from: record, maxLength: 280) {
+            let type = record["type"] as? String,
+            type == "user",
+            let snippet = messageSnippet(from: record, maxLength: 280)
+        {
             metadata.firstPrompt = snippet
         }
     }
@@ -314,7 +318,7 @@ enum ClaudeConversationIndex {
         if let parts = content as? [Any] {
             let extracted = parts.compactMap { part -> String? in
                 guard let part = part as? [String: Any],
-                      let type = part["type"] as? String
+                    let type = part["type"] as? String
                 else {
                     return nil
                 }
@@ -343,7 +347,8 @@ enum ClaudeConversationIndex {
 
     private static func compact(_ text: String?, maxLength: Int) -> String? {
         guard let text else { return nil }
-        let collapsed = text
+        let collapsed =
+            text
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
@@ -365,9 +370,10 @@ enum ClaudeConversationIndex {
     ) -> String {
         // Use summary if available and not a known-bad pattern
         if let summary = summary?.trimmedNonEmpty,
-           summary.lowercased() != "no prompt",
-           !summary.lowercased().contains("invalid api key"),
-           !summary.lowercased().hasPrefix("error:") {
+            summary.lowercased() != "no prompt",
+            !summary.lowercased().contains("invalid api key"),
+            !summary.lowercased().hasPrefix("error:")
+        {
             return summary
         }
 
@@ -386,7 +392,8 @@ enum ClaudeConversationIndex {
                 options: .regularExpression
             )
 
-            let lines = cleanedPrompt
+            let lines =
+                cleanedPrompt
                 .split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
@@ -410,7 +417,8 @@ enum ClaudeConversationIndex {
                 with: "",
                 options: .regularExpression
             )
-            let words = stripped
+            let words =
+                stripped
                 .replacingOccurrences(of: "-", with: " ")
                 .replacingOccurrences(of: "_", with: " ")
                 .split(separator: " ")
@@ -436,7 +444,8 @@ enum ClaudeConversationIndex {
         let fileManager = FileManager.default
 
         while true {
-            let manifestPath = currentURL
+            let manifestPath =
+                currentURL
                 .appendingPathComponent(".pu", isDirectory: true)
                 .appendingPathComponent("manifest.json")
                 .path

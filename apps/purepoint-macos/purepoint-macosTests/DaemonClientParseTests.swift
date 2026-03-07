@@ -6,8 +6,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseHealthReport() {
         let json = """
-        {"type":"health_report","pid":1234,"uptime_seconds":60,"protocol_version":1,"agent_count":3}
-        """.data(using: .utf8)!
+            {"type":"health_report","pid":1234,"uptime_seconds":60,"protocol_version":1,"agent_count":3}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .healthReport(let pid, let uptime, let version, let count) = response else {
@@ -22,8 +22,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseStatusReport() {
         let json = """
-        {"type":"status_report","worktrees":[],"agents":[{"id":"ag-1","name":"test","status":"running"}]}
-        """.data(using: .utf8)!
+            {"type":"status_report","worktrees":[],"agents":[{"id":"ag-1","name":"test","status":"running"}]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .statusReport(let worktrees, let agents) = response else {
@@ -39,8 +39,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseStatusReportWithAgentOptionalFields() {
         let json = """
-        {"type":"status_report","worktrees":[],"agents":[{"id":"ag-1","name":"test","status":"completed","pid":9876,"exit_code":0,"idle_seconds":120,"worktree_id":"wt-1"}]}
-        """.data(using: .utf8)!
+            {"type":"status_report","worktrees":[],"agents":[{"id":"ag-1","name":"test","status":"completed","pid":9876,"exit_code":0,"idle_seconds":120,"worktree_id":"wt-1"}]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .statusReport(_, let agents) = response else {
@@ -56,8 +56,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseStatusReportWithWorktrees() {
         let json = """
-        {"type":"status_report","worktrees":[{"id":"wt-1","name":"feature-auth","path":"/tmp/wt","branch":"pu/feature-auth","status":"active","agents":{"ag-1":{"id":"ag-1","name":"claude-1","agentType":"claude","status":"running","prompt":"add auth","startedAt":"2026-01-01T00:00:00Z"}},"createdAt":"2026-01-01T00:00:00Z"}],"agents":[]}
-        """.data(using: .utf8)!
+            {"type":"status_report","worktrees":[{"id":"wt-1","name":"feature-auth","path":"/tmp/wt","branch":"pu/feature-auth","status":"active","agents":{"ag-1":{"id":"ag-1","name":"claude-1","agentType":"claude","status":"running","prompt":"add auth","startedAt":"2026-01-01T00:00:00Z"}},"createdAt":"2026-01-01T00:00:00Z"}],"agents":[]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .statusReport(let worktrees, let agents) = response else {
@@ -74,8 +74,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseAttachReady() {
         let json = """
-        {"type":"attach_ready","buffered_bytes":4096}
-        """.data(using: .utf8)!
+            {"type":"attach_ready","buffered_bytes":4096}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .attachReady(let bytes) = response else {
@@ -88,8 +88,8 @@ struct DaemonClientParseTests {
     @Test func testParseOutputDecodesHexData() {
         // "hello" = 68656c6c6f
         let json = """
-        {"type":"output","agent_id":"ag-1","data":"68656c6c6f"}
-        """.data(using: .utf8)!
+            {"type":"output","agent_id":"ag-1","data":"68656c6c6f"}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .output(let agentId, let data) = response else {
@@ -102,8 +102,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseError() {
         let json = """
-        {"type":"error","code":"AGENT_NOT_FOUND","message":"no such agent"}
-        """.data(using: .utf8)!
+            {"type":"error","code":"AGENT_NOT_FOUND","message":"no such agent"}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .error(let code, let message) = response else {
@@ -116,8 +116,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseOk() {
         let json = """
-        {"type":"ok"}
-        """.data(using: .utf8)!
+            {"type":"ok"}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .ok = response else {
@@ -128,8 +128,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseShuttingDown() {
         let json = """
-        {"type":"shutting_down"}
-        """.data(using: .utf8)!
+            {"type":"shutting_down"}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .shuttingDown = response else {
@@ -140,8 +140,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseUnknownType() {
         let json = """
-        {"type":"future_response_type","data":123}
-        """.data(using: .utf8)!
+            {"type":"future_response_type","data":123}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .unknown(let type) = response else {
@@ -166,8 +166,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseTemplateList() {
         let json = """
-        {"type":"template_list","templates":[{"name":"review","description":"Code review","agent":"claude","source":"local","variables":["BRANCH"]}]}
-        """.data(using: .utf8)!
+            {"type":"template_list","templates":[{"name":"review","description":"Code review","agent":"claude","source":"local","variables":["BRANCH"]}]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .templateList(let templates) = response else {
@@ -184,11 +184,12 @@ struct DaemonClientParseTests {
 
     @Test func testParseTemplateDetail() {
         let json = """
-        {"type":"template_detail","name":"review","description":"Code review","agent":"claude","body":"Review {{BRANCH}}.","source":"local","variables":["BRANCH"]}
-        """.data(using: .utf8)!
+            {"type":"template_detail","name":"review","description":"Code review","agent":"claude","body":"Review {{BRANCH}}.","source":"local","variables":["BRANCH"]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
-        guard case .templateDetail(let name, let description, let agent, let body, let source, let variables) = response else {
+        guard case .templateDetail(let name, let description, let agent, let body, let source, let variables) = response
+        else {
             Issue.record("expected templateDetail, got \(response)")
             return
         }
@@ -202,8 +203,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseAgentDefList() {
         let json = """
-        {"type":"agent_def_list","agent_defs":[{"name":"reviewer","agent_type":"claude","template":"review","tags":["review"],"scope":"local","available_in_command_dialog":true,"icon":"shield"}]}
-        """.data(using: .utf8)!
+            {"type":"agent_def_list","agent_defs":[{"name":"reviewer","agent_type":"claude","template":"review","tags":["review"],"scope":"local","available_in_command_dialog":true,"icon":"shield"}]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .agentDefList(let agentDefs) = response else {
@@ -222,8 +223,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseAgentDefListWithNulls() {
         let json = """
-        {"type":"agent_def_list","agent_defs":[{"name":"basic","agent_type":"claude","template":null,"tags":[],"scope":"global","available_in_command_dialog":false,"icon":null}]}
-        """.data(using: .utf8)!
+            {"type":"agent_def_list","agent_defs":[{"name":"basic","agent_type":"claude","template":null,"tags":[],"scope":"global","available_in_command_dialog":false,"icon":null}]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .agentDefList(let agentDefs) = response else {
@@ -240,8 +241,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseSwarmDefList() {
         let json = """
-        {"type":"swarm_def_list","swarm_defs":[{"name":"full-stack","worktree_count":3,"worktree_template":"feature","roster":[{"agent_def":"reviewer","role":"review","quantity":2}],"include_terminal":true,"scope":"local"}]}
-        """.data(using: .utf8)!
+            {"type":"swarm_def_list","swarm_defs":[{"name":"full-stack","worktree_count":3,"worktree_template":"feature","roster":[{"agent_def":"reviewer","role":"review","quantity":2}],"include_terminal":true,"scope":"local"}]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .swarmDefList(let swarmDefs) = response else {
@@ -262,8 +263,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseRunSwarmResult() {
         let json = """
-        {"type":"run_swarm_result","spawned_agents":["ag-abc","ag-def"]}
-        """.data(using: .utf8)!
+            {"type":"run_swarm_result","spawned_agents":["ag-abc","ag-def"]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .runSwarmResult(let spawnedAgents) = response else {
@@ -275,8 +276,8 @@ struct DaemonClientParseTests {
 
     @Test func testParseTemplateListEmpty() {
         let json = """
-        {"type":"template_list","templates":[]}
-        """.data(using: .utf8)!
+            {"type":"template_list","templates":[]}
+            """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
         guard case .templateList(let templates) = response else {

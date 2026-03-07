@@ -21,7 +21,9 @@ nonisolated enum Theme {
 
     // MARK: - Helpers
 
-    private static func adaptive(dark: (CGFloat, CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat, CGFloat)) -> NSColor {
+    private static func adaptive(
+        dark: (CGFloat, CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat, CGFloat)
+    ) -> NSColor {
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
                 return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: dark.3)

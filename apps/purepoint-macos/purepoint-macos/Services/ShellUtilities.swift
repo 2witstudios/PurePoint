@@ -8,8 +8,8 @@ nonisolated func shellEscape(_ s: String) -> String {
 /// Parse a single JSON line into a dictionary, returning nil on failure.
 nonisolated func parseJSONLine(_ line: String) -> [String: Any]? {
     guard let data = line.data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: data),
-          let dict = object as? [String: Any]
+        let object = try? JSONSerialization.jsonObject(with: data),
+        let dict = object as? [String: Any]
     else { return nil }
     return dict
 }

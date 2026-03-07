@@ -8,8 +8,8 @@ struct AgentsHubModelsTests {
 
     @Test func testSavedPromptFromTemplateInfo() {
         let json = """
-        {"name":"review","description":"Code review","agent":"claude","source":"local","variables":["BRANCH"]}
-        """.data(using: .utf8)!
+            {"name":"review","description":"Code review","agent":"claude","source":"local","variables":["BRANCH"]}
+            """.data(using: .utf8)!
 
         let info = try! JSONDecoder().decode(TemplateInfo.self, from: json)
         let prompt = SavedPrompt(from: info)
@@ -42,8 +42,8 @@ struct AgentsHubModelsTests {
 
     @Test func testAgentDefinitionFromAgentDefInfo() {
         let json = """
-        {"name":"reviewer","agent_type":"claude","template":"review","tags":["review"],"scope":"local","available_in_command_dialog":true,"icon":"shield"}
-        """.data(using: .utf8)!
+            {"name":"reviewer","agent_type":"claude","template":"review","tags":["review"],"scope":"local","available_in_command_dialog":true,"icon":"shield"}
+            """.data(using: .utf8)!
 
         let info = try! JSONDecoder().decode(AgentDefInfo.self, from: json)
         let def = AgentDefinition(from: info)
@@ -75,8 +75,8 @@ struct AgentsHubModelsTests {
 
     @Test func testSwarmDefinitionFromSwarmDefInfo() {
         let json = """
-        {"name":"full-stack","worktree_count":3,"worktree_template":"feature","roster":[{"agent_def":"reviewer","role":"review","quantity":2}],"include_terminal":true,"scope":"local"}
-        """.data(using: .utf8)!
+            {"name":"full-stack","worktree_count":3,"worktree_template":"feature","roster":[{"agent_def":"reviewer","role":"review","quantity":2}],"include_terminal":true,"scope":"local"}
+            """.data(using: .utf8)!
 
         let info = try! JSONDecoder().decode(SwarmDefInfo.self, from: json)
         let swarm = SwarmDefinition(from: info)
@@ -106,7 +106,7 @@ struct AgentsHubModelsTests {
             scope: "local"
         )
 
-        #expect(swarm.totalAgents == 9) // 3 * (2 + 1)
+        #expect(swarm.totalAgents == 9)  // 3 * (2 + 1)
     }
 
     @Test func testSwarmDefinitionManualInit() {

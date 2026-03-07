@@ -30,30 +30,30 @@ struct ClaudeConversationIndexTests {
                 .user("Build a dashboard for session browsing"),
                 .assistant("I'll index the local transcript files and wire a dashboard."),
                 .user("Show a pulse card too"),
-                .assistant("The pulse card is mocked, but the conversation browser is real.")
+                .assistant("The pulse card is mocked, but the conversation browser is real."),
             ]
         )
 
         let indexURL = transcriptDirectory.appendingPathComponent("sessions-index.json")
         let indexJSON = """
-        {
-          "version": 1,
-          "entries": [
             {
-              "sessionId": "sid-indexed",
-              "fullPath": "\(transcriptURL.path)",
-              "fileMtime": 1770046959218,
-              "firstPrompt": "Build a dashboard for session browsing",
-              "summary": "Useful dashboard",
-              "messageCount": 4,
-              "created": "2026-03-01T09:00:00.000Z",
-              "modified": "2026-03-01T09:10:05.000Z",
-              "gitBranch": "feature/dashboard",
-              "projectPath": "\(worktreePath.path)"
+              "version": 1,
+              "entries": [
+                {
+                  "sessionId": "sid-indexed",
+                  "fullPath": "\(transcriptURL.path)",
+                  "fileMtime": 1770046959218,
+                  "firstPrompt": "Build a dashboard for session browsing",
+                  "summary": "Useful dashboard",
+                  "messageCount": 4,
+                  "created": "2026-03-01T09:00:00.000Z",
+                  "modified": "2026-03-01T09:10:05.000Z",
+                  "gitBranch": "feature/dashboard",
+                  "projectPath": "\(worktreePath.path)"
+                }
+              ]
             }
-          ]
-        }
-        """
+            """
         try Data(indexJSON.utf8).write(to: indexURL)
 
         let sessions = try ClaudeConversationIndex.loadSessions(baseURL: claudeBase)
@@ -93,7 +93,7 @@ struct ClaudeConversationIndexTests {
                 .user("Implement the following plan:\n\n# Resume old Claude session"),
                 .assistant("I'm reading the transcript directly because there is no sessions index here."),
                 .user("Keep the conversation browser real"),
-                .assistant("Done. The dashboard now falls back to raw JSONL files.")
+                .assistant("Done. The dashboard now falls back to raw JSONL files."),
             ]
         )
 
@@ -121,17 +121,18 @@ struct ClaudeConversationIndexTests {
                 .user("First user message"),
                 .assistant("First assistant reply"),
                 .user("Second user message"),
-                .assistant("Second assistant reply")
+                .assistant("Second assistant reply"),
             ]
         )
 
         let snippets = ClaudeConversationIndex.recentSnippets(from: transcriptURL)
 
-        #expect(snippets == [
-            "First assistant reply",
-            "Second user message",
-            "Second assistant reply"
-        ])
+        #expect(
+            snippets == [
+                "First assistant reply",
+                "Second user message",
+                "Second assistant reply",
+            ])
     }
 
     @Test func tempDirectoriesAreSkipped() throws {
@@ -189,19 +190,19 @@ struct ClaudeConversationIndexTests {
 
         let indexURL = dir.appendingPathComponent("sessions-index.json")
         let indexJSON = """
-        {
-          "version": 1,
-          "entries": [
             {
-              "sessionId": "sid-bad",
-              "fullPath": "\(transcript.path)",
-              "summary": "error: invalid api key",
-              "gitBranch": "pu/simplify-engine",
-              "projectPath": "/tmp"
+              "version": 1,
+              "entries": [
+                {
+                  "sessionId": "sid-bad",
+                  "fullPath": "\(transcript.path)",
+                  "summary": "error: invalid api key",
+                  "gitBranch": "pu/simplify-engine",
+                  "projectPath": "/tmp"
+                }
+              ]
             }
-          ]
-        }
-        """
+            """
         try Data(indexJSON.utf8).write(to: indexURL)
 
         let sessions = try ClaudeConversationIndex.loadSessions(baseURL: claudeBase)
@@ -259,13 +260,15 @@ struct ClaudeConversationIndexTests {
             let timestamp = String(format: "2026-03-01T09:%02d:00.000Z", index + 1)
             switch line {
             case .user(let content):
-                payloads.append("""
-                {"type":"user","cwd":"\(cwd)","sessionId":"\(sessionId)","gitBranch":"\(branch)","timestamp":"\(timestamp)","message":{"role":"user","content":"\(escaped(content))"}}
-                """)
+                payloads.append(
+                    """
+                    {"type":"user","cwd":"\(cwd)","sessionId":"\(sessionId)","gitBranch":"\(branch)","timestamp":"\(timestamp)","message":{"role":"user","content":"\(escaped(content))"}}
+                    """)
             case .assistant(let content):
-                payloads.append("""
-                {"type":"assistant","cwd":"\(cwd)","sessionId":"\(sessionId)","gitBranch":"\(branch)","timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"\(escaped(content))"}]}}
-                """)
+                payloads.append(
+                    """
+                    {"type":"assistant","cwd":"\(cwd)","sessionId":"\(sessionId)","gitBranch":"\(branch)","timestamp":"\(timestamp)","message":{"role":"assistant","content":[{"type":"text","text":"\(escaped(content))"}]}}
+                    """)
             }
         }
 

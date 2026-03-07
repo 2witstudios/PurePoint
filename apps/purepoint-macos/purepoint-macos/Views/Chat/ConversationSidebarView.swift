@@ -110,9 +110,11 @@ struct ConversationSidebarView: View {
 
                     Spacer()
 
-                    Text(Self.relativeFormatter.localizedString(
-                        for: session.modifiedAt, relativeTo: Date()
-                    ))
+                    Text(
+                        Self.relativeFormatter.localizedString(
+                            for: session.modifiedAt, relativeTo: Date()
+                        )
+                    )
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 }

@@ -35,10 +35,15 @@ enum CommandPaletteItem: Identifiable {
         switch self {
         case .builtIn(let v): v.subtitle
         case .agentDef(let d):
-            if let tmpl = d.template { "Template: \(tmpl)" }
-            else if d.inlinePrompt != nil { "Inline prompt" }
-            else { d.agentType }
-        case .swarm(let s): "\(s.totalAgents) agent\(s.totalAgents == 1 ? "" : "s") across \(s.worktreeCount) worktree\(s.worktreeCount == 1 ? "" : "s")"
+            if let tmpl = d.template {
+                "Template: \(tmpl)"
+            } else if d.inlinePrompt != nil {
+                "Inline prompt"
+            } else {
+                d.agentType
+            }
+        case .swarm(let s):
+            "\(s.totalAgents) agent\(s.totalAgents == 1 ? "" : "s") across \(s.worktreeCount) worktree\(s.worktreeCount == 1 ? "" : "s")"
         }
     }
 
@@ -46,8 +51,7 @@ enum CommandPaletteItem: Identifiable {
         switch self {
         case .builtIn(let v): v.promptPlaceholder
         case .agentDef(let d):
-            if d.template != nil { "Override prompt (optional)..." }
-            else { "Enter prompt..." }
+            if d.template != nil { "Override prompt (optional)..." } else { "Enter prompt..." }
         case .swarm: ""
         }
     }
@@ -96,7 +100,8 @@ enum CommandPaletteItem: Identifiable {
         swarms: [SwarmDefinition]
     ) -> [CommandPaletteItem] {
         let builtIns = builtInVariants.map { CommandPaletteItem.builtIn($0) }
-        let agentItems = agents
+        let agentItems =
+            agents
             .filter(\.availableInCommandDialog)
             .map { CommandPaletteItem.agentDef($0) }
         let swarmItems = swarms.map { CommandPaletteItem.swarm($0) }

@@ -19,7 +19,8 @@ struct ContentBlockView: View {
                 }
                 return nil
             }.first
-            ToolCallCardView(name: toolName, input: nil, output: output, isError: isError, status: isError ? .failed : .completed)
+            ToolCallCardView(
+                name: toolName, input: nil, output: output, isError: isError, status: isError ? .failed : .completed)
         case .pulse(_, let summary):
             pulseCard(summary)
         }

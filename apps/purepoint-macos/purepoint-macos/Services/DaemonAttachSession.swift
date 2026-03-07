@@ -13,7 +13,7 @@ actor DaemonAttachSession {
     private var stopped = false
     private var onFirstOutput: (() -> Void)?
     private var lastFullRefreshAtNanos: UInt64 = 0
-    private static let fullRefreshIntervalNanos: UInt64 = 200_000_000 // 200ms
+    private static let fullRefreshIntervalNanos: UInt64 = 200_000_000  // 200ms
 
     init(agentId: String, terminalView: TerminalView, onFirstOutput: (() -> Void)? = nil) {
         self.agentId = agentId
@@ -26,8 +26,8 @@ actor DaemonAttachSession {
         guard !stopped else { return }
 
         let fastRetries = 5
-        let fastDelay: UInt64 = 100_000_000   // 100ms
-        let slowDelay: UInt64 = 2_000_000_000 // 2s
+        let fastDelay: UInt64 = 100_000_000  // 100ms
+        let slowDelay: UInt64 = 2_000_000_000  // 2s
         var retries = 0
         let maxRetries = 20
 
@@ -47,7 +47,7 @@ actor DaemonAttachSession {
                 do {
                     try await Task.sleep(nanoseconds: delay)
                 } catch {
-                    break // CancellationError — exit immediately
+                    break  // CancellationError — exit immediately
                 }
             }
         }

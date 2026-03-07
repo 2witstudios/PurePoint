@@ -42,8 +42,10 @@ struct DraggableSplit<First: View, Second: View>: View {
     private func dividerHandle(total: CGFloat, isVertical: Bool) -> some View {
         Rectangle()
             .fill(Color(nsColor: .separatorColor))
-            .frame(width: isVertical ? dividerThickness : nil,
-                   height: isVertical ? nil : dividerThickness)
+            .frame(
+                width: isVertical ? dividerThickness : nil,
+                height: isVertical ? nil : dividerThickness
+            )
             .contentShape(Rectangle().inset(by: -4))
             .onHover { hovering in
                 if hovering {
@@ -56,12 +58,13 @@ struct DraggableSplit<First: View, Second: View>: View {
                     NSCursor.pop()
                 }
             }
-            .gesture(DragGesture(minimumDistance: 1)
-                .onChanged { value in
-                    let position = isVertical ? value.location.x : value.location.y
-                    let clamped = max(0.1, min(0.9, position / total))
-                    onRatioChanged(clamped)
-                }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let position = isVertical ? value.location.x : value.location.y
+                        let clamped = max(0.1, min(0.9, position / total))
+                        onRatioChanged(clamped)
+                    }
             )
     }
 }

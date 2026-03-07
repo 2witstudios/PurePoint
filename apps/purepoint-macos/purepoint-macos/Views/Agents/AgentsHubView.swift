@@ -126,7 +126,8 @@ struct AgentsHubView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         CommandHintBar(
                             icon: "text.alignleft",
-                            text: "Prompts can be stored globally or inside a project, then assigned to agents and swarms."
+                            text:
+                                "Prompts can be stored globally or inside a project, then assigned to agents and swarms."
                         )
 
                         MockSurfaceCard(
@@ -735,7 +736,7 @@ private struct SwarmDiagramView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            ForEach(1 ... max(swarm.worktreeCount, 1), id: \.self) { index in
+            ForEach(1...max(swarm.worktreeCount, 1), id: \.self) { index in
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Worktree \(index)")
                         .font(.system(size: 12, weight: .semibold))

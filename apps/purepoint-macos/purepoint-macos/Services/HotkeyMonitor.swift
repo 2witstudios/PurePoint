@@ -38,6 +38,6 @@ final class HotkeyMonitor {
             object: nil,
             userInfo: ["action": action]
         )
-        return nil // consume event
+        return nil  // consume event
     }
 }

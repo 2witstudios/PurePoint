@@ -34,13 +34,14 @@ final class ChatState {
         guard !query.isEmpty else { return sessions }
 
         return sessions.filter { session in
-            let haystacks = [
-                session.title,
-                session.projectName,
-                session.workspaceName,
-                session.projectPath,
-                session.gitBranch ?? ""
-            ] + session.previewSnippets
+            let haystacks =
+                [
+                    session.title,
+                    session.projectName,
+                    session.workspaceName,
+                    session.projectPath,
+                    session.gitBranch ?? "",
+                ] + session.previewSnippets
 
             return haystacks.contains { $0.localizedCaseInsensitiveContains(query) }
         }
@@ -77,9 +78,15 @@ final class ChatState {
 
         var sections: [ConversationSection] = []
         if !today.isEmpty { sections.append(ConversationSection(id: "today", title: "Today", sessions: today)) }
-        if !yesterday.isEmpty { sections.append(ConversationSection(id: "yesterday", title: "Yesterday", sessions: yesterday)) }
-        if !thisWeek.isEmpty { sections.append(ConversationSection(id: "this-week", title: "This Week", sessions: thisWeek)) }
-        if !thisMonth.isEmpty { sections.append(ConversationSection(id: "this-month", title: "This Month", sessions: thisMonth)) }
+        if !yesterday.isEmpty {
+            sections.append(ConversationSection(id: "yesterday", title: "Yesterday", sessions: yesterday))
+        }
+        if !thisWeek.isEmpty {
+            sections.append(ConversationSection(id: "this-week", title: "This Week", sessions: thisWeek))
+        }
+        if !thisMonth.isEmpty {
+            sections.append(ConversationSection(id: "this-month", title: "This Month", sessions: thisMonth))
+        }
         if !older.isEmpty { sections.append(ConversationSection(id: "older", title: "Older", sessions: older)) }
         return sections
     }
@@ -103,18 +110,20 @@ final class ChatState {
         guard !prompt.isEmpty, !isStreaming else { return }
 
         // Append user message
-        messages.append(ChatMessage(
-            role: .user,
-            contentBlocks: [.text(id: UUID().uuidString, text: prompt)]
-        ))
+        messages.append(
+            ChatMessage(
+                role: .user,
+                contentBlocks: [.text(id: UUID().uuidString, text: prompt)]
+            ))
 
         // Create placeholder assistant message
         let assistantId = UUID().uuidString
-        messages.append(ChatMessage(
-            id: assistantId,
-            role: .assistant,
-            isStreaming: true
-        ))
+        messages.append(
+            ChatMessage(
+                id: assistantId,
+                role: .assistant,
+                isStreaming: true
+            ))
 
         isStreaming = true
         streamError = nil
@@ -137,8 +146,9 @@ final class ChatState {
 
             // Surface error if stream produced no content
             if let index = messages.lastIndex(where: { $0.id == assistantId }),
-               messages[index].contentBlocks.isEmpty,
-               streamError == nil {
+                messages[index].contentBlocks.isEmpty,
+                streamError == nil
+            {
                 streamError = "No response received. Check that Claude CLI is working correctly."
             }
         } catch {
@@ -260,9 +270,10 @@ final class ChatState {
                     blockCount += split.count
                     messages[index].contentBlocks.append(contentsOf: split)
                 case .toolUse(let id, let name, let input):
-                    messages[index].contentBlocks.append(.toolUse(
-                        id: id, name: name, input: input, status: .running
-                    ))
+                    messages[index].contentBlocks.append(
+                        .toolUse(
+                            id: id, name: name, input: input, status: .running
+                        ))
                     blockCount += 1
                 }
             }
@@ -270,10 +281,11 @@ final class ChatState {
         case .contentBlockDelta(_, let delta):
             streamingText += delta
             // Replace all text blocks with re-split accumulated text
-            let textStartIndex = messages[index].contentBlocks.indices.first(where: {
-                if case .text = messages[index].contentBlocks[$0] { return true }
-                return false
-            }) ?? messages[index].contentBlocks.endIndex
+            let textStartIndex =
+                messages[index].contentBlocks.indices.first(where: {
+                    if case .text = messages[index].contentBlocks[$0] { return true }
+                    return false
+                }) ?? messages[index].contentBlocks.endIndex
             messages[index].contentBlocks.removeSubrange(textStartIndex...)
             let split = ContentBlockSplitter.split(streamingText)
             messages[index].contentBlocks.append(contentsOf: split)
@@ -282,7 +294,8 @@ final class ChatState {
             // Update the matching tool_use status
             for i in messages[index].contentBlocks.indices {
                 if case .toolUse(let id, let name, let input, _) = messages[index].contentBlocks[i],
-                   id == toolUseId {
+                    id == toolUseId
+                {
                     messages[index].contentBlocks[i] = .toolUse(
                         id: id, name: name, input: input,
                         status: isError ? .failed : .completed
@@ -290,12 +303,13 @@ final class ChatState {
                 }
             }
             // Append tool result block
-            messages[index].contentBlocks.append(.toolResult(
-                id: UUID().uuidString,
-                toolUseId: toolUseId,
-                output: content,
-                isError: isError
-            ))
+            messages[index].contentBlocks.append(
+                .toolResult(
+                    id: UUID().uuidString,
+                    toolUseId: toolUseId,
+                    output: content,
+                    isError: isError
+                ))
 
         case .result(let sessionId, _):
             currentSessionId = sessionId

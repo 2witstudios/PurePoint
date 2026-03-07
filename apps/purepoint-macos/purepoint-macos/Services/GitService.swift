@@ -45,7 +45,8 @@ actor GitService {
     // MARK: - PR Commands
 
     func fetchPRList(cwd: String, branch: String?) -> [PullRequestInfo] {
-        let fields = "number,title,url,state,headRefName,baseRefName,author,labels,reviewDecision,additions,deletions,changedFiles,isDraft,createdAt,updatedAt"
+        let fields =
+            "number,title,url,state,headRefName,baseRefName,author,labels,reviewDecision,additions,deletions,changedFiles,isDraft,createdAt,updatedAt"
         var args = ["pr", "list", "--json", fields, "--limit", "50"]
         if let branch {
             args += ["--head", branch]
@@ -90,9 +91,13 @@ actor GitService {
                 if line.hasPrefix("-") && !line.hasPrefix("---") { delCount += 1 }
             }
 
-            if hasNewFile { statusMap[filename] = "A" }
-            else if hasDeletedFile { statusMap[filename] = "D" }
-            else { statusMap[filename] = "M" }
+            if hasNewFile {
+                statusMap[filename] = "A"
+            } else if hasDeletedFile {
+                statusMap[filename] = "D"
+            } else {
+                statusMap[filename] = "M"
+            }
 
             numstatMap[filename] = (addCount, delCount)
         }
@@ -107,7 +112,9 @@ actor GitService {
 
     // MARK: - Diff Parsing
 
-    private func parseDiffOutput(_ diffOutput: String, statusMap: [String: String], numstatMap: [String: (Int, Int)]) -> DiffData {
+    private func parseDiffOutput(_ diffOutput: String, statusMap: [String: String], numstatMap: [String: (Int, Int)])
+        -> DiffData
+    {
         var files: [FileDiff] = []
         let fileSections = diffOutput.components(separatedBy: "diff --git ")
 
@@ -164,26 +171,29 @@ actor GitService {
                 if !inHunk { continue }
 
                 if line.hasPrefix("+") {
-                    currentHunkLines.append(DiffLine(
-                        type: .addition, content: String(line.dropFirst()),
-                        oldLineNo: nil, newLineNo: newLineNo
-                    ))
+                    currentHunkLines.append(
+                        DiffLine(
+                            type: .addition, content: String(line.dropFirst()),
+                            oldLineNo: nil, newLineNo: newLineNo
+                        ))
                     newLineNo += 1
                 } else if line.hasPrefix("-") {
-                    currentHunkLines.append(DiffLine(
-                        type: .deletion, content: String(line.dropFirst()),
-                        oldLineNo: oldLineNo, newLineNo: nil
-                    ))
+                    currentHunkLines.append(
+                        DiffLine(
+                            type: .deletion, content: String(line.dropFirst()),
+                            oldLineNo: oldLineNo, newLineNo: nil
+                        ))
                     oldLineNo += 1
                 } else if line.hasPrefix(" ") {
-                    currentHunkLines.append(DiffLine(
-                        type: .context, content: String(line.dropFirst()),
-                        oldLineNo: oldLineNo, newLineNo: newLineNo
-                    ))
+                    currentHunkLines.append(
+                        DiffLine(
+                            type: .context, content: String(line.dropFirst()),
+                            oldLineNo: oldLineNo, newLineNo: newLineNo
+                        ))
                     oldLineNo += 1
                     newLineNo += 1
                 } else if line.hasPrefix("\\") {
-                    continue // "\ No newline at end of file"
+                    continue  // "\ No newline at end of file"
                 }
             }
 
@@ -194,26 +204,28 @@ actor GitService {
             let stats = numstatMap[filename] ?? (0, 0)
             let statusCode = statusMap[filename] ?? "M"
 
-            files.append(FileDiff(
-                filename: filename,
-                statusCode: statusCode,
-                added: stats.0,
-                removed: stats.1,
-                hunks: hunks
-            ))
+            files.append(
+                FileDiff(
+                    filename: filename,
+                    statusCode: statusCode,
+                    added: stats.0,
+                    removed: stats.1,
+                    hunks: hunks
+                ))
         }
 
         // Include files from status with no diff (e.g. untracked)
         for (file, code) in statusMap {
             if !files.contains(where: { $0.filename == file }) {
                 let stats = numstatMap[file] ?? (0, 0)
-                files.append(FileDiff(
-                    filename: file,
-                    statusCode: code,
-                    added: stats.0,
-                    removed: stats.1,
-                    hunks: []
-                ))
+                files.append(
+                    FileDiff(
+                        filename: file,
+                        statusCode: code,
+                        added: stats.0,
+                        removed: stats.1,
+                        hunks: []
+                    ))
             }
         }
 

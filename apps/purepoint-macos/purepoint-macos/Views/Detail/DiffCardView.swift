@@ -49,7 +49,9 @@ struct DiffCardView: View {
         if components.count > 1 {
             let dir = components.dropLast().joined(separator: "/") + "/"
             let file = String(components.last!)
-            return Text("\(Text(dir).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary))\(Text(file).font(.system(size: 12, weight: .semibold, design: .monospaced)))")
+            return Text(
+                "\(Text(dir).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary))\(Text(file).font(.system(size: 12, weight: .semibold, design: .monospaced)))"
+            )
         } else {
             return Text(fileDiff.filename).font(.system(size: 12, weight: .semibold, design: .monospaced))
         }
@@ -87,7 +89,7 @@ struct DiffCardView: View {
         case "A": "doc.badge.plus"
         case "D": "doc.badge.minus"
         case "M": "doc.text"
-        default:  "doc.text"
+        default: "doc.text"
         }
     }
 
@@ -96,17 +98,17 @@ struct DiffCardView: View {
         case "A": .green
         case "D": .red
         case "M": .yellow
-        default:  .gray
+        default: .gray
         }
     }
 
     private var statusLabel: String {
         switch fileDiff.statusCode {
-        case "M":  "Modified"
-        case "A":  "Added"
-        case "D":  "Deleted"
+        case "M": "Modified"
+        case "A": "Added"
+        case "D": "Deleted"
         case "??": "Untracked"
-        default:   fileDiff.statusCode
+        default: fileDiff.statusCode
         }
     }
 }

@@ -15,7 +15,10 @@ final class GridLayoutNode: Codable, Sendable {
     let first: GridLayoutNode?
     let second: GridLayoutNode?
 
-    init(type: NodeType, agentId: String?, axis: PaneSplitNode.Axis?, ratio: CGFloat?, first: GridLayoutNode?, second: GridLayoutNode?) {
+    init(
+        type: NodeType, agentId: String?, axis: PaneSplitNode.Axis?, ratio: CGFloat?, first: GridLayoutNode?,
+        second: GridLayoutNode?
+    ) {
         self.type = type
         self.agentId = agentId
         self.axis = axis

@@ -87,7 +87,8 @@ private struct PanePlaceholderView: View {
             case .spawnBuiltIn(let variant, let prompt, _):
                 project?.spawnAgentForPane(agent: variant.id, prompt: prompt ?? "", leafId: lid, gridState: gs)
             case .spawnAgentDef(let def, let prompt):
-                project?.spawnAgentForPane(agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", leafId: lid, gridState: gs)
+                project?.spawnAgentForPane(
+                    agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", leafId: lid, gridState: gs)
             case .runSwarm:
                 break
             }

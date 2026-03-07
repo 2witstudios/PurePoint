@@ -96,7 +96,8 @@ struct AgentCreationSheet: View {
                 .keyboardShortcut(.cancelAction)
             Spacer()
             Button("Create") {
-                let parsedTags = tags
+                let parsedTags =
+                    tags
                     .split(separator: ",")
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }

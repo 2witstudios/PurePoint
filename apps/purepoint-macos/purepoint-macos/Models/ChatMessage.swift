@@ -11,7 +11,10 @@ struct ChatMessage: Identifiable, Sendable {
     var contentBlocks: [ContentBlock]
     var isStreaming: Bool
 
-    init(id: String = UUID().uuidString, role: ChatRole, timestamp: Date = Date(), contentBlocks: [ContentBlock] = [], isStreaming: Bool = false) {
+    init(
+        id: String = UUID().uuidString, role: ChatRole, timestamp: Date = Date(), contentBlocks: [ContentBlock] = [],
+        isStreaming: Bool = false
+    ) {
         self.id = id
         self.role = role
         self.timestamp = timestamp

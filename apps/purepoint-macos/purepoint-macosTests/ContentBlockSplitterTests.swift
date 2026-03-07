@@ -16,14 +16,14 @@ struct ContentBlockSplitterTests {
 
     @Test func givenSingleCodeFenceShouldReturnTextAndCodeBlock() {
         let input = """
-        Here is some code:
+            Here is some code:
 
-        ```swift
-        let x = 42
-        ```
+            ```swift
+            let x = 42
+            ```
 
-        And some more text.
-        """
+            And some more text.
+            """
 
         let blocks = ContentBlockSplitter.split(input)
         #expect(blocks.count == 3)
@@ -50,16 +50,16 @@ struct ContentBlockSplitterTests {
 
     @Test func givenMultipleCodeFencesShouldSplitCorrectly() {
         let input = """
-        First:
-        ```python
-        print("a")
-        ```
-        Middle text.
-        ```rust
-        fn main() {}
-        ```
-        End.
-        """
+            First:
+            ```python
+            print("a")
+            ```
+            Middle text.
+            ```rust
+            fn main() {}
+            ```
+            End.
+            """
 
         let blocks = ContentBlockSplitter.split(input)
         #expect(blocks.count == 5)
@@ -75,16 +75,18 @@ struct ContentBlockSplitterTests {
 
     @Test func givenCodeFenceWithLanguageShouldCaptureLanguage() {
         let input = """
-        ```typescript
-        const x: number = 1;
-        ```
-        """
+            ```typescript
+            const x: number = 1;
+            ```
+            """
 
         let blocks = ContentBlockSplitter.split(input)
-        guard case .codeBlock(_, let lang, _) = blocks.first(where: {
-            if case .codeBlock = $0 { return true }
-            return false
-        }) else {
+        guard
+            case .codeBlock(_, let lang, _) = blocks.first(where: {
+                if case .codeBlock = $0 { return true }
+                return false
+            })
+        else {
             Issue.record("Expected .codeBlock")
             return
         }
@@ -93,16 +95,18 @@ struct ContentBlockSplitterTests {
 
     @Test func givenCodeFenceWithoutLanguageShouldDefaultToNil() {
         let input = """
-        ```
-        plain code
-        ```
-        """
+            ```
+            plain code
+            ```
+            """
 
         let blocks = ContentBlockSplitter.split(input)
-        guard case .codeBlock(_, let lang, let code) = blocks.first(where: {
-            if case .codeBlock = $0 { return true }
-            return false
-        }) else {
+        guard
+            case .codeBlock(_, let lang, let code) = blocks.first(where: {
+                if case .codeBlock = $0 { return true }
+                return false
+            })
+        else {
             Issue.record("Expected .codeBlock")
             return
         }
@@ -112,10 +116,10 @@ struct ContentBlockSplitterTests {
 
     @Test func givenUnclosedCodeFenceShouldTreatAsText() {
         let input = """
-        Some text
-        ```python
-        unclosed code block
-        """
+            Some text
+            ```python
+            unclosed code block
+            """
 
         let blocks = ContentBlockSplitter.split(input)
         #expect(blocks.count == 1)
@@ -128,10 +132,10 @@ struct ContentBlockSplitterTests {
 
     @Test func givenOnlyCodeFenceShouldReturnSingleCodeBlock() {
         let input = """
-        ```js
-        console.log("hi")
-        ```
-        """
+            ```js
+            console.log("hi")
+            ```
+            """
 
         let blocks = ContentBlockSplitter.split(input)
         let codeBlocks = blocks.filter {

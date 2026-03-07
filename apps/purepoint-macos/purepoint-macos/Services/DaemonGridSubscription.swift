@@ -18,15 +18,15 @@ actor DaemonGridSubscription {
     func start() async {
         guard !stopped else { return }
 
-        var backoff: UInt64 = 500_000_000 // 0.5s
-        let maxBackoff: UInt64 = 5_000_000_000 // 5s
+        var backoff: UInt64 = 500_000_000  // 0.5s
+        let maxBackoff: UInt64 = 5_000_000_000  // 5s
         var retries = 0
         let maxRetries = 20
 
         while !stopped {
             do {
                 try await runSubscriptionLoop()
-                break // Normal exit
+                break  // Normal exit
             } catch is CancellationError {
                 break
             } catch {

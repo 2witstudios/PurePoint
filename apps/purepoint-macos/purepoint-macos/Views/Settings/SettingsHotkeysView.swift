@@ -153,13 +153,15 @@ private struct EditableHotkeyRow: View {
         }
 
         recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
-            if event.keyCode == SpecialKey.escape.keyCode && event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty {
+            if event.keyCode == SpecialKey.escape.keyCode
+                && event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty
+            {
                 stopRecording()
                 return nil
             }
 
             guard let binding = KeyBinding.from(event: event) else {
-                return nil // Ignore bare keys without modifiers
+                return nil  // Ignore bare keys without modifiers
             }
 
             if let conflict = keyBindingState.detectConflict(binding, excluding: action) {

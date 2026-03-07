@@ -12,7 +12,9 @@ struct DaemonErrorBanner: View {
                 .font(.callout)
                 .lineLimit(2)
             Spacer()
-            Button { onDismiss() } label: {
+            Button {
+                onDismiss()
+            } label: {
                 Image(systemName: "xmark")
                     .foregroundStyle(.secondary)
             }

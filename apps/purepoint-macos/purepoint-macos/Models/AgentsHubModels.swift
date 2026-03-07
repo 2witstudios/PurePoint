@@ -53,7 +53,10 @@ struct AgentDefinition: Identifiable {
         self.icon = info.icon
     }
 
-    init(name: String, agentType: String = "claude", template: String? = nil, inlinePrompt: String? = nil, tags: [String] = [], scope: String = "local", availableInCommandDialog: Bool = true, icon: String? = nil) {
+    init(
+        name: String, agentType: String = "claude", template: String? = nil, inlinePrompt: String? = nil,
+        tags: [String] = [], scope: String = "local", availableInCommandDialog: Bool = true, icon: String? = nil
+    ) {
         self.id = "\(scope):\(name)"
         self.name = name
         self.agentType = agentType
@@ -89,7 +92,10 @@ struct SwarmDefinition: Identifiable {
         self.scope = info.scope
     }
 
-    init(name: String, worktreeCount: Int = 1, worktreeTemplate: String = "", roster: [SwarmRosterItem] = [], includeTerminal: Bool = false, scope: String = "local") {
+    init(
+        name: String, worktreeCount: Int = 1, worktreeTemplate: String = "", roster: [SwarmRosterItem] = [],
+        includeTerminal: Bool = false, scope: String = "local"
+    ) {
         self.id = "\(scope):\(name)"
         self.name = name
         self.worktreeCount = worktreeCount

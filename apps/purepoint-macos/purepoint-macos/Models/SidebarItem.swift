@@ -14,8 +14,8 @@ enum SidebarNavItem: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .dashboard: "bubble.left.and.bubble.right.fill"
-        case .agents:    "cpu"
-        case .schedule:  "calendar"
+        case .agents: "cpu"
+        case .schedule: "calendar"
         }
     }
 }
@@ -25,7 +25,7 @@ enum SidebarSelection: Hashable {
     case agent(String)
     case terminal(String)
     case worktree(String)
-    case project(String)    // projectRoot path
+    case project(String)  // projectRoot path
 }
 
 // MARK: - SidebarNode (NSOutlineView reference-type wrapper)

@@ -53,8 +53,9 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         super.layout()
         let currentSize = terminalView.frame.size
         guard currentSize != lastKnownTerminalViewSize,
-              currentSize.width > 1,
-              currentSize.height > 1 else { return }
+            currentSize.width > 1,
+            currentSize.height > 1
+        else { return }
         lastKnownTerminalViewSize = currentSize
         terminalView.setFrameSize(currentSize)
     }
@@ -156,8 +157,11 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         layer?.borderWidth = 0
-        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-              !urls.isEmpty else {
+        guard
+            let urls = sender.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+            !urls.isEmpty
+        else {
             return false
         }
         let escaped = urls.map { shellEscape($0.path) }.joined(separator: " ")
@@ -171,7 +175,8 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     private func handleScrollEvent(_ event: NSEvent) -> NSEvent? {
         guard let targetView = event.window?.contentView?.hitTest(event.locationInWindow),
-              targetView === terminalView || targetView.isDescendant(of: terminalView) else {
+            targetView === terminalView || targetView.isDescendant(of: terminalView)
+        else {
             return event
         }
 

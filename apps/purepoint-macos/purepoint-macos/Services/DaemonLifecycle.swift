@@ -18,7 +18,8 @@ enum DaemonLifecycle {
         if let bundlePath = Bundle.main.executableURL?
             .deletingLastPathComponent()
             .appendingPathComponent("pu-engine").path,
-           FileManager.default.isExecutableFile(atPath: bundlePath) {
+            FileManager.default.isExecutableFile(atPath: bundlePath)
+        {
             return bundlePath
         }
 
@@ -79,9 +80,10 @@ private actor DaemonLauncher {
     private func killExistingDaemon() {
         // Read PID from file
         guard let content = try? String(contentsOfFile: pidPath, encoding: .utf8),
-              let pid = pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines)),
-              pid > 0,
-              kill(pid, 0) == 0 else {
+            let pid = pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines)),
+            pid > 0,
+            kill(pid, 0) == 0
+        else {
             // No running process — just clean up stale files
             cleanupFiles()
             return
@@ -124,16 +126,19 @@ private actor DaemonLauncher {
         // Redirect stderr to log file for diagnostics
         try? FileManager.default.createDirectory(at: puDir, withIntermediateDirectories: true)
         let logFile = puDir.appendingPathComponent("daemon.log")
-        process.standardError = FileHandle(forWritingAtPath: logFile.path) ?? {
-            FileManager.default.createFile(atPath: logFile.path, contents: nil)
-            return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
-        }()
+        process.standardError =
+            FileHandle(forWritingAtPath: logFile.path)
+            ?? {
+                FileManager.default.createFile(atPath: logFile.path, contents: nil)
+                return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
+            }()
 
         try process.run()
 
         // Close stderr FileHandle in parent — the child has its own copy
         if let stderrHandle = process.standardError as? FileHandle,
-           stderrHandle !== FileHandle.nullDevice {
+            stderrHandle !== FileHandle.nullDevice
+        {
             try? stderrHandle.close()
         }
 
@@ -153,7 +158,8 @@ private actor DaemonLauncher {
         guard let binaryPath else { return false }
 
         guard let binaryDate = modDate(path: binaryPath),
-              let pidDate = modDate(path: pidPath) else {
+            let pidDate = modDate(path: pidPath)
+        else {
             print("[Daemon] shouldRestart: missing dates for binary=\(binaryPath) or pid=\(pidPath)")
             return false
         }

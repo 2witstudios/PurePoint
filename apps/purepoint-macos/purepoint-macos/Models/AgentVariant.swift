@@ -3,7 +3,7 @@ import Foundation
 struct AgentVariant: Identifiable {
     let id: String
     let displayName: String
-    let icon: String              // SF Symbol
+    let icon: String  // SF Symbol
     let subtitle: String
     let promptPlaceholder: String
     let kind: Kind

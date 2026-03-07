@@ -111,8 +111,8 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     var isMonitorHandled: Bool {
         switch self {
         case .focusSidebar, .focusContent, .toggleSidebar,
-             .navDashboard, .navAgents, .navSchedule,
-             .toggleChatSidebar:
+            .navDashboard, .navAgents, .navSchedule,
+            .toggleChatSidebar:
             return true
         default:
             return false
@@ -134,9 +134,9 @@ enum KeyModifier: String, Codable, Hashable, Comparable {
 
     var symbol: String {
         switch self {
-        case .control: "\u{2303}" // ⌃
+        case .control: "\u{2303}"  // ⌃
         case .option: "\u{2325}"  // ⌥
-        case .shift: "\u{21E7}"   // ⇧
+        case .shift: "\u{21E7}"  // ⇧
         case .command: "\u{2318}"  // ⌘
         }
     }
@@ -189,15 +189,15 @@ enum SpecialKey: String, Codable, Hashable {
 
     var displaySymbol: String {
         switch self {
-        case .upArrow: "\u{2191}"    // ↑
+        case .upArrow: "\u{2191}"  // ↑
         case .downArrow: "\u{2193}"  // ↓
         case .leftArrow: "\u{2190}"  // ←
-        case .rightArrow: "\u{2192}" // →
-        case .escape: "\u{238B}"     // ⎋
-        case .return: "\u{21A9}"     // ↩
-        case .tab: "\u{21E5}"        // ⇥
-        case .space: "\u{2423}"      // ␣
-        case .delete: "\u{232B}"     // ⌫
+        case .rightArrow: "\u{2192}"  // →
+        case .escape: "\u{238B}"  // ⎋
+        case .return: "\u{21A9}"  // ↩
+        case .tab: "\u{21E5}"  // ⇥
+        case .space: "\u{2423}"  // ␣
+        case .delete: "\u{232B}"  // ⌫
         }
     }
 
@@ -267,12 +267,14 @@ enum KeyBindingKey: Codable, Equatable, Hashable {
         switch type {
         case "character":
             guard let c = value.first else {
-                throw DecodingError.dataCorruptedError(forKey: .value, in: container, debugDescription: "Empty character")
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value, in: container, debugDescription: "Empty character")
             }
             self = .character(c)
         case "special":
             guard let s = SpecialKey(rawValue: value) else {
-                throw DecodingError.dataCorruptedError(forKey: .value, in: container, debugDescription: "Unknown special key")
+                throw DecodingError.dataCorruptedError(
+                    forKey: .value, in: container, debugDescription: "Unknown special key")
             }
             self = .special(s)
         default:

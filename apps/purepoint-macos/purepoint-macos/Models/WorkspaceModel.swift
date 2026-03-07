@@ -27,7 +27,10 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
         name.isEmpty ? id : name
     }
 
-    init(id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String, sessionId: String? = nil, suspended: Bool = false) {
+    init(
+        id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String,
+        sessionId: String? = nil, suspended: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.agentType = agentType

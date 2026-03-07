@@ -20,7 +20,7 @@ struct ChatStateTests {
         let mock = MockClaudeProcess()
         mock.events = [
             .assistant(content: [.text("Hello back!")]),
-            .result(sessionId: "sess-1", durationMs: 100)
+            .result(sessionId: "sess-1", durationMs: 100),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -35,7 +35,7 @@ struct ChatStateTests {
         let mock = MockClaudeProcess()
         mock.events = [
             .assistant(content: [.text("Here is text")]),
-            .result(sessionId: "sess-2", durationMs: 200)
+            .result(sessionId: "sess-2", durationMs: 200),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -53,7 +53,7 @@ struct ChatStateTests {
         let mock = MockClaudeProcess()
         mock.events = [
             .assistant(content: [.text("Let me read that."), .toolUse(id: "t1", name: "Read", input: "{}")]),
-            .result(sessionId: "sess-3", durationMs: 150)
+            .result(sessionId: "sess-3", durationMs: 150),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -71,7 +71,7 @@ struct ChatStateTests {
         let mock = MockClaudeProcess()
         mock.events = [
             .assistant(content: [.text("Done")]),
-            .result(sessionId: "sess-4", durationMs: 50)
+            .result(sessionId: "sess-4", durationMs: 50),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -120,7 +120,7 @@ struct ChatStateTests {
         // Provide events so streaming starts
         mock.events = [
             .assistant(content: [.text("working...")]),
-            .result(sessionId: "s5", durationMs: 100)
+            .result(sessionId: "s5", durationMs: 100),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -158,7 +158,7 @@ struct ChatStateTests {
         mock.events = [
             .contentBlockDelta(index: 0, delta: "Hello "),
             .contentBlockDelta(index: 0, delta: "world!"),
-            .result(sessionId: "sess-delta", durationMs: 100)
+            .result(sessionId: "sess-delta", durationMs: 100),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -179,7 +179,7 @@ struct ChatStateTests {
             .contentBlockDelta(index: 0, delta: "partial "),
             .contentBlockDelta(index: 0, delta: "text"),
             .assistant(content: [.text("final authoritative text")]),
-            .result(sessionId: "sess-replace", durationMs: 100)
+            .result(sessionId: "sess-replace", durationMs: 100),
         ]
         let state = ChatState(processProvider: mock)
 
@@ -266,9 +266,9 @@ struct ChatStateTests {
         let path = tempDir.appendingPathComponent("sess.jsonl")
         // Write a simple transcript
         let lines = """
-        {"type":"user","sessionId":"sess-load","timestamp":"2026-03-01T09:01:00.000Z","message":{"role":"user","content":"Hello"}}
-        {"type":"assistant","sessionId":"sess-load","timestamp":"2026-03-01T09:02:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}]}}
-        """
+            {"type":"user","sessionId":"sess-load","timestamp":"2026-03-01T09:01:00.000Z","message":{"role":"user","content":"Hello"}}
+            {"type":"assistant","sessionId":"sess-load","timestamp":"2026-03-01T09:02:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}]}}
+            """
         try Data(lines.utf8).write(to: path)
 
         let session = ClaudeConversation(

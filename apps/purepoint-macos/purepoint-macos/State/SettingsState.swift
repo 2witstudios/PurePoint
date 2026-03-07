@@ -77,7 +77,8 @@ final class SettingsState {
             launchAtLogin = defaults.bool(forKey: "PP_launchAtLogin")
         }
         if let raw = defaults.string(forKey: "PP_appearance"),
-           let v = AppAppearance(rawValue: raw) {
+            let v = AppAppearance(rawValue: raw)
+        {
             appearance = v
         }
         if defaults.object(forKey: "PP_terminalFontSize") != nil {
