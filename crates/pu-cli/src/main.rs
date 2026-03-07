@@ -144,6 +144,18 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Show git diffs across agent worktrees
+    Diff {
+        /// Diff a specific worktree
+        #[arg(long)]
+        worktree: Option<String>,
+        /// Show file summary instead of full diff
+        #[arg(long)]
+        stat: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove worktrees, their agents, and branches
     Clean {
         /// Remove a specific worktree
@@ -588,6 +600,11 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Diff {
+            worktree,
+            stat,
+            json,
+        } => commands::diff::run(&socket, worktree, stat, json).await,
         Commands::Clean {
             worktree,
             all,

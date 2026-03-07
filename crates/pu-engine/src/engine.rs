@@ -167,7 +167,8 @@ impl Engine {
             | Request::ListSchedules { project_root }
             | Request::SaveSchedule { project_root, .. }
             | Request::EnableSchedule { project_root, .. }
-            | Request::DisableSchedule { project_root, .. } => {
+            | Request::DisableSchedule { project_root, .. }
+            | Request::Diff { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -392,6 +393,14 @@ impl Engine {
             }
             Request::DisableSchedule { project_root, name } => {
                 self.handle_disable_schedule(&project_root, &name).await
+            }
+            Request::Diff {
+                project_root,
+                worktree_id,
+                stat,
+            } => {
+                self.handle_diff(&project_root, worktree_id.as_deref(), stat)
+                    .await
             }
         }
     }
@@ -2927,6 +2936,77 @@ impl Engine {
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
         }
+    }
+
+    async fn handle_diff(
+        &self,
+        project_root: &str,
+        worktree_id: Option<&str>,
+        stat: bool,
+    ) -> Response {
+        let m = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let worktrees: Vec<WorktreeEntry> = if let Some(wt_id) = worktree_id {
+            match m.worktrees.get(wt_id) {
+                Some(wt) => vec![wt.clone()],
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("worktree '{wt_id}' not found"),
+                    };
+                }
+            }
+        } else {
+            m.worktrees
+                .into_values()
+                .filter(|wt| wt.status == WorktreeStatus::Active)
+                .collect()
+        };
+
+        if worktrees.is_empty() {
+            return Response::DiffResult { diffs: vec![] };
+        }
+
+        let mut diffs = Vec::new();
+        for wt in &worktrees {
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            if !wt_path.exists() {
+                continue;
+            }
+            let base = wt.base_branch.as_deref();
+            match git::diff_worktree(&wt_path, base, stat).await {
+                Ok(output) => {
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: output.diff,
+                        files_changed: output.files_changed,
+                        insertions: output.insertions,
+                        deletions: output.deletions,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("failed to diff worktree {}: {}", wt.id, e);
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: format!("error: {e}"),
+                        files_changed: 0,
+                        insertions: 0,
+                        deletions: 0,
+                    });
+                }
+            }
+        }
+
+        Response::DiffResult { diffs }
     }
 }
 
