@@ -138,7 +138,8 @@ final class ProjectState: Identifiable {
     // MARK: - Agent Operations
 
     func createAgent(
-        agent: String, prompt: String, name: String? = nil, isWorktree: Bool = false, selection: SidebarSelection?
+        agent: String, prompt: String, name: String? = nil, isWorktree: Bool = false, selection: SidebarSelection?,
+        command: String? = nil
     ) {
         let root = projectRoot
 
@@ -181,7 +182,8 @@ final class ProjectState: Identifiable {
                 let response = try await client.send(
                     .spawn(
                         projectRoot: root, prompt: prompt, agent: agent,
-                        name: name, root: spawnRoot, worktree: spawnWorktree
+                        name: name, root: spawnRoot, worktree: spawnWorktree,
+                        command: command
                     ))
                 switch response {
                 case .spawnResult(_, let agentId, _):
@@ -261,7 +263,9 @@ final class ProjectState: Identifiable {
                 agent: variant.id, prompt: prompt ?? "", name: name, isWorktree: variant.kind == .worktree,
                 selection: selection)
         case .spawnAgentDef(let def, let prompt):
-            createAgent(agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", selection: selection)
+            createAgent(
+                agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "",
+                selection: selection, command: def.command)
         case .runSwarm(let def):
             let root = projectRoot
             Task { await hub.runSwarm(projectRoot: root, name: def.name) }

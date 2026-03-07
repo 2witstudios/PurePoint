@@ -188,7 +188,10 @@ struct DaemonClientParseTests {
             """.data(using: .utf8)!
 
         let response = DaemonClient.parse(json)
-        guard case .templateDetail(let name, let description, let agent, let body, let source, let variables) = response
+        guard
+            case .templateDetail(
+                let name, let description, let agent, let body,
+                let source, let variables, let command) = response
         else {
             Issue.record("expected templateDetail, got \(response)")
             return
@@ -199,6 +202,7 @@ struct DaemonClientParseTests {
         #expect(body == "Review {{BRANCH}}.")
         #expect(source == "local")
         #expect(variables == ["BRANCH"])
+        #expect(command == nil)
     }
 
     @Test func testParseAgentDefList() {

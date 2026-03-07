@@ -262,12 +262,16 @@ pub fn print_response(response: &Response, json_mode: bool) {
             body,
             source,
             variables,
+            command,
         } => {
             println!("{} ({})", name.bold(), source.dimmed());
             if !description.is_empty() {
                 println!("  {description}");
             }
             println!("  Agent: {agent}");
+            if let Some(cmd) = &command {
+                println!("  Command: {cmd}");
+            }
             if !variables.is_empty() {
                 println!("  Variables: {}", variables.join(", "));
             }
@@ -283,9 +287,13 @@ pub fn print_response(response: &Response, json_mode: bool) {
             scope,
             available_in_command_dialog,
             icon,
+            command,
         } => {
             println!("{} ({})", name.bold(), scope.dimmed());
             println!("  Type: {agent_type}");
+            if let Some(cmd) = &command {
+                println!("  Command: {cmd}");
+            }
             if let Some(tpl) = template {
                 println!("  Template: {tpl}");
             }

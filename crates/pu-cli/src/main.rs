@@ -47,6 +47,9 @@ enum Commands {
         /// Read prompt from a file path
         #[arg(long, conflicts_with = "template")]
         file: Option<String>,
+        /// Command to run in the terminal (for terminal agents)
+        #[arg(long)]
+        command: Option<String>,
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
@@ -240,6 +243,9 @@ enum AgentAction {
         /// Inline prompt text
         #[arg(long)]
         inline_prompt: Option<String>,
+        /// Command to run (for terminal agents)
+        #[arg(long)]
+        command: Option<String>,
         /// Comma-separated tags
         #[arg(long, default_value = "")]
         tags: String,
@@ -478,11 +484,13 @@ async fn main() {
             worktree,
             template,
             file,
+            command,
             vars,
             json,
         } => {
             commands::spawn::run(
-                &socket, prompt, agent, name, base, root, worktree, template, file, vars, json,
+                &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
+                json,
             )
             .await
         }
@@ -536,6 +544,7 @@ async fn main() {
                 agent_type,
                 template,
                 inline_prompt,
+                command,
                 tags,
                 scope,
                 json,
@@ -546,6 +555,7 @@ async fn main() {
                     &agent_type,
                     template,
                     inline_prompt,
+                    command,
                     &tags,
                     &scope,
                     json,

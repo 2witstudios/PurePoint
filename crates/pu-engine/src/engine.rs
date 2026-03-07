@@ -195,9 +195,19 @@ impl Engine {
                 base,
                 root,
                 worktree,
+                command,
             } => {
-                self.handle_spawn(&project_root, &prompt, &agent, name, base, root, worktree)
-                    .await
+                self.handle_spawn(
+                    &project_root,
+                    &prompt,
+                    &agent,
+                    name,
+                    base,
+                    root,
+                    worktree,
+                    command,
+                )
+                .await
             }
             Request::CreateWorktree {
                 project_root,
@@ -256,9 +266,18 @@ impl Engine {
                 agent,
                 body,
                 scope,
+                command,
             } => {
-                self.handle_save_template(&project_root, &name, &description, &agent, &body, &scope)
-                    .await
+                self.handle_save_template(
+                    &project_root,
+                    &name,
+                    &description,
+                    &agent,
+                    &body,
+                    &scope,
+                    command,
+                )
+                .await
             }
             Request::DeleteTemplate {
                 project_root,
@@ -285,6 +304,7 @@ impl Engine {
                 scope,
                 available_in_command_dialog,
                 icon,
+                command,
             } => {
                 self.handle_save_agent_def(
                     &project_root,
@@ -296,6 +316,7 @@ impl Engine {
                     &scope,
                     available_in_command_dialog,
                     icon,
+                    command,
                 )
                 .await
             }
@@ -585,6 +606,7 @@ impl Engine {
         base: Option<String>,
         root: bool,
         worktree: Option<String>,
+        terminal_command: Option<String>,
     ) -> Response {
         let root_path = Path::new(project_root);
 
@@ -648,53 +670,88 @@ impl Engine {
                 .unwrap_or_else(|_| "HEAD".into()),
         };
 
-        // Build command with prompt
-        let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, agent_type) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
-        let mut args = cmd_args;
+        // Normalize empty command to None
+        let terminal_command = terminal_command.filter(|c| !c.is_empty());
 
-        // Add agent-type-specific flags (not stored in config — engine concern)
-        match agent_type {
-            "claude" => {
-                if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
-                    args.insert(0, "--dangerously-skip-permissions".into());
-                }
-            }
-            "codex" => {
-                if !args.iter().any(|a| a == "--full-auto") {
-                    args.insert(0, "--full-auto".into());
-                }
-            }
-            _ => {}
-        }
+        // When a terminal command is set, it becomes the PTY process directly
+        let (command, args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
+            terminal_command
+        {
+            let has_metacharacters = cmd.contains('|')
+                || cmd.contains("&&")
+                || cmd.contains(';')
+                || cmd.contains('>')
+                || cmd.contains('<')
+                || cmd.contains('$');
 
-        // Generate session ID for claude agents (enables resume via --resume)
-        let session_id = if agent_type == "claude" {
-            let id = pu_core::id::session_id();
-            args.push("--session-id".into());
-            args.push(id.clone());
-            Some(id)
-        } else {
-            None
-        };
-
-        // Claude prompt via argv can stall first render in some terminals; keep stdin injection
-        // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
-        let inject_prompt_via_stdin =
-            Self::should_inject_prompt_via_stdin(agent_type, agent_cfg.interactive, prompt);
-        if !inject_prompt_via_stdin && !prompt.is_empty() {
-            let prompt_flag =
-                Self::resolved_prompt_flag(agent_type, agent_cfg.prompt_flag.as_deref());
-            if let Some(flag) = prompt_flag {
-                args.push(flag);
-                args.push(prompt.to_string());
+            let (cmd_bin, cmd_args) = if has_metacharacters {
+                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+                (shell, vec!["-c".to_string(), cmd.clone()])
             } else {
-                // Default prompt style is positional (for example codex [PROMPT]).
-                args.push(prompt.to_string());
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.is_empty() {
+                    // Shouldn't happen after filter, but handle gracefully
+                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+                    (shell, vec![])
+                } else {
+                    (
+                        parts[0].to_string(),
+                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                    )
+                }
+            };
+            (cmd_bin, cmd_args, None, false)
+        } else {
+            // Standard agent flow
+            let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, agent_type) {
+                Ok(v) => v,
+                Err(e) => return e,
+            };
+            let mut args = cmd_args;
+
+            // Add agent-type-specific flags (not stored in config — engine concern)
+            match agent_type {
+                "claude" => {
+                    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+                        args.insert(0, "--dangerously-skip-permissions".into());
+                    }
+                }
+                "codex" => {
+                    if !args.iter().any(|a| a == "--full-auto") {
+                        args.insert(0, "--full-auto".into());
+                    }
+                }
+                _ => {}
             }
-        }
+
+            // Generate session ID for claude agents (enables resume via --resume)
+            let session_id = if agent_type == "claude" {
+                let id = pu_core::id::session_id();
+                args.push("--session-id".into());
+                args.push(id.clone());
+                Some(id)
+            } else {
+                None
+            };
+
+            // Claude prompt via argv can stall first render in some terminals; keep stdin injection
+            // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
+            let inject_prompt_via_stdin =
+                Self::should_inject_prompt_via_stdin(agent_type, agent_cfg.interactive, prompt);
+            if !inject_prompt_via_stdin && !prompt.is_empty() {
+                let prompt_flag =
+                    Self::resolved_prompt_flag(agent_type, agent_cfg.prompt_flag.as_deref());
+                if let Some(flag) = prompt_flag {
+                    args.push(flag);
+                    args.push(prompt.to_string());
+                } else {
+                    // Default prompt style is positional (for example codex [PROMPT]).
+                    args.push(prompt.to_string());
+                }
+            }
+
+            (command, args, session_id, inject_prompt_via_stdin)
+        };
 
         // Determine working directory
         let (cwd, worktree_id) = if root || worktree.is_some() {
@@ -846,6 +903,7 @@ impl Engine {
             session_id,
             suspended_at: None,
             suspended: false,
+            command: terminal_command,
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -1887,6 +1945,7 @@ impl Engine {
                     agent: t.agent,
                     source: t.source,
                     variables: pu_core::template::extract_variables(&t.body),
+                    command: t.command,
                 })
                 .collect();
             infos
@@ -1917,6 +1976,7 @@ impl Engine {
                 variables: pu_core::template::extract_variables(&t.body),
                 body: t.body,
                 source: t.source,
+                command: t.command,
             },
             Ok(None) => Response::Error {
                 code: "NOT_FOUND".into(),
@@ -1929,6 +1989,7 @@ impl Engine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_save_template(
         &self,
         project_root: &str,
@@ -1937,6 +1998,7 @@ impl Engine {
         agent: &str,
         body: &str,
         scope: &str,
+        command: Option<String>,
     ) -> Response {
         let dir = match Self::resolve_scope_dir(
             project_root,
@@ -1957,7 +2019,7 @@ impl Engine {
         let a = agent.to_string();
         let b = body.to_string();
         match tokio::task::spawn_blocking(move || {
-            pu_core::template::save_template(&dir, &n, &d, &a, &b)
+            pu_core::template::save_template_with_command(&dir, &n, &d, &a, &b, command.as_deref())
         })
         .await
         {
@@ -2027,6 +2089,7 @@ impl Engine {
                     scope: d.scope,
                     available_in_command_dialog: d.available_in_command_dialog,
                     icon: d.icon,
+                    command: d.command,
                 })
                 .collect();
             infos
@@ -2058,6 +2121,7 @@ impl Engine {
                 scope: d.scope,
                 available_in_command_dialog: d.available_in_command_dialog,
                 icon: d.icon,
+                command: d.command,
             },
             Ok(None) => Response::Error {
                 code: "NOT_FOUND".into(),
@@ -2082,6 +2146,7 @@ impl Engine {
         scope: &str,
         available_in_command_dialog: bool,
         icon: Option<String>,
+        command: Option<String>,
     ) -> Response {
         let dir = match Self::resolve_scope_dir(
             project_root,
@@ -2106,6 +2171,7 @@ impl Engine {
             scope: scope.to_string(),
             available_in_command_dialog,
             icon,
+            command,
         };
         match tokio::task::spawn_blocking(move || pu_core::agent_def::save_agent_def(&dir, &def))
             .await
@@ -2354,7 +2420,8 @@ impl Engine {
         };
 
         // Pre-resolve all agent defs and their prompts once, before iterating worktrees.
-        let mut resolved_roster: Vec<(pu_core::agent_def::AgentDef, String, u32)> = Vec::new();
+        let mut resolved_roster: Vec<(pu_core::agent_def::AgentDef, String, Option<String>, u32)> =
+            Vec::new();
         for entry in &swarm_def.roster {
             let pr2 = project_root.to_string();
             let ad_name = entry.agent_def.clone();
@@ -2381,7 +2448,7 @@ impl Engine {
                 }
             };
 
-            let prompt = if let Some(ref tpl_name) = agent_def.template {
+            let (prompt, template_command) = if let Some(ref tpl_name) = agent_def.template {
                 let pr3 = project_root.to_string();
                 let tn = tpl_name.clone();
                 let vars_clone = vars.clone();
@@ -2390,7 +2457,11 @@ impl Engine {
                 })
                 .await
                 {
-                    Ok(Some(tpl)) => pu_core::template::render(&tpl, &vars_clone),
+                    Ok(Some(tpl)) => {
+                        let rendered = pu_core::template::render(&tpl, &vars_clone);
+                        let cmd = pu_core::template::render_command(&tpl, &vars_clone);
+                        (rendered, cmd)
+                    }
                     Ok(None) => {
                         return Response::Error {
                             code: "NOT_FOUND".into(),
@@ -2405,10 +2476,10 @@ impl Engine {
                     }
                 }
             } else {
-                agent_def.inline_prompt.clone().unwrap_or_default()
+                (agent_def.inline_prompt.clone().unwrap_or_default(), None)
             };
 
-            resolved_roster.push((agent_def, prompt, entry.quantity));
+            resolved_roster.push((agent_def, prompt, template_command, entry.quantity));
         }
 
         let mut spawned_agents = Vec::new();
@@ -2424,7 +2495,7 @@ impl Engine {
 
             let mut worktree_id: Option<String> = None;
 
-            for (agent_def, prompt, quantity) in &resolved_roster {
+            for (agent_def, prompt, template_command, quantity) in &resolved_roster {
                 for q in 0..*quantity {
                     let agent_name = format!("{}-{}-{wt_index}-{q}", swarm_name, agent_def.name);
 
@@ -2435,6 +2506,12 @@ impl Engine {
                         (Some(wt_name.clone()), None)
                     };
 
+                    // Agent def command takes precedence, then template command
+                    let resolved_command = agent_def
+                        .command
+                        .clone()
+                        .or_else(|| template_command.clone());
+
                     let resp = self
                         .handle_spawn(
                             project_root,
@@ -2444,6 +2521,7 @@ impl Engine {
                             None,
                             false,
                             spawn_worktree,
+                            resolved_command,
                         )
                         .await;
 
@@ -2466,6 +2544,28 @@ impl Engine {
                             };
                         }
                         _ => {}
+                    }
+                }
+            }
+
+            // If include_terminal is set, spawn a bare terminal into this worktree
+            if swarm_def.include_terminal {
+                if let Some(ref wt_id) = worktree_id {
+                    let term_name = format!("{swarm_name}-terminal-{wt_index}");
+                    let resp = self
+                        .handle_spawn(
+                            project_root,
+                            "",
+                            "terminal",
+                            Some(term_name),
+                            None,
+                            false,
+                            Some(wt_id.clone()),
+                            None,
+                        )
+                        .await;
+                    if let Response::SpawnResult { agent_id, .. } = resp {
+                        spawned_agents.push(agent_id);
                     }
                 }
             }
@@ -2835,16 +2935,23 @@ impl Engine {
                 let pr = schedule.project_root.clone();
                 let root = Path::new(&pr);
                 if let Some(def) = pu_core::agent_def::find_agent_def(root, name) {
-                    let prompt = if let Some(ref ip) = def.inline_prompt {
-                        ip.clone()
+                    let empty_vars = std::collections::HashMap::new();
+                    let (prompt, template_command) = if let Some(ref ip) = def.inline_prompt {
+                        (ip.clone(), None)
                     } else if let Some(ref tpl_name) = def.template {
-                        pu_core::template::find_template(root, tpl_name)
-                            .map(|t| t.body)
-                            .unwrap_or_else(|| {
-                                format!("Scheduled: agent def '{name}' (template not found)")
-                            })
+                        match pu_core::template::find_template(root, tpl_name) {
+                            Some(tpl) => {
+                                let rendered = pu_core::template::render(&tpl, &empty_vars);
+                                let cmd = pu_core::template::render_command(&tpl, &empty_vars);
+                                (rendered, cmd)
+                            }
+                            None => (
+                                format!("Scheduled: agent def '{name}' (template not found)"),
+                                None,
+                            ),
+                        }
                     } else {
-                        format!("Scheduled: run agent def '{name}'")
+                        (format!("Scheduled: run agent def '{name}'"), None)
                     };
                     self.handle_request(Request::Spawn {
                         project_root: pr,
@@ -2854,6 +2961,7 @@ impl Engine {
                         base: None,
                         root: true,
                         worktree: None,
+                        command: def.command.or(template_command),
                     })
                     .await
                 } else {
@@ -2880,6 +2988,7 @@ impl Engine {
                     base: None,
                     root: true,
                     worktree: None,
+                    command: None,
                 })
                 .await
             }
@@ -3140,6 +3249,7 @@ mod tests {
                 base: None,
                 root: true,
                 worktree: None,
+                command: None,
             })
             .await;
 
