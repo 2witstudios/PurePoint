@@ -1532,7 +1532,7 @@ impl Engine {
             let Ok(mod_time) = entry.metadata().and_then(|m| m.modified()) else {
                 continue;
             };
-            if latest.as_ref().map_or(true, |(_, t)| mod_time > *t) {
+            if latest.as_ref().is_none_or(|(_, t)| mod_time > *t) {
                 if let Some(stem) = path.file_stem() {
                     latest = Some((stem.to_string_lossy().to_string(), mod_time));
                 }
