@@ -220,6 +220,10 @@ pub enum Request {
         #[serde(default)]
         target: String,
         scope: String,
+        #[serde(default = "crate::serde_defaults::default_true")]
+        root: bool,
+        #[serde(default)]
+        agent_name: Option<String>,
     },
     DeleteSchedule {
         project_root: String,
@@ -325,6 +329,10 @@ pub struct ScheduleInfo {
     pub project_root: String,
     pub target: String,
     pub scope: String,
+    #[serde(default = "crate::serde_defaults::default_true")]
+    pub root: bool,
+    #[serde(default)]
+    pub agent_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -492,6 +500,10 @@ pub enum Response {
         project_root: String,
         target: String,
         scope: String,
+        #[serde(default = "crate::serde_defaults::default_true")]
+        root: bool,
+        #[serde(default)]
+        agent_name: Option<String>,
         created_at: DateTime<Utc>,
     },
     Ok,
@@ -1812,6 +1824,8 @@ mod tests {
             },
             target: String::new(),
             scope: "local".into(),
+            root: true,
+            agent_name: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -1887,6 +1901,8 @@ mod tests {
                 project_root: "/test".into(),
                 target: String::new(),
                 scope: "local".into(),
+                root: true,
+                agent_name: None,
                 created_at: Utc::now(),
             }],
         };
@@ -1916,6 +1932,8 @@ mod tests {
             project_root: "/test".into(),
             target: String::new(),
             scope: "local".into(),
+            root: false,
+            agent_name: Some("overnight-build".into()),
             created_at: Utc::now(),
         };
         let json = serde_json::to_string(&resp).unwrap();
