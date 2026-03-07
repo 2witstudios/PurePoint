@@ -54,6 +54,8 @@ pub enum Request {
         root: bool,
         #[serde(default)]
         worktree: Option<String>,
+        #[serde(default)]
+        command: Option<String>,
     },
     Status {
         project_root: String,
@@ -133,6 +135,8 @@ pub enum Request {
         agent: String,
         body: String,
         scope: String,
+        #[serde(default)]
+        command: Option<String>,
     },
     DeleteTemplate {
         project_root: String,
@@ -162,6 +166,8 @@ pub enum Request {
         available_in_command_dialog: bool,
         #[serde(default)]
         icon: Option<String>,
+        #[serde(default)]
+        command: Option<String>,
     },
     DeleteAgentDef {
         project_root: String,
@@ -301,6 +307,8 @@ pub struct TemplateInfo {
     pub agent: String,
     pub source: String,
     pub variables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +321,8 @@ pub struct AgentDefInfo {
     pub scope: String,
     pub available_in_command_dialog: bool,
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +471,8 @@ pub enum Response {
         body: String,
         source: String,
         variables: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
     AgentDefList {
         agent_defs: Vec<AgentDefInfo>,
@@ -474,6 +486,8 @@ pub enum Response {
         scope: String,
         available_in_command_dialog: bool,
         icon: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
     SwarmDefList {
         swarm_defs: Vec<SwarmDefInfo>,
@@ -612,6 +626,7 @@ mod tests {
             base: Some("develop".into()),
             root: false,
             worktree: None,
+            command: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -1300,6 +1315,7 @@ mod tests {
             agent: "claude".into(),
             source: "local".into(),
             variables: vec!["BRANCH".into()],
+            command: None,
         };
 
         // when
@@ -1328,6 +1344,7 @@ mod tests {
             scope: "local".into(),
             available_in_command_dialog: true,
             icon: Some("magnifyingglass".into()),
+            command: None,
         };
 
         // when
@@ -1428,6 +1445,7 @@ mod tests {
             agent: "claude".into(),
             body: "Review {{BRANCH}}.".into(),
             scope: "local".into(),
+            command: None,
         };
 
         // when
@@ -1443,6 +1461,7 @@ mod tests {
                 agent,
                 body,
                 scope,
+                ..
             } => {
                 assert_eq!(project_root, "/test");
                 assert_eq!(name, "review");
@@ -1514,6 +1533,7 @@ mod tests {
             scope: "local".into(),
             available_in_command_dialog: true,
             icon: Some("magnifyingglass".into()),
+            command: None,
         };
 
         // when
@@ -1765,6 +1785,7 @@ mod tests {
                 agent: "claude".into(),
                 source: "local".into(),
                 variables: vec!["BRANCH".into()],
+                command: None,
             }],
         };
 
@@ -1793,6 +1814,7 @@ mod tests {
             body: "Review {{BRANCH}}.".into(),
             source: "local".into(),
             variables: vec!["BRANCH".into()],
+            command: None,
         };
 
         // when
@@ -1808,6 +1830,7 @@ mod tests {
                 body,
                 source,
                 variables,
+                ..
             } => {
                 assert_eq!(name, "review");
                 assert_eq!(description, "Code review");
@@ -1833,6 +1856,7 @@ mod tests {
                 scope: "local".into(),
                 available_in_command_dialog: true,
                 icon: None,
+                command: None,
             }],
         };
 

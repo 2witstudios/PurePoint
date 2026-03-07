@@ -16,6 +16,8 @@ pub struct Template {
     /// Where this template was loaded from ("local" or "global")
     #[serde(skip_deserializing)]
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 fn default_agent() -> String {
@@ -44,6 +46,8 @@ pub fn parse_template(content: &str, file_name: &str) -> Template {
                 description: Option<String>,
                 #[serde(default)]
                 agent: Option<String>,
+                #[serde(default)]
+                command: Option<String>,
             }
 
             if let Ok(fm) = serde_yml::from_str::<FrontMatter>(yaml) {
@@ -53,6 +57,7 @@ pub fn parse_template(content: &str, file_name: &str) -> Template {
                     agent: fm.agent.unwrap_or_else(default_agent),
                     body,
                     source: String::new(),
+                    command: fm.command,
                 };
             }
         }
@@ -65,6 +70,7 @@ pub fn parse_template(content: &str, file_name: &str) -> Template {
         agent: default_agent(),
         body: content.to_string(),
         source: String::new(),
+        command: None,
     }
 }
 
@@ -114,12 +120,18 @@ pub fn find_template(project_root: &Path, name: &str) -> Option<Template> {
     None
 }
 
-/// Substitute `{{VAR}}` placeholders in the template body.
-pub fn render(template: &Template, vars: &HashMap<String, String>) -> String {
-    let mut result = template.body.clone();
+/// Replace `{{VAR}}` placeholders in `text` using the provided variable map.
+fn substitute_vars(text: &str, vars: &HashMap<String, String>) -> String {
+    let mut result = text.to_string();
     for (key, value) in vars {
         result = result.replace(&format!("{{{{{key}}}}}"), value);
     }
+    result
+}
+
+/// Substitute `{{VAR}}` placeholders in the template body.
+pub fn render(template: &Template, vars: &HashMap<String, String>) -> String {
+    let result = substitute_vars(&template.body, vars);
     if result.contains("{{") {
         let remaining = extract_variables(&result);
         eprintln!(
@@ -128,6 +140,12 @@ pub fn render(template: &Template, vars: &HashMap<String, String>) -> String {
         );
     }
     result
+}
+
+/// Substitute `{{VAR}}` placeholders in the template command, if present.
+pub fn render_command(template: &Template, vars: &HashMap<String, String>) -> Option<String> {
+    let cmd = template.command.as_ref()?;
+    Some(substitute_vars(cmd, vars))
 }
 
 /// Extract all `{{VAR}}` names from a template body.
@@ -158,6 +176,17 @@ pub fn save_template(
     agent: &str,
     body: &str,
 ) -> Result<(), std::io::Error> {
+    save_template_with_command(dir, name, description, agent, body, None)
+}
+
+pub fn save_template_with_command(
+    dir: &Path,
+    name: &str,
+    description: &str,
+    agent: &str,
+    body: &str,
+    command: Option<&str>,
+) -> Result<(), std::io::Error> {
     crate::validation::validate_name(name)?;
     std::fs::create_dir_all(dir)?;
     #[derive(Serialize)]
@@ -165,11 +194,14 @@ pub fn save_template(
         name: &'a str,
         description: &'a str,
         agent: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<&'a str>,
     }
     let fm = serde_yml::to_string(&TemplateFrontmatter {
         name,
         description,
         agent,
+        command,
     })
     .map_err(std::io::Error::other)?;
     let content = format!("---\n{fm}---\n{body}");
@@ -273,6 +305,7 @@ mod tests {
             agent: "claude".into(),
             body: "Review {{BRANCH}} for {{SCOPE}}.".into(),
             source: String::new(),
+            command: None,
         };
         let mut vars = HashMap::new();
         vars.insert("BRANCH".into(), "main".into());
@@ -436,5 +469,71 @@ mod tests {
 
         // then
         assert!(!result);
+    }
+
+    #[test]
+    fn given_template_with_command_frontmatter_should_parse() {
+        let content = "---\nname: dev-server\nagent: terminal\ncommand: \"npm run dev\"\n---\nStart the dev server.\n";
+        let tpl = parse_template(content, "dev-server.md");
+        assert_eq!(tpl.name, "dev-server");
+        assert_eq!(tpl.agent, "terminal");
+        assert_eq!(tpl.command, Some("npm run dev".to_string()));
+    }
+
+    #[test]
+    fn given_template_without_command_should_default_to_none() {
+        let content = "---\nname: basic\n---\nBody.\n";
+        let tpl = parse_template(content, "basic.md");
+        assert!(tpl.command.is_none());
+    }
+
+    #[test]
+    fn given_command_with_variables_should_substitute() {
+        let tpl = Template {
+            name: "dev".into(),
+            description: String::new(),
+            agent: "terminal".into(),
+            body: String::new(),
+            source: String::new(),
+            command: Some("npm run dev --port {{PORT}}".into()),
+        };
+        let mut vars = HashMap::new();
+        vars.insert("PORT".into(), "3000".into());
+        let cmd = render_command(&tpl, &vars);
+        assert_eq!(cmd, Some("npm run dev --port 3000".to_string()));
+    }
+
+    #[test]
+    fn given_no_command_render_command_should_return_none() {
+        let tpl = Template {
+            name: "test".into(),
+            description: String::new(),
+            agent: "claude".into(),
+            body: "body".into(),
+            source: String::new(),
+            command: None,
+        };
+        let vars = HashMap::new();
+        assert!(render_command(&tpl, &vars).is_none());
+    }
+
+    #[test]
+    fn given_save_template_with_command_should_round_trip() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("templates");
+
+        save_template_with_command(
+            &dir,
+            "dev-server",
+            "Dev server",
+            "terminal",
+            "Start server.\n",
+            Some("npm run dev"),
+        )
+        .unwrap();
+        let content = std::fs::read_to_string(dir.join("dev-server.md")).unwrap();
+        let tpl = parse_template(&content, "dev-server.md");
+        assert_eq!(tpl.command, Some("npm run dev".to_string()));
+        assert_eq!(tpl.agent, "terminal");
     }
 }
