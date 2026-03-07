@@ -22,7 +22,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     init(frame: NSRect, terminalView: TerminalView? = nil) {
         self.terminalView = terminalView ?? TerminalView(frame: frame)
-        self.terminalView.getTerminal().changeScrollback(10_000)
+        self.terminalView.getTerminal().changeHistorySize(10_000)
         super.init(frame: frame)
 
         self.terminalView.pinToEdges(of: self)
