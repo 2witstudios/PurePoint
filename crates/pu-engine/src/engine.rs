@@ -1567,7 +1567,7 @@ impl Engine {
         }
 
         // Step 2: Starting from the original session file, follow the chain
-        let mut current_file = sessions_dir.join(format!("{}.jsonl", original_session_id));
+        let mut current_file = sessions_dir.join(format!("{original_session_id}.jsonl"));
         if !current_file.exists() {
             return None;
         }
@@ -3495,7 +3495,7 @@ mod tests {
         parent_uuid: Option<&str>,
         message_uuids: &[&str],
     ) {
-        let path = dir.join(format!("{}.jsonl", filename_uuid));
+        let path = dir.join(format!("{filename_uuid}.jsonl"));
         let mut first_line = serde_json::json!({
             "sessionId": session_id,
             "type": "summary",
