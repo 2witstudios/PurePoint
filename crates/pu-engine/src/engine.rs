@@ -1970,6 +1970,7 @@ impl Engine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_save_template(
         &self,
         project_root: &str,

@@ -68,6 +68,7 @@ pub async fn run(
 
 /// Resolve the prompt from one of: --template, --file, or inline positional arg.
 /// Returns (optional_prompt, optional_agent_override, optional_command_override).
+#[allow(clippy::type_complexity)]
 fn resolve_prompt(
     inline: Option<String>,
     template_name: Option<String>,
