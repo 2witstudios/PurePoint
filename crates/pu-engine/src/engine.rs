@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::os::fd::OwnedFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1276,17 +1276,23 @@ impl Engine {
             }
         };
 
-        // 3. Construct resume command based on agent type
+        // 3. Resolve latest session file (handles Claude Code session splitting)
+        let effective_session_id: Option<String> = agent_entry
+            .session_id
+            .as_ref()
+            .map(|sid| Self::find_latest_session_file(&cwd, sid).unwrap_or_else(|| sid.clone()));
+
+        // 4. Construct resume command based on agent type
         let (command, args, session_id) = match self.build_resume_command(
             &agent_entry.agent_type,
             &agent_cfg,
-            agent_entry.session_id.as_deref(),
+            effective_session_id.as_deref(),
         ) {
             Ok(result) => result,
             Err(response) => return response,
         };
 
-        // 4. Spawn PTY process
+        // 5. Spawn PTY process
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.to_string()));
         let spawn_config = SpawnConfig {
@@ -1311,7 +1317,7 @@ impl Engine {
 
         let pid = handle.pid;
 
-        // 5. Update manifest: Suspended → Running, new PID
+        // 6. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
         let pr = project_root.to_string();
@@ -1345,7 +1351,7 @@ impl Engine {
             };
         }
 
-        // 6. Store handle in session map
+        // 7. Store handle in session map
         self.sessions
             .lock()
             .await
@@ -1394,6 +1400,105 @@ impl Engine {
                 let (command, args) = Self::parse_agent_command(agent_cfg, agent_type)?;
                 Ok((command, args, None))
             }
+        }
+    }
+
+    /// Scan Claude Code's session directory for the latest continuation of a session.
+    /// Claude Code stores sessions at `~/.claude/projects/{escaped-cwd}/{uuid}.jsonl`.
+    /// When context is compacted or `/resume` is used, a new file is created with a new
+    /// `sessionId` but linked via `parentUuid` referencing a message UUID inside the
+    /// previous session file. This traces that chain to find the latest continuation.
+    fn find_latest_session_file(cwd: &str, original_session_id: &str) -> Option<String> {
+        let home = std::env::var("HOME").ok()?;
+        let escaped: String = cwd
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let sessions_dir = PathBuf::from(&home)
+            .join(".claude")
+            .join("projects")
+            .join(&escaped);
+
+        Self::find_latest_session_file_in(&sessions_dir, original_session_id)
+    }
+
+    /// Inner implementation that takes an explicit sessions directory (testable).
+    /// Traces the parentUuid chain from the original session file to find the latest
+    /// continuation. Returns `None` if no continuations exist.
+    fn find_latest_session_file_in(
+        sessions_dir: &std::path::Path,
+        original_session_id: &str,
+    ) -> Option<String> {
+        if !sessions_dir.is_dir() {
+            return None;
+        }
+
+        // Step 1: Read first line of every .jsonl file, extract (filename_uuid, parentUuid)
+        let mut candidates: Vec<(String, String, PathBuf)> = Vec::new(); // (filename_uuid, parentUuid, path)
+
+        for entry in std::fs::read_dir(sessions_dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+                continue;
+            };
+
+            let Ok(file) = std::fs::File::open(&path) else {
+                continue;
+            };
+            let mut reader = std::io::BufReader::new(file);
+            let mut first_line = String::new();
+            if std::io::BufRead::read_line(&mut reader, &mut first_line).is_err() {
+                continue;
+            }
+
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&first_line) else {
+                continue;
+            };
+
+            // Only files with a non-null parentUuid are continuation candidates
+            if let Some(parent_uuid) = value.get("parentUuid").and_then(|v| v.as_str()) {
+                candidates.push((stem, parent_uuid.to_string(), path));
+            }
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Step 2: Starting from the original session file, follow the chain
+        let mut current_file = sessions_dir.join(format!("{}.jsonl", original_session_id));
+        let mut current_id = original_session_id.to_string();
+
+        loop {
+            // Find which candidate has a parentUuid that exists inside the current file
+            let next = candidates
+                .iter()
+                .position(|(_, parent_uuid, _)| file_contains_uuid(&current_file, parent_uuid));
+
+            match next {
+                Some(idx) => {
+                    let (next_id, _, next_path) = candidates.remove(idx);
+                    current_id = next_id;
+                    current_file = next_path;
+                }
+                None => break,
+            }
+        }
+
+        // Only return if we actually followed at least one hop
+        if current_id == original_session_id {
+            None
+        } else {
+            Some(current_id)
         }
     }
 
@@ -2979,6 +3084,23 @@ async fn inject_initial_prompt(
     true
 }
 
+/// Check if a session file contains a given UUID string anywhere in its content.
+/// Used to determine if a continuation's `parentUuid` references a message in this file.
+fn file_contains_uuid(path: &std::path::Path, uuid: &str) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let reader = std::io::BufReader::new(file);
+    use std::io::BufRead;
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        if line.contains(uuid) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3099,5 +3221,122 @@ mod tests {
             Engine::resolved_prompt_flag("codex", Some("--prompt")),
             Some("--prompt".to_string())
         );
+    }
+
+    /// Helper: create a session .jsonl file with a given uuid, sessionId, and optional parentUuid.
+    /// Optionally include extra lines containing message UUIDs that children can reference.
+    fn write_session_file(
+        dir: &std::path::Path,
+        filename_uuid: &str,
+        session_id: &str,
+        parent_uuid: Option<&str>,
+        message_uuids: &[&str],
+    ) {
+        let path = dir.join(format!("{}.jsonl", filename_uuid));
+        let mut first_line = serde_json::json!({
+            "sessionId": session_id,
+            "type": "summary",
+        });
+        if let Some(pu) = parent_uuid {
+            first_line["parentUuid"] = serde_json::Value::String(pu.to_string());
+        }
+        let mut content = serde_json::to_string(&first_line).unwrap();
+        content.push('\n');
+        for msg_uuid in message_uuids {
+            let line = serde_json::json!({
+                "uuid": msg_uuid,
+                "type": "assistant",
+                "message": {"content": "hello"},
+            });
+            content.push_str(&serde_json::to_string(&line).unwrap());
+            content.push('\n');
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn given_session_chain_should_return_latest_continuation() {
+        // given: a 3-file chain: original -> child1 -> child2
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("-Users-jono-myproject");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // original session: uuid "aaa", sessionId "aaa", contains message "msg-1"
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // child1: uuid "bbb", sessionId "bbb" (different!), parentUuid "msg-1", contains "msg-2"
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &["msg-2"]);
+        // child2: uuid "ccc", sessionId "ccc" (different!), parentUuid "msg-2"
+        write_session_file(&sessions_dir, "ccc", "ccc", Some("msg-2"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: should return "ccc", the end of the chain
+        assert_eq!(result, Some("ccc".to_string()));
+    }
+
+    #[test]
+    fn given_no_continuations_should_return_none() {
+        // given: only the original session file, no children
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join(".claude").join("projects").join("-test");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: no continuation found
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_multi_agent_same_dir_should_follow_correct_chain() {
+        // given: two independent chains in the same session dir
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // Agent A chain: aaa -> bbb
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["a-msg-1"]);
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("a-msg-1"), &[]);
+
+        // Agent B chain: xxx -> yyy
+        write_session_file(&sessions_dir, "xxx", "xxx", None, &["b-msg-1"]);
+        write_session_file(&sessions_dir, "yyy", "yyy", Some("b-msg-1"), &[]);
+
+        // when: looking for agent A's chain
+        let result_a = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+        // when: looking for agent B's chain
+        let result_b = Engine::find_latest_session_file_in(&sessions_dir, "xxx");
+
+        // then: each follows its own chain
+        assert_eq!(result_a, Some("bbb".to_string()));
+        assert_eq!(result_b, Some("yyy".to_string()));
+    }
+
+    #[test]
+    fn given_stub_files_with_null_parent_should_ignore_them() {
+        // given: original + a stub file (null parentUuid) + real continuation
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // stub: no parentUuid, won't be in chain
+        write_session_file(&sessions_dir, "stub", "stub", None, &[]);
+        // real continuation
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: follows real chain, ignores stub
+        assert_eq!(result, Some("bbb".to_string()));
     }
 }
