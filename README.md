@@ -104,7 +104,20 @@ Rebind every action. Navigate without a mouse. The settings panel lets you custo
 
 ## Getting Started
 
-Releases coming soon. For now, build from source:
+Download the latest `.dmg` from [Releases](https://github.com/2witstudios/purepoint/releases) — this is the recommended way to install PurePoint.
+
+Open the DMG, drag PurePoint to Applications, and launch. The app installs the `pu` CLI to `~/.pu/bin/pu` on first launch. Add it to your PATH:
+
+```sh
+export PATH="$HOME/.pu/bin:$PATH"
+```
+
+Then in any git project:
+
+```sh
+pu init
+pu spawn "fix the typo in README"
+```
 
 <details>
 <summary>Build from source</summary>
@@ -119,19 +132,6 @@ just build-app
 ```
 
 </details>
-
-The app installs the `pu` CLI to `~/.pu/bin/pu` on launch. Add it to your PATH:
-
-```sh
-export PATH="$HOME/.pu/bin:$PATH"
-```
-
-Then in any git project:
-
-```sh
-pu init
-pu spawn "fix the typo in README"
-```
 
 ## The `pu` CLI
 
@@ -173,24 +173,6 @@ Run `pu --help` for full usage.
 macOS only. Linux TUI is planned.
 
 PurePoint is early and under active development — the core works, but some features are still in design. See [`docs/`](docs/) for specs and architecture.
-
-## Building from Source
-
-<details>
-<summary>Development commands</summary>
-
-All tasks use [just](https://github.com/casey/just). Rust 1.88 is pinned via `rust-toolchain.toml`.
-
-```sh
-just fmt          # Format Rust code
-just lint         # Run clippy lints
-just test         # Run all Rust tests
-just build-app    # Build the macOS app
-just test-app     # Run macOS tests
-just ci           # Run everything (fmt-check + lint + test + deny + build-app + test-app)
-```
-
-</details>
 
 ## License
 
