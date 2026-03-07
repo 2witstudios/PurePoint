@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::os::fd::OwnedFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1357,17 +1357,23 @@ impl Engine {
             }
         };
 
-        // 3. Construct resume command based on agent type
+        // 3. Resolve latest session file (handles Claude Code session splitting)
+        let effective_session_id: Option<String> = agent_entry
+            .session_id
+            .as_ref()
+            .map(|sid| Self::find_latest_session_file(&cwd, sid).unwrap_or_else(|| sid.clone()));
+
+        // 4. Construct resume command based on agent type
         let (command, args, session_id) = match self.build_resume_command(
             &agent_entry.agent_type,
             &agent_cfg,
-            agent_entry.session_id.as_deref(),
+            effective_session_id.as_deref(),
         ) {
             Ok(result) => result,
             Err(response) => return response,
         };
 
-        // 4. Spawn PTY process
+        // 5. Spawn PTY process
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.to_string()));
         let spawn_config = SpawnConfig {
@@ -1392,7 +1398,7 @@ impl Engine {
 
         let pid = handle.pid;
 
-        // 5. Update manifest: Suspended → Running, new PID
+        // 6. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
         let pr = project_root.to_string();
@@ -1426,7 +1432,7 @@ impl Engine {
             };
         }
 
-        // 6. Store handle in session map
+        // 7. Store handle in session map
         self.sessions
             .lock()
             .await
@@ -1476,6 +1482,67 @@ impl Engine {
                 Ok((command, args, None))
             }
         }
+    }
+
+    /// Scan Claude Code's session directory for the latest continuation of a session.
+    /// Claude Code stores sessions at `~/.claude/projects/{escaped-cwd}/{uuid}.jsonl`.
+    /// When sessions split/compact, new files keep the same `sessionId` field but get
+    /// a new filename UUID. Returns the latest file's UUID if newer than the original.
+    fn find_latest_session_file(cwd: &str, original_session_id: &str) -> Option<String> {
+        let home = std::env::var("HOME").ok()?;
+        let escaped = cwd.replace('/', "-");
+        let sessions_dir = PathBuf::from(&home)
+            .join(".claude")
+            .join("projects")
+            .join(&escaped);
+
+        if !sessions_dir.is_dir() {
+            return None;
+        }
+
+        let mut latest: Option<(String, std::time::SystemTime)> = None;
+
+        for entry in std::fs::read_dir(&sessions_dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+
+            let Ok(file) = std::fs::File::open(&path) else {
+                continue;
+            };
+            let mut reader = std::io::BufReader::new(file);
+            let mut first_line = String::new();
+            if std::io::BufRead::read_line(&mut reader, &mut first_line).is_err() {
+                continue;
+            }
+
+            // Quick string check before JSON parsing
+            if !first_line.contains(original_session_id) {
+                continue;
+            }
+
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&first_line) else {
+                continue;
+            };
+            if value.get("sessionId").and_then(|v| v.as_str()) != Some(original_session_id) {
+                continue;
+            }
+
+            let Ok(mod_time) = entry.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            if latest.as_ref().map_or(true, |(_, t)| mod_time > *t) {
+                if let Some(stem) = path.file_stem() {
+                    latest = Some((stem.to_string_lossy().to_string(), mod_time));
+                }
+            }
+        }
+
+        // Only return if we found a different (newer) file than the original
+        latest
+            .map(|(id, _)| id)
+            .filter(|id| id != original_session_id)
     }
 
     async fn handle_logs(&self, agent_id: &str, tail: usize) -> Response {
