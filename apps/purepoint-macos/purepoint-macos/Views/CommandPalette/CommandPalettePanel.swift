@@ -204,6 +204,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         tableView.rowHeight = 44
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.selectionHighlightStyle = .none
+        tableView.style = .fullWidth
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
@@ -431,7 +432,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     }
 
     private func resizePanel(rowCount: Int) {
-        let headerHeight: CGFloat = 56
+        let headerHeight: CGFloat = 57
         let rowsHeight = CGFloat(max(rowCount, 1)) * 44
         let bottomPadding: CGFloat = 8
         let panelHeight = min(headerHeight + rowsHeight + bottomPadding, 380)
