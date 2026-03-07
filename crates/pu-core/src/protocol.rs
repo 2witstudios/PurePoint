@@ -107,6 +107,13 @@ pub enum Request {
         agent_id: String,
         name: String,
     },
+    CreateWorktree {
+        project_root: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        base: Option<String>,
+    },
     DeleteWorktree {
         project_root: String,
         worktree_id: String,
@@ -419,6 +426,9 @@ pub enum Response {
     RenameResult {
         agent_id: String,
         name: String,
+    },
+    CreateWorktreeResult {
+        worktree_id: String,
     },
     DeleteWorktreeResult {
         worktree_id: String,
@@ -1947,6 +1957,57 @@ mod tests {
                 assert_eq!(error_message, "could not spawn agent ag-def");
             }
             _ => panic!("expected RunSwarmPartial"),
+        }
+    }
+
+    #[test]
+    fn given_create_worktree_request_should_round_trip() {
+        let req = Request::CreateWorktree {
+            project_root: "/test".into(),
+            name: Some("feature-x".into()),
+            base: Some("develop".into()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::CreateWorktree {
+                project_root,
+                name,
+                base,
+            } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(name.as_deref(), Some("feature-x"));
+                assert_eq!(base.as_deref(), Some("develop"));
+            }
+            _ => panic!("expected CreateWorktree"),
+        }
+    }
+
+    #[test]
+    fn given_create_worktree_request_should_default_optional_fields() {
+        let json = r#"{"type":"create_worktree","project_root":"/test"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::CreateWorktree { name, base, .. } => {
+                assert!(name.is_none());
+                assert!(base.is_none());
+            }
+            _ => panic!("expected CreateWorktree"),
+        }
+    }
+
+    #[test]
+    fn given_create_worktree_result_should_round_trip() {
+        let resp = Response::CreateWorktreeResult {
+            worktree_id: "wt-abc".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::CreateWorktreeResult { worktree_id } => {
+                assert_eq!(worktree_id, "wt-abc");
+            }
+            _ => panic!("expected CreateWorktreeResult"),
         }
     }
 }

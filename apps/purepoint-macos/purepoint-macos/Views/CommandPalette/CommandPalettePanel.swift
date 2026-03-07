@@ -411,13 +411,23 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         }
         promptScrollTopConstraint?.isActive = true
 
+        let showPrompt = item.showsPromptField
+
         promptHeader.isHidden = false
-        promptScrollView.isHidden = false
-        promptHint.isHidden = false
+        promptScrollView.isHidden = !showPrompt
+        promptHint.isHidden = !showPrompt
 
         promptHeightConstraint.constant = 60
 
-        let panelHeight: CGFloat = showName ? 260 : 170
+        let panelHeight: CGFloat
+        if showName && showPrompt {
+            panelHeight = 260
+        } else if showName {
+            // Name only (worktree) — no prompt field
+            panelHeight = 140
+        } else {
+            panelHeight = 170
+        }
         if let panel = view.window as? CommandPalettePanel {
             var frame = panel.frame
             let dy = frame.height - panelHeight
@@ -527,7 +537,12 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
         let result: CommandPaletteResult
         switch item {
-        case .builtIn(let v): result = .spawnBuiltIn(variant: v, prompt: promptOrNil, name: nameOrNil)
+        case .builtIn(let v):
+            if v.kind == .worktree {
+                result = .createWorktree(name: nameOrNil)
+            } else {
+                result = .spawnBuiltIn(variant: v, prompt: promptOrNil, name: nameOrNil)
+            }
         case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: promptOrNil)
         case .swarm(let s): result = .runSwarm(def: s)
         }
@@ -625,9 +640,20 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     private func handleNameFieldCommand(_ sel: Selector) -> Bool {
         switch sel {
-        case #selector(NSResponder.insertNewline(_:)),
-            #selector(NSResponder.insertTab(_:)):
-            view.window?.makeFirstResponder(promptTextView)
+        case #selector(NSResponder.insertNewline(_:)):
+            // If no prompt field (worktree), submit directly from name field
+            if case .prompt(let item) = phase, !item.showsPromptField {
+                submitPrompt()
+            } else {
+                view.window?.makeFirstResponder(promptTextView)
+            }
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            if case .prompt(let item) = phase, !item.showsPromptField {
+                // No prompt field to tab to — do nothing
+            } else {
+                view.window?.makeFirstResponder(promptTextView)
+            }
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             handleEscape()

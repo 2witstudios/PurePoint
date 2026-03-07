@@ -158,6 +158,7 @@ impl Engine {
         match &request {
             Request::Init { project_root }
             | Request::Spawn { project_root, .. }
+            | Request::CreateWorktree { project_root, .. }
             | Request::Status { project_root, .. }
             | Request::Kill { project_root, .. }
             | Request::ListTemplates { project_root }
@@ -197,6 +198,11 @@ impl Engine {
                 self.handle_spawn(&project_root, &prompt, &agent, name, base, root, worktree)
                     .await
             }
+            Request::CreateWorktree {
+                project_root,
+                name,
+                base,
+            } => self.handle_create_worktree(&project_root, name, base).await,
             Request::Kill {
                 project_root,
                 target,
@@ -883,6 +889,110 @@ impl Engine {
             agent_id,
             status: AgentStatus::Streaming,
         }
+    }
+
+    async fn handle_create_worktree(
+        &self,
+        project_root: &str,
+        name: Option<String>,
+        base: Option<String>,
+    ) -> Response {
+        let root_path = Path::new(project_root);
+
+        // Ensure initialized
+        if !paths::manifest_path(root_path).exists() {
+            return Response::Error {
+                code: "NOT_INITIALIZED".into(),
+                message: "not initialized — run `pu init` first".into(),
+            };
+        }
+
+        // Load config for env_files
+        let cfg = match config::load_config_strict(root_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    code: "CONFIG_ERROR".into(),
+                    message: format!("failed to load config: {e}"),
+                };
+            }
+        };
+
+        // Resolve name
+        let raw = match name {
+            Some(n) => n,
+            None => {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: "worktree creation requires a name".into(),
+                };
+            }
+        };
+        let worktree_name = pu_core::id::normalize_worktree_name(&raw);
+        if worktree_name.is_empty() {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "worktree creation requires a name".into(),
+            };
+        }
+
+        let base_branch = base.unwrap_or_else(|| "HEAD".into());
+        let wt_id = pu_core::id::worktree_id();
+        let wt_path = paths::worktree_path(root_path, &wt_id);
+        let branch = format!("pu/{worktree_name}");
+        let rollback_branch = branch.clone();
+
+        if let Err(e) = git::create_worktree(root_path, &wt_path, &branch, &base_branch).await {
+            return Response::Error {
+                code: "CREATE_WORKTREE_FAILED".into(),
+                message: format!("failed to create worktree: {e}"),
+            };
+        }
+
+        // Copy env files into new worktree
+        for env_file in &cfg.env_files {
+            let src = root_path.join(env_file);
+            let dst = wt_path.join(env_file);
+            match tokio::fs::copy(&src, &dst).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && !src.exists() => {}
+                Err(e) => tracing::warn!("failed to copy {env_file} to worktree: {e}"),
+            }
+        }
+
+        // Write manifest entry (worktree only, no agents)
+        let cwd = wt_path.to_string_lossy().to_string();
+        let wt_id_clone = wt_id.clone();
+        let manifest_result = manifest::update_manifest(root_path, move |mut m| {
+            m.worktrees
+                .entry(wt_id_clone.clone())
+                .or_insert_with(|| WorktreeEntry {
+                    id: wt_id_clone,
+                    name: worktree_name.clone(),
+                    path: cwd,
+                    branch,
+                    base_branch: Some(base_branch.clone()),
+                    status: WorktreeStatus::Active,
+                    agents: IndexMap::new(),
+                    created_at: chrono::Utc::now(),
+                    merged_at: None,
+                });
+            m
+        });
+
+        if let Err(e) = manifest_result {
+            // Rollback: remove worktree + branch
+            self.rollback_worktree(root_path, Some(&wt_id), Some(&rollback_branch))
+                .await;
+            return Response::Error {
+                code: "CREATE_WORKTREE_FAILED".into(),
+                message: format!("failed to update manifest: {e}"),
+            };
+        }
+
+        self.notify_status_change(project_root).await;
+
+        Response::CreateWorktreeResult { worktree_id: wt_id }
     }
 
     async fn handle_kill(

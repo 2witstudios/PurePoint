@@ -133,6 +133,8 @@ private struct PanePlaceholderView: View {
                     agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", leafId: lid, gridState: gs)
             case .runSwarm:
                 break
+            case .createWorktree:
+                break
             }
         }
     }
