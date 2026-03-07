@@ -69,7 +69,6 @@ jobs:
 
       - name: Archive
         run: |
-          set -o pipefail
           xcodebuild archive \
             -project apps/purepoint-macos/purepoint-macos.xcodeproj \
             -scheme purepoint-macos \
@@ -79,9 +78,7 @@ jobs:
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
             MARKETING_VERSION="${{ steps.version.outputs.marketing }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
-            2>&1 | xcbeautify --report junit --report-path build/archive-report.xml
-          ls -la build/PurePoint.xcarchive
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}"
 
       - name: Export archive
         run: |
