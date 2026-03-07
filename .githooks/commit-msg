@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ──────────────────────────────────────────────────────────────
+# Commit-msg hook for PurePoint
+#
+# Enforces: Conventional Commits + sentence case
+# Format:   type[(scope)]: Description starting with capital
+# Skip:     SKIP_HOOKS=commit-msg git commit ...
+#           SKIP_HOOKS=all git commit ...
+# Bypass:   git commit --no-verify
+# ──────────────────────────────────────────────────────────────
+
+# Skip if requested
+if [[ "${SKIP_HOOKS:-}" == "all" ]] || echo ",${SKIP_HOOKS:-}," | grep -q ",commit-msg,"; then
+    exit 0
+fi
+
+MSG_FILE="$1"
+MSG=$(head -1 "$MSG_FILE")
+
+# Allow merge commits
+if echo "$MSG" | grep -qE '^Merge '; then
+    exit 0
+fi
+
+# Allow revert commits
+if echo "$MSG" | grep -qE '^Revert '; then
+    exit 0
+fi
+
+# Allow fixup/squash commits (with warning)
+if echo "$MSG" | grep -qE '^(fixup|squash)! '; then
+    echo "commit-msg: allowing $( echo "$MSG" | cut -d'!' -f1 )! commit (remember to autosquash)"
+    exit 0
+fi
+
+# ── Validation ───────────────────────────────────────────────
+
+TYPES="feat|fix|chore|docs|refactor|test|ci|perf|style|build"
+# Full pattern: type[(scope)]: Uppercase description
+PATTERN="^(${TYPES})(\([a-zA-Z0-9_-]+\))?: [A-Z]"
+
+ERRORS=()
+
+# Check max length
+if (( ${#MSG} > 72 )); then
+    ERRORS+=("Message is ${#MSG} chars (max 72)")
+fi
+
+# Check trailing period
+if echo "$MSG" | grep -qE '\.$'; then
+    ERRORS+=("Remove trailing period")
+fi
+
+# Check format
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+    # Diagnose specific issue
+    if ! echo "$MSG" | grep -qE "^(${TYPES})"; then
+        # Check for WIP
+        if echo "$MSG" | grep -qiE '^WIP'; then
+            BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+            if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+                ERRORS+=("WIP commits not allowed on $BRANCH")
+            else
+                exit 0
+            fi
+        else
+            ERRORS+=("Must start with a type: feat, fix, chore, docs, refactor, test, ci, perf, style, build")
+        fi
+    elif ! echo "$MSG" | grep -qE "^(${TYPES})(\([a-zA-Z0-9_-]+\))?: "; then
+        ERRORS+=("Missing ': ' after type/scope (use 'type: ' or 'type(scope): ')")
+    elif ! echo "$MSG" | grep -qE "^(${TYPES})(\([a-zA-Z0-9_-]+\))?: [A-Z]"; then
+        ERRORS+=("Description must start with uppercase (sentence case)")
+    fi
+fi
+
+# ── Report ───────────────────────────────────────────────────
+
+if (( ${#ERRORS[@]} > 0 )); then
+    echo ""
+    echo "commit-msg: INVALID commit message"
+    echo ""
+    echo "  Got:      $MSG"
+    echo ""
+    for err in "${ERRORS[@]}"; do
+        echo "  Error:    $err"
+    done
+    echo ""
+    echo "  Format:   type[(scope)]: Description starting with capital"
+    echo "  Types:    feat fix chore docs refactor test ci perf style build"
+    echo "  Examples: feat: Add workspace command"
+    echo "            fix(cli): Resolve manifest parsing error"
+    echo "            chore: Update dependencies"
+    echo ""
+
+    # Suggest a fix if we can detect the type
+    TYPE_MATCH=$(echo "$MSG" | grep -oE "^(${TYPES})" || true)
+    if [[ -n "$TYPE_MATCH" ]]; then
+        # Extract description after type[(scope)]:
+        DESC=$(echo "$MSG" | sed -E "s/^(${TYPES})(\([a-zA-Z0-9_-]+\))?:? *//")
+        SCOPE=$(echo "$MSG" | grep -oE '\([a-zA-Z0-9_-]+\)' || true)
+        if [[ -n "$DESC" ]]; then
+            # Capitalize first letter of description
+            FIRST=$(echo "${DESC:0:1}" | tr '[:lower:]' '[:upper:]')
+            REST="${DESC:1}"
+            # Remove trailing period
+            REST="${REST%.}"
+            SUGGESTION="${TYPE_MATCH}${SCOPE}: ${FIRST}${REST}"
+            # Truncate if needed
+            if (( ${#SUGGESTION} > 72 )); then
+                SUGGESTION="${SUGGESTION:0:69}..."
+            fi
+            echo "  Suggested: $SUGGESTION"
+            echo ""
+        fi
+    fi
+
+    echo "  Skip:     SKIP_HOOKS=commit-msg git commit ..."
+    echo "  Bypass:   git commit --no-verify"
+    exit 1
+fi

@@ -1,8 +1,196 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Only check formatting when Rust files are staged
-if git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$'; then
-  echo "pre-commit: checking Rust formatting..."
-  cargo fmt --all -- --check
+# ──────────────────────────────────────────────────────────────
+# Pre-commit hook for PurePoint
+#
+# Checks: rust-fmt, swift-fmt, hygiene
+# Skip individual:  SKIP_HOOKS=rust-fmt,hygiene git commit ...
+# Skip all:         SKIP_HOOKS=all git commit ...
+# Bypass entirely:  git commit --no-verify
+# ──────────────────────────────────────────────────────────────
+
+FAILED=0
+
+# Helpers ─────────────────────────────────────────────────────
+
+skip_check() {
+    local name="$1"
+    [[ "${SKIP_HOOKS:-}" == "all" ]] && return 0
+    echo ",${SKIP_HOOKS:-}," | grep -q ",$name," && return 0
+    return 1
+}
+
+now_ms() {
+    perl -MTime::HiRes=time -e 'printf "%.0f\n", time * 1000'
+}
+
+print_timing() {
+    local label="$1" start="$2" end="$3"
+    local elapsed=$(( end - start ))
+    if (( elapsed >= 1000 )); then
+        printf "  [%s: %d.%03ds]\n" "$label" $((elapsed / 1000)) $((elapsed % 1000))
+    else
+        printf "  [%s: %dms]\n" "$label" "$elapsed"
+    fi
+}
+
+# Staged files (cached once) ──────────────────────────────────
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+has_staged() {
+    echo "$STAGED_FILES" | grep -q "$1"
+}
+
+# ══════════════════════════════════════════════════════════════
+# Check: Rust formatting
+# ══════════════════════════════════════════════════════════════
+
+if ! skip_check "rust-fmt" && has_staged '\.rs$'; then
+    echo "pre-commit: checking Rust formatting..."
+    start=$(now_ms)
+
+    if ! cargo fmt --all -- --check; then
+        echo ""
+        echo "  FAILED: Rust formatting"
+        echo "  Fix:    cargo fmt --all"
+        echo ""
+        FAILED=1
+    fi
+
+    end=$(now_ms)
+    print_timing "rust-fmt" "$start" "$end"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# Check: Swift formatting
+# ══════════════════════════════════════════════════════════════
+
+if ! skip_check "swift-fmt" && has_staged '\.swift$'; then
+    SWIFT_FORMAT=""
+
+    if command -v swift-format &>/dev/null; then
+        SWIFT_FORMAT="swift-format"
+    elif xcrun --find swift-format &>/dev/null 2>&1; then
+        SWIFT_FORMAT="$(xcrun --find swift-format)"
+    fi
+
+    if [[ -z "$SWIFT_FORMAT" ]]; then
+        echo "pre-commit: swift-format not found, skipping Swift format check"
+        echo "  Install: brew install swift-format"
+    else
+        echo "pre-commit: checking Swift formatting..."
+        start=$(now_ms)
+
+        SWIFT_STAGED=$(echo "$STAGED_FILES" | grep '\.swift$' || true)
+        SWIFT_FAILED=0
+
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if ! "$SWIFT_FORMAT" lint --strict "$file" 2>&1; then
+                SWIFT_FAILED=1
+            fi
+        done <<< "$SWIFT_STAGED"
+
+        if (( SWIFT_FAILED )); then
+            echo ""
+            echo "  FAILED: Swift formatting"
+            echo "  Fix:    just fmt-swift"
+            echo ""
+            FAILED=1
+        fi
+
+        end=$(now_ms)
+        print_timing "swift-fmt" "$start" "$end"
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════
+# Check: File hygiene
+# ══════════════════════════════════════════════════════════════
+
+if ! skip_check "hygiene" && [[ -n "$STAGED_FILES" ]]; then
+    echo "pre-commit: checking file hygiene..."
+    start=$(now_ms)
+    HYGIENE_FAILED=0
+
+    # --- Large files (>1MB) ---
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        [[ ! -f "$file" ]] && continue
+        size=$(wc -c < "$file" | tr -d ' ')
+        if (( size > 1048576 )); then
+            size_mb=$(echo "scale=1; $size / 1048576" | bc)
+            echo "  BLOCKED: $file is ${size_mb}MB (limit: 1MB)"
+            HYGIENE_FAILED=1
+        fi
+    done <<< "$STAGED_FILES"
+
+    # --- Merge conflict markers (text files only) ---
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        [[ ! -f "$file" ]] && continue
+        # Skip binary files
+        if file --brief --mime "$file" | grep -q 'charset=binary'; then
+            continue
+        fi
+        if grep -nE '^(<{7}|>{7}|={7})( |$)' "$file" > /dev/null 2>&1; then
+            echo "  BLOCKED: $file contains merge conflict markers"
+            HYGIENE_FAILED=1
+        fi
+    done <<< "$STAGED_FILES"
+
+    # --- Secret patterns ---
+    SECRET_PATTERNS=(
+        'AKIA[0-9A-Z]{16}'                          # AWS access key
+        '-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'  # Private keys
+        'ghp_[0-9a-zA-Z]{36}'                       # GitHub PAT
+        'gho_[0-9a-zA-Z]{36}'                       # GitHub OAuth
+        'ghu_[0-9a-zA-Z]{36}'                       # GitHub user token
+        'ghs_[0-9a-zA-Z]{36}'                       # GitHub server token
+        'xoxb-[0-9a-zA-Z-]+'                        # Slack bot token
+        'xoxp-[0-9a-zA-Z-]+'                        # Slack user token
+        'xoxa-[0-9a-zA-Z-]+'                        # Slack app token
+        'sk-[0-9a-zA-Z]{20,}'                       # API keys (OpenAI, etc.)
+        'password\s*=\s*["\x27][^"\x27]{4,}'        # password assignments
+        'api[_-]?key\s*=\s*["\x27][^"\x27]{8,}'     # api key assignments
+    )
+
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        [[ ! -f "$file" ]] && continue
+        # Skip binary files
+        if file --brief --mime "$file" | grep -q 'charset=binary'; then
+            continue
+        fi
+        for pattern in "${SECRET_PATTERNS[@]}"; do
+            if grep -nEi "$pattern" "$file" > /dev/null 2>&1; then
+                echo "  BLOCKED: $file may contain secrets (matched: ${pattern:0:30}...)"
+                HYGIENE_FAILED=1
+                break
+            fi
+        done
+    done <<< "$STAGED_FILES"
+
+    if (( HYGIENE_FAILED )); then
+        echo ""
+        echo "  FAILED: File hygiene checks"
+        echo "  Skip:   SKIP_HOOKS=hygiene git commit ..."
+        echo ""
+        FAILED=1
+    fi
+
+    end=$(now_ms)
+    print_timing "hygiene" "$start" "$end"
+fi
+
+# ══════════════════════════════════════════════════════════════
+
+if (( FAILED )); then
+    echo "pre-commit: BLOCKED (see above)"
+    echo "  Skip individual checks: SKIP_HOOKS=<name>[,<name>] git commit ..."
+    echo "  Skip all pre-commit:    SKIP_HOOKS=all git commit ..."
+    echo "  Bypass entirely:        git commit --no-verify"
+    exit 1
 fi
