@@ -148,6 +148,10 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn isolate_home(tmp: &TempDir) {
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+    }
+
     #[test]
     fn given_swarm_def_yaml_should_deserialize() {
         let yaml = "name: full-stack\nworktree_count: 3\nworktree_template: feature\nroster:\n  - agent_def: reviewer\n    role: review\n    quantity: 2\ninclude_terminal: true\n";
@@ -183,6 +187,7 @@ mod tests {
     #[test]
     fn given_local_and_global_swarm_defs_should_list_local_first() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let root = tmp.path();
         let local_dir = paths::swarms_dir(root);
         std::fs::create_dir_all(&local_dir).unwrap();
@@ -225,6 +230,7 @@ mod tests {
     #[test]
     fn given_no_swarm_defs_should_return_empty_list() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let defs = list_swarm_defs(tmp.path());
         assert!(defs.is_empty());
     }

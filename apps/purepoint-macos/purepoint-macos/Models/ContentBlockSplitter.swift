@@ -20,6 +20,7 @@ enum ContentBlockSplitter {
         var codeLines: [String] = []
         var codeLanguage: String?
         var openingFenceLine: String?
+        var savedText: [String] = []
         var inCodeBlock = false
         var blockIndex = startIndex
 
@@ -35,8 +36,9 @@ enum ContentBlockSplitter {
         for line in lines {
             if !inCodeBlock {
                 if line.hasPrefix("```") {
-                    // Optimistically enter code block (single pass — no look-ahead)
-                    flushText()
+                    // Optimistically enter code block — save currentText in case fence is unclosed
+                    savedText = currentText
+                    currentText = []
                     let langPart = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                     codeLanguage = langPart.isEmpty ? nil : langPart
                     openingFenceLine = line
@@ -47,6 +49,10 @@ enum ContentBlockSplitter {
                 }
             } else {
                 if isClosingFence(line) {
+                    // Code block confirmed — flush any preceding text
+                    currentText = savedText
+                    flushText()
+                    savedText = []
                     let code = codeLines.joined(separator: "\n")
                     blocks.append(.codeBlock(id: "cb-\(blockIndex)", language: codeLanguage, code: code))
                     blockIndex += 1
@@ -62,6 +68,7 @@ enum ContentBlockSplitter {
 
         // EOF while in code block: the fence had no closing — treat as plain text
         if inCodeBlock {
+            currentText = savedText
             if let fence = openingFenceLine {
                 currentText.append(fence)
             }

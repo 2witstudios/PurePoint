@@ -33,7 +33,7 @@ struct AgentsHubModelsTests {
             variables: ["VAR"]
         )
 
-        #expect(prompt.id == "test")
+        #expect(prompt.id == "global:test")
         #expect(prompt.name == "test")
         #expect(prompt.body == "Do something.")
     }
@@ -62,7 +62,7 @@ struct AgentsHubModelsTests {
     @Test func testAgentDefinitionManualInit() {
         let def = AgentDefinition(name: "test-agent")
 
-        #expect(def.id == "test-agent")
+        #expect(def.id == "local:test-agent")
         #expect(def.agentType == "claude")
         #expect(def.template == nil)
         #expect(def.tags.isEmpty)
@@ -112,7 +112,7 @@ struct AgentsHubModelsTests {
     @Test func testSwarmDefinitionManualInit() {
         let swarm = SwarmDefinition(name: "empty")
 
-        #expect(swarm.id == "empty")
+        #expect(swarm.id == "local:empty")
         #expect(swarm.worktreeCount == 1)
         #expect(swarm.roster.isEmpty)
         #expect(swarm.includeTerminal == false)

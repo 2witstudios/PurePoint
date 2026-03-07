@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SettingsAboutView: View {
+    @EnvironmentObject var updaterViewModel: CheckForUpdatesViewModel
+
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -43,6 +45,11 @@ struct SettingsAboutView: View {
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
             .frame(maxWidth: 300)
+
+            Button("Check for Updates\u{2026}") {
+                updaterViewModel.checkForUpdates()
+            }
+            .disabled(!updaterViewModel.canCheckForUpdates)
 
             HStack(spacing: 16) {
                 Link("Documentation", destination: URL(string: "https://purepoint.dev/docs")!)

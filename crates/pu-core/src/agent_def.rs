@@ -141,6 +141,10 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn isolate_home(tmp: &TempDir) {
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+    }
+
     #[test]
     fn given_agent_def_yaml_should_deserialize() {
         let yaml = "name: reviewer\nagent_type: claude\ntags:\n  - review\n  - code\n";
@@ -167,6 +171,7 @@ mod tests {
     #[test]
     fn given_local_and_global_agent_defs_should_list_local_first() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let root = tmp.path();
         let local_dir = paths::agents_dir(root);
         std::fs::create_dir_all(&local_dir).unwrap();
@@ -209,6 +214,7 @@ mod tests {
     #[test]
     fn given_no_agent_defs_should_return_empty_list() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let defs = list_agent_defs(tmp.path());
         assert!(defs.is_empty());
     }

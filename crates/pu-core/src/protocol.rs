@@ -266,7 +266,6 @@ fn default_enabled() -> bool {
     true
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmRosterEntryPayload {
     pub agent_def: String,

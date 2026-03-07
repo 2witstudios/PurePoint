@@ -82,5 +82,22 @@ test-app:
         CODE_SIGNING_REQUIRED=NO \
         DEVELOPMENT_TEAM=""
 
+# Archive for release testing
+archive:
+    xcodebuild archive \
+        -project "{{project}}" \
+        -scheme "{{scheme}}" \
+        -configuration Release \
+        -archivePath build/PurePoint.xcarchive \
+        2>&1 | xcbeautify
+
+# Export archive for distribution (run after archive)
+export:
+    xcodebuild -exportArchive \
+        -archivePath build/PurePoint.xcarchive \
+        -exportPath build/export \
+        -exportOptionsPlist apps/purepoint-macos/ExportOptions.plist \
+        2>&1 | xcbeautify
+
 # Run everything
 ci: ci-rust build-app test-app

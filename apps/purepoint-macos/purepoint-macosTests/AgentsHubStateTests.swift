@@ -32,7 +32,7 @@ struct AgentsHubStateTests {
             SavedPrompt(
                 name: "deploy", description: "Deploy", agent: "claude", body: "", source: "global", variables: []),
         ]
-        state.selectedPromptId = "deploy"
+        state.selectedPromptId = "global:deploy"
 
         #expect(state.selectedPrompt?.name == "deploy")
     }
@@ -43,7 +43,7 @@ struct AgentsHubStateTests {
             AgentDefinition(name: "reviewer"),
             AgentDefinition(name: "fixer"),
         ]
-        state.selectedAgentId = "fixer"
+        state.selectedAgentId = "local:fixer"
 
         #expect(state.selectedAgent?.name == "fixer")
     }
@@ -54,7 +54,7 @@ struct AgentsHubStateTests {
             SwarmDefinition(name: "full-stack"),
             SwarmDefinition(name: "lite"),
         ]
-        state.selectedSwarmId = "lite"
+        state.selectedSwarmId = "local:lite"
 
         #expect(state.selectedSwarm?.name == "lite")
     }

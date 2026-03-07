@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		FB0A00012F60000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00022F60000000000001 /* SwiftTerm */; };
+		FB0A00062F60000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00072F60000000000002 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FB0A00012F60000000000001 /* SwiftTerm in Frameworks */,
+				FB0A00062F60000000000002 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -119,6 +121,7 @@
 			name = "purepoint-macos";
 			packageProductDependencies = (
 				FB0A00022F60000000000001 /* SwiftTerm */,
+				FB0A00072F60000000000002 /* Sparkle */,
 			);
 			productName = "purepoint-macos";
 			productReference = FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */;
@@ -204,6 +207,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				FB0A00032F60000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FBC7CFBB2F53F1FD00F8E0A1 /* Products */;
@@ -436,6 +440,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "purepoint-macos/PurePoint.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -446,6 +451,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PurePoint;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -453,7 +459,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "-witstudios.purepoint-macos";
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint;
 				PRODUCT_NAME = PurePoint;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -470,6 +476,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "purepoint-macos/PurePoint.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -480,6 +487,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PurePoint;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -487,7 +495,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "-witstudios.purepoint-macos";
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint;
 				PRODUCT_NAME = PurePoint;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -510,7 +518,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "-witstudios.purepoint-macosTests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.Tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -532,7 +540,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "-witstudios.purepoint-macosTests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.Tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -552,7 +560,7 @@
 				DEVELOPMENT_TEAM = M96WTV3CKX;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "-witstudios.purepoint-macosUITests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.UITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -572,7 +580,7 @@
 				DEVELOPMENT_TEAM = M96WTV3CKX;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "-witstudios.purepoint-macosUITests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.UITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -633,6 +641,14 @@
 				minimumVersion = 1.11.2;
 			};
 		};
+		FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.7.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -640,6 +656,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FB0A00032F60000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
+		};
+		FB0A00072F60000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

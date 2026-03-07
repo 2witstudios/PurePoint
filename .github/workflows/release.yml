@@ -1,0 +1,209 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.2.3)'
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${TAG#v}"
+          MARKETING="${TAG%.*}"
+          BUILD="${TAG##*.}"
+          echo "raw=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "marketing=${MARKETING}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${TAG} (marketing=${MARKETING}, build=${BUILD})"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Apple certificate
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+      - name: Install tools
+        run: brew install xcbeautify create-dmg
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project apps/purepoint-macos/purepoint-macos.xcodeproj \
+            -scheme purepoint-macos \
+            -configuration Release \
+            -archivePath build/PurePoint.xcarchive \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            MARKETING_VERSION="${{ steps.version.outputs.marketing }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+            2>&1 | xcbeautify
+
+      - name: Export archive
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/PurePoint.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist apps/purepoint-macos/ExportOptions.plist \
+            2>&1 | xcbeautify
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_PATH="build/export/PurePoint.app"
+          ZIP_PATH="$RUNNER_TEMP/PurePoint-notarize.zip"
+
+          ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+
+          xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "$APP_PATH"
+
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "PurePoint" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "PurePoint.app" 150 190 \
+            --app-drop-link 450 190 \
+            --hide-extension "PurePoint.app" \
+            "build/PurePoint-${{ steps.version.outputs.raw }}.dmg" \
+            "build/export/PurePoint.app" \
+            || true
+
+          ls -la "build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
+
+      - name: Sign and notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
+
+          codesign --force --sign "Developer ID Application" \
+            --options runtime "$DMG_PATH"
+
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "$DMG_PATH"
+
+      - name: Install Sparkle tools
+        run: |
+          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.7.0/Sparkle-2.7.0.tar.xz -o /tmp/sparkle.tar.xz
+          mkdir -p /tmp/sparkle
+          tar xf /tmp/sparkle.tar.xz -C /tmp/sparkle
+          cp /tmp/sparkle/bin/sign_update /usr/local/bin/sign_update
+          chmod +x /usr/local/bin/sign_update
+
+      - name: Sign DMG with Sparkle Ed25519
+        id: sparkle_sign
+        env:
+          SPARKLE_ED25519_KEY: ${{ secrets.SPARKLE_ED25519_KEY }}
+        run: |
+          DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
+          SIGN_OUTPUT=$(echo "$SPARKLE_ED25519_KEY" | sign_update "$DMG_PATH" --ed-key-file -)
+          echo "Sparkle signature output: $SIGN_OUTPUT"
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
+          LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+          echo "ed_signature=${ED_SIGNATURE}" >> "$GITHUB_OUTPUT"
+          echo "length=${LENGTH}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
+
+          gh release create "v${{ steps.version.outputs.raw }}" "$DMG_PATH" \
+            --title "PurePoint v${{ steps.version.outputs.raw }}" \
+            --generate-notes
+
+      - name: Generate and upload appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.raw }}"
+          MARKETING="${{ steps.version.outputs.marketing }}"
+          BUILD="${{ steps.version.outputs.build }}"
+          DMG_URL="https://github.com/2witstudios/purepoint/releases/download/v${VERSION}/PurePoint-${VERSION}.dmg"
+          ED_SIGNATURE="${{ steps.sparkle_sign.outputs.ed_signature }}"
+          LENGTH="${{ steps.sparkle_sign.outputs.length }}"
+          PUB_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S %z')"
+
+          cat > build/appcast.xml << APPCAST_EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <channel>
+              <title>PurePoint</title>
+              <item>
+                <title>PurePoint v${VERSION}</title>
+                <pubDate>${PUB_DATE}</pubDate>
+                <sparkle:version>${BUILD}</sparkle:version>
+                <sparkle:shortVersionString>${MARKETING}</sparkle:shortVersionString>
+                <enclosure url="${DMG_URL}" sparkle:edSignature="${ED_SIGNATURE}" length="${LENGTH}" type="application/octet-stream" />
+              </item>
+            </channel>
+          </rss>
+          APPCAST_EOF
+
+          gh release upload appcast build/appcast.xml --clobber
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true

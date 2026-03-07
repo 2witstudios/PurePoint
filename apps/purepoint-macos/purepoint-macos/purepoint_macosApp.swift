@@ -1,3 +1,4 @@
+import Sparkle
 import SwiftUI
 
 @main
@@ -8,6 +9,7 @@ struct purepoint_macosApp: App {
     @State private var gridState = GridState()
     @State private var keyBindingState = KeyBindingState()
     @State private var hotkeyMonitor = HotkeyMonitor()
+    @StateObject private var updaterViewModel = CheckForUpdatesViewModel()
 
     var body: some Scene {
         WindowGroup {
@@ -17,6 +19,7 @@ struct purepoint_macosApp: App {
                 .environment(viewCache)
                 .environment(gridState)
                 .environment(keyBindingState)
+                .environmentObject(updaterViewModel)
                 .preferredColorScheme(settingsState.appearance.colorScheme)
                 .frame(
                     minWidth: PurePointTheme.windowMinWidth,
@@ -69,6 +72,13 @@ struct purepoint_macosApp: App {
                     keyBindingState.keyEquivalent(for: .settings),
                     modifiers: keyBindingState.eventModifiers(for: .settings)
                 )
+
+                Divider()
+
+                Button("Check for Updates\u{2026}") {
+                    updaterViewModel.checkForUpdates()
+                }
+                .disabled(!updaterViewModel.canCheckForUpdates)
             }
 
             CommandMenu("Navigation") {

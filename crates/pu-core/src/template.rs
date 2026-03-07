@@ -232,6 +232,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Override HOME so global_pu_dir() points to an empty temp dir.
+    fn isolate_home(tmp: &TempDir) {
+        unsafe { std::env::set_var("HOME", tmp.path()) };
+    }
+
     #[test]
     fn given_template_with_frontmatter_should_parse() {
         let content = "---\nname: code-review\ndescription: Review code\nagent: codex\n---\nReview the code on branch {{BRANCH}}.\n";
@@ -286,6 +291,7 @@ mod tests {
     #[test]
     fn given_local_and_global_templates_should_list_local_first() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let root = tmp.path();
         let local_dir = paths::templates_dir(root);
         std::fs::create_dir_all(&local_dir).unwrap();
@@ -324,6 +330,7 @@ mod tests {
     #[test]
     fn given_no_templates_should_return_empty_list() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let templates = list_templates(tmp.path());
         assert!(templates.is_empty());
     }
