@@ -641,7 +641,12 @@ impl Engine {
             // Root agents and existing-worktree agents get auto-generated names
             name.unwrap_or_else(pu_core::id::root_agent_name)
         };
-        let base_branch = base.unwrap_or_else(|| "HEAD".into());
+        let base_branch = match base {
+            Some(b) => b,
+            None => git::resolve_base_ref(root_path, "HEAD")
+                .await
+                .unwrap_or_else(|_| "HEAD".into()),
+        };
 
         // Build command with prompt
         let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, agent_type) {
@@ -945,7 +950,12 @@ impl Engine {
             };
         }
 
-        let base_branch = base.unwrap_or_else(|| "HEAD".into());
+        let base_branch = match base {
+            Some(b) => b,
+            None => git::resolve_base_ref(root_path, "HEAD")
+                .await
+                .unwrap_or_else(|_| "HEAD".into()),
+        };
         let wt_id = pu_core::id::worktree_id();
         let wt_path = paths::worktree_path(root_path, &wt_id);
         let branch = format!("pu/{worktree_name}");

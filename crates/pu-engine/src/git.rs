@@ -40,6 +40,23 @@ pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<(
     Ok(())
 }
 
+/// Resolve a symbolic ref (like "HEAD") to a branch name (like "main").
+/// Falls back to a commit SHA if HEAD is detached.
+pub async fn resolve_base_ref(repo_root: &Path, refspec: &str) -> Result<String, std::io::Error> {
+    if refspec == "HEAD" {
+        // Try to get the branch name HEAD points to
+        if let Ok(branch) = run_git(&["symbolic-ref", "--short", "HEAD"], repo_root).await {
+            if !branch.is_empty() {
+                return Ok(branch);
+            }
+        }
+        // Detached HEAD — fall back to SHA
+        run_git(&["rev-parse", "HEAD"], repo_root).await
+    } else {
+        Ok(refspec.to_string())
+    }
+}
+
 pub async fn delete_local_branch(repo_root: &Path, branch: &str) -> Result<(), std::io::Error> {
     run_git(&["branch", "-D", branch], repo_root).await?;
     Ok(())
