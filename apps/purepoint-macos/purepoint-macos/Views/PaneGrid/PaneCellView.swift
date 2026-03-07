@@ -1,34 +1,76 @@
 import SwiftUI
 
 /// A single pane cell in the grid — shows a terminal or empty placeholder.
+/// Hover detection lives on the outer ZStack (backed by the opaque terminal),
+/// so the overlay never intercepts clicks meant for the terminal.
 struct PaneCellView: View {
     let leafId: Int
     let agentId: String?
     let isFocused: Bool
+    @State private var isHovered = false
     @Environment(AppState.self) private var appState
     @Environment(GridState.self) private var gridState
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack(alignment: .topTrailing) {
             if let agentId, let agent = appState.agent(byId: agentId) {
-                TerminalContainerView(agent: agent, isFocused: isFocused)
+                TerminalContainerView(
+                    agent: agent,
+                    isFocused: isFocused,
+                    onFocus: { gridState.focusedLeafId = leafId }
+                )
             } else {
                 PanePlaceholderView(leafId: leafId)
+                    .onTapGesture {
+                        gridState.focusedLeafId = leafId
+                    }
             }
 
             // Focus indicator bar
             if isFocused {
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(height: 2)
+                VStack {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(height: 2)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
             }
 
-            // Hover overlay with split/close buttons
-            HoverOverlay(leafId: leafId)
+            // Hover buttons (split/close)
+            if isHovered {
+                HStack(spacing: 4) {
+                    if gridState.canSplit(axis: .vertical) {
+                        OverlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
+                            gridState.focusedLeafId = leafId
+                            gridState.splitFocused(axis: .vertical)
+                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
+                        }
+                    }
+                    if gridState.canSplit(axis: .horizontal) {
+                        OverlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
+                            gridState.focusedLeafId = leafId
+                            gridState.splitFocused(axis: .horizontal)
+                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
+                        }
+                    }
+                    if gridState.leafCount > 1 {
+                        OverlayButton(icon: "xmark", tooltip: "Close Pane") {
+                            gridState.focusedLeafId = leafId
+                            gridState.closeFocused()
+                        }
+                    }
+                }
+                .padding(6)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .padding(8)
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+            }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            gridState.focusedLeafId = leafId
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
+                isHovered = hovering
+            }
         }
     }
 }
@@ -91,55 +133,6 @@ private struct PanePlaceholderView: View {
                     agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", leafId: lid, gridState: gs)
             case .runSwarm:
                 break
-            }
-        }
-    }
-}
-
-/// Hover overlay showing split/close buttons in the top-right corner.
-private struct HoverOverlay: View {
-    let leafId: Int
-    @State private var isHovered = false
-    @Environment(GridState.self) private var gridState
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.clear
-
-            if isHovered {
-                HStack(spacing: 4) {
-                    if gridState.canSplit(axis: .vertical) {
-                        OverlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
-                            gridState.focusedLeafId = leafId
-                            gridState.splitFocused(axis: .vertical)
-                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
-                        }
-                    }
-                    if gridState.canSplit(axis: .horizontal) {
-                        OverlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
-                            gridState.focusedLeafId = leafId
-                            gridState.splitFocused(axis: .horizontal)
-                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
-                        }
-                    }
-                    if gridState.leafCount > 1 {
-                        OverlayButton(icon: "xmark", tooltip: "Close Pane") {
-                            gridState.focusedLeafId = leafId
-                            gridState.closeFocused()
-                        }
-                    }
-                }
-                .padding(6)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
-                .padding(8)
-                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
-                isHovered = hovering
             }
         }
     }

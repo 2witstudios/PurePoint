@@ -24,6 +24,7 @@ struct TerminalPaneView: NSViewRepresentable {
 /// The AppKit view that wraps a ScrollableTerminal and manages daemon attach lifecycle.
 class TerminalPaneNSView: NSView {
     let agent: AgentModel
+    var onMouseDown: (() -> Void)?
     private(set) var terminal: ScrollableTerminal?
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
@@ -144,6 +145,7 @@ class TerminalPaneNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
         focusTerminal()
         super.mouseDown(with: event)
     }
