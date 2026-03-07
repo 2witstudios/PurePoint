@@ -1357,22 +1357,17 @@ impl Engine {
             }
         };
 
-        // 3. Resolve latest session file (handles Claude Code session splitting)
-        //    This does synchronous file I/O, so run on the blocking pool.
-        let effective_session_id = match agent_entry.session_id.clone() {
-            Some(sid) => {
-                let cwd = cwd.clone();
-                let fallback = sid.clone();
-                Some(
-                    tokio::task::spawn_blocking(move || {
-                        Self::find_latest_session_file(&cwd, &sid).unwrap_or(sid)
-                    })
-                    .await
-                    .unwrap_or(fallback),
-                )
-            }
-            None => None,
-        };
+        // 3. Repair corrupted session files before resume (claude-code#24304)
+        if let Some(ref sid) = agent_entry.session_id {
+            let cwd_clone = cwd.clone();
+            let sid_clone = sid.clone();
+            tokio::task::spawn_blocking(move || {
+                Self::repair_session_files(&cwd_clone, &sid_clone);
+            })
+            .await
+            .ok();
+        }
+        let effective_session_id = agent_entry.session_id.clone();
 
         // 4. Construct resume command based on agent type
         let (command, args, session_id) = match self.build_resume_command(
@@ -1497,10 +1492,8 @@ impl Engine {
 
     /// Scan Claude Code's session directory for the latest continuation of a session.
     /// Claude Code stores sessions at `~/.claude/projects/{escaped-cwd}/{uuid}.jsonl`.
-    /// When context is compacted or `/resume` is used, a new file is created with a new
-    /// `sessionId` but linked via `parentUuid` referencing a message UUID inside the
-    /// previous session file. This traces that chain to find the latest continuation.
-    fn find_latest_session_file(cwd: &str, original_session_id: &str) -> Option<String> {
+    /// Resolve the sessions directory for a given working directory.
+    fn sessions_dir_for(cwd: &str) -> Option<PathBuf> {
         let home = std::env::var("HOME").ok()?;
         let escaped: String = cwd
             .chars()
@@ -1512,101 +1505,63 @@ impl Engine {
                 }
             })
             .collect();
-        let sessions_dir = PathBuf::from(&home)
-            .join(".claude")
-            .join("projects")
-            .join(&escaped);
-
-        Self::find_latest_session_file_in(&sessions_dir, original_session_id)
+        Some(
+            PathBuf::from(&home)
+                .join(".claude")
+                .join("projects")
+                .join(&escaped),
+        )
     }
 
-    /// Inner implementation that takes an explicit sessions directory (testable).
-    /// Traces the parentUuid chain from the original session file to find the latest
-    /// continuation. Returns `None` if no continuations exist.
-    fn find_latest_session_file_in(
-        sessions_dir: &std::path::Path,
-        original_session_id: &str,
-    ) -> Option<String> {
+    /// Repair corrupted Claude Code session JSONL files for the given session.
+    ///
+    /// Fixes three known corruption patterns (claude-code#24304):
+    /// 1. Snapshot `messageId` collisions — `file-history-snapshot` entries sharing UUIDs with real messages
+    /// 2. Broken `parentUuid` references — entries pointing to non-existent UUIDs
+    /// 3. Disconnected compaction roots — multiple `parentUuid: null` entries splitting the conversation
+    fn repair_session_files(cwd: &str, session_id: &str) {
+        let Some(sessions_dir) = Self::sessions_dir_for(cwd) else {
+            return;
+        };
         if !sessions_dir.is_dir() {
-            return None;
+            return;
         }
 
-        // Step 1: Read first line of every .jsonl file, extract (filename_uuid, parentUuid)
-        let mut candidates: Vec<(String, String, PathBuf)> = Vec::new(); // (filename_uuid, parentUuid, path)
+        // Repair the original session file
+        let original = sessions_dir.join(format!("{session_id}.jsonl"));
+        if original.is_file() {
+            repair_session_file(&original);
+        }
 
-        for entry in std::fs::read_dir(sessions_dir).ok()?.flatten() {
+        // Repair continuation files that chain back to the original session
+        let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+            // Skip the original — already repaired
+            if path.file_stem().and_then(|s| s.to_str()) == Some(session_id) {
                 continue;
-            };
-
+            }
+            // Only repair continuation files (first line has non-null parentUuid)
             let Ok(file) = std::fs::File::open(&path) else {
                 continue;
             };
             let mut reader = std::io::BufReader::new(file);
             let mut first_line = String::new();
-            if std::io::BufRead::read_line(&mut reader, &mut first_line).is_err() {
+            if BufRead::read_line(&mut reader, &mut first_line).is_err() {
                 continue;
             }
-
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&first_line) else {
                 continue;
             };
-
-            // Only files with a non-null parentUuid are continuation candidates
-            if let Some(parent_uuid) = value.get("parentUuid").and_then(|v| v.as_str()) {
-                candidates.push((stem, parent_uuid.to_string(), path));
+            if value.get("parentUuid").and_then(|v| v.as_str()).is_some() {
+                repair_session_file(&path);
             }
         }
-
-        if candidates.is_empty() {
-            return None;
-        }
-
-        // Step 2: BFS to find ALL reachable descendants from the original file.
-        // This avoids greedily committing to one fork and missing a longer/newer branch.
-        let original_file = sessions_dir.join(format!("{original_session_id}.jsonl"));
-        if !original_file.exists() {
-            return None;
-        }
-
-        // (id, path) of files to explore
-        let mut queue: Vec<(String, PathBuf)> =
-            vec![(original_session_id.to_string(), original_file)];
-        // All reachable descendants (excluding the original)
-        let mut reachable: Vec<(String, PathBuf)> = Vec::new();
-
-        while let Some((_, ref current_path)) = queue.pop() {
-            let current_path = current_path.clone();
-            // Find candidates whose parentUuid appears in this file
-            let mut i = 0;
-            while i < candidates.len() {
-                if file_contains_uuid(&current_path, &candidates[i].1) {
-                    let (child_id, _, child_path) = candidates.remove(i);
-                    queue.push((child_id.clone(), child_path.clone()));
-                    reachable.push((child_id, child_path));
-                } else {
-                    i += 1;
-                }
-            }
-        }
-
-        if reachable.is_empty() {
-            return None;
-        }
-
-        // Pick the newest reachable descendant by modification time
-        reachable
-            .into_iter()
-            .max_by(|(_, path_a), (_, path_b)| {
-                let mod_a = std::fs::metadata(path_a).and_then(|m| m.modified()).ok();
-                let mod_b = std::fs::metadata(path_b).and_then(|m| m.modified()).ok();
-                mod_a.cmp(&mod_b).then_with(|| path_a.cmp(path_b))
-            })
-            .map(|(id, _)| id)
     }
 
     async fn handle_logs(&self, agent_id: &str, tail: usize) -> Response {
@@ -3340,28 +3295,133 @@ async fn inject_initial_prompt(
     true
 }
 
-/// Check if a session file contains a message with the given UUID.
-/// Parses the `"uuid"` field from each JSONL line (skipping the first metadata
-/// line) for an exact match, avoiding false positives from substring hits.
-fn file_contains_uuid(path: &std::path::Path, uuid: &str) -> bool {
-    let Ok(file) = std::fs::File::open(path) else {
+/// Repair a single Claude Code session JSONL file.
+///
+/// Returns `true` if any repairs were made (a `.bak` backup is written).
+fn repair_session_file(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
         return false;
     };
-    let reader = std::io::BufReader::new(file);
-    for line in reader.lines().skip(1) {
-        let Ok(line) = line else { break };
-        // Quick substring check before parsing JSON
-        if !line.contains(uuid) {
+
+    let mut lines: Vec<serde_json::Value> = Vec::new();
+    for raw_line in content.lines() {
+        if raw_line.trim().is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
-        if value.get("uuid").and_then(|v| v.as_str()) == Some(uuid) {
-            return true;
+        match serde_json::from_str::<serde_json::Value>(raw_line) {
+            Ok(v) => lines.push(v),
+            Err(_) => {
+                // Preserve unparseable lines as-is by wrapping in a raw marker
+                lines.push(serde_json::json!({"__raw": raw_line}));
+            }
         }
     }
-    false
+
+    if lines.is_empty() {
+        return false;
+    }
+
+    // Collect all "uuid" values into a set
+    let mut uuid_set: HashSet<String> = HashSet::new();
+    for entry in &lines {
+        if let Some(uuid) = entry.get("uuid").and_then(|v| v.as_str()) {
+            uuid_set.insert(uuid.to_string());
+        }
+    }
+
+    let mut modified = false;
+
+    // Fix 1: Snapshot messageId collisions
+    // file-history-snapshot entries sometimes reuse a messageId that collides with
+    // a real message uuid. Nullify the messageId to prevent confusion.
+    for entry in &mut lines {
+        if entry.get("__raw").is_some() {
+            continue;
+        }
+        let is_snapshot =
+            entry.get("type").and_then(|v| v.as_str()) == Some("file-history-snapshot");
+        if !is_snapshot {
+            continue;
+        }
+        if let Some(mid) = entry
+            .get("messageId")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+        {
+            if uuid_set.contains(&mid) {
+                entry["messageId"] = serde_json::Value::Null;
+                modified = true;
+            }
+        }
+    }
+
+    // Fix 2: Broken parentUuid references — point to nearest preceding entry's uuid
+    // Fix 3: Disconnected roots — if >1 entry has parentUuid: null, stitch extras
+    let mut null_parent_count = 0;
+    let mut last_uuid: Option<String> = None;
+
+    for entry in &mut lines {
+        if entry.get("__raw").is_some() {
+            continue;
+        }
+
+        let has_parent_uuid_field = entry.get("parentUuid").is_some();
+        let parent_uuid_value = entry
+            .get("parentUuid")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        if has_parent_uuid_field {
+            match &parent_uuid_value {
+                Some(pu) if !uuid_set.contains(pu) => {
+                    // Broken reference — point to nearest preceding uuid
+                    if let Some(ref prev) = last_uuid {
+                        entry["parentUuid"] = serde_json::Value::String(prev.clone());
+                        modified = true;
+                    }
+                }
+                None => {
+                    // parentUuid is null — this is a root
+                    null_parent_count += 1;
+                    if null_parent_count > 1 {
+                        // Stitch disconnected root to nearest preceding uuid
+                        if let Some(ref prev) = last_uuid {
+                            entry["parentUuid"] = serde_json::Value::String(prev.clone());
+                            modified = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Track the most recent uuid for stitching
+        if let Some(uuid) = entry.get("uuid").and_then(|v| v.as_str()) {
+            last_uuid = Some(uuid.to_string());
+        }
+    }
+
+    if !modified {
+        return false;
+    }
+
+    // Write backup
+    let backup = path.with_extension("jsonl.bak");
+    let _ = std::fs::write(&backup, &content);
+
+    // Write repaired file
+    let mut output = String::new();
+    for entry in &lines {
+        if let Some(raw) = entry.get("__raw").and_then(|v| v.as_str()) {
+            output.push_str(raw);
+        } else {
+            output.push_str(&serde_json::to_string(entry).unwrap_or_default());
+        }
+        output.push('\n');
+    }
+    let _ = std::fs::write(path, &output);
+
+    true
 }
 
 #[cfg(test)]
@@ -3487,183 +3547,112 @@ mod tests {
         );
     }
 
-    /// Helper: create a session .jsonl file with a given uuid, sessionId, and optional parentUuid.
-    /// Optionally include extra lines containing message UUIDs that children can reference.
-    fn write_session_file(
-        dir: &std::path::Path,
-        filename_uuid: &str,
-        session_id: &str,
-        parent_uuid: Option<&str>,
-        message_uuids: &[&str],
-    ) {
-        let path = dir.join(format!("{filename_uuid}.jsonl"));
-        let mut first_line = serde_json::json!({
-            "sessionId": session_id,
-            "type": "summary",
-        });
-        if let Some(pu) = parent_uuid {
-            first_line["parentUuid"] = serde_json::Value::String(pu.to_string());
-        }
-        let mut content = serde_json::to_string(&first_line).unwrap();
-        content.push('\n');
-        for msg_uuid in message_uuids {
-            let line = serde_json::json!({
-                "uuid": msg_uuid,
-                "type": "assistant",
-                "message": {"content": "hello"},
-            });
-            content.push_str(&serde_json::to_string(&line).unwrap());
-            content.push('\n');
-        }
-        std::fs::write(path, content).unwrap();
-    }
-
     #[test]
-    fn given_session_chain_should_return_latest_continuation() {
-        // given: a 3-file chain: original -> child1 -> child2
+    fn given_snapshot_collision_should_nullify_message_id() {
+        // given: a session file where a file-history-snapshot reuses a real message uuid
         let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp
-            .path()
-            .join(".claude")
-            .join("projects")
-            .join("-Users-jono-myproject");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        // original session: uuid "aaa", sessionId "aaa", contains message "msg-1"
-        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
-        // child1: uuid "bbb", sessionId "bbb" (different!), parentUuid "msg-1", contains "msg-2"
-        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &["msg-2"]);
-        // child2: uuid "ccc", sessionId "ccc" (different!), parentUuid "msg-2"
-        write_session_file(&sessions_dir, "ccc", "ccc", Some("msg-2"), &[]);
+        let path = tmp.path().join("session.jsonl");
+        let content = [
+            r#"{"uuid":"u1","type":"summary","parentUuid":null}"#,
+            r#"{"uuid":"u2","type":"assistant","message":{"content":"hello"}}"#,
+            r#"{"type":"file-history-snapshot","messageId":"u2","data":{}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, &content).unwrap();
 
         // when
-        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
-
-        // then: should return "ccc", the end of the chain
-        assert_eq!(result, Some("ccc".to_string()));
-    }
-
-    #[test]
-    fn given_no_continuations_should_return_none() {
-        // given: only the original session file, no children
-        let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp.path().join(".claude").join("projects").join("-test");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
-
-        // when
-        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
-
-        // then: no continuation found
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn given_multi_agent_same_dir_should_follow_correct_chain() {
-        // given: two independent chains in the same session dir
-        let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        // Agent A chain: aaa -> bbb
-        write_session_file(&sessions_dir, "aaa", "aaa", None, &["a-msg-1"]);
-        write_session_file(&sessions_dir, "bbb", "bbb", Some("a-msg-1"), &[]);
-
-        // Agent B chain: xxx -> yyy
-        write_session_file(&sessions_dir, "xxx", "xxx", None, &["b-msg-1"]);
-        write_session_file(&sessions_dir, "yyy", "yyy", Some("b-msg-1"), &[]);
-
-        // when: looking for agent A's chain
-        let result_a = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
-        // when: looking for agent B's chain
-        let result_b = Engine::find_latest_session_file_in(&sessions_dir, "xxx");
-
-        // then: each follows its own chain
-        assert_eq!(result_a, Some("bbb".to_string()));
-        assert_eq!(result_b, Some("yyy".to_string()));
-    }
-
-    #[test]
-    fn given_stub_files_with_null_parent_should_ignore_them() {
-        // given: original + a stub file (null parentUuid) + real continuation
-        let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
-        // stub: no parentUuid, won't be in chain
-        write_session_file(&sessions_dir, "stub", "stub", None, &[]);
-        // real continuation
-        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &[]);
-
-        // when
-        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
-
-        // then: follows real chain, ignores stub
-        assert_eq!(result, Some("bbb".to_string()));
-    }
-
-    #[test]
-    fn given_missing_original_file_should_return_none() {
-        // given: candidates exist but the original session file is missing
-        let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        // A continuation that references a non-existent original
-        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &[]);
-
-        // when: original "aaa" doesn't exist on disk
-        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+        let repaired = repair_session_file(&path);
 
         // then
-        assert_eq!(result, None);
+        assert!(repaired);
+        let result = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<serde_json::Value> = result
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // The snapshot's messageId should be null
+        assert_eq!(lines[2]["messageId"], serde_json::Value::Null);
+        // Backup should exist
+        assert!(tmp.path().join("session.jsonl.bak").exists());
     }
 
     #[test]
-    fn given_forked_chain_should_pick_newest_continuation() {
-        // given: two continuations both reference the same parent message
+    fn given_broken_parent_uuid_should_fix_reference() {
+        // given: a session file where an entry's parentUuid points to a non-existent uuid
         let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
-        // older fork
-        write_session_file(&sessions_dir, "older", "older", Some("msg-1"), &[]);
-        // sleep to ensure different mod times (1.1s covers HFS+ 1s granularity)
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        // newer fork
-        write_session_file(&sessions_dir, "newer", "newer", Some("msg-1"), &[]);
+        let path = tmp.path().join("session.jsonl");
+        let content = [
+            r#"{"uuid":"u1","type":"summary","parentUuid":null}"#,
+            r#"{"uuid":"u2","parentUuid":"u1","type":"assistant"}"#,
+            r#"{"uuid":"u3","parentUuid":"DOES_NOT_EXIST","type":"assistant"}"#,
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, &content).unwrap();
 
         // when
-        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+        let repaired = repair_session_file(&path);
 
-        // then: should pick the newer fork
-        assert_eq!(result, Some("newer".to_string()));
+        // then
+        assert!(repaired);
+        let result = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<serde_json::Value> = result
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // u3's parentUuid should now point to u2 (nearest preceding)
+        assert_eq!(lines[2]["parentUuid"], "u2");
     }
 
     #[test]
-    fn given_deep_fork_should_pick_newest_descendant_not_greedy_child() {
-        // given: aaa -> bbb (via msg-1), aaa -> ddd (via msg-1), bbb -> ccc (via msg-2)
-        // ccc is the newest file. A greedy approach picking ddd at hop 1 would miss ccc.
+    fn given_disconnected_root_should_stitch() {
+        // given: a session file with two entries having parentUuid: null (disconnected roots)
         let tmp = TempDir::new().unwrap();
-        let sessions_dir = tmp.path().join("sessions");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
-
-        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
-        // ddd: direct child of aaa (via msg-1), written first (older)
-        write_session_file(&sessions_dir, "ddd", "ddd", Some("msg-1"), &[]);
-        // bbb: direct child of aaa (via msg-1), contains msg-2
-        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &["msg-2"]);
-        // ccc: child of bbb (via msg-2), written last (newest)
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        write_session_file(&sessions_dir, "ccc", "ccc", Some("msg-2"), &[]);
+        let path = tmp.path().join("session.jsonl");
+        let content = [
+            r#"{"uuid":"u1","type":"summary","parentUuid":null}"#,
+            r#"{"uuid":"u2","parentUuid":"u1","type":"assistant"}"#,
+            r#"{"uuid":"u3","parentUuid":null,"type":"assistant"}"#,
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, &content).unwrap();
 
         // when
-        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+        let repaired = repair_session_file(&path);
 
-        // then: should pick ccc (newest overall descendant), not ddd (greedy first child)
-        assert_eq!(result, Some("ccc".to_string()));
+        // then
+        assert!(repaired);
+        let result = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<serde_json::Value> = result
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // u3's parentUuid should now point to u2 (nearest preceding)
+        assert_eq!(lines[2]["parentUuid"], "u2");
+    }
+
+    #[test]
+    fn given_intact_file_should_not_modify() {
+        // given: a perfectly valid session file
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("session.jsonl");
+        let content = [
+            r#"{"uuid":"u1","type":"summary","parentUuid":null}"#,
+            r#"{"uuid":"u2","parentUuid":"u1","type":"assistant"}"#,
+            r#"{"uuid":"u3","parentUuid":"u2","type":"assistant"}"#,
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, &content).unwrap();
+
+        // when
+        let repaired = repair_session_file(&path);
+
+        // then: no changes needed
+        assert!(!repaired);
+        // No backup file should be created
+        assert!(!tmp.path().join("session.jsonl.bak").exists());
     }
 }
