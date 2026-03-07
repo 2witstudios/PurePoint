@@ -21,7 +21,7 @@ struct PromptCreationSheet: View {
             Divider()
             sheetFooter
         }
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 520)
     }
 
     // MARK: - Header
@@ -67,7 +67,6 @@ struct PromptCreationSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .formStyle(.grouped)
-        .scrollDisabled(true)
     }
 
     // MARK: - Footer
