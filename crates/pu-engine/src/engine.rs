@@ -2970,10 +2970,27 @@ impl Engine {
             return Response::DiffResult { diffs: vec![] };
         }
 
+        let is_targeted = worktree_id.is_some();
         let mut diffs = Vec::new();
         for wt in &worktrees {
             let wt_path = std::path::PathBuf::from(&wt.path);
             if !wt_path.exists() {
+                if is_targeted {
+                    // Targeted query: report the error so callers can distinguish
+                    // a deleted worktree from a clean one.
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: String::new(),
+                        files_changed: 0,
+                        insertions: 0,
+                        deletions: 0,
+                        error: Some(format!("worktree directory not found: {}", wt.path)),
+                    });
+                }
+                // Bulk query: skip missing dirs (best-effort)
                 continue;
             }
             let base = wt.base_branch.as_deref();
@@ -2988,6 +3005,7 @@ impl Engine {
                         files_changed: output.files_changed,
                         insertions: output.insertions,
                         deletions: output.deletions,
+                        error: None,
                     });
                 }
                 Err(e) => {
@@ -2997,10 +3015,11 @@ impl Engine {
                         worktree_name: wt.name.clone(),
                         branch: wt.branch.clone(),
                         base_branch: wt.base_branch.clone(),
-                        diff_output: format!("error: {e}"),
+                        diff_output: String::new(),
                         files_changed: 0,
                         insertions: 0,
                         deletions: 0,
+                        error: Some(format!("{e}")),
                     });
                 }
             }

@@ -55,30 +55,39 @@ pub struct DiffOutput {
 }
 
 /// Compute the diff for a worktree against its base branch.
-/// If `base` is provided, diffs against that branch. Otherwise diffs uncommitted changes.
+///
+/// When `base` is provided, computes the merge-base between HEAD and `base` so
+/// the diff shows only the worktree's own changes (not upstream commits that
+/// landed on base after the worktree was created). When `base` is `None`, diffs
+/// uncommitted changes against HEAD. Untracked files are not included.
+///
 /// When `stat` is true, returns `--stat` summary instead of full diff.
 pub async fn diff_worktree(
     worktree_path: &Path,
     base: Option<&str>,
     stat: bool,
 ) -> Result<DiffOutput, std::io::Error> {
-    // Get the stat summary (always needed for counts)
-    let stat_args: Vec<&str> = match base {
-        Some(b) => vec!["diff", "--stat", b],
-        None => vec!["diff", "--stat", "HEAD"],
+    // Resolve the comparison target: use merge-base when a base branch is given
+    // so we only see the worktree's own changes, not upstream commits.
+    let merge_base: Option<String> = match base {
+        Some(b) => {
+            let mb = run_git_allow_empty(&["merge-base", "HEAD", b], worktree_path).await?;
+            let mb = mb.trim().to_string();
+            if mb.is_empty() { None } else { Some(mb) }
+        }
+        None => None,
     };
-    let stat_output = run_git_allow_empty(&stat_args, worktree_path).await?;
 
+    let target = merge_base.as_deref().unwrap_or("HEAD");
+
+    // Get the stat summary (always needed for counts)
+    let stat_output = run_git_allow_empty(&["diff", "--stat", target], worktree_path).await?;
     let (files_changed, insertions, deletions) = parse_diff_stat(&stat_output);
 
     let diff = if stat {
         stat_output
     } else {
-        let diff_args: Vec<&str> = match base {
-            Some(b) => vec!["diff", b],
-            None => vec!["diff", "HEAD"],
-        };
-        run_git_allow_empty(&diff_args, worktree_path).await?
+        run_git_allow_empty(&["diff", target], worktree_path).await?
     };
 
     Ok(DiffOutput {

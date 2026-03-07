@@ -405,7 +405,9 @@ pub fn print_response(response: &Response, json_mode: bool) {
                     base.dimmed(),
                     d.branch.green()
                 );
-                if d.files_changed == 0 && d.diff_output.trim().is_empty() {
+                if let Some(ref err) = d.error {
+                    println!("  {}: {}", "error".red().bold(), err);
+                } else if d.files_changed == 0 && d.diff_output.trim().is_empty() {
                     println!("  {}", "No changes".dimmed());
                 } else {
                     println!(
@@ -841,6 +843,7 @@ mod tests {
                 files_changed: 1,
                 insertions: 1,
                 deletions: 0,
+                error: None,
             }],
         };
         print_response(&resp, false);
@@ -864,6 +867,7 @@ mod tests {
                 files_changed: 0,
                 insertions: 0,
                 deletions: 0,
+                error: None,
             }],
         };
         print_response(&resp, false);

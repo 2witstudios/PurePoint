@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Serde helper: encode Vec<u8> as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -543,6 +543,8 @@ pub struct WorktreeDiffEntry {
     pub files_changed: usize,
     pub insertions: usize,
     pub deletions: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[cfg(test)]
@@ -734,6 +736,7 @@ mod tests {
                 files_changed: 2,
                 insertions: 5,
                 deletions: 3,
+                error: None,
             }],
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -918,8 +921,8 @@ mod tests {
     }
 
     #[test]
-    fn given_protocol_version_should_be_1() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+    fn given_protocol_version_should_be_current() {
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 
     // --- GridCommand round-trips ---
