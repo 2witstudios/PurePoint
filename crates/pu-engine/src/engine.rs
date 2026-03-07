@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1358,10 +1358,21 @@ impl Engine {
         };
 
         // 3. Resolve latest session file (handles Claude Code session splitting)
-        let effective_session_id: Option<String> = agent_entry
-            .session_id
-            .as_ref()
-            .map(|sid| Self::find_latest_session_file(&cwd, sid).unwrap_or_else(|| sid.clone()));
+        //    This does synchronous file I/O, so run on the blocking pool.
+        let effective_session_id = match agent_entry.session_id.clone() {
+            Some(sid) => {
+                let cwd = cwd.clone();
+                let fallback = sid.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        Self::find_latest_session_file(&cwd, &sid).unwrap_or(sid)
+                    })
+                    .await
+                    .unwrap_or(fallback),
+                )
+            }
+            None => None,
+        };
 
         // 4. Construct resume command based on agent type
         let (command, args, session_id) = match self.build_resume_command(
@@ -1486,27 +1497,51 @@ impl Engine {
 
     /// Scan Claude Code's session directory for the latest continuation of a session.
     /// Claude Code stores sessions at `~/.claude/projects/{escaped-cwd}/{uuid}.jsonl`.
-    /// When sessions split/compact, new files keep the same `sessionId` field but get
-    /// a new filename UUID. Returns the latest file's UUID if newer than the original.
+    /// When context is compacted or `/resume` is used, a new file is created with a new
+    /// `sessionId` but linked via `parentUuid` referencing a message UUID inside the
+    /// previous session file. This traces that chain to find the latest continuation.
     fn find_latest_session_file(cwd: &str, original_session_id: &str) -> Option<String> {
         let home = std::env::var("HOME").ok()?;
-        let escaped = cwd.replace('/', "-");
+        let escaped: String = cwd
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
         let sessions_dir = PathBuf::from(&home)
             .join(".claude")
             .join("projects")
             .join(&escaped);
 
+        Self::find_latest_session_file_in(&sessions_dir, original_session_id)
+    }
+
+    /// Inner implementation that takes an explicit sessions directory (testable).
+    /// Traces the parentUuid chain from the original session file to find the latest
+    /// continuation. Returns `None` if no continuations exist.
+    fn find_latest_session_file_in(
+        sessions_dir: &std::path::Path,
+        original_session_id: &str,
+    ) -> Option<String> {
         if !sessions_dir.is_dir() {
             return None;
         }
 
-        let mut latest: Option<(String, std::time::SystemTime)> = None;
+        // Step 1: Read first line of every .jsonl file, extract (filename_uuid, parentUuid)
+        let mut candidates: Vec<(String, String, PathBuf)> = Vec::new(); // (filename_uuid, parentUuid, path)
 
-        for entry in std::fs::read_dir(&sessions_dir).ok()?.flatten() {
+        for entry in std::fs::read_dir(sessions_dir).ok()?.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+                continue;
+            };
 
             let Ok(file) = std::fs::File::open(&path) else {
                 continue;
@@ -1517,32 +1552,61 @@ impl Engine {
                 continue;
             }
 
-            // Quick string check before JSON parsing
-            if !first_line.contains(original_session_id) {
-                continue;
-            }
-
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&first_line) else {
                 continue;
             };
-            if value.get("sessionId").and_then(|v| v.as_str()) != Some(original_session_id) {
-                continue;
-            }
 
-            let Ok(mod_time) = entry.metadata().and_then(|m| m.modified()) else {
-                continue;
-            };
-            if latest.as_ref().is_none_or(|(_, t)| mod_time > *t) {
-                if let Some(stem) = path.file_stem() {
-                    latest = Some((stem.to_string_lossy().to_string(), mod_time));
+            // Only files with a non-null parentUuid are continuation candidates
+            if let Some(parent_uuid) = value.get("parentUuid").and_then(|v| v.as_str()) {
+                candidates.push((stem, parent_uuid.to_string(), path));
+            }
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Step 2: BFS to find ALL reachable descendants from the original file.
+        // This avoids greedily committing to one fork and missing a longer/newer branch.
+        let original_file = sessions_dir.join(format!("{original_session_id}.jsonl"));
+        if !original_file.exists() {
+            return None;
+        }
+
+        // (id, path) of files to explore
+        let mut queue: Vec<(String, PathBuf)> =
+            vec![(original_session_id.to_string(), original_file)];
+        // All reachable descendants (excluding the original)
+        let mut reachable: Vec<(String, PathBuf)> = Vec::new();
+
+        while let Some((_, ref current_path)) = queue.pop() {
+            let current_path = current_path.clone();
+            // Find candidates whose parentUuid appears in this file
+            let mut i = 0;
+            while i < candidates.len() {
+                if file_contains_uuid(&current_path, &candidates[i].1) {
+                    let (child_id, _, child_path) = candidates.remove(i);
+                    queue.push((child_id.clone(), child_path.clone()));
+                    reachable.push((child_id, child_path));
+                } else {
+                    i += 1;
                 }
             }
         }
 
-        // Only return if we found a different (newer) file than the original
-        latest
+        if reachable.is_empty() {
+            return None;
+        }
+
+        // Pick the newest reachable descendant by modification time
+        reachable
+            .into_iter()
+            .max_by(|(_, path_a), (_, path_b)| {
+                let mod_a = std::fs::metadata(path_a).and_then(|m| m.modified()).ok();
+                let mod_b = std::fs::metadata(path_b).and_then(|m| m.modified()).ok();
+                mod_a.cmp(&mod_b).then_with(|| path_a.cmp(path_b))
+            })
             .map(|(id, _)| id)
-            .filter(|id| id != original_session_id)
     }
 
     async fn handle_logs(&self, agent_id: &str, tail: usize) -> Response {
@@ -3276,6 +3340,30 @@ async fn inject_initial_prompt(
     true
 }
 
+/// Check if a session file contains a message with the given UUID.
+/// Parses the `"uuid"` field from each JSONL line (skipping the first metadata
+/// line) for an exact match, avoiding false positives from substring hits.
+fn file_contains_uuid(path: &std::path::Path, uuid: &str) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let reader = std::io::BufReader::new(file);
+    for line in reader.lines().skip(1) {
+        let Ok(line) = line else { break };
+        // Quick substring check before parsing JSON
+        if !line.contains(uuid) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if value.get("uuid").and_then(|v| v.as_str()) == Some(uuid) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3397,5 +3485,185 @@ mod tests {
             Engine::resolved_prompt_flag("codex", Some("--prompt")),
             Some("--prompt".to_string())
         );
+    }
+
+    /// Helper: create a session .jsonl file with a given uuid, sessionId, and optional parentUuid.
+    /// Optionally include extra lines containing message UUIDs that children can reference.
+    fn write_session_file(
+        dir: &std::path::Path,
+        filename_uuid: &str,
+        session_id: &str,
+        parent_uuid: Option<&str>,
+        message_uuids: &[&str],
+    ) {
+        let path = dir.join(format!("{filename_uuid}.jsonl"));
+        let mut first_line = serde_json::json!({
+            "sessionId": session_id,
+            "type": "summary",
+        });
+        if let Some(pu) = parent_uuid {
+            first_line["parentUuid"] = serde_json::Value::String(pu.to_string());
+        }
+        let mut content = serde_json::to_string(&first_line).unwrap();
+        content.push('\n');
+        for msg_uuid in message_uuids {
+            let line = serde_json::json!({
+                "uuid": msg_uuid,
+                "type": "assistant",
+                "message": {"content": "hello"},
+            });
+            content.push_str(&serde_json::to_string(&line).unwrap());
+            content.push('\n');
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn given_session_chain_should_return_latest_continuation() {
+        // given: a 3-file chain: original -> child1 -> child2
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("-Users-jono-myproject");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // original session: uuid "aaa", sessionId "aaa", contains message "msg-1"
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // child1: uuid "bbb", sessionId "bbb" (different!), parentUuid "msg-1", contains "msg-2"
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &["msg-2"]);
+        // child2: uuid "ccc", sessionId "ccc" (different!), parentUuid "msg-2"
+        write_session_file(&sessions_dir, "ccc", "ccc", Some("msg-2"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: should return "ccc", the end of the chain
+        assert_eq!(result, Some("ccc".to_string()));
+    }
+
+    #[test]
+    fn given_no_continuations_should_return_none() {
+        // given: only the original session file, no children
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join(".claude").join("projects").join("-test");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: no continuation found
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_multi_agent_same_dir_should_follow_correct_chain() {
+        // given: two independent chains in the same session dir
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // Agent A chain: aaa -> bbb
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["a-msg-1"]);
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("a-msg-1"), &[]);
+
+        // Agent B chain: xxx -> yyy
+        write_session_file(&sessions_dir, "xxx", "xxx", None, &["b-msg-1"]);
+        write_session_file(&sessions_dir, "yyy", "yyy", Some("b-msg-1"), &[]);
+
+        // when: looking for agent A's chain
+        let result_a = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+        // when: looking for agent B's chain
+        let result_b = Engine::find_latest_session_file_in(&sessions_dir, "xxx");
+
+        // then: each follows its own chain
+        assert_eq!(result_a, Some("bbb".to_string()));
+        assert_eq!(result_b, Some("yyy".to_string()));
+    }
+
+    #[test]
+    fn given_stub_files_with_null_parent_should_ignore_them() {
+        // given: original + a stub file (null parentUuid) + real continuation
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // stub: no parentUuid, won't be in chain
+        write_session_file(&sessions_dir, "stub", "stub", None, &[]);
+        // real continuation
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: follows real chain, ignores stub
+        assert_eq!(result, Some("bbb".to_string()));
+    }
+
+    #[test]
+    fn given_missing_original_file_should_return_none() {
+        // given: candidates exist but the original session file is missing
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        // A continuation that references a non-existent original
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &[]);
+
+        // when: original "aaa" doesn't exist on disk
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_forked_chain_should_pick_newest_continuation() {
+        // given: two continuations both reference the same parent message
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // older fork
+        write_session_file(&sessions_dir, "older", "older", Some("msg-1"), &[]);
+        // sleep to ensure different mod times (1.1s covers HFS+ 1s granularity)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // newer fork
+        write_session_file(&sessions_dir, "newer", "newer", Some("msg-1"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: should pick the newer fork
+        assert_eq!(result, Some("newer".to_string()));
+    }
+
+    #[test]
+    fn given_deep_fork_should_pick_newest_descendant_not_greedy_child() {
+        // given: aaa -> bbb (via msg-1), aaa -> ddd (via msg-1), bbb -> ccc (via msg-2)
+        // ccc is the newest file. A greedy approach picking ddd at hop 1 would miss ccc.
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // ddd: direct child of aaa (via msg-1), written first (older)
+        write_session_file(&sessions_dir, "ddd", "ddd", Some("msg-1"), &[]);
+        // bbb: direct child of aaa (via msg-1), contains msg-2
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &["msg-2"]);
+        // ccc: child of bbb (via msg-2), written last (newest)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_session_file(&sessions_dir, "ccc", "ccc", Some("msg-2"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: should pick ccc (newest overall descendant), not ddd (greedy first child)
+        assert_eq!(result, Some("ccc".to_string()));
     }
 }
