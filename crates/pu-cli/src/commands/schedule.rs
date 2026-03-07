@@ -37,10 +37,15 @@ pub async fn run_create(
     daemon_ctrl::ensure_daemon(socket).await?;
     let project_root = commands::cwd_string()?;
 
-    // Validate: --name is required when not --root
+    // Validate: --name is required when not --root, and mutually exclusive with --root
     if !root && agent_name.is_none() {
         return Err(CliError::Other(
             "--name is required when not using --root".into(),
+        ));
+    }
+    if root && agent_name.is_some() {
+        return Err(CliError::Other(
+            "--root and --name are mutually exclusive".into(),
         ));
     }
 

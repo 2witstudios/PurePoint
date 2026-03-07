@@ -72,11 +72,11 @@ pub struct ScheduleDef {
 
 impl ScheduleDef {
     /// Validate that `root` and `agent_name` are consistent:
-    /// - root=true → agent_name must be None or empty
+    /// - root=true → agent_name must be None
     /// - root=false → agent_name must be Some(non-empty)
     pub fn validate(&self) -> Result<(), std::io::Error> {
         if self.root {
-            if self.agent_name.as_ref().is_some_and(|n| !n.is_empty()) {
+            if self.agent_name.is_some() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "agent_name must not be set when root is true",
@@ -432,6 +432,13 @@ created_at: "2025-06-01T00:00:00Z"
     fn given_root_true_with_agent_name_should_reject() {
         let mut def = make_schedule_def("test");
         def.agent_name = Some("bad".to_string());
+        assert!(def.validate().is_err());
+    }
+
+    #[test]
+    fn given_root_true_with_empty_agent_name_should_reject() {
+        let mut def = make_schedule_def("test");
+        def.agent_name = Some(String::new());
         assert!(def.validate().is_err());
     }
 
