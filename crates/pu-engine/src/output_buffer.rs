@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use tokio::sync::watch;
 
-const DEFAULT_CAPACITY: usize = 1024 * 1024; // 1MB
+const DEFAULT_CAPACITY: usize = 4 * 1024 * 1024; // 4MB
 
 pub struct OutputBuffer {
     inner: RwLock<BufferInner>,
