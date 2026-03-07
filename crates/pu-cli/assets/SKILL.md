@@ -1,6 +1,6 @@
 ---
 name: pu
-description: Use when user asks to spawn agents, check workspace status, manage parallel coding tasks, or when you need to run work in isolated worktrees. PurePoint orchestrates parallel AI coding agents.
+description: Use when user asks to spawn agents, check workspace status, manage parallel coding tasks, schedule future agents, or when you need to run work in isolated worktrees. PurePoint orchestrates parallel AI coding agents.
 user-invocable: true
 ---
 
@@ -71,6 +71,40 @@ pu kill --all                                 # kill worktree agents (preserves 
 pu kill --all --include-root                  # kill everything including root agents
 pu kill --agent <agent_id> --json             # machine output
 ```
+
+### Clean up worktrees
+```bash
+pu clean --worktree <wt_id>              # remove worktree, kill its agents, delete branch
+pu clean --all                           # remove all worktrees
+pu clean --all --json                    # machine output
+```
+
+### Schedule agents
+```bash
+pu schedule list                   # list all schedules
+pu schedule list --json            # machine-readable
+pu schedule show <name>            # show schedule details
+pu schedule show <name> --json     # machine-readable
+pu schedule create <name> \
+  --start-at "2026-03-07T14:00:00Z" \
+  --recurrence none \
+  --trigger inline-prompt \
+  --trigger-prompt "do the thing"  # one-shot scheduled agent
+pu schedule create <name> \
+  --start-at "2026-03-07T14:00:00Z" \
+  --recurrence daily \
+  --trigger agent-def \
+  --trigger-name my-agent          # recurring from saved agent def
+pu schedule enable <name>          # enable a disabled schedule
+pu schedule disable <name>         # disable without deleting
+pu schedule delete <name>          # remove a schedule
+```
+
+**Recurrence options**: `none` (one-shot), `hourly`, `daily`, `weekdays`, `weekly`, `monthly`.
+
+**Trigger types**: `inline-prompt` (with `--trigger-prompt`), `agent-def` (with `--trigger-name`), `swarm-def` (with `--trigger-name`).
+
+**Scope**: `--scope local` (default, project-level) or `--scope global`.
 
 ### Other
 ```bash

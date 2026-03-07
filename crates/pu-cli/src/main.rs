@@ -144,6 +144,18 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Remove worktrees, their agents, and branches
+    Clean {
+        /// Remove a specific worktree
+        #[arg(long, conflicts_with = "all")]
+        worktree: Option<String>,
+        /// Remove all worktrees
+        #[arg(long)]
+        all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -576,6 +588,11 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Clean {
+            worktree,
+            all,
+            json,
+        } => commands::clean::run(&socket, worktree, all, json).await,
         Commands::Schedule { action } => match action {
             ScheduleAction::List { json } => commands::schedule::run_list(&socket, json).await,
             ScheduleAction::Create {
