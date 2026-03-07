@@ -167,7 +167,8 @@ impl Engine {
             | Request::ListSchedules { project_root }
             | Request::SaveSchedule { project_root, .. }
             | Request::EnableSchedule { project_root, .. }
-            | Request::DisableSchedule { project_root, .. } => {
+            | Request::DisableSchedule { project_root, .. }
+            | Request::Diff { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -392,6 +393,14 @@ impl Engine {
             }
             Request::DisableSchedule { project_root, name } => {
                 self.handle_disable_schedule(&project_root, &name).await
+            }
+            Request::Diff {
+                project_root,
+                worktree_id,
+                stat,
+            } => {
+                self.handle_diff(&project_root, worktree_id.as_deref(), stat)
+                    .await
             }
         }
     }
@@ -632,7 +641,12 @@ impl Engine {
             // Root agents and existing-worktree agents get auto-generated names
             name.unwrap_or_else(pu_core::id::root_agent_name)
         };
-        let base_branch = base.unwrap_or_else(|| "HEAD".into());
+        let base_branch = match base {
+            Some(b) => b,
+            None => git::resolve_base_ref(root_path, "HEAD")
+                .await
+                .unwrap_or_else(|_| "HEAD".into()),
+        };
 
         // Build command with prompt
         let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, agent_type) {
@@ -936,7 +950,12 @@ impl Engine {
             };
         }
 
-        let base_branch = base.unwrap_or_else(|| "HEAD".into());
+        let base_branch = match base {
+            Some(b) => b,
+            None => git::resolve_base_ref(root_path, "HEAD")
+                .await
+                .unwrap_or_else(|_| "HEAD".into()),
+        };
         let wt_id = pu_core::id::worktree_id();
         let wt_path = paths::worktree_path(root_path, &wt_id);
         let branch = format!("pu/{worktree_name}");
@@ -2927,6 +2946,96 @@ impl Engine {
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
         }
+    }
+
+    async fn handle_diff(
+        &self,
+        project_root: &str,
+        worktree_id: Option<&str>,
+        stat: bool,
+    ) -> Response {
+        let m = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let worktrees: Vec<WorktreeEntry> = if let Some(wt_id) = worktree_id {
+            match m.worktrees.get(wt_id) {
+                Some(wt) => vec![wt.clone()],
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("worktree '{wt_id}' not found"),
+                    };
+                }
+            }
+        } else {
+            m.worktrees
+                .into_values()
+                .filter(|wt| wt.status == WorktreeStatus::Active)
+                .collect()
+        };
+
+        if worktrees.is_empty() {
+            return Response::DiffResult { diffs: vec![] };
+        }
+
+        let is_targeted = worktree_id.is_some();
+        let mut diffs = Vec::new();
+        for wt in &worktrees {
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            if !wt_path.exists() {
+                if is_targeted {
+                    // Targeted query: report the error so callers can distinguish
+                    // a deleted worktree from a clean one.
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: String::new(),
+                        files_changed: 0,
+                        insertions: 0,
+                        deletions: 0,
+                        error: Some(format!("worktree directory not found: {}", wt.path)),
+                    });
+                }
+                // Bulk query: skip missing dirs (best-effort)
+                continue;
+            }
+            let base = wt.base_branch.as_deref();
+            match git::diff_worktree(&wt_path, base, stat).await {
+                Ok(output) => {
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: output.diff,
+                        files_changed: output.files_changed,
+                        insertions: output.insertions,
+                        deletions: output.deletions,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("failed to diff worktree {}: {}", wt.id, e);
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: String::new(),
+                        files_changed: 0,
+                        insertions: 0,
+                        deletions: 0,
+                        error: Some(format!("{e}")),
+                    });
+                }
+            }
+        }
+
+        Response::DiffResult { diffs }
     }
 }
 
