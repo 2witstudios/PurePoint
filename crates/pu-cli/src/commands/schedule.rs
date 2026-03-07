@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 
 use crate::client;
 use crate::commands;
@@ -160,14 +160,22 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>, CliError> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
     }
-    // Try naive datetime (e.g. "2025-06-15T03:00:00")
+    // Try naive datetime (e.g. "2025-06-15T08:00:00") — treated as local time
     if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(naive.and_utc());
+        return Local
+            .from_local_datetime(&naive)
+            .earliest()
+            .map(|dt| dt.with_timezone(&Utc))
+            .ok_or_else(|| CliError::Other(format!("invalid local time: {s}")));
     }
-    // Try date only (e.g. "2025-06-15")
+    // Try date only (e.g. "2025-06-15") — treated as midnight local time
     if let Ok(naive) = NaiveDateTime::parse_from_str(&format!("{s}T00:00:00"), "%Y-%m-%dT%H:%M:%S")
     {
-        return Ok(naive.and_utc());
+        return Local
+            .from_local_datetime(&naive)
+            .earliest()
+            .map(|dt| dt.with_timezone(&Utc))
+            .ok_or_else(|| CliError::Other(format!("invalid local time: {s}")));
     }
     Err(CliError::Other(format!(
         "invalid datetime: {s} (expected RFC 3339 or YYYY-MM-DDTHH:MM:SS)"
@@ -184,18 +192,22 @@ mod tests {
         let dt = parse_datetime("2025-06-15T03:00:00Z").unwrap();
         assert_eq!(dt.year(), 2025);
         assert_eq!(dt.month(), 6);
+        assert_eq!(dt.hour(), 3); // UTC as specified
     }
 
     #[test]
-    fn given_naive_datetime_should_parse() {
+    fn given_naive_datetime_should_parse_as_local_time() {
         let dt = parse_datetime("2025-06-15T03:00:00").unwrap();
-        assert_eq!(dt.hour(), 3);
+        let local: DateTime<Local> = dt.with_timezone(&Local);
+        assert_eq!(local.hour(), 3); // interpreted as local, not UTC
     }
 
     #[test]
-    fn given_date_only_should_parse() {
+    fn given_date_only_should_parse_as_local_midnight() {
         let dt = parse_datetime("2025-06-15").unwrap();
-        assert_eq!(dt.day(), 15);
+        let local: DateTime<Local> = dt.with_timezone(&Local);
+        assert_eq!(local.day(), 15);
+        assert_eq!(local.hour(), 0); // midnight local
     }
 
     #[test]
