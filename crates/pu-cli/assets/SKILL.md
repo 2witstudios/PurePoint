@@ -85,29 +85,16 @@ pu schedule list                   # list all schedules
 pu schedule list --json            # machine-readable
 pu schedule show <name>            # show schedule details
 pu schedule show <name> --json     # machine-readable
-
-# Worktree spawn (default) — needs --name
-pu schedule create overnight-build \
-  --start-at "2026-03-07T22:30:00" \
-  --name overnight-build \
+pu schedule create <name> \
+  --start-at "2026-03-07T14:00:00Z" \
+  --recurrence none \
   --trigger inline-prompt \
-  --trigger-prompt "build a feature"   # spawns in worktree pu/overnight-build
-
-# Root spawn — for read-only/cross-project tasks
-pu schedule create morning-status \
-  --start-at "2026-03-07T08:00:00" \
-  --root \
-  --trigger inline-prompt \
-  --trigger-prompt "scan commits"      # spawns in project root
-
-# Recurring with agent def
-pu schedule create nightly-review \
-  --start-at "2026-03-07T03:00:00" \
+  --trigger-prompt "do the thing"  # one-shot scheduled agent
+pu schedule create <name> \
+  --start-at "2026-03-07T14:00:00Z" \
   --recurrence daily \
-  --root \
   --trigger agent-def \
-  --trigger-name security-review       # recurring root agent from saved def
-
+  --trigger-name my-agent          # recurring from saved agent def
 pu schedule enable <name>          # enable a disabled schedule
 pu schedule disable <name>         # disable without deleting
 pu schedule delete <name>          # remove a schedule
@@ -116,8 +103,6 @@ pu schedule delete <name>          # remove a schedule
 **Recurrence options**: `none` (one-shot), `hourly`, `daily`, `weekdays`, `weekly`, `monthly`.
 
 **Trigger types**: `inline-prompt` (with `--trigger-prompt`), `agent-def` (with `--trigger-name`), `swarm-def` (with `--trigger-name`).
-
-**Spawn mode**: By default, scheduled agents spawn into a worktree (requires `--name`). Use `--root` to spawn in the project root instead (for read-only or cross-project tasks).
 
 **Scope**: `--scope local` (default, project-level) or `--scope global`.
 

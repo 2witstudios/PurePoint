@@ -58,12 +58,6 @@ pub struct ScheduleDef {
     pub project_root: String,
     #[serde(default)]
     pub target: String,
-    /// Whether the scheduled agent spawns in the project root (true) or a worktree (false)
-    #[serde(default = "crate::serde_defaults::default_true")]
-    pub root: bool,
-    /// Worktree/branch name when `root` is false
-    #[serde(default)]
-    pub agent_name: Option<String>,
     /// "local" or "global" — set at load time, not serialized
     #[serde(skip)]
     pub scope: String,
@@ -314,8 +308,6 @@ mod tests {
             trigger: make_trigger(),
             project_root: "/projects/myapp".to_string(),
             target: String::new(),
-            root: true,
-            agent_name: None,
             scope: String::new(),
             created_at: Utc::now(),
         }
@@ -362,32 +354,6 @@ created_at: "2025-06-01T00:00:00Z"
         assert_eq!(def.recurrence, Recurrence::None); // default none
         assert_eq!(def.target, ""); // default empty
         assert!(def.next_run.is_none()); // default none
-        assert!(def.root); // default true (backward compat)
-        assert!(def.agent_name.is_none()); // default none
-    }
-
-    #[test]
-    fn given_schedule_with_worktree_fields_should_round_trip() {
-        let yaml = r#"
-name: overnight-build
-start_at: "2025-06-01T22:30:00Z"
-trigger:
-  type: inline_prompt
-  prompt: "build a feature"
-project_root: /projects/myapp
-root: false
-agent_name: overnight-build
-created_at: "2025-06-01T00:00:00Z"
-"#;
-        let def: ScheduleDef = serde_yml::from_str(yaml).unwrap();
-        assert!(!def.root);
-        assert_eq!(def.agent_name.as_deref(), Some("overnight-build"));
-
-        // Round-trip through YAML
-        let serialized = serde_yml::to_string(&def).unwrap();
-        let reparsed: ScheduleDef = serde_yml::from_str(&serialized).unwrap();
-        assert!(!reparsed.root);
-        assert_eq!(reparsed.agent_name.as_deref(), Some("overnight-build"));
     }
 
     #[test]
