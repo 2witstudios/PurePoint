@@ -104,7 +104,7 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard let self, !Task.isCancelled else { return }
 
-                self.assignPendingSpawnsToGrid(snapshot.rootAgents)
+                self.assignPendingSpawnsToGrid(snapshot.rootAgents, incomingWorktrees: snapshot.worktrees)
                 self.mergeWorktrees(snapshot.worktrees)
                 self.mergeRootAgents(snapshot.rootAgents)
             } catch is CancellationError {
@@ -161,7 +161,15 @@ final class ProjectState: Identifiable {
                     spawnRoot = true
                     spawnWorktree = nil
                 }
-            case nil, .nav, .project, .terminal:
+            case .terminal(let id):
+                if let wtId = worktreeId(forAgentId: id) {
+                    spawnRoot = false
+                    spawnWorktree = wtId
+                } else {
+                    spawnRoot = true
+                    spawnWorktree = nil
+                }
+            case nil, .nav, .project:
                 spawnRoot = true
                 spawnWorktree = nil
             }
@@ -191,6 +199,14 @@ final class ProjectState: Identifiable {
 
     func spawnAgentForPane(agent: String, prompt: String, leafId: Int, gridState: GridState) {
         let root = projectRoot
+        let spawnWorktree: String?
+        if let ownerId = gridState.ownerAgentId,
+            let wtId = worktreeId(forAgentId: ownerId)
+        {
+            spawnWorktree = wtId
+        } else {
+            spawnWorktree = nil
+        }
 
         gridState.pendingSpawnLeafIds.insert(leafId)
 
@@ -201,7 +217,7 @@ final class ProjectState: Identifiable {
                 let response = try await client.send(
                     .spawn(
                         projectRoot: root, prompt: prompt, agent: agent,
-                        root: true, worktree: nil
+                        root: spawnWorktree == nil, worktree: spawnWorktree
                     ))
                 switch response {
                 case .spawnResult(_, let agentId, _):
@@ -258,6 +274,9 @@ final class ProjectState: Identifiable {
     /// Used by pane-close to prevent sidebar flash.
     func removeAndKillAgent(_ agentId: String) {
         rootAgents.removeAll { $0.id == agentId }
+        for i in worktrees.indices {
+            worktrees[i].agents.removeAll { $0.id == agentId }
+        }
         killAgent(agentId)
     }
 
@@ -334,12 +353,14 @@ final class ProjectState: Identifiable {
 
     /// Eagerly assign newly-appeared agents to pending grid leaves before merging,
     /// so they appear in childAgentIds immediately (sidebar leak prevention).
-    private func assignPendingSpawnsToGrid(_ incomingAgents: [AgentModel]) {
+    private func assignPendingSpawnsToGrid(_ incomingRootAgents: [AgentModel], incomingWorktrees: [WorktreeModel] = [])
+    {
         guard let gs = gridState, gs.projectRoot == projectRoot else { return }
         var pending = gs.pendingSpawnLeafIds
         guard !pending.isEmpty else { return }
-        let currentIds = Set(rootAgents.map(\.id))
-        for agent in incomingAgents where !currentIds.contains(agent.id) {
+        let currentIds = Set(rootAgents.map(\.id) + worktrees.flatMap(\.agents).map(\.id))
+        let allIncoming = incomingRootAgents + incomingWorktrees.flatMap(\.agents)
+        for agent in allIncoming where !currentIds.contains(agent.id) {
             guard let leafId = pending.first else { break }
             pending.remove(leafId)
             gs.pendingSpawnLeafIds.remove(leafId)
@@ -383,7 +404,7 @@ final class ProjectState: Identifiable {
                                 )
                             }
 
-                            self.assignPendingSpawnsToGrid(agentModels)
+                            self.assignPendingSpawnsToGrid(agentModels, incomingWorktrees: worktreeModels)
                             self.mergeWorktrees(worktreeModels)
                             self.mergeRootAgents(agentModels)
                         }
