@@ -1566,53 +1566,47 @@ impl Engine {
             return None;
         }
 
-        // Step 2: Starting from the original session file, follow the chain
-        let mut current_file = sessions_dir.join(format!("{original_session_id}.jsonl"));
-        if !current_file.exists() {
+        // Step 2: BFS to find ALL reachable descendants from the original file.
+        // This avoids greedily committing to one fork and missing a longer/newer branch.
+        let original_file = sessions_dir.join(format!("{original_session_id}.jsonl"));
+        if !original_file.exists() {
             return None;
         }
-        let mut current_id = original_session_id.to_string();
 
-        loop {
-            // Collect all candidates whose parentUuid exists inside the current file
-            let matching: Vec<usize> = candidates
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, parent_uuid, _))| file_contains_uuid(&current_file, parent_uuid))
-                .map(|(i, _)| i)
-                .collect();
+        // (id, path) of files to explore
+        let mut queue: Vec<(String, PathBuf)> =
+            vec![(original_session_id.to_string(), original_file)];
+        // All reachable descendants (excluding the original)
+        let mut reachable: Vec<(String, PathBuf)> = Vec::new();
 
-            if matching.is_empty() {
-                break;
+        while let Some((_, ref current_path)) = queue.pop() {
+            let current_path = current_path.clone();
+            // Find candidates whose parentUuid appears in this file
+            let mut i = 0;
+            while i < candidates.len() {
+                if file_contains_uuid(&current_path, &candidates[i].1) {
+                    let (child_id, _, child_path) = candidates.remove(i);
+                    queue.push((child_id.clone(), child_path.clone()));
+                    reachable.push((child_id, child_path));
+                } else {
+                    i += 1;
+                }
             }
-
-            // Pick the newest by modification time (fall back to lexicographic path order)
-            let best = matching
-                .into_iter()
-                .max_by(|&a, &b| {
-                    let mod_a = std::fs::metadata(&candidates[a].2)
-                        .and_then(|m| m.modified())
-                        .ok();
-                    let mod_b = std::fs::metadata(&candidates[b].2)
-                        .and_then(|m| m.modified())
-                        .ok();
-                    mod_a
-                        .cmp(&mod_b)
-                        .then_with(|| candidates[a].2.cmp(&candidates[b].2))
-                })
-                .unwrap(); // safe: matching is non-empty
-
-            let (next_id, _, next_path) = candidates.remove(best);
-            current_id = next_id;
-            current_file = next_path;
         }
 
-        // Only return if we actually followed at least one hop
-        if current_id == original_session_id {
-            None
-        } else {
-            Some(current_id)
+        if reachable.is_empty() {
+            return None;
         }
+
+        // Pick the newest reachable descendant by modification time
+        reachable
+            .into_iter()
+            .max_by(|(_, path_a), (_, path_b)| {
+                let mod_a = std::fs::metadata(path_a).and_then(|m| m.modified()).ok();
+                let mod_b = std::fs::metadata(path_b).and_then(|m| m.modified()).ok();
+                mod_a.cmp(&mod_b).then_with(|| path_a.cmp(path_b))
+            })
+            .map(|(id, _)| id)
     }
 
     async fn handle_logs(&self, agent_id: &str, tail: usize) -> Response {
@@ -3346,9 +3340,9 @@ async fn inject_initial_prompt(
     true
 }
 
-/// Check if a session file contains a given UUID string in its message lines.
-/// Skips the first line (metadata with parentUuid/sessionId) to avoid false
-/// positives where a file's own parentUuid matches the search term.
+/// Check if a session file contains a message with the given UUID.
+/// Parses the `"uuid"` field from each JSONL line (skipping the first metadata
+/// line) for an exact match, avoiding false positives from substring hits.
 fn file_contains_uuid(path: &std::path::Path, uuid: &str) -> bool {
     let Ok(file) = std::fs::File::open(path) else {
         return false;
@@ -3356,7 +3350,14 @@ fn file_contains_uuid(path: &std::path::Path, uuid: &str) -> bool {
     let reader = std::io::BufReader::new(file);
     for line in reader.lines().skip(1) {
         let Ok(line) = line else { break };
-        if line.contains(uuid) {
+        // Quick substring check before parsing JSON
+        if !line.contains(uuid) {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if value.get("uuid").and_then(|v| v.as_str()) == Some(uuid) {
             return true;
         }
     }
@@ -3640,5 +3641,29 @@ mod tests {
 
         // then: should pick the newer fork
         assert_eq!(result, Some("newer".to_string()));
+    }
+
+    #[test]
+    fn given_deep_fork_should_pick_newest_descendant_not_greedy_child() {
+        // given: aaa -> bbb (via msg-1), aaa -> ddd (via msg-1), bbb -> ccc (via msg-2)
+        // ccc is the newest file. A greedy approach picking ddd at hop 1 would miss ccc.
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        write_session_file(&sessions_dir, "aaa", "aaa", None, &["msg-1"]);
+        // ddd: direct child of aaa (via msg-1), written first (older)
+        write_session_file(&sessions_dir, "ddd", "ddd", Some("msg-1"), &[]);
+        // bbb: direct child of aaa (via msg-1), contains msg-2
+        write_session_file(&sessions_dir, "bbb", "bbb", Some("msg-1"), &["msg-2"]);
+        // ccc: child of bbb (via msg-2), written last (newest)
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_session_file(&sessions_dir, "ccc", "ccc", Some("msg-2"), &[]);
+
+        // when
+        let result = Engine::find_latest_session_file_in(&sessions_dir, "aaa");
+
+        // then: should pick ccc (newest overall descendant), not ddd (greedy first child)
+        assert_eq!(result, Some("ccc".to_string()));
     }
 }
