@@ -1398,6 +1398,14 @@ impl Engine {
 
         let pid = handle.pid;
 
+        // Store handle in session map BEFORE writing manifest.
+        // ManifestWatcher in Swift fires on manifest write and immediately
+        // tries to attach — the session must already be in the map.
+        self.sessions
+            .lock()
+            .await
+            .insert(agent_id.to_string(), handle);
+
         // 6. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
@@ -1421,22 +1429,18 @@ impl Engine {
         .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
 
         if let Err(e) = manifest_result {
-            // Rollback: kill the resumed process
-            self.pty_host
-                .kill(&handle, Duration::from_secs(2))
-                .await
-                .ok();
+            // Rollback: remove session and kill process
+            if let Some(handle) = self.sessions.lock().await.remove(agent_id) {
+                self.pty_host
+                    .kill(&handle, Duration::from_secs(2))
+                    .await
+                    .ok();
+            }
             return Response::Error {
                 code: "RESUME_FAILED".into(),
                 message: format!("failed to update manifest: {e}"),
             };
         }
-
-        // 7. Store handle in session map
-        self.sessions
-            .lock()
-            .await
-            .insert(agent_id.to_string(), handle);
 
         self.notify_status_change(project_root).await;
 
