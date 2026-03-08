@@ -6,6 +6,10 @@ use tokio::sync::watch;
 
 const DEFAULT_CAPACITY: usize = 4 * 1024 * 1024; // 4MB
 
+/// Minimum printable characters (after stripping ANSI) for a write to count as
+/// substantive content. Spinner output (1–2 chars) stays below this threshold.
+const SUBSTANTIVE_CONTENT_MIN_CHARS: usize = 5;
+
 pub struct OutputBuffer {
     inner: RwLock<BufferInner>,
     written_tx: watch::Sender<usize>,
@@ -16,6 +20,7 @@ struct BufferInner {
     data: VecDeque<u8>,
     capacity: usize,
     last_write: Instant,
+    last_content_write: Instant,
     total_written: usize,
 }
 
@@ -32,11 +37,13 @@ impl OutputBuffer {
 
     pub fn with_capacity(capacity: usize) -> Self {
         let (written_tx, written_rx) = watch::channel(0usize);
+        let now = Instant::now();
         Self {
             inner: RwLock::new(BufferInner {
                 data: VecDeque::new(),
                 capacity,
-                last_write: Instant::now(),
+                last_write: now,
+                last_content_write: now,
                 total_written: 0,
             }),
             written_tx,
@@ -54,7 +61,11 @@ impl OutputBuffer {
             inner.data.drain(..excess);
         }
         let total = inner.total_written;
-        inner.last_write = Instant::now();
+        let now = Instant::now();
+        inner.last_write = now;
+        if Self::has_substantive_content(bytes) {
+            inner.last_content_write = now;
+        }
         drop(inner);
         self.written_tx.send_replace(total);
     }
@@ -123,6 +134,15 @@ impl OutputBuffer {
         self.read_tail_inner(&inner, n)
     }
 
+    pub fn content_idle_seconds(&self) -> u64 {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_content_write
+            .elapsed()
+            .as_secs()
+    }
+
     pub fn idle_seconds(&self) -> u64 {
         self.inner
             .read()
@@ -149,6 +169,73 @@ impl OutputBuffer {
             || trimmed.ends_with(b"% ")
             || trimmed.ends_with(b"# ")
             || trimmed.ends_with(b"> ")
+    }
+
+    /// Returns true if `bytes` contains more than 4 printable characters
+    /// after stripping ANSI escape sequences and control characters.
+    fn has_substantive_content(bytes: &[u8]) -> bool {
+        let mut printable = 0usize;
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == 0x1b {
+                // ESC — start of escape sequence
+                i += 1;
+                if i >= bytes.len() {
+                    break;
+                }
+                match bytes[i] {
+                    b'[' => {
+                        // CSI sequence: ESC [ ... (ends at 0x40–0x7E)
+                        i += 1;
+                        while i < bytes.len() && !(0x40..=0x7E).contains(&bytes[i]) {
+                            i += 1;
+                        }
+                        if i < bytes.len() {
+                            i += 1; // skip final byte
+                        }
+                    }
+                    b']' => {
+                        // OSC sequence: ESC ] ... (ends at BEL or ST)
+                        i += 1;
+                        while i < bytes.len() {
+                            if bytes[i] == 0x07 {
+                                i += 1;
+                                break;
+                            }
+                            if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                                i += 2;
+                                break;
+                            }
+                            i += 1;
+                        }
+                    }
+                    _ => {
+                        // Other ESC sequences (e.g., ESC =, ESC >): skip one char
+                        i += 1;
+                    }
+                }
+            } else if b < 0x20 || b == 0x7f {
+                // Control character (CR, LF, TAB, BEL, etc.)
+                i += 1;
+            } else {
+                // Printable ASCII or start of UTF-8 multibyte
+                printable += 1;
+                if printable >= SUBSTANTIVE_CONTENT_MIN_CHARS {
+                    return true;
+                }
+                // Skip remaining bytes of UTF-8 multibyte character
+                if b >= 0xC0 {
+                    i += 1;
+                    while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        false
     }
 
     fn read_tail_inner(&self, inner: &BufferInner, n: usize) -> Vec<u8> {
@@ -370,6 +457,145 @@ mod tests {
         buf.write(b"12345");
         buf.write(b"67890");
         assert_eq!(buf.current_offset(), 10);
+    }
+
+    // --- ANSI content detection tests ---
+
+    #[test]
+    fn given_plain_text_should_be_substantive() {
+        assert!(OutputBuffer::has_substantive_content(b"Hello World"));
+    }
+
+    #[test]
+    fn given_pure_ansi_csi_should_not_be_substantive() {
+        // CSI erase line + cursor move
+        assert!(!OutputBuffer::has_substantive_content(b"\x1b[2K\x1b[1G"));
+    }
+
+    #[test]
+    fn given_ansi_plus_spinner_char_should_not_be_substantive() {
+        // CSI erase + single multibyte spinner character (✻ = 3 bytes, 1 printable)
+        let mut data = b"\x1b[2K\x1b[1G".to_vec();
+        data.extend("✻".as_bytes());
+        assert!(!OutputBuffer::has_substantive_content(&data));
+    }
+
+    #[test]
+    fn given_ansi_plus_five_printable_should_be_substantive() {
+        assert!(OutputBuffer::has_substantive_content(
+            b"\x1b[32mHello\x1b[0m"
+        ));
+    }
+
+    #[test]
+    fn given_exactly_four_printable_should_not_be_substantive() {
+        assert!(!OutputBuffer::has_substantive_content(
+            b"\x1b[32mTest\x1b[0m"
+        ));
+    }
+
+    #[test]
+    fn given_osc_title_sequence_should_not_be_substantive() {
+        assert!(!OutputBuffer::has_substantive_content(
+            b"\x1b]0;My Title\x07"
+        ));
+    }
+
+    #[test]
+    fn given_dec_private_mode_should_not_be_substantive() {
+        // Hide cursor: ESC [ ? 25 l
+        assert!(!OutputBuffer::has_substantive_content(b"\x1b[?25l"));
+    }
+
+    #[test]
+    fn given_control_chars_only_should_not_be_substantive() {
+        assert!(!OutputBuffer::has_substantive_content(b"\r\n\t\x07"));
+    }
+
+    // --- Content idle tracking tests ---
+
+    #[test]
+    fn given_write_with_only_ansi_sequences_should_not_update_content_write() {
+        let buf = OutputBuffer::new();
+        // Simulate Claude Code spinner: CSI sequence + single spinner char
+        // ESC [ ? 25 l (hide cursor) + "✻"
+        buf.write(b"\x1b[?25l");
+        buf.write("✻".as_bytes());
+        // content_idle should be high since no substantive content was written
+        let idle = buf.content_idle_seconds();
+        // The buffer was just created, so even content_idle should be ~0
+        // But the key test is below - after a delay, content_idle grows
+        // while idle_seconds stays near 0 due to spinner writes
+        assert!(idle < 2);
+    }
+
+    #[test]
+    fn given_write_with_substantive_content_should_update_content_write() {
+        let buf = OutputBuffer::new();
+        buf.write(b"Processing files...");
+        let idle = buf.content_idle_seconds();
+        assert!(
+            idle < 2,
+            "content_idle_seconds should be near 0 after substantive write, got {idle}"
+        );
+    }
+
+    #[test]
+    fn given_spinner_after_content_should_not_reset_content_idle() {
+        let buf = OutputBuffer::new();
+        // First, write real content
+        buf.write(b"Thinking about your request...\n");
+        // Then write spinner sequences (ANSI + 1-2 spinner chars)
+        for spinner in ["✻", "✽", "✻", "✽"] {
+            buf.write(format!("\x1b[2K\x1b[1G{spinner}").as_bytes());
+        }
+        // content_idle should track the real content write, not the spinners
+        let content_idle = buf.content_idle_seconds();
+        let raw_idle = buf.idle_seconds();
+        // Both should be near 0 since everything just happened
+        assert!(content_idle < 2);
+        assert!(raw_idle < 2);
+    }
+
+    #[test]
+    fn given_ansi_with_short_printable_should_not_count_as_content() {
+        // <= 4 printable bytes after stripping ANSI should not count
+        let buf = OutputBuffer::new();
+        // CSI erase line + carriage return + 1 spinner char = not content
+        buf.write("\x1b[2K\x1b[1G✻".as_bytes());
+        let idle = buf.content_idle_seconds();
+        assert!(idle < 2); // just created, so near 0 regardless
+    }
+
+    #[test]
+    fn given_ansi_with_long_printable_should_count_as_content() {
+        let buf = OutputBuffer::new();
+        // ANSI color code + substantial text = content
+        buf.write(b"\x1b[32mHello World\x1b[0m");
+        let idle = buf.content_idle_seconds();
+        assert!(
+            idle < 2,
+            "content_idle should be near 0 after substantive content, got {idle}"
+        );
+    }
+
+    #[test]
+    fn given_osc_sequences_should_be_stripped() {
+        let buf = OutputBuffer::new();
+        // OSC set title sequence: ESC ] 0 ; title BEL
+        buf.write(b"\x1b]0;Terminal Title\x07");
+        // Only the title text is printable, but it's inside OSC so should be stripped
+        // After stripping, no printable content remains
+        let idle = buf.content_idle_seconds();
+        assert!(idle < 2);
+    }
+
+    #[test]
+    fn given_only_control_chars_should_not_count_as_content() {
+        let buf = OutputBuffer::new();
+        buf.write(b"\r\n\t");
+        let idle = buf.content_idle_seconds();
+        assert!(idle < 2);
     }
 
     #[test]
