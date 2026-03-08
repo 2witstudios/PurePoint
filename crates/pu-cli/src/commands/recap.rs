@@ -92,6 +92,7 @@ fn status_label(status: AgentStatus, exit_code: Option<i32>, suspended: bool) ->
     match status {
         AgentStatus::Streaming => "streaming".green().to_string(),
         AgentStatus::Waiting => "waiting".cyan().to_string(),
+        // Broken + exit 0 means the process exited cleanly (i.e. agent finished)
         AgentStatus::Broken => match exit_code {
             Some(0) => "done".dimmed().to_string(),
             Some(code) => format!("{}", format!("failed ({code})").red()),
@@ -241,7 +242,7 @@ fn print_json(
                         "id": a.id,
                         "name": a.name,
                         "agent_type": a.agent_type,
-                        "status": format!("{:?}", a.status),
+                        "status": serde_json::to_value(a.status).unwrap(),
                         "started_at": a.started_at.to_rfc3339(),
                         "exit_code": a.exit_code,
                         "suspended": a.suspended,
@@ -252,7 +253,7 @@ fn print_json(
                 "id": wt.id,
                 "name": wt.name,
                 "branch": wt.branch,
-                "status": format!("{:?}", wt.status),
+                "status": serde_json::to_value(wt.status).unwrap(),
                 "agents": agents_json,
                 "diff": diff.map(|d| serde_json::json!({
                     "files_changed": d.files_changed,
@@ -270,7 +271,7 @@ fn print_json(
                 "id": a.id,
                 "name": a.name,
                 "agent_type": a.agent_type,
-                "status": format!("{:?}", a.status),
+                "status": serde_json::to_value(a.status).unwrap(),
                 "started_at": a.started_at.to_rfc3339(),
                 "exit_code": a.exit_code,
                 "suspended": a.suspended,
