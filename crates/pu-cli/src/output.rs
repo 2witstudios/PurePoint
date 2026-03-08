@@ -53,7 +53,7 @@ fn print_agent_pulse(a: &pu_core::protocol::AgentPulseEntry) {
         .idle_seconds
         .map(|s| {
             if s > 0 {
-                format!(" idle {s}s")
+                format!(" idle {}", format_duration(s as i64))
             } else {
                 String::new()
             }

@@ -3157,6 +3157,36 @@ impl Engine {
         }
     }
 
+    fn agent_pulse_entry(
+        &self,
+        agent: &AgentEntry,
+        sessions: &HashMap<String, AgentHandle>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> pu_core::protocol::AgentPulseEntry {
+        let (status, exit_code, idle_seconds) =
+            self.live_agent_status_sync(&agent.id, agent, sessions);
+        let runtime = (now - agent.started_at).num_seconds();
+        let snippet = agent.prompt.as_ref().map(|p| {
+            let trimmed = p.trim();
+            let truncated: String = trimmed.chars().take(77).collect();
+            if truncated.len() < trimmed.len() {
+                format!("{truncated}...")
+            } else {
+                truncated
+            }
+        });
+        pu_core::protocol::AgentPulseEntry {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            agent_type: agent.agent_type.clone(),
+            status,
+            exit_code,
+            runtime_seconds: runtime,
+            idle_seconds,
+            prompt_snippet: snippet,
+        }
+    }
+
     async fn handle_pulse(&self, project_root: &str) -> Response {
         let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
@@ -3170,32 +3200,10 @@ impl Engine {
         let root_agents: Vec<pu_core::protocol::AgentPulseEntry> = m
             .agents
             .values()
-            .map(|a| {
-                let (status, exit_code, idle_seconds) =
-                    self.live_agent_status_sync(&a.id, a, &sessions);
-                let runtime = (now - a.started_at).num_seconds();
-                let snippet = a.prompt.as_ref().map(|p| {
-                    let trimmed = p.trim();
-                    if trimmed.len() > 80 {
-                        format!("{}...", &trimmed[..77])
-                    } else {
-                        trimmed.to_string()
-                    }
-                });
-                pu_core::protocol::AgentPulseEntry {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                    agent_type: a.agent_type.clone(),
-                    status,
-                    exit_code,
-                    runtime_seconds: runtime,
-                    idle_seconds,
-                    prompt_snippet: snippet,
-                }
-            })
+            .map(|a| self.agent_pulse_entry(a, &sessions, now))
             .collect();
 
-        // Build worktree entries with agents + git stats
+        // Build worktree entries — collect all agent data in one lock acquisition
         let active_worktrees: Vec<_> = m
             .worktrees
             .values()
@@ -3203,43 +3211,22 @@ impl Engine {
             .cloned()
             .collect();
 
+        let wt_agents: Vec<Vec<pu_core::protocol::AgentPulseEntry>> = active_worktrees
+            .iter()
+            .map(|wt| {
+                wt.agents
+                    .values()
+                    .map(|a| self.agent_pulse_entry(a, &sessions, now))
+                    .collect()
+            })
+            .collect();
+
         // Drop sessions lock before shelling out to git
         drop(sessions);
 
         let mut worktrees = Vec::new();
-        for wt in &active_worktrees {
+        for (wt, agents) in active_worktrees.iter().zip(wt_agents) {
             let elapsed = (now - wt.created_at).num_seconds();
-
-            // Gather agent pulse entries (re-acquire lock briefly)
-            let sessions = self.sessions.lock().await;
-            let agents: Vec<pu_core::protocol::AgentPulseEntry> = wt
-                .agents
-                .values()
-                .map(|a| {
-                    let (status, exit_code, idle_seconds) =
-                        self.live_agent_status_sync(&a.id, a, &sessions);
-                    let runtime = (now - a.started_at).num_seconds();
-                    let snippet = a.prompt.as_ref().map(|p| {
-                        let trimmed = p.trim();
-                        if trimmed.len() > 80 {
-                            format!("{}...", &trimmed[..77])
-                        } else {
-                            trimmed.to_string()
-                        }
-                    });
-                    pu_core::protocol::AgentPulseEntry {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                        agent_type: a.agent_type.clone(),
-                        status,
-                        exit_code,
-                        runtime_seconds: runtime,
-                        idle_seconds,
-                        prompt_snippet: snippet,
-                    }
-                })
-                .collect();
-            drop(sessions);
 
             // Get git diff stats
             let wt_path = std::path::PathBuf::from(&wt.path);
