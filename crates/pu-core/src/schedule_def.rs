@@ -82,7 +82,7 @@ impl ScheduleDef {
                     "agent_name must not be set when root is true",
                 ));
             }
-        } else if self.agent_name.as_ref().is_none_or(|n| n.is_empty()) {
+        } else if self.agent_name.as_ref().is_none_or(String::is_empty) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agent_name is required when root is false",
@@ -277,9 +277,8 @@ pub fn next_occurrence(
 
 fn scan_dir(dir: &Path, scope: &str) -> Vec<ScheduleDef> {
     let mut defs = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return defs,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return defs;
     };
     for entry in entries.flatten() {
         let path = entry.path();
