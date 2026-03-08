@@ -170,6 +170,12 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Workspace pulse — agents, runtimes, and git stats at a glance
+    Pulse {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show git diffs across agent worktrees
     Diff {
         /// Diff a specific worktree
@@ -653,6 +659,7 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Pulse { json } => commands::pulse::run(&socket, json).await,
         Commands::Diff {
             worktree,
             stat,

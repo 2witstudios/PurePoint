@@ -47,6 +47,46 @@ fn status_colored_with_suspended(
     }
 }
 
+fn format_duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        let h = seconds / 3600;
+        let m = (seconds % 3600) / 60;
+        format!("{h}h {m}m")
+    }
+}
+
+fn print_agent_pulse(a: &pu_core::protocol::AgentPulseEntry) {
+    let status_str = status_colored(a.status, a.exit_code);
+    let runtime = format_duration(a.runtime_seconds);
+    let idle = a
+        .idle_seconds
+        .map(|s| {
+            if s > 0 {
+                format!(" idle {}", format_duration(s as i64))
+            } else {
+                String::new()
+            }
+        })
+        .unwrap_or_default();
+
+    println!(
+        "  {} {} {} ({}{}){}",
+        a.id.dimmed(),
+        a.name,
+        status_str,
+        runtime.dimmed(),
+        idle.dimmed(),
+        a.prompt_snippet
+            .as_ref()
+            .map(|s| format!("\n    {}", s.dimmed()))
+            .unwrap_or_default()
+    );
+}
+
 pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliError> {
     if json_mode {
         println!("{}", serde_json::to_string_pretty(response)?);
@@ -443,6 +483,66 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
                 }
             }
         }
+        Response::PulseReport {
+            worktrees,
+            root_agents,
+        } => {
+            if worktrees.is_empty() && root_agents.is_empty() {
+                println!("{}", "No active workspace".dimmed());
+                return Ok(());
+            }
+
+            // Root-level agents
+            if !root_agents.is_empty() {
+                println!("{}", "Root Agents".bold().underline());
+                for a in root_agents {
+                    print_agent_pulse(a);
+                }
+                if !worktrees.is_empty() {
+                    println!();
+                }
+            }
+
+            for (i, wt) in worktrees.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                // Worktree header with elapsed time
+                let elapsed = format_duration(wt.elapsed_seconds);
+                println!(
+                    "{} {} {} ({})",
+                    "Worktree".bold(),
+                    wt.worktree_name.bold(),
+                    wt.branch.green(),
+                    elapsed.dimmed()
+                );
+
+                // Git stats
+                if let Some(ref err) = wt.diff_error {
+                    println!("  git: {} {}", "error".red(), err);
+                } else if wt.files_changed > 0 {
+                    println!(
+                        "  git: {} file(s), {} {}, {} {}",
+                        wt.files_changed.to_string().bold(),
+                        format!("+{}", wt.insertions).green(),
+                        "ins".dimmed(),
+                        format!("-{}", wt.deletions).red(),
+                        "del".dimmed()
+                    );
+                } else {
+                    println!("  git: {}", "no changes yet".dimmed());
+                }
+
+                // Agents in this worktree
+                if wt.agents.is_empty() {
+                    println!("  {}", "no agents".dimmed());
+                } else {
+                    for a in &wt.agents {
+                        print_agent_pulse(a);
+                    }
+                }
+            }
+        }
         Response::ScheduleList { schedules } => {
             if schedules.is_empty() {
                 println!("No schedules");
@@ -719,7 +819,7 @@ mod tests {
     #[test]
     fn given_empty_suspend_result_should_not_panic() {
         let resp = Response::SuspendResult { suspended: vec![] };
-        let _ = print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -933,6 +1033,90 @@ mod tests {
             }],
         };
         print_response(&resp, false).unwrap();
+    }
+
+    // --- pulse output ---
+
+    #[test]
+    fn given_pulse_report_should_not_panic() {
+        let resp = Response::PulseReport {
+            worktrees: vec![pu_core::protocol::WorktreePulseEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "feature-5".into(),
+                branch: "pu/feature-5".into(),
+                elapsed_seconds: 3661,
+                agents: vec![pu_core::protocol::AgentPulseEntry {
+                    id: "ag-1".into(),
+                    name: "claude".into(),
+                    agent_type: "claude".into(),
+                    status: AgentStatus::Streaming,
+                    exit_code: None,
+                    runtime_seconds: 120,
+                    idle_seconds: Some(5),
+                    prompt_snippet: Some("Add pulse command to CLI".into()),
+                }],
+                files_changed: 3,
+                insertions: 42,
+                deletions: 7,
+                diff_error: None,
+            }],
+            root_agents: vec![pu_core::protocol::AgentPulseEntry {
+                id: "ag-2".into(),
+                name: "point-guard".into(),
+                agent_type: "claude".into(),
+                status: AgentStatus::Waiting,
+                exit_code: None,
+                runtime_seconds: 7200,
+                idle_seconds: Some(30),
+                prompt_snippet: None,
+            }],
+        };
+        print_response(&resp, false).unwrap();
+    }
+
+    #[test]
+    fn given_empty_pulse_report_should_not_panic() {
+        let resp = Response::PulseReport {
+            worktrees: vec![],
+            root_agents: vec![],
+        };
+        print_response(&resp, false).unwrap();
+    }
+
+    #[test]
+    fn given_pulse_report_json_should_produce_valid_json() {
+        let resp = Response::PulseReport {
+            worktrees: vec![pu_core::protocol::WorktreePulseEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "test".into(),
+                branch: "pu/test".into(),
+                elapsed_seconds: 60,
+                agents: vec![],
+                files_changed: 0,
+                insertions: 0,
+                deletions: 0,
+                diff_error: None,
+            }],
+            root_agents: vec![],
+        };
+        let json = serde_json::to_string_pretty(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "pulse_report");
+    }
+
+    #[test]
+    fn given_format_duration_under_60s() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn given_format_duration_minutes() {
+        assert_eq!(format_duration(125), "2m 5s");
+    }
+
+    #[test]
+    fn given_format_duration_hours() {
+        assert_eq!(format_duration(3661), "1h 1m");
     }
 
     // --- schedule output ---

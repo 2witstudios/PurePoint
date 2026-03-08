@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Serde helper: encode `Vec<u8>` as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -251,6 +251,9 @@ pub enum Request {
         worktree_id: Option<String>,
         #[serde(default)]
         stat: bool,
+    },
+    Pulse {
+        project_root: String,
     },
 }
 
@@ -530,6 +533,10 @@ pub enum Response {
     DiffResult {
         diffs: Vec<WorktreeDiffEntry>,
     },
+    PulseReport {
+        worktrees: Vec<WorktreePulseEntry>,
+        root_agents: Vec<AgentPulseEntry>,
+    },
     Ok,
     ShuttingDown,
     Error {
@@ -571,6 +578,34 @@ pub struct WorktreeDiffEntry {
     pub deletions: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentPulseEntry {
+    pub id: String,
+    pub name: String,
+    pub agent_type: String,
+    pub status: AgentStatus,
+    pub exit_code: Option<i32>,
+    pub runtime_seconds: i64,
+    pub idle_seconds: Option<u64>,
+    pub prompt_snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WorktreePulseEntry {
+    pub worktree_id: String,
+    pub worktree_name: String,
+    pub branch: String,
+    pub elapsed_seconds: i64,
+    pub agents: Vec<AgentPulseEntry>,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -949,7 +984,7 @@ mod tests {
 
     #[test]
     fn given_protocol_version_should_be_current() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert_eq!(PROTOCOL_VERSION, 3);
     }
 
     // --- GridCommand round-trips ---
