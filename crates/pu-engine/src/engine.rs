@@ -3164,6 +3164,32 @@ impl Engine {
         };
 
         let now = chrono::Utc::now();
+        let sessions = self.sessions.lock().await;
+
+        // Helper: build RecapAgentEntry using live/normalized status
+        let build_recap_agent =
+            |a: &pu_core::types::AgentEntry| -> pu_core::protocol::RecapAgentEntry {
+                let (status, exit_code, _idle) = self.live_agent_status_sync(&a.id, a, &sessions);
+                let completed_at = if status == AgentStatus::Broken {
+                    a.completed_at.or(Some(now))
+                } else {
+                    None
+                };
+                let end = completed_at.unwrap_or(now);
+                let duration = (end - a.started_at).num_seconds().max(0) as u64;
+                pu_core::protocol::RecapAgentEntry {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    agent_type: a.agent_type.clone(),
+                    status,
+                    exit_code,
+                    prompt: a.prompt.clone(),
+                    started_at: a.started_at,
+                    completed_at,
+                    duration_seconds: duration,
+                    suspended: a.suspended,
+                }
+            };
 
         // Build recap for each active worktree
         let mut worktrees = Vec::new();
@@ -3171,37 +3197,24 @@ impl Engine {
             if wt.status != WorktreeStatus::Active {
                 continue;
             }
-            let agents: Vec<pu_core::protocol::RecapAgentEntry> = wt
-                .agents
-                .values()
-                .map(|a| {
-                    let end = a.completed_at.unwrap_or(now);
-                    let duration = (end - a.started_at).num_seconds().max(0) as u64;
-                    pu_core::protocol::RecapAgentEntry {
-                        id: a.id.clone(),
-                        name: a.name.clone(),
-                        agent_type: a.agent_type.clone(),
-                        status: a.status,
-                        exit_code: a.exit_code,
-                        prompt: a.prompt.clone(),
-                        started_at: a.started_at,
-                        completed_at: a.completed_at,
-                        duration_seconds: duration,
-                        suspended: a.suspended,
-                    }
-                })
-                .collect();
+            let agents: Vec<pu_core::protocol::RecapAgentEntry> =
+                wt.agents.values().map(&build_recap_agent).collect();
 
             // Get diff stats (best-effort)
             let wt_path = std::path::PathBuf::from(&wt.path);
-            let (files_changed, insertions, deletions) = if wt_path.exists() {
+            let (files_changed, insertions, deletions, diff_error) = if wt_path.exists() {
                 let base = wt.base_branch.as_deref();
                 match git::diff_worktree(&wt_path, base, true).await {
-                    Ok(output) => (output.files_changed, output.insertions, output.deletions),
-                    Err(_) => (0, 0, 0),
+                    Ok(output) => (
+                        Some(output.files_changed),
+                        Some(output.insertions),
+                        Some(output.deletions),
+                        None,
+                    ),
+                    Err(e) => (None, None, None, Some(format!("git diff failed: {e}"))),
                 }
             } else {
-                (0, 0, 0)
+                (None, None, None, Some("worktree path not found".into()))
             };
 
             worktrees.push(pu_core::protocol::RecapWorktreeEntry {
@@ -3212,30 +3225,16 @@ impl Engine {
                 files_changed,
                 insertions,
                 deletions,
+                diff_error,
             });
         }
 
         // Build recap for root-level agents
-        let root_agents: Vec<pu_core::protocol::RecapAgentEntry> = m
-            .agents
-            .values()
-            .map(|a| {
-                let end = a.completed_at.unwrap_or(now);
-                let duration = (end - a.started_at).num_seconds().max(0) as u64;
-                pu_core::protocol::RecapAgentEntry {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                    agent_type: a.agent_type.clone(),
-                    status: a.status,
-                    exit_code: a.exit_code,
-                    prompt: a.prompt.clone(),
-                    started_at: a.started_at,
-                    completed_at: a.completed_at,
-                    duration_seconds: duration,
-                    suspended: a.suspended,
-                }
-            })
-            .collect();
+        let root_agents: Vec<pu_core::protocol::RecapAgentEntry> =
+            m.agents.values().map(&build_recap_agent).collect();
+
+        // Drop session lock before returning
+        drop(sessions);
 
         Response::RecapResult {
             worktrees,

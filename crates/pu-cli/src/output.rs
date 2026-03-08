@@ -504,9 +504,12 @@ pub fn print_response(response: &Response, json_mode: bool) {
 
             // Worktrees
             for wt in worktrees {
-                total_files += wt.files_changed;
-                total_ins += wt.insertions;
-                total_del += wt.deletions;
+                total_files += wt.files_changed.unwrap_or(0);
+                total_ins += wt.insertions.unwrap_or(0);
+                total_del += wt.deletions.unwrap_or(0);
+
+                // Worktree header
+                println!("  {} ({})", wt.worktree_name.bold(), wt.branch.dimmed());
 
                 for a in &wt.agents {
                     let (icon, counted) = agent_recap_icon(a.status, a.exit_code);
@@ -519,25 +522,34 @@ pub fn print_response(response: &Response, json_mode: bool) {
                     let duration = format_duration(a.duration_seconds);
                     let status_label = recap_status_label(a.status, a.exit_code, a.suspended);
                     println!(
-                        "  {} {} ({}) {} {}",
+                        "    {} {} ({}) {} {}",
                         icon,
-                        wt.worktree_name.bold(),
+                        a.name.bold(),
                         a.id.dimmed(),
                         status_label,
                         duration.dimmed()
                     );
                     if let Some(ref prompt) = a.prompt {
                         let truncated = truncate_prompt(prompt, 72);
-                        println!("    {}", format!("\"{truncated}\"").dimmed());
+                        println!("      {}", format!("\"{truncated}\"").dimmed());
                     }
                 }
-                if wt.files_changed > 0 {
-                    println!(
-                        "    {} file(s), {}, {}",
-                        wt.files_changed,
-                        format!("+{}", wt.insertions).green(),
-                        format!("-{}", wt.deletions).red()
-                    );
+                if wt.agents.is_empty() {
+                    println!("    {}", "No agents".dimmed());
+                }
+                match (wt.files_changed, wt.diff_error.as_deref()) {
+                    (Some(f), _) if f > 0 => {
+                        println!(
+                            "    {} file(s), {}, {}",
+                            f,
+                            format!("+{}", wt.insertions.unwrap_or(0)).green(),
+                            format!("-{}", wt.deletions.unwrap_or(0)).red()
+                        );
+                    }
+                    (None, Some(err)) => {
+                        println!("    {}", format!("diff unavailable: {err}").dimmed());
+                    }
+                    _ => {}
                 }
             }
 
@@ -1143,9 +1155,10 @@ mod tests {
                     duration_seconds: 720,
                     suspended: false,
                 }],
-                files_changed: 4,
-                insertions: 127,
-                deletions: 23,
+                files_changed: Some(4),
+                insertions: Some(127),
+                deletions: Some(23),
+                diff_error: None,
             }],
             root_agents: vec![],
         };
@@ -1192,9 +1205,10 @@ mod tests {
                         duration_seconds: 180,
                         suspended: false,
                     }],
-                    files_changed: 2,
-                    insertions: 50,
-                    deletions: 10,
+                    files_changed: Some(2),
+                    insertions: Some(50),
+                    deletions: Some(10),
+                    diff_error: None,
                 },
                 pu_core::protocol::RecapWorktreeEntry {
                     worktree_id: "wt-2".into(),
@@ -1212,9 +1226,10 @@ mod tests {
                         duration_seconds: 45,
                         suspended: false,
                     }],
-                    files_changed: 1,
-                    insertions: 8,
-                    deletions: 3,
+                    files_changed: Some(1),
+                    insertions: Some(8),
+                    deletions: Some(3),
+                    diff_error: None,
                 },
             ],
             root_agents: vec![],

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Serde helper: encode Vec<u8> as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -602,9 +602,14 @@ pub struct RecapWorktreeEntry {
     pub worktree_name: String,
     pub branch: String,
     pub agents: Vec<RecapAgentEntry>,
-    pub files_changed: usize,
-    pub insertions: usize,
-    pub deletions: usize,
+    /// None means diff stats are unavailable (worktree missing or git error).
+    /// Some(0) means the worktree is clean.
+    pub files_changed: Option<usize>,
+    pub insertions: Option<usize>,
+    pub deletions: Option<usize>,
+    /// Human-readable reason when diff stats are unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -983,7 +988,7 @@ mod tests {
 
     #[test]
     fn given_protocol_version_should_be_current() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert_eq!(PROTOCOL_VERSION, 3);
     }
 
     // --- GridCommand round-trips ---
@@ -2244,15 +2249,16 @@ mod tests {
                 duration_seconds: 180,
                 suspended: false,
             }],
-            files_changed: 4,
-            insertions: 127,
-            deletions: 23,
+            files_changed: Some(4),
+            insertions: Some(127),
+            deletions: Some(23),
+            diff_error: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: RecapWorktreeEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.worktree_id, "wt-1");
-        assert_eq!(parsed.files_changed, 4);
-        assert_eq!(parsed.insertions, 127);
+        assert_eq!(parsed.files_changed, Some(4));
+        assert_eq!(parsed.insertions, Some(127));
         assert_eq!(parsed.agents.len(), 1);
     }
 
@@ -2264,9 +2270,10 @@ mod tests {
                 worktree_name: "test".into(),
                 branch: "pu/test".into(),
                 agents: vec![],
-                files_changed: 0,
-                insertions: 0,
-                deletions: 0,
+                files_changed: Some(0),
+                insertions: Some(0),
+                deletions: Some(0),
+                diff_error: None,
             }],
             root_agents: vec![],
         };
