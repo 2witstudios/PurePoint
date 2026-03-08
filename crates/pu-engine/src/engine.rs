@@ -719,19 +719,21 @@ impl Engine {
             // Add agent-type-specific flags (not stored in config — engine concern)
             match agent_type {
                 "claude" => {
+                    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+                        args.insert(0, "--dangerously-skip-permissions".into());
+                    }
                     if plan_mode {
                         args.insert(0, "plan".into());
                         args.insert(0, "--permission-mode".into());
-                    } else if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
-                        args.insert(0, "--dangerously-skip-permissions".into());
                     }
                 }
                 "codex" => {
+                    if !args.iter().any(|a| a == "--full-auto") {
+                        args.insert(0, "--full-auto".into());
+                    }
                     if plan_mode {
                         args.insert(0, "read-only".into());
                         args.insert(0, "--sandbox".into());
-                    } else if !args.iter().any(|a| a == "--full-auto") {
-                        args.insert(0, "--full-auto".into());
                     }
                 }
                 "opencode" => {
@@ -1485,23 +1487,20 @@ impl Engine {
                     code: "RESUME_FAILED".into(),
                     message: "cannot resume Claude agent: no session_id preserved".into(),
                 })?;
-                let mode_flag = if plan_mode {
-                    vec!["--permission-mode".into(), "plan".into()]
-                } else {
-                    vec!["--dangerously-skip-permissions".into()]
-                };
-                let mut args = mode_flag;
+                let mut args = vec!["--dangerously-skip-permissions".into()];
+                if plan_mode {
+                    args.push("--permission-mode".into());
+                    args.push("plan".into());
+                }
                 args.push("--resume".into());
                 args.push(sid.to_string());
                 Ok(("claude".into(), args, Some(sid.to_string())))
             }
             "codex" => {
-                let mut args = vec!["resume".into(), "--last".into()];
+                let mut args = vec!["resume".into(), "--last".into(), "--full-auto".into()];
                 if plan_mode {
                     args.push("--sandbox".into());
                     args.push("read-only".into());
-                } else {
-                    args.push("--full-auto".into());
                 }
                 Ok(("codex".into(), args, None))
             }
