@@ -159,6 +159,12 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Live dashboard showing all agents in real-time
+    Watch {
+        /// Refresh interval in milliseconds (default: 800)
+        #[arg(long)]
+        interval: Option<u64>,
+    },
     /// Remove worktrees, their agents, and branches
     Clean {
         /// Remove a specific worktree
@@ -621,6 +627,7 @@ async fn main() {
             stat,
             json,
         } => commands::diff::run(&socket, worktree, stat, json).await,
+        Commands::Watch { interval } => commands::watch::run(&socket, interval).await,
         Commands::Clean {
             worktree,
             all,
