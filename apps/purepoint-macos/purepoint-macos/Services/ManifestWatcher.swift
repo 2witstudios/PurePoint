@@ -104,8 +104,10 @@ final class ManifestWatcher: @unchecked Sendable {
 
     deinit {
         debounceWork?.cancel()
-        source?.cancel()
-        if fileDescriptor >= 0 {
+        if source != nil {
+            // Cancel handler will close the fd — do not also close it here.
+            source?.cancel()
+        } else if fileDescriptor >= 0 {
             close(fileDescriptor)
         }
     }

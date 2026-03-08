@@ -222,19 +222,17 @@ pub fn delete_template(dir: &Path, name: &str) -> Result<bool, std::io::Error> {
 
 fn scan_dir(dir: &Path, source: &str) -> Vec<Template> {
     let mut templates = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return templates,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return templates;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("md") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                let file_name = path
-                    .file_name()
-                    .expect("dir entry has file name")
-                    .to_string_lossy()
-                    .to_string();
+                let Some(file_name) = path.file_name() else {
+                    continue;
+                };
+                let file_name = file_name.to_string_lossy().to_string();
                 let mut tpl = parse_template(&content, &file_name);
                 tpl.source = source.to_string();
                 templates.push(tpl);
@@ -251,11 +249,7 @@ fn find_in_dir(dir: &Path, name: &str, source: &str) -> Option<Template> {
     let path = dir.join(format!("{name}.md"));
     if path.is_file() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            let file_name = path
-                .file_name()
-                .expect("path has file name")
-                .to_string_lossy()
-                .to_string();
+            let file_name = path.file_name()?.to_string_lossy().to_string();
             let mut tpl = parse_template(&content, &file_name);
             tpl.source = source.to_string();
             return Some(tpl);
@@ -274,7 +268,7 @@ mod tests {
 
     /// Override HOME so global_pu_dir() points to an empty temp dir.
     fn isolate_home(tmp: &TempDir) {
-        unsafe { std::env::set_var("HOME", tmp.path()) };
+        paths::set_home_override(Some(tmp.path().to_path_buf()));
     }
 
     #[test]
