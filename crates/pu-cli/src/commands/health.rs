@@ -10,6 +10,6 @@ pub async fn run(socket: &Path, json: bool) -> Result<(), CliError> {
 
     let resp = client::send_request(socket, &Request::Health).await?;
     let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }
