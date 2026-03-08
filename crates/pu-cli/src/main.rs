@@ -67,6 +67,9 @@ enum Commands {
         json: bool,
     },
     /// Bench (suspend) agents — pull them off the court
+    #[command(long_about = "Bench (suspend) agents — pull them off the court.\n\n\
+        When using --all, the invoking agent may also be suspended.\n\
+        Use `pu play <agent_id>` to resume a benched agent.")]
     Bench {
         /// Agent ID to bench
         #[arg(conflicts_with = "all")]

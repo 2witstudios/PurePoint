@@ -23,10 +23,12 @@ pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> 
     }
 }
 
+/// Return a colored status string for display (delegates with `suspended = false`).
 fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
     status_colored_with_suspended(status, exit_code, false)
 }
 
+/// Return a colored status string, showing "benched" (yellow) for suspended alive agents.
 fn status_colored_with_suspended(
     status: AgentStatus,
     exit_code: Option<i32>,

@@ -5,6 +5,10 @@ use crate::output;
 use pu_core::protocol::{Request, SuspendTarget};
 use std::path::Path;
 
+/// Suspend one or all agents ("bench" them).
+///
+/// When `--all` is used, the invoking agent may be included in the suspend
+/// results. A warning is emitted if this happens; use `pu play <id>` to resume.
 pub async fn run_bench(
     socket: &Path,
     agent: Option<String>,
@@ -57,6 +61,7 @@ pub async fn run_bench(
     Ok(())
 }
 
+/// Resume a previously benched agent, putting it back in play.
 pub async fn run_play(socket: &Path, agent_id: &str, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
