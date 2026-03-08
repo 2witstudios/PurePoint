@@ -57,7 +57,7 @@ pub async fn run_bench(
         }
     }
 
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }
 
@@ -75,6 +75,6 @@ pub async fn run_play(socket: &Path, agent_id: &str, json: bool) -> Result<(), C
     )
     .await?;
     let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }

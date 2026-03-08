@@ -9,6 +9,7 @@ pub mod init;
 pub mod kill;
 pub mod logs;
 pub mod prompt;
+pub mod pulse;
 pub mod schedule;
 pub mod send;
 pub mod spawn;
