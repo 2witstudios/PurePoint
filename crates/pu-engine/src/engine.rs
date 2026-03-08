@@ -196,6 +196,7 @@ impl Engine {
                 root,
                 worktree,
                 command,
+                plan_mode,
             } => {
                 self.handle_spawn(
                     &project_root,
@@ -206,6 +207,7 @@ impl Engine {
                     root,
                     worktree,
                     command,
+                    plan_mode,
                 )
                 .await
             }
@@ -611,6 +613,7 @@ impl Engine {
         root: bool,
         worktree: Option<String>,
         terminal_command: Option<String>,
+        plan_mode: bool,
     ) -> Response {
         let root_path = Path::new(project_root);
 
@@ -716,13 +719,25 @@ impl Engine {
             // Add agent-type-specific flags (not stored in config — engine concern)
             match agent_type {
                 "claude" => {
-                    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+                    if plan_mode {
+                        args.insert(0, "plan".into());
+                        args.insert(0, "--permission-mode".into());
+                    } else if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
                         args.insert(0, "--dangerously-skip-permissions".into());
                     }
                 }
                 "codex" => {
-                    if !args.iter().any(|a| a == "--full-auto") {
+                    if plan_mode {
+                        args.insert(0, "read-only".into());
+                        args.insert(0, "--sandbox".into());
+                    } else if !args.iter().any(|a| a == "--full-auto") {
                         args.insert(0, "--full-auto".into());
+                    }
+                }
+                "opencode" => {
+                    if plan_mode {
+                        args.insert(0, "plan".into());
+                        args.insert(0, "--agent".into());
                     }
                 }
                 _ => {}
@@ -908,6 +923,7 @@ impl Engine {
             suspended_at: None,
             suspended: false,
             command: terminal_command,
+            plan_mode,
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -1374,6 +1390,7 @@ impl Engine {
             &agent_entry.agent_type,
             &agent_cfg,
             effective_session_id.as_deref(),
+            agent_entry.plan_mode,
         ) {
             Ok(result) => result,
             Err(response) => return response,
@@ -1460,6 +1477,7 @@ impl Engine {
         agent_type: &str,
         agent_cfg: &pu_core::types::AgentConfig,
         session_id: Option<&str>,
+        plan_mode: bool,
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
         match agent_type {
             "claude" => {
@@ -1467,19 +1485,32 @@ impl Engine {
                     code: "RESUME_FAILED".into(),
                     message: "cannot resume Claude agent: no session_id preserved".into(),
                 })?;
-                let args = vec![
-                    "--dangerously-skip-permissions".into(),
-                    "--resume".into(),
-                    sid.to_string(),
-                ];
+                let mode_flag = if plan_mode {
+                    vec!["--permission-mode".into(), "plan".into()]
+                } else {
+                    vec!["--dangerously-skip-permissions".into()]
+                };
+                let mut args = mode_flag;
+                args.push("--resume".into());
+                args.push(sid.to_string());
                 Ok(("claude".into(), args, Some(sid.to_string())))
             }
             "codex" => {
-                let args = vec!["resume".into(), "--last".into(), "--full-auto".into()];
+                let mut args = vec!["resume".into(), "--last".into()];
+                if plan_mode {
+                    args.push("--sandbox".into());
+                    args.push("read-only".into());
+                } else {
+                    args.push("--full-auto".into());
+                }
                 Ok(("codex".into(), args, None))
             }
             "opencode" => {
-                let args = vec!["--continue".into()];
+                let mut args = vec!["--continue".into()];
+                if plan_mode {
+                    args.push("--agent".into());
+                    args.push("plan".into());
+                }
                 Ok(("opencode".into(), args, None))
             }
             _ => {
@@ -2612,6 +2643,7 @@ impl Engine {
                             false,
                             spawn_worktree,
                             resolved_command,
+                            false,
                         )
                         .await;
 
@@ -2652,6 +2684,7 @@ impl Engine {
                             false,
                             Some(wt_id.clone()),
                             None,
+                            false,
                         )
                         .await;
                     if let Response::SpawnResult { agent_id, .. } = resp {
@@ -3060,6 +3093,7 @@ impl Engine {
                         root: schedule.root,
                         worktree: None,
                         command: def.command.or(template_command),
+                        plan_mode: false,
                     })
                     .await
                 } else {
@@ -3087,6 +3121,7 @@ impl Engine {
                     root: schedule.root,
                     worktree: None,
                     command: None,
+                    plan_mode: false,
                 })
                 .await
             }
@@ -3477,6 +3512,7 @@ mod tests {
                 root: true,
                 worktree: None,
                 command: None,
+                plan_mode: false,
             })
             .await;
 

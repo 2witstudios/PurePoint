@@ -84,6 +84,8 @@ pub struct AgentEntry {
     pub suspended: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode: bool,
 }
 
 impl<'de> Deserialize<'de> for AgentEntry {
@@ -107,6 +109,8 @@ impl<'de> Deserialize<'de> for AgentEntry {
             suspended: bool,
             #[serde(default)]
             command: Option<String>,
+            #[serde(default)]
+            plan_mode: bool,
         }
         let raw = Raw::deserialize(deserializer)?;
         // Backward compat: old manifests have suspended_at set but no suspended field.
@@ -127,6 +131,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             suspended_at: raw.suspended_at,
             suspended,
             command: raw.command,
+            plan_mode: raw.plan_mode,
         })
     }
 }
@@ -400,6 +405,7 @@ mod tests {
             suspended_at: None,
             suspended: false,
             command: None,
+            plan_mode: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -409,6 +415,8 @@ mod tests {
         assert!(!json.contains("completedAt"));
         assert!(!json.contains("exitCode"));
         assert!(!json.contains("sessionId"));
+        // plan_mode false should be omitted
+        assert!(!json.contains("planMode"));
     }
 
     #[test]
@@ -447,6 +455,56 @@ mod tests {
         assert_eq!(entry.pid, Some(5678));
     }
 
+    #[test]
+    fn given_agent_entry_with_plan_mode_true_should_serialize() {
+        // given
+        let entry = AgentEntry {
+            id: "ag-plan".into(),
+            name: "claude".into(),
+            agent_type: "claude".into(),
+            status: AgentStatus::Streaming,
+            prompt: Some("research this".into()),
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            exit_code: None,
+            error: None,
+            pid: Some(1234),
+            session_id: None,
+            suspended_at: None,
+            suspended: false,
+            command: None,
+            plan_mode: true,
+        };
+
+        // when
+        let json = serde_json::to_string(&entry).unwrap();
+
+        // then
+        assert!(json.contains("planMode"));
+        let parsed: AgentEntry = serde_json::from_str(&json).unwrap();
+        assert!(parsed.plan_mode);
+    }
+
+    #[test]
+    fn given_old_manifest_without_plan_mode_should_default_to_false() {
+        // given: JSON without planMode field (backward compat with old manifests)
+        let json = r#"{
+            "id": "ag-old",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "streaming",
+            "prompt": "hello",
+            "startedAt": "2026-03-01T00:00:00Z",
+            "pid": 1234
+        }"#;
+
+        // when
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+
+        // then
+        assert!(!entry.plan_mode);
+    }
+
     // --- WorktreeEntry ---
 
     #[test]
@@ -469,6 +527,7 @@ mod tests {
                 suspended_at: None,
                 suspended: false,
                 command: None,
+                plan_mode: false,
             },
         );
         let entry = WorktreeEntry {
@@ -520,6 +579,7 @@ mod tests {
                 suspended_at: None,
                 suspended: false,
                 command: None,
+                plan_mode: false,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -547,6 +607,7 @@ mod tests {
                 suspended_at: None,
                 suspended: false,
                 command: None,
+                plan_mode: false,
             },
         );
         m.worktrees.insert(
@@ -588,6 +649,7 @@ mod tests {
             suspended_at: None,
             suspended: false,
             command: None,
+            plan_mode: false,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();
