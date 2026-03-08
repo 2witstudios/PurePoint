@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Serde helper: encode Vec<u8> as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -984,7 +984,7 @@ mod tests {
 
     #[test]
     fn given_protocol_version_should_be_current() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert_eq!(PROTOCOL_VERSION, 3);
     }
 
     // --- GridCommand round-trips ---
