@@ -24,6 +24,17 @@ pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> 
 }
 
 fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
+    status_colored_with_suspended(status, exit_code, false)
+}
+
+fn status_colored_with_suspended(
+    status: AgentStatus,
+    exit_code: Option<i32>,
+    suspended: bool,
+) -> String {
+    if suspended && status.is_alive() {
+        return "benched".yellow().to_string();
+    }
     match status {
         AgentStatus::Streaming => "streaming".green().to_string(),
         AgentStatus::Waiting => "waiting".cyan().to_string(),
@@ -95,7 +106,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
                         "{:<14} {:<16} {}",
                         a.id.dimmed(),
                         a.name,
-                        status_colored(a.status, a.exit_code)
+                        status_colored_with_suspended(a.status, a.exit_code, a.suspended)
                     );
                 }
             }
@@ -119,7 +130,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
                             "  {:<14} {:<16} {}",
                             a.id.dimmed(),
                             a.name,
-                            status_colored(a.status, a.exit_code),
+                            status_colored_with_suspended(a.status, a.exit_code, a.suspended),
                         );
                     }
                 }
@@ -130,7 +141,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 "{} {} {}",
                 a.id.dimmed(),
                 a.name.bold(),
-                status_colored(a.status, a.exit_code)
+                status_colored_with_suspended(a.status, a.exit_code, a.suspended)
             );
             if let Some(pid) = a.pid {
                 println!("  PID:    {pid}");
@@ -149,11 +160,18 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Killed {} agent(s)", killed.len());
         }
         Response::SuspendResult { suspended } => {
-            println!("Suspended {} agent(s)", suspended.len());
+            if suspended.is_empty() {
+                println!("No agents to bench");
+            } else {
+                println!("Benched {} agent(s)", suspended.len());
+                for id in suspended {
+                    println!("  {}", id.dimmed());
+                }
+            }
         }
         Response::ResumeResult { agent_id, status } => {
             println!(
-                "Resumed agent {} ({})",
+                "Back in play: {} ({})",
                 agent_id.bold(),
                 status_colored(*status, None)
             );
@@ -702,6 +720,12 @@ mod tests {
     }
 
     #[test]
+    fn given_empty_suspend_result_should_not_panic() {
+        let resp = Response::SuspendResult { suspended: vec![] };
+        print_response(&resp, false);
+    }
+
+    #[test]
     fn given_resume_result_should_not_panic() {
         let resp = Response::ResumeResult {
             agent_id: "ag-1".into(),
@@ -841,6 +865,33 @@ mod tests {
     fn given_waiting_should_show_waiting() {
         let s = status_colored(AgentStatus::Waiting, None);
         assert!(s.contains("waiting"));
+    }
+
+    // --- status_colored_with_suspended (bench) ---
+
+    #[test]
+    fn given_suspended_streaming_should_show_benched() {
+        let s = status_colored_with_suspended(AgentStatus::Streaming, None, true);
+        assert!(s.contains("benched"));
+    }
+
+    #[test]
+    fn given_suspended_waiting_should_show_benched() {
+        let s = status_colored_with_suspended(AgentStatus::Waiting, None, true);
+        assert!(s.contains("benched"));
+    }
+
+    #[test]
+    fn given_suspended_broken_should_not_show_benched() {
+        let s = status_colored_with_suspended(AgentStatus::Broken, Some(0), true);
+        assert!(!s.contains("benched"));
+        assert!(s.contains("done"));
+    }
+
+    #[test]
+    fn given_not_suspended_should_show_normal_status() {
+        let s = status_colored_with_suspended(AgentStatus::Streaming, None, false);
+        assert!(s.contains("streaming"));
     }
 
     // --- diff output ---

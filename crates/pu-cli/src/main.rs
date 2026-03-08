@@ -66,6 +66,25 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Bench (suspend) agents — pull them off the court
+    Bench {
+        /// Agent ID to bench
+        agent_id: Option<String>,
+        /// Bench all active agents
+        #[arg(long)]
+        all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Put a benched agent back in play (resume)
+    Play {
+        /// Agent ID to resume
+        agent_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Kill agents
     Kill {
         /// Kill specific agent
@@ -499,6 +518,14 @@ async fn main() {
                 json,
             )
             .await
+        }
+        Commands::Bench {
+            agent_id,
+            all,
+            json,
+        } => commands::bench::run_bench(&socket, agent_id, all, json).await,
+        Commands::Play { agent_id, json } => {
+            commands::bench::run_play(&socket, &agent_id, json).await
         }
         Commands::Status { agent, json } => commands::status::run(&socket, agent, json).await,
         Commands::Kill {
