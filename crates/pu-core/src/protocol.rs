@@ -252,6 +252,9 @@ pub enum Request {
         #[serde(default)]
         stat: bool,
     },
+    Pulse {
+        project_root: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,6 +533,10 @@ pub enum Response {
     DiffResult {
         diffs: Vec<WorktreeDiffEntry>,
     },
+    PulseReport {
+        worktrees: Vec<WorktreePulseEntry>,
+        root_agents: Vec<AgentPulseEntry>,
+    },
     Ok,
     ShuttingDown,
     Error {
@@ -571,6 +578,34 @@ pub struct WorktreeDiffEntry {
     pub deletions: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentPulseEntry {
+    pub id: String,
+    pub name: String,
+    pub agent_type: String,
+    pub status: AgentStatus,
+    pub exit_code: Option<i32>,
+    pub runtime_seconds: i64,
+    pub idle_seconds: Option<u64>,
+    pub prompt_snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WorktreePulseEntry {
+    pub worktree_id: String,
+    pub worktree_name: String,
+    pub branch: String,
+    pub elapsed_seconds: i64,
+    pub agents: Vec<AgentPulseEntry>,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_error: Option<String>,
 }
 
 #[cfg(test)]

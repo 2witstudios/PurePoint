@@ -168,7 +168,8 @@ impl Engine {
             | Request::SaveSchedule { project_root, .. }
             | Request::EnableSchedule { project_root, .. }
             | Request::DisableSchedule { project_root, .. }
-            | Request::Diff { project_root, .. } => {
+            | Request::Diff { project_root, .. }
+            | Request::Pulse { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -427,6 +428,7 @@ impl Engine {
                 self.handle_diff(&project_root, worktree_id.as_deref(), stat)
                     .await
             }
+            Request::Pulse { project_root } => self.handle_pulse(&project_root).await,
         }
     }
 
@@ -3152,6 +3154,126 @@ impl Engine {
             other => Err(format!(
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
+        }
+    }
+
+    async fn handle_pulse(&self, project_root: &str) -> Response {
+        let m = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let sessions = self.sessions.lock().await;
+        let now = chrono::Utc::now();
+
+        // Build root-level agents
+        let root_agents: Vec<pu_core::protocol::AgentPulseEntry> = m
+            .agents
+            .values()
+            .map(|a| {
+                let (status, exit_code, idle_seconds) =
+                    self.live_agent_status_sync(&a.id, a, &sessions);
+                let runtime = (now - a.started_at).num_seconds();
+                let snippet = a.prompt.as_ref().map(|p| {
+                    let trimmed = p.trim();
+                    if trimmed.len() > 80 {
+                        format!("{}...", &trimmed[..77])
+                    } else {
+                        trimmed.to_string()
+                    }
+                });
+                pu_core::protocol::AgentPulseEntry {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    agent_type: a.agent_type.clone(),
+                    status,
+                    exit_code,
+                    runtime_seconds: runtime,
+                    idle_seconds,
+                    prompt_snippet: snippet,
+                }
+            })
+            .collect();
+
+        // Build worktree entries with agents + git stats
+        let active_worktrees: Vec<_> = m
+            .worktrees
+            .values()
+            .filter(|wt| wt.status == WorktreeStatus::Active)
+            .cloned()
+            .collect();
+
+        // Drop sessions lock before shelling out to git
+        drop(sessions);
+
+        let mut worktrees = Vec::new();
+        for wt in &active_worktrees {
+            let elapsed = (now - wt.created_at).num_seconds();
+
+            // Gather agent pulse entries (re-acquire lock briefly)
+            let sessions = self.sessions.lock().await;
+            let agents: Vec<pu_core::protocol::AgentPulseEntry> = wt
+                .agents
+                .values()
+                .map(|a| {
+                    let (status, exit_code, idle_seconds) =
+                        self.live_agent_status_sync(&a.id, a, &sessions);
+                    let runtime = (now - a.started_at).num_seconds();
+                    let snippet = a.prompt.as_ref().map(|p| {
+                        let trimmed = p.trim();
+                        if trimmed.len() > 80 {
+                            format!("{}...", &trimmed[..77])
+                        } else {
+                            trimmed.to_string()
+                        }
+                    });
+                    pu_core::protocol::AgentPulseEntry {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                        agent_type: a.agent_type.clone(),
+                        status,
+                        exit_code,
+                        runtime_seconds: runtime,
+                        idle_seconds,
+                        prompt_snippet: snippet,
+                    }
+                })
+                .collect();
+            drop(sessions);
+
+            // Get git diff stats
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            let (files_changed, insertions, deletions, diff_error) = if wt_path.exists() {
+                let base = wt.base_branch.as_deref();
+                match git::diff_worktree(&wt_path, base, true).await {
+                    Ok(output) => (
+                        output.files_changed,
+                        output.insertions,
+                        output.deletions,
+                        None,
+                    ),
+                    Err(e) => (0, 0, 0, Some(format!("{e}"))),
+                }
+            } else {
+                (0, 0, 0, None)
+            };
+
+            worktrees.push(pu_core::protocol::WorktreePulseEntry {
+                worktree_id: wt.id.clone(),
+                worktree_name: wt.name.clone(),
+                branch: wt.branch.clone(),
+                elapsed_seconds: elapsed,
+                agents,
+                files_changed,
+                insertions,
+                deletions,
+                diff_error,
+            });
+        }
+
+        Response::PulseReport {
+            worktrees,
+            root_agents,
         }
     }
 
