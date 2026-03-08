@@ -85,10 +85,12 @@ fn format_duration(secs: u64) -> String {
 
 fn truncate_prompt(prompt: &str, max_len: usize) -> String {
     let first_line = prompt.lines().next().unwrap_or("");
-    if first_line.len() <= max_len {
+    let char_count: usize = first_line.chars().count();
+    if char_count <= max_len {
         first_line.to_string()
     } else {
-        format!("{}...", &first_line[..max_len - 3])
+        let truncated: String = first_line.chars().take(max_len - 3).collect();
+        format!("{truncated}...")
     }
 }
 
@@ -1262,6 +1264,15 @@ mod tests {
         let result = truncate_prompt(&long_prompt, 72);
         assert_eq!(result.len(), 72);
         assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn given_truncate_prompt_multibyte_should_not_panic() {
+        // CJK characters are 3 bytes each — this would panic with byte-level slicing
+        let prompt = "你".repeat(30); // 30 chars, 90 bytes
+        let result = truncate_prompt(&prompt, 10);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 10); // 7 chars + "..."
     }
 
     #[test]
