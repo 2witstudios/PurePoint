@@ -249,8 +249,9 @@ fn render_agent_table<'a>(
             .prompt
             .map(|p| {
                 let trimmed = p.trim().replace('\n', " ");
-                if trimmed.len() > 50 {
-                    format!("{}…", &trimmed[..49])
+                if trimmed.chars().count() > 50 {
+                    let truncated: String = trimmed.chars().take(49).collect();
+                    format!("{truncated}…")
                 } else {
                     trimmed
                 }
