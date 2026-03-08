@@ -96,9 +96,8 @@ pub fn delete_agent_def(dir: &Path, name: &str) -> Result<bool, std::io::Error> 
 
 fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentDef> {
     let mut defs = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return defs,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return defs;
     };
     for entry in entries.flatten() {
         let path = entry.path();

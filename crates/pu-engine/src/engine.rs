@@ -646,14 +646,11 @@ impl Engine {
         let creating_new_worktree = !root && worktree.is_none();
         let agent_name = if creating_new_worktree {
             // Worktree spawns require a user-provided name (becomes the branch slug)
-            let raw = match name {
-                Some(n) => n,
-                None => {
-                    return Response::Error {
-                        code: "INVALID_ARGUMENT".into(),
-                        message: "worktree spawn requires a name".into(),
-                    };
-                }
+            let Some(raw) = name else {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: "worktree spawn requires a name".into(),
+                };
             };
             let normalized = pu_core::id::normalize_worktree_name(&raw);
             if normalized.is_empty() {
@@ -700,7 +697,7 @@ impl Engine {
                 } else {
                     (
                         parts[0].to_string(),
-                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                        parts[1..].iter().map(ToString::to_string).collect(),
                     )
                 }
             };
@@ -995,14 +992,11 @@ impl Engine {
         };
 
         // Resolve name
-        let raw = match name {
-            Some(n) => n,
-            None => {
-                return Response::Error {
-                    code: "INVALID_ARGUMENT".into(),
-                    message: "worktree creation requires a name".into(),
-                };
-            }
+        let Some(raw) = name else {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "worktree creation requires a name".into(),
+            };
         };
         let worktree_name = pu_core::id::normalize_worktree_name(&raw);
         if worktree_name.is_empty() {
@@ -1833,9 +1827,8 @@ impl Engine {
     /// Called synchronously inside handle_init so state is correct before the first status read.
     fn reconcile_agents_on_init(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
@@ -1880,9 +1873,8 @@ impl Engine {
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let needs_reap = |a: &AgentEntry| {
             !a.suspended
