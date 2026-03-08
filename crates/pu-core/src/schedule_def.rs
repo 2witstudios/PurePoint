@@ -82,7 +82,7 @@ impl ScheduleDef {
                     "agent_name must not be set when root is true",
                 ));
             }
-        } else if self.agent_name.as_ref().is_none_or(|n| n.is_empty()) {
+        } else if self.agent_name.as_ref().is_none_or(String::is_empty) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "agent_name is required when root is false",
@@ -277,9 +277,8 @@ pub fn next_occurrence(
 
 fn scan_dir(dir: &Path, scope: &str) -> Vec<ScheduleDef> {
     let mut defs = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return defs,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return defs;
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -327,6 +326,10 @@ fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<ScheduleDef> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn isolate_home(tmp: &TempDir) {
+        paths::set_home_override(Some(tmp.path().to_path_buf()));
+    }
 
     fn make_trigger() -> ScheduleTrigger {
         ScheduleTrigger::AgentDef {
@@ -504,6 +507,7 @@ created_at: "2025-06-01T00:00:00Z"
     #[test]
     fn given_local_and_global_schedule_defs_should_list_local_first() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let root = tmp.path();
         let local_dir = paths::schedules_dir(root);
         std::fs::create_dir_all(&local_dir).unwrap();
@@ -538,6 +542,7 @@ created_at: "2025-06-01T00:00:00Z"
     #[test]
     fn given_no_schedule_defs_should_return_empty_list() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let defs = list_schedule_defs(tmp.path());
         assert!(defs.is_empty());
     }

@@ -648,14 +648,11 @@ impl Engine {
         let creating_new_worktree = !root && worktree.is_none();
         let agent_name = if creating_new_worktree {
             // Worktree spawns require a user-provided name (becomes the branch slug)
-            let raw = match name {
-                Some(n) => n,
-                None => {
-                    return Response::Error {
-                        code: "INVALID_ARGUMENT".into(),
-                        message: "worktree spawn requires a name".into(),
-                    };
-                }
+            let Some(raw) = name else {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: "worktree spawn requires a name".into(),
+                };
             };
             let normalized = pu_core::id::normalize_worktree_name(&raw);
             if normalized.is_empty() {
@@ -702,7 +699,7 @@ impl Engine {
                 } else {
                     (
                         parts[0].to_string(),
-                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                        parts[1..].iter().map(ToString::to_string).collect(),
                     )
                 }
             };
@@ -997,14 +994,11 @@ impl Engine {
         };
 
         // Resolve name
-        let raw = match name {
-            Some(n) => n,
-            None => {
-                return Response::Error {
-                    code: "INVALID_ARGUMENT".into(),
-                    message: "worktree creation requires a name".into(),
-                };
-            }
+        let Some(raw) = name else {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "worktree creation requires a name".into(),
+            };
         };
         let worktree_name = pu_core::id::normalize_worktree_name(&raw);
         if worktree_name.is_empty() {
@@ -1406,6 +1400,14 @@ impl Engine {
 
         let pid = handle.pid;
 
+        // Store handle in session map BEFORE writing manifest.
+        // ManifestWatcher in Swift fires on manifest write and immediately
+        // tries to attach — the session must already be in the map.
+        self.sessions
+            .lock()
+            .await
+            .insert(agent_id.to_string(), handle);
+
         // 6. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
@@ -1429,22 +1431,18 @@ impl Engine {
         .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
 
         if let Err(e) = manifest_result {
-            // Rollback: kill the resumed process
-            self.pty_host
-                .kill(&handle, Duration::from_secs(2))
-                .await
-                .ok();
+            // Rollback: remove session and kill process
+            if let Some(handle) = self.sessions.lock().await.remove(agent_id) {
+                self.pty_host
+                    .kill(&handle, Duration::from_secs(2))
+                    .await
+                    .ok();
+            }
             return Response::Error {
                 code: "RESUME_FAILED".into(),
                 message: format!("failed to update manifest: {e}"),
             };
         }
-
-        // 7. Store handle in session map
-        self.sessions
-            .lock()
-            .await
-            .insert(agent_id.to_string(), handle);
 
         self.notify_status_change(project_root).await;
 
@@ -1835,9 +1833,8 @@ impl Engine {
     /// Called synchronously inside handle_init so state is correct before the first status read.
     fn reconcile_agents_on_init(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
@@ -1882,9 +1879,8 @@ impl Engine {
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let needs_reap = |a: &AgentEntry| {
             !a.suspended

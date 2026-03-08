@@ -5,7 +5,7 @@ use crate::types::{AgentStatus, WorktreeEntry};
 
 pub const PROTOCOL_VERSION: u32 = 3;
 
-/// Serde helper: encode Vec<u8> as hex in JSON for binary PTY data.
+/// Serde helper: encode `Vec<u8>` as hex in JSON for binary PTY data.
 mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
