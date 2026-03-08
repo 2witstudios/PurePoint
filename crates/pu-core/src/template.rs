@@ -230,7 +230,10 @@ fn scan_dir(dir: &Path, source: &str) -> Vec<Template> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("md") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+                let Some(file_name) = path.file_name() else {
+                    continue;
+                };
+                let file_name = file_name.to_string_lossy().to_string();
                 let mut tpl = parse_template(&content, &file_name);
                 tpl.source = source.to_string();
                 templates.push(tpl);
@@ -247,7 +250,7 @@ fn find_in_dir(dir: &Path, name: &str, source: &str) -> Option<Template> {
     let path = dir.join(format!("{name}.md"));
     if path.is_file() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+            let file_name = path.file_name()?.to_string_lossy().to_string();
             let mut tpl = parse_template(&content, &file_name);
             tpl.source = source.to_string();
             return Some(tpl);

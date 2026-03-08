@@ -7,7 +7,7 @@ use crate::error::CliError;
 use crate::output;
 use pu_core::protocol::Request;
 
-/// Parse comma-separated tags string into a Vec<String>.
+/// Parse comma-separated tags string into a `Vec<String>`.
 /// Empty string returns empty vec. Whitespace around each tag is trimmed.
 fn parse_tags(tags: &str) -> Vec<String> {
     if tags.is_empty() {
