@@ -14,7 +14,7 @@ pub fn validate_name(name: &str) -> Result<(), std::io::Error> {
             format!("name must not start with '.': {name}"),
         ));
     }
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("name contains invalid characters: {name}"),
