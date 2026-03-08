@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CliError {
-    #[error("daemon not running — run `pu spawn` to start it")]
+    #[error("daemon not running — it should auto-start; check `~/.pu/logs/daemon.log` for errors")]
     DaemonNotRunning,
 
     #[error("daemon request timed out after 30 seconds")]
