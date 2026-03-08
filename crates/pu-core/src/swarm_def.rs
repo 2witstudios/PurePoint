@@ -149,7 +149,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn isolate_home(tmp: &TempDir) {
-        unsafe { std::env::set_var("HOME", tmp.path()) };
+        paths::set_home_override(Some(tmp.path().to_path_buf()));
     }
 
     #[test]

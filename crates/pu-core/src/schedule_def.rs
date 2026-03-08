@@ -328,6 +328,10 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn isolate_home(tmp: &TempDir) {
+        paths::set_home_override(Some(tmp.path().to_path_buf()));
+    }
+
     fn make_trigger() -> ScheduleTrigger {
         ScheduleTrigger::AgentDef {
             name: "security-review".to_string(),
@@ -504,6 +508,7 @@ created_at: "2025-06-01T00:00:00Z"
     #[test]
     fn given_local_and_global_schedule_defs_should_list_local_first() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let root = tmp.path();
         let local_dir = paths::schedules_dir(root);
         std::fs::create_dir_all(&local_dir).unwrap();
@@ -538,6 +543,7 @@ created_at: "2025-06-01T00:00:00Z"
     #[test]
     fn given_no_schedule_defs_should_return_empty_list() {
         let tmp = TempDir::new().unwrap();
+        isolate_home(&tmp);
         let defs = list_schedule_defs(tmp.path());
         assert!(defs.is_empty());
     }

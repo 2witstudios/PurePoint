@@ -266,7 +266,7 @@ mod tests {
 
     /// Override HOME so global_pu_dir() points to an empty temp dir.
     fn isolate_home(tmp: &TempDir) {
-        unsafe { std::env::set_var("HOME", tmp.path()) };
+        paths::set_home_override(Some(tmp.path().to_path_buf()));
     }
 
     #[test]
