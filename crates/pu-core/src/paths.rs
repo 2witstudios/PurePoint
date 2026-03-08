@@ -72,6 +72,14 @@ pub fn global_schedules_dir() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("schedules"))
 }
 
+pub fn triggers_dir(project_root: &Path) -> PathBuf {
+    pu_dir(project_root).join("triggers")
+}
+
+pub fn global_triggers_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("triggers"))
+}
+
 fn home_dir() -> Result<PathBuf, std::io::Error> {
     std::env::var("HOME")
         .map(PathBuf::from)
@@ -220,6 +228,24 @@ mod tests {
         let path = global_schedules_dir().unwrap();
         assert!(
             path.to_string_lossy().contains(".pu/schedules"),
+            "unexpected path: {path:?}"
+        );
+    }
+
+    #[test]
+    fn given_project_root_should_build_triggers_dir() {
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            triggers_dir(root),
+            PathBuf::from("/projects/myapp/.pu/triggers")
+        );
+    }
+
+    #[test]
+    fn given_global_triggers_dir_should_live_under_home_pu() {
+        let path = global_triggers_dir().unwrap();
+        assert!(
+            path.to_string_lossy().contains(".pu/triggers"),
             "unexpected path: {path:?}"
         );
     }

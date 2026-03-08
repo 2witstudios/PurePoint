@@ -2,6 +2,7 @@ pub mod agent_def;
 pub mod attach;
 pub mod clean;
 pub mod diff;
+pub mod gate;
 pub mod grid;
 pub mod health;
 pub mod init;
@@ -13,6 +14,7 @@ pub mod send;
 pub mod spawn;
 pub mod status;
 pub mod swarm;
+pub mod trigger;
 
 use std::collections::HashMap;
 

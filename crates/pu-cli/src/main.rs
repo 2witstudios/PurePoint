@@ -53,6 +53,9 @@ enum Commands {
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
+        /// Disable event triggers for this agent
+        #[arg(long)]
+        no_trigger: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -146,6 +149,19 @@ enum Commands {
     Schedule {
         #[command(subcommand)]
         action: ScheduleAction,
+    },
+    /// Manage event-driven triggers
+    Trigger {
+        #[command(subcommand)]
+        action: TriggerAction,
+    },
+    /// Evaluate git hook gates
+    Gate {
+        /// Event type: pre-commit or pre-push
+        event: String,
+        /// Project root path
+        #[arg(long)]
+        project_root: Option<String>,
     },
     /// Show git diffs across agent worktrees
     Diff {
@@ -465,6 +481,58 @@ enum ScheduleAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TriggerAction {
+    /// List triggers
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a trigger
+    Show {
+        /// Trigger name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a trigger
+    Create {
+        /// Trigger name
+        name: String,
+        /// Event type: agent_idle, pre_commit, pre_push
+        #[arg(long = "on")]
+        event: String,
+        /// Description
+        #[arg(long)]
+        description: Option<String>,
+        /// Inject text (repeatable, creates sequence steps)
+        #[arg(long)]
+        inject: Vec<String>,
+        /// Gate command (repeatable, creates gate-only sequence steps)
+        #[arg(long)]
+        gate: Vec<String>,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a trigger
+    Delete {
+        /// Trigger name
+        name: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -492,11 +560,12 @@ async fn main() {
             file,
             command,
             vars,
+            no_trigger,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                json,
+                no_trigger, json,
             )
             .await
         }
@@ -616,6 +685,40 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Trigger { action } => match action {
+            TriggerAction::List { json } => commands::trigger::run_list(&socket, json).await,
+            TriggerAction::Show { name, json } => {
+                commands::trigger::run_show(&socket, &name, json).await
+            }
+            TriggerAction::Create {
+                name,
+                event,
+                description,
+                inject,
+                gate,
+                scope,
+                json,
+            } => {
+                commands::trigger::run_create(
+                    &socket,
+                    &name,
+                    &event,
+                    description,
+                    inject,
+                    gate,
+                    &scope,
+                    json,
+                )
+                .await
+            }
+            TriggerAction::Delete { name, scope, json } => {
+                commands::trigger::run_delete(&socket, &name, &scope, json).await
+            }
+        },
+        Commands::Gate {
+            event,
+            project_root,
+        } => commands::gate::run(&socket, &event, project_root).await,
         Commands::Diff {
             worktree,
             stat,
