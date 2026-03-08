@@ -11,9 +11,17 @@ pub async fn run_bench(
     all: bool,
     json: bool,
 ) -> Result<(), CliError> {
+    let self_agent_id = std::env::var("PU_AGENT_ID").ok();
+
     let target = if all {
         SuspendTarget::All
     } else if let Some(id) = agent {
+        // Self-protection: refuse to bench own agent
+        if let Some(ref self_id) = self_agent_id {
+            if &id == self_id {
+                return Err(CliError::Other("cannot bench self".into()));
+            }
+        }
         SuspendTarget::Agent(id)
     } else {
         return Err(CliError::Other(
@@ -33,6 +41,18 @@ pub async fn run_bench(
     )
     .await?;
     let resp = output::check_response(resp, json)?;
+
+    // Warn if self was included in bulk bench results
+    if let Some(ref self_id) = self_agent_id {
+        if let pu_core::protocol::Response::SuspendResult { ref suspended } = resp {
+            if suspended.contains(self_id) {
+                eprintln!(
+                    "warning: agent {self_id} benched itself — use `pu play {self_id}` to resume",
+                );
+            }
+        }
+    }
+
     output::print_response(&resp, json);
     Ok(())
 }
