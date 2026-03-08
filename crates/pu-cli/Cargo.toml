@@ -21,4 +21,5 @@ path = "src/main.rs"
 
 [dev-dependencies]
 pu-engine = { path = "../pu-engine" }
+indexmap = { workspace = true }
 tempfile = "3"
