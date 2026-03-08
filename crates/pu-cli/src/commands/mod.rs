@@ -13,6 +13,7 @@ pub mod send;
 pub mod spawn;
 pub mod status;
 pub mod swarm;
+pub mod watch;
 
 use std::collections::HashMap;
 
