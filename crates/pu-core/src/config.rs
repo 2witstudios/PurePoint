@@ -218,7 +218,7 @@ agents:
         let claude = &config.agents["claude"];
         assert_eq!(claude.launch_args, Some(vec![]));
         // resolved_launch_args should return empty when explicitly set
-        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_ref());
+        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_deref());
         assert!(args.is_empty());
     }
 
@@ -235,7 +235,7 @@ agents:
         let claude = &config.agents["claude"];
         assert!(claude.launch_args.is_none());
         // resolved_launch_args should return defaults when not set
-        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_ref());
+        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_deref());
         assert_eq!(args, vec!["--dangerously-skip-permissions"]);
     }
 }

@@ -26,6 +26,21 @@ use crate::git;
 use crate::output_buffer::OutputBuffer;
 use crate::pty_manager::{AgentHandle, NativePtyHost, SpawnConfig};
 
+/// Parameters for spawning an agent, extracted to avoid too many positional args.
+struct SpawnParams {
+    project_root: String,
+    prompt: String,
+    agent_type: String,
+    name: Option<String>,
+    base: Option<String>,
+    root: bool,
+    worktree: Option<String>,
+    terminal_command: Option<String>,
+    /// Skip auto-mode launch args for this spawn. One-off override;
+    /// does not affect resume (resume always reads from config).
+    no_auto: bool,
+}
+
 pub struct Engine {
     start_time: Instant,
     pty_host: NativePtyHost,
@@ -198,17 +213,17 @@ impl Engine {
                 command,
                 no_auto,
             } => {
-                self.handle_spawn(
-                    &project_root,
-                    &prompt,
-                    &agent,
+                self.handle_spawn(SpawnParams {
+                    project_root,
+                    prompt,
+                    agent_type: agent,
                     name,
                     base,
                     root,
                     worktree,
-                    command,
+                    terminal_command: command,
                     no_auto,
-                )
+                })
                 .await
             }
             Request::CreateWorktree {
@@ -602,19 +617,21 @@ impl Engine {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_spawn(
-        &self,
-        project_root: &str,
-        prompt: &str,
-        agent_type: &str,
-        name: Option<String>,
-        base: Option<String>,
-        root: bool,
-        worktree: Option<String>,
-        terminal_command: Option<String>,
-        no_auto: bool,
-    ) -> Response {
+    async fn handle_spawn(&self, params: SpawnParams) -> Response {
+        let SpawnParams {
+            project_root,
+            prompt,
+            agent_type,
+            name,
+            base,
+            root,
+            worktree,
+            terminal_command,
+            no_auto,
+        } = params;
+        let project_root = &project_root;
+        let prompt = &prompt;
+        let agent_type = &*agent_type;
         let root_path = Path::new(project_root);
 
         // Ensure initialized
@@ -716,12 +733,16 @@ impl Engine {
             };
             let mut args = cmd_args;
 
-            // Add agent-type-specific launch args from config (or defaults)
+            // Add agent-type-specific launch args from config (or defaults).
+            // no_auto is a one-off CLI override; it does not persist to resume.
             if !no_auto {
                 let launch_args = pu_core::types::resolved_launch_args(
                     agent_type,
-                    agent_cfg.launch_args.as_ref(),
+                    agent_cfg.launch_args.as_deref(),
                 );
+                if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
+                    tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
+                }
                 for arg in launch_args.into_iter().rev() {
                     if !args.iter().any(|a| a == &arg) {
                         args.insert(0, arg);
@@ -1463,7 +1484,7 @@ impl Engine {
         session_id: Option<&str>,
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
         let launch_args =
-            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_ref());
+            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
         match agent_type {
             "claude" => {
                 let sid = session_id.ok_or_else(|| Response::Error {
@@ -2606,17 +2627,17 @@ impl Engine {
                         .or_else(|| template_command.clone());
 
                     let resp = self
-                        .handle_spawn(
-                            project_root,
-                            prompt,
-                            &agent_def.agent_type,
-                            spawn_name,
-                            None,
-                            false,
-                            spawn_worktree,
-                            resolved_command,
-                            false,
-                        )
+                        .handle_spawn(SpawnParams {
+                            project_root: project_root.to_string(),
+                            prompt: prompt.to_string(),
+                            agent_type: agent_def.agent_type.clone(),
+                            name: spawn_name,
+                            base: None,
+                            root: false,
+                            worktree: spawn_worktree,
+                            terminal_command: resolved_command,
+                            no_auto: false,
+                        })
                         .await;
 
                     match resp {
@@ -2647,17 +2668,17 @@ impl Engine {
                 if let Some(ref wt_id) = worktree_id {
                     let term_name = format!("{swarm_name}-terminal-{wt_index}");
                     let resp = self
-                        .handle_spawn(
-                            project_root,
-                            "",
-                            "terminal",
-                            Some(term_name),
-                            None,
-                            false,
-                            Some(wt_id.clone()),
-                            None,
-                            false,
-                        )
+                        .handle_spawn(SpawnParams {
+                            project_root: project_root.to_string(),
+                            prompt: String::new(),
+                            agent_type: "terminal".into(),
+                            name: Some(term_name),
+                            base: None,
+                            root: false,
+                            worktree: Some(wt_id.clone()),
+                            terminal_command: None,
+                            no_auto: false,
+                        })
                         .await;
                     if let Response::SpawnResult { agent_id, .. } = resp {
                         spawned_agents.push(agent_id);
@@ -3553,6 +3574,77 @@ mod tests {
             Engine::resolved_prompt_flag("codex", Some("--prompt")),
             Some("--prompt".to_string())
         );
+    }
+
+    #[test]
+    fn given_claude_build_resume_with_default_launch_args_should_include_yolo() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "claude".into(),
+            command: "claude".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None, // use defaults
+        };
+
+        // when
+        let (cmd, args, sid) = engine
+            .build_resume_command("claude", &agent_cfg, Some("sess-123"))
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, "claude");
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"sess-123".to_string()));
+        assert_eq!(sid, Some("sess-123".to_string()));
+    }
+
+    #[test]
+    fn given_claude_build_resume_with_empty_launch_args_should_omit_yolo() {
+        // given: user configured launchArgs: [] to disable auto-mode
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "claude".into(),
+            command: "claude".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: Some(vec![]),
+        };
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("claude", &agent_cfg, Some("sess-456"))
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, "claude");
+        assert!(!args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn given_codex_build_resume_with_custom_launch_args_should_use_them() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "codex".into(),
+            command: "codex".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: Some(vec!["--approval-mode=full-auto".into()]),
+        };
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("codex", &agent_cfg, None)
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, "codex");
+        assert!(args.contains(&"--approval-mode=full-auto".to_string()));
+        assert!(!args.contains(&"--full-auto".to_string()));
     }
 
     #[test]

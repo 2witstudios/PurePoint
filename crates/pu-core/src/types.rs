@@ -271,9 +271,9 @@ pub fn default_agents() -> IndexMap<String, AgentConfig> {
 /// - `None` → use built-in defaults per agent type
 /// - `Some([])` → no launch args (user explicitly disabled auto-mode)
 /// - `Some([...])` → use exactly these args
-pub fn resolved_launch_args(agent_type: &str, launch_args: Option<&Vec<String>>) -> Vec<String> {
+pub fn resolved_launch_args(agent_type: &str, launch_args: Option<&[String]>) -> Vec<String> {
     match launch_args {
-        Some(args) => args.clone(),
+        Some(args) => args.to_vec(),
         None => match agent_type {
             "claude" => vec!["--dangerously-skip-permissions".into()],
             "codex" => vec!["--full-auto".into()],
