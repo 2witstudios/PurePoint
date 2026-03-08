@@ -526,18 +526,18 @@ pub fn print_response(response: &Response, json_mode: bool) {
                         status_label,
                         duration.dimmed()
                     );
-                    if wt.files_changed > 0 {
-                        println!(
-                            "    {} file(s), {}, {}",
-                            wt.files_changed,
-                            format!("+{}", wt.insertions).green(),
-                            format!("-{}", wt.deletions).red()
-                        );
-                    }
                     if let Some(ref prompt) = a.prompt {
                         let truncated = truncate_prompt(prompt, 72);
                         println!("    {}", format!("\"{truncated}\"").dimmed());
                     }
+                }
+                if wt.files_changed > 0 {
+                    println!(
+                        "    {} file(s), {}, {}",
+                        wt.files_changed,
+                        format!("+{}", wt.insertions).green(),
+                        format!("-{}", wt.deletions).red()
+                    );
                 }
             }
 
