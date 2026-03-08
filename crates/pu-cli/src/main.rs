@@ -147,6 +147,12 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Recap workspace activity: agent status + code changes at a glance
+    Recap {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show git diffs across agent worktrees
     Diff {
         /// Diff a specific worktree
@@ -616,6 +622,7 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Recap { json } => commands::recap::run(&socket, json).await,
         Commands::Diff {
             worktree,
             stat,

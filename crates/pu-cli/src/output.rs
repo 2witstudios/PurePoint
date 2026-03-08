@@ -34,6 +34,64 @@ fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
     }
 }
 
+enum RecapCount {
+    Streaming,
+    Waiting,
+    Done,
+    Broken,
+}
+
+fn agent_recap_icon(status: AgentStatus, exit_code: Option<i32>) -> (String, RecapCount) {
+    match status {
+        AgentStatus::Streaming => ("●".green().to_string(), RecapCount::Streaming),
+        AgentStatus::Waiting => ("◆".cyan().to_string(), RecapCount::Waiting),
+        AgentStatus::Broken => match exit_code {
+            Some(0) => ("✓".green().to_string(), RecapCount::Done),
+            _ => ("✗".red().to_string(), RecapCount::Broken),
+        },
+    }
+}
+
+fn recap_status_label(status: AgentStatus, exit_code: Option<i32>, suspended: bool) -> String {
+    if suspended {
+        return "suspended".cyan().to_string();
+    }
+    match status {
+        AgentStatus::Streaming => "streaming".green().to_string(),
+        AgentStatus::Waiting => "waiting".cyan().to_string(),
+        AgentStatus::Broken => match exit_code {
+            Some(0) => "done".dimmed().to_string(),
+            Some(code) => format!("exit {code}").red().to_string(),
+            None => "broken".red().to_string(),
+        },
+    }
+}
+
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m > 0 {
+            format!("{h}h {m}m")
+        } else {
+            format!("{h}h")
+        }
+    }
+}
+
+fn truncate_prompt(prompt: &str, max_len: usize) -> String {
+    let first_line = prompt.lines().next().unwrap_or("");
+    if first_line.len() <= max_len {
+        first_line.to_string()
+    } else {
+        format!("{}...", &first_line[..max_len - 3])
+    }
+}
+
 pub fn print_response(response: &Response, json_mode: bool) {
     if json_mode {
         println!(
@@ -394,6 +452,119 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 for id in spawned_agents {
                     println!("  {}", id.dimmed());
                 }
+            }
+        }
+        Response::RecapResult {
+            worktrees,
+            root_agents,
+        } => {
+            if worktrees.is_empty() && root_agents.is_empty() {
+                println!("{}", "No agents to recap".dimmed());
+                return;
+            }
+
+            println!("{}", "━━━ Workspace Recap ━━━".bold());
+            println!();
+
+            let mut total_streaming = 0usize;
+            let mut total_waiting = 0usize;
+            let mut total_done = 0usize;
+            let mut total_broken = 0usize;
+            let mut total_files = 0usize;
+            let mut total_ins = 0usize;
+            let mut total_del = 0usize;
+
+            // Root agents
+            for a in root_agents {
+                let (icon, counted) = agent_recap_icon(a.status, a.exit_code);
+                match counted {
+                    RecapCount::Streaming => total_streaming += 1,
+                    RecapCount::Waiting => total_waiting += 1,
+                    RecapCount::Done => total_done += 1,
+                    RecapCount::Broken => total_broken += 1,
+                }
+                let duration = format_duration(a.duration_seconds);
+                let status_label = recap_status_label(a.status, a.exit_code, a.suspended);
+                println!(
+                    "  {} {} ({}) {} {}",
+                    icon,
+                    a.name.bold(),
+                    a.id.dimmed(),
+                    status_label,
+                    duration.dimmed()
+                );
+                println!("    {}", a.agent_type.dimmed());
+                if let Some(ref prompt) = a.prompt {
+                    let truncated = truncate_prompt(prompt, 72);
+                    println!("    {}", format!("\"{truncated}\"").dimmed());
+                }
+            }
+
+            // Worktrees
+            for wt in worktrees {
+                total_files += wt.files_changed;
+                total_ins += wt.insertions;
+                total_del += wt.deletions;
+
+                for a in &wt.agents {
+                    let (icon, counted) = agent_recap_icon(a.status, a.exit_code);
+                    match counted {
+                        RecapCount::Streaming => total_streaming += 1,
+                        RecapCount::Waiting => total_waiting += 1,
+                        RecapCount::Done => total_done += 1,
+                        RecapCount::Broken => total_broken += 1,
+                    }
+                    let duration = format_duration(a.duration_seconds);
+                    let status_label = recap_status_label(a.status, a.exit_code, a.suspended);
+                    println!(
+                        "  {} {} ({}) {} {}",
+                        icon,
+                        wt.worktree_name.bold(),
+                        a.id.dimmed(),
+                        status_label,
+                        duration.dimmed()
+                    );
+                    if wt.files_changed > 0 {
+                        println!(
+                            "    {} file(s), {}, {}",
+                            wt.files_changed,
+                            format!("+{}", wt.insertions).green(),
+                            format!("-{}", wt.deletions).red()
+                        );
+                    }
+                    if let Some(ref prompt) = a.prompt {
+                        let truncated = truncate_prompt(prompt, 72);
+                        println!("    {}", format!("\"{truncated}\"").dimmed());
+                    }
+                }
+            }
+
+            // Summary line
+            println!();
+            let mut parts = Vec::new();
+            if total_done > 0 {
+                parts.push(format!("{total_done} done").green().to_string());
+            }
+            if total_streaming > 0 {
+                parts.push(format!("{total_streaming} streaming").green().to_string());
+            }
+            if total_waiting > 0 {
+                parts.push(format!("{total_waiting} waiting").cyan().to_string());
+            }
+            if total_broken > 0 {
+                parts.push(format!("{total_broken} broken").red().to_string());
+            }
+            let summary = parts.join(", ");
+            if total_files > 0 {
+                println!(
+                    "  {} · {} file(s) · {}, {}",
+                    summary,
+                    total_files,
+                    format!("+{total_ins}").green(),
+                    format!("-{total_del}").red()
+                );
+            } else {
+                println!("  {summary}");
             }
         }
         Response::DiffResult { diffs } => {
@@ -938,5 +1109,181 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
         print_response(&resp, false);
+    }
+
+    // --- recap output ---
+
+    #[test]
+    fn given_empty_recap_should_not_panic() {
+        let resp = Response::RecapResult {
+            worktrees: vec![],
+            root_agents: vec![],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_recap_with_worktree_agents_should_not_panic() {
+        let resp = Response::RecapResult {
+            worktrees: vec![pu_core::protocol::RecapWorktreeEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "fix-auth".into(),
+                branch: "pu/fix-auth".into(),
+                agents: vec![pu_core::protocol::RecapAgentEntry {
+                    id: "ag-1".into(),
+                    name: "claude".into(),
+                    agent_type: "claude".into(),
+                    status: AgentStatus::Streaming,
+                    exit_code: None,
+                    prompt: Some("Add user auth".into()),
+                    started_at: chrono::Utc::now(),
+                    completed_at: None,
+                    duration_seconds: 720,
+                    suspended: false,
+                }],
+                files_changed: 4,
+                insertions: 127,
+                deletions: 23,
+            }],
+            root_agents: vec![],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_recap_with_root_agents_should_not_panic() {
+        let resp = Response::RecapResult {
+            worktrees: vec![],
+            root_agents: vec![pu_core::protocol::RecapAgentEntry {
+                id: "ag-root".into(),
+                name: "point-guard".into(),
+                agent_type: "claude".into(),
+                status: AgentStatus::Broken,
+                exit_code: Some(0),
+                prompt: Some("Watch the workspace".into()),
+                started_at: chrono::Utc::now(),
+                completed_at: Some(chrono::Utc::now()),
+                duration_seconds: 3700,
+                suspended: false,
+            }],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_recap_mixed_statuses_should_not_panic() {
+        let resp = Response::RecapResult {
+            worktrees: vec![
+                pu_core::protocol::RecapWorktreeEntry {
+                    worktree_id: "wt-1".into(),
+                    worktree_name: "feature-a".into(),
+                    branch: "pu/feature-a".into(),
+                    agents: vec![pu_core::protocol::RecapAgentEntry {
+                        id: "ag-1".into(),
+                        name: "claude".into(),
+                        agent_type: "claude".into(),
+                        status: AgentStatus::Broken,
+                        exit_code: Some(0),
+                        prompt: None,
+                        started_at: chrono::Utc::now(),
+                        completed_at: Some(chrono::Utc::now()),
+                        duration_seconds: 180,
+                        suspended: false,
+                    }],
+                    files_changed: 2,
+                    insertions: 50,
+                    deletions: 10,
+                },
+                pu_core::protocol::RecapWorktreeEntry {
+                    worktree_id: "wt-2".into(),
+                    worktree_name: "bugfix-b".into(),
+                    branch: "pu/bugfix-b".into(),
+                    agents: vec![pu_core::protocol::RecapAgentEntry {
+                        id: "ag-2".into(),
+                        name: "claude".into(),
+                        agent_type: "claude".into(),
+                        status: AgentStatus::Broken,
+                        exit_code: Some(1),
+                        prompt: Some("Fix parser".into()),
+                        started_at: chrono::Utc::now(),
+                        completed_at: Some(chrono::Utc::now()),
+                        duration_seconds: 45,
+                        suspended: false,
+                    }],
+                    files_changed: 1,
+                    insertions: 8,
+                    deletions: 3,
+                },
+            ],
+            root_agents: vec![],
+        };
+        print_response(&resp, false);
+    }
+
+    #[test]
+    fn given_recap_json_mode_should_not_panic() {
+        let resp = Response::RecapResult {
+            worktrees: vec![],
+            root_agents: vec![],
+        };
+        print_response(&resp, true);
+    }
+
+    // --- recap helpers ---
+
+    #[test]
+    fn given_format_duration_seconds_should_show_s() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn given_format_duration_minutes_should_show_m() {
+        assert_eq!(format_duration(120), "2m");
+    }
+
+    #[test]
+    fn given_format_duration_hours_should_show_h_m() {
+        assert_eq!(format_duration(3700), "1h 1m");
+    }
+
+    #[test]
+    fn given_format_duration_exact_hour_should_show_h() {
+        assert_eq!(format_duration(3600), "1h");
+    }
+
+    #[test]
+    fn given_truncate_prompt_short_should_not_truncate() {
+        assert_eq!(truncate_prompt("short prompt", 72), "short prompt");
+    }
+
+    #[test]
+    fn given_truncate_prompt_long_should_truncate_with_ellipsis() {
+        let long_prompt = "a".repeat(100);
+        let result = truncate_prompt(&long_prompt, 72);
+        assert_eq!(result.len(), 72);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn given_truncate_prompt_multiline_should_use_first_line() {
+        assert_eq!(truncate_prompt("line1\nline2\nline3", 72), "line1");
+    }
+
+    #[test]
+    fn given_agent_recap_icon_streaming_should_show_green_dot() {
+        let (icon, _) = agent_recap_icon(AgentStatus::Streaming, None);
+        assert!(icon.contains("●"));
+    }
+
+    #[test]
+    fn given_agent_recap_icon_done_should_show_checkmark() {
+        let (icon, _) = agent_recap_icon(AgentStatus::Broken, Some(0));
+        assert!(icon.contains("✓"));
+    }
+
+    #[test]
+    fn given_agent_recap_icon_broken_should_show_x() {
+        let (icon, _) = agent_recap_icon(AgentStatus::Broken, Some(1));
+        assert!(icon.contains("✗"));
     }
 }

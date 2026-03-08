@@ -252,6 +252,9 @@ pub enum Request {
         #[serde(default)]
         stat: bool,
     },
+    Recap {
+        project_root: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,6 +533,10 @@ pub enum Response {
     DiffResult {
         diffs: Vec<WorktreeDiffEntry>,
     },
+    RecapResult {
+        worktrees: Vec<RecapWorktreeEntry>,
+        root_agents: Vec<RecapAgentEntry>,
+    },
     Ok,
     ShuttingDown,
     Error {
@@ -571,6 +578,33 @@ pub struct WorktreeDiffEntry {
     pub deletions: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RecapAgentEntry {
+    pub id: String,
+    pub name: String,
+    pub agent_type: String,
+    pub status: AgentStatus,
+    pub exit_code: Option<i32>,
+    pub prompt: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub duration_seconds: u64,
+    pub suspended: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RecapWorktreeEntry {
+    pub worktree_id: String,
+    pub worktree_name: String,
+    pub branch: String,
+    pub agents: Vec<RecapAgentEntry>,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
 }
 
 #[cfg(test)]
@@ -2154,5 +2188,117 @@ mod tests {
             }
             _ => panic!("expected CreateWorktreeResult"),
         }
+    }
+
+    // --- Recap ---
+
+    #[test]
+    fn given_recap_request_should_round_trip() {
+        let req = Request::Recap {
+            project_root: "/test".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Recap { project_root } => assert_eq!(project_root, "/test"),
+            _ => panic!("expected Recap"),
+        }
+    }
+
+    #[test]
+    fn given_recap_agent_entry_should_round_trip() {
+        let entry = RecapAgentEntry {
+            id: "ag-1".into(),
+            name: "claude".into(),
+            agent_type: "claude".into(),
+            status: AgentStatus::Streaming,
+            exit_code: None,
+            prompt: Some("fix auth".into()),
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            duration_seconds: 720,
+            suspended: false,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: RecapAgentEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "ag-1");
+        assert_eq!(parsed.duration_seconds, 720);
+        assert_eq!(parsed.prompt, Some("fix auth".into()));
+    }
+
+    #[test]
+    fn given_recap_worktree_entry_should_round_trip() {
+        let entry = RecapWorktreeEntry {
+            worktree_id: "wt-1".into(),
+            worktree_name: "fix-auth".into(),
+            branch: "pu/fix-auth".into(),
+            agents: vec![RecapAgentEntry {
+                id: "ag-1".into(),
+                name: "claude".into(),
+                agent_type: "claude".into(),
+                status: AgentStatus::Broken,
+                exit_code: Some(0),
+                prompt: None,
+                started_at: chrono::Utc::now(),
+                completed_at: Some(chrono::Utc::now()),
+                duration_seconds: 180,
+                suspended: false,
+            }],
+            files_changed: 4,
+            insertions: 127,
+            deletions: 23,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: RecapWorktreeEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.worktree_id, "wt-1");
+        assert_eq!(parsed.files_changed, 4);
+        assert_eq!(parsed.insertions, 127);
+        assert_eq!(parsed.agents.len(), 1);
+    }
+
+    #[test]
+    fn given_recap_result_should_round_trip() {
+        let resp = Response::RecapResult {
+            worktrees: vec![RecapWorktreeEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "test".into(),
+                branch: "pu/test".into(),
+                agents: vec![],
+                files_changed: 0,
+                insertions: 0,
+                deletions: 0,
+            }],
+            root_agents: vec![],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::RecapResult {
+                worktrees,
+                root_agents,
+            } => {
+                assert_eq!(worktrees.len(), 1);
+                assert_eq!(worktrees[0].worktree_id, "wt-1");
+                assert!(root_agents.is_empty());
+            }
+            _ => panic!("expected RecapResult"),
+        }
+    }
+
+    #[test]
+    fn given_empty_recap_result_should_round_trip() {
+        let resp = Response::RecapResult {
+            worktrees: vec![],
+            root_agents: vec![],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            Response::RecapResult {
+                worktrees,
+                root_agents,
+            } if worktrees.is_empty() && root_agents.is_empty()
+        ));
     }
 }

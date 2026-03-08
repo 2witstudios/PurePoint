@@ -168,7 +168,8 @@ impl Engine {
             | Request::SaveSchedule { project_root, .. }
             | Request::EnableSchedule { project_root, .. }
             | Request::DisableSchedule { project_root, .. }
-            | Request::Diff { project_root, .. } => {
+            | Request::Diff { project_root, .. }
+            | Request::Recap { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -427,6 +428,7 @@ impl Engine {
                 self.handle_diff(&project_root, worktree_id.as_deref(), stat)
                     .await
             }
+            Request::Recap { project_root } => self.handle_recap(&project_root).await,
         }
     }
 
@@ -3152,6 +3154,92 @@ impl Engine {
             other => Err(format!(
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
+        }
+    }
+
+    async fn handle_recap(&self, project_root: &str) -> Response {
+        let m = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let now = chrono::Utc::now();
+
+        // Build recap for each active worktree
+        let mut worktrees = Vec::new();
+        for wt in m.worktrees.values() {
+            if wt.status != WorktreeStatus::Active {
+                continue;
+            }
+            let agents: Vec<pu_core::protocol::RecapAgentEntry> = wt
+                .agents
+                .values()
+                .map(|a| {
+                    let end = a.completed_at.unwrap_or(now);
+                    let duration = (end - a.started_at).num_seconds().max(0) as u64;
+                    pu_core::protocol::RecapAgentEntry {
+                        id: a.id.clone(),
+                        name: a.name.clone(),
+                        agent_type: a.agent_type.clone(),
+                        status: a.status,
+                        exit_code: a.exit_code,
+                        prompt: a.prompt.clone(),
+                        started_at: a.started_at,
+                        completed_at: a.completed_at,
+                        duration_seconds: duration,
+                        suspended: a.suspended,
+                    }
+                })
+                .collect();
+
+            // Get diff stats (best-effort)
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            let (files_changed, insertions, deletions) = if wt_path.exists() {
+                let base = wt.base_branch.as_deref();
+                match git::diff_worktree(&wt_path, base, true).await {
+                    Ok(output) => (output.files_changed, output.insertions, output.deletions),
+                    Err(_) => (0, 0, 0),
+                }
+            } else {
+                (0, 0, 0)
+            };
+
+            worktrees.push(pu_core::protocol::RecapWorktreeEntry {
+                worktree_id: wt.id.clone(),
+                worktree_name: wt.name.clone(),
+                branch: wt.branch.clone(),
+                agents,
+                files_changed,
+                insertions,
+                deletions,
+            });
+        }
+
+        // Build recap for root-level agents
+        let root_agents: Vec<pu_core::protocol::RecapAgentEntry> = m
+            .agents
+            .values()
+            .map(|a| {
+                let end = a.completed_at.unwrap_or(now);
+                let duration = (end - a.started_at).num_seconds().max(0) as u64;
+                pu_core::protocol::RecapAgentEntry {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    agent_type: a.agent_type.clone(),
+                    status: a.status,
+                    exit_code: a.exit_code,
+                    prompt: a.prompt.clone(),
+                    started_at: a.started_at,
+                    completed_at: a.completed_at,
+                    duration_seconds: duration,
+                    suspended: a.suspended,
+                }
+            })
+            .collect();
+
+        Response::RecapResult {
+            worktrees,
+            root_agents,
         }
     }
 
