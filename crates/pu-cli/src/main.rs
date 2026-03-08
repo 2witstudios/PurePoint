@@ -69,6 +69,7 @@ enum Commands {
     /// Bench (suspend) agents — pull them off the court
     Bench {
         /// Agent ID to bench
+        #[arg(conflicts_with = "all")]
         agent_id: Option<String>,
         /// Bench all active agents
         #[arg(long)]
