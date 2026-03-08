@@ -229,7 +229,11 @@ impl Engine {
             } => self.handle_resume(&project_root, &agent_id).await,
             Request::Logs { agent_id, tail } => self.handle_logs(&agent_id, tail).await,
             Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
-            Request::Input { agent_id, data } => self.handle_input(&agent_id, &data).await,
+            Request::Input {
+                agent_id,
+                data,
+                submit,
+            } => self.handle_input(&agent_id, &data, submit).await,
             Request::Resize {
                 agent_id,
                 cols,
@@ -1596,7 +1600,7 @@ impl Engine {
         }
     }
 
-    async fn handle_input(&self, agent_id: &str, data: &[u8]) -> Response {
+    async fn handle_input(&self, agent_id: &str, data: &[u8], submit: bool) -> Response {
         // Clone the fd Arc under the lock, then drop the lock before the blocking write
         let master_fd = {
             let sessions = self.sessions.lock().await;
@@ -1605,7 +1609,12 @@ impl Engine {
                 None => return Self::agent_not_found(agent_id),
             }
         };
-        match self.pty_host.write_to_fd(&master_fd, data).await {
+        let result = if submit {
+            self.pty_host.write_chunked_submit(&master_fd, data).await
+        } else {
+            self.pty_host.write_to_fd(&master_fd, data).await
+        };
+        match result {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error {
                 code: "IO_ERROR".into(),
@@ -3259,8 +3268,8 @@ impl Drop for Engine {
     }
 }
 
-/// Inject prompt text into a PTY in small chunks to mimic typing, avoiding
-/// TUI paste-mode behaviors. Returns `true` on success.
+/// Inject prompt text into a PTY and submit with Enter via chunked typing.
+/// Returns `true` on success.
 async fn inject_initial_prompt(
     pty_host: &NativePtyHost,
     master_fd: &Arc<OwnedFd>,
@@ -3270,26 +3279,8 @@ async fn inject_initial_prompt(
     if prompt.is_empty() {
         return true;
     }
-    // Write in small chunks to mimic typing and avoid TUI paste-mode behaviors.
-    for chunk in prompt.chunks(8) {
-        if let Err(e) = pty_host.write_to_fd(master_fd, chunk).await {
-            tracing::warn!(
-                "failed to inject initial prompt text for {}: {}",
-                agent_id,
-                e
-            );
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(6)).await;
-    }
-    // Give the input widget a moment to process buffered bytes before submit.
-    tokio::time::sleep(Duration::from_millis(180)).await;
-    if let Err(e) = pty_host.write_to_fd(master_fd, b"\r").await {
-        tracing::warn!(
-            "failed to inject initial prompt submit key for {}: {}",
-            agent_id,
-            e
-        );
+    if let Err(e) = pty_host.write_chunked_submit(master_fd, prompt).await {
+        tracing::warn!("failed to inject initial prompt for {}: {}", agent_id, e);
         return false;
     }
     true

@@ -15,13 +15,10 @@ pub async fn run(
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let data = if let Some(key_name) = keys {
-        translate_keys(&key_name)?
-    } else if let Some(mut t) = text {
-        if !no_enter {
-            t.push('\r');
-        }
-        t.into_bytes()
+    let (data, submit) = if let Some(key_name) = keys {
+        (translate_keys(&key_name)?, false)
+    } else if let Some(t) = text {
+        (t.into_bytes(), !no_enter)
     } else {
         return Err(CliError::Other("provide text or --keys".into()));
     };
@@ -31,6 +28,7 @@ pub async fn run(
         &Request::Input {
             agent_id: agent_id.to_string(),
             data,
+            submit,
         },
     )
     .await?;

@@ -88,6 +88,11 @@ pub enum Request {
         agent_id: String,
         #[serde(with = "hex_bytes")]
         data: Vec<u8>,
+        /// When true, the engine sends data as chunked typed input then submits
+        /// with Enter (\r). This avoids a race where a single atomic write of
+        /// text+Enter causes the TUI to swallow the Enter keypress.
+        #[serde(default)]
+        submit: bool,
     },
     Resize {
         agent_id: String,
@@ -2153,6 +2158,71 @@ mod tests {
                 assert_eq!(worktree_id, "wt-abc");
             }
             _ => panic!("expected CreateWorktreeResult"),
+        }
+    }
+
+    // --- Input submit field ---
+
+    #[test]
+    fn given_input_with_submit_should_round_trip() {
+        // given
+        let req = Request::Input {
+            agent_id: "ag-abc".into(),
+            data: b"hello world".to_vec(),
+            submit: true,
+        };
+
+        // when
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+
+        // then
+        match parsed {
+            Request::Input {
+                agent_id,
+                data,
+                submit,
+            } => {
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(data, b"hello world");
+                assert!(submit);
+            }
+            _ => panic!("expected Input"),
+        }
+    }
+
+    #[test]
+    fn given_input_without_submit_field_should_default_false() {
+        // given — JSON without the submit field (backward compat)
+        let json = r#"{"type":"input","agent_id":"ag-abc","data":"68656c6c6f"}"#;
+
+        // when
+        let req: Request = serde_json::from_str(json).unwrap();
+
+        // then
+        match req {
+            Request::Input { submit, .. } => assert!(!submit),
+            _ => panic!("expected Input"),
+        }
+    }
+
+    #[test]
+    fn given_input_with_submit_false_should_round_trip() {
+        // given
+        let req = Request::Input {
+            agent_id: "ag-abc".into(),
+            data: b"raw keys".to_vec(),
+            submit: false,
+        };
+
+        // when
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+
+        // then
+        match parsed {
+            Request::Input { submit, .. } => assert!(!submit),
+            _ => panic!("expected Input"),
         }
     }
 }
