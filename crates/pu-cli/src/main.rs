@@ -53,6 +53,9 @@ enum Commands {
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
+        /// Skip auto-mode flags (--dangerously-skip-permissions, --full-auto, etc.)
+        #[arg(long)]
+        no_auto: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -492,11 +495,12 @@ async fn main() {
             file,
             command,
             vars,
+            no_auto,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                json,
+                no_auto, json,
             )
             .await
         }

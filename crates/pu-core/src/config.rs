@@ -177,4 +177,65 @@ envFiles: [".env"]
         let config = load_config_strict(tmp.path()).unwrap();
         assert_eq!(config.default_agent, "claude");
     }
+
+    #[test]
+    fn given_config_with_launch_args_should_load_them() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml = r#"
+defaultAgent: claude
+agents:
+  claude:
+    name: claude
+    command: claude
+    launchArgs:
+      - "--verbose"
+"#;
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = load_config(root);
+        let claude = &config.agents["claude"];
+        assert_eq!(claude.launch_args, Some(vec!["--verbose".to_string()]));
+    }
+
+    #[test]
+    fn given_config_with_empty_launch_args_should_disable_auto_mode() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml = r#"
+defaultAgent: claude
+agents:
+  claude:
+    name: claude
+    command: claude
+    launchArgs: []
+"#;
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = load_config(root);
+        let claude = &config.agents["claude"];
+        assert_eq!(claude.launch_args, Some(vec![]));
+        // resolved_launch_args should return empty when explicitly set
+        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_ref());
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn given_config_without_launch_args_should_use_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml =
+            "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n";
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = load_config(root);
+        let claude = &config.agents["claude"];
+        assert!(claude.launch_args.is_none());
+        // resolved_launch_args should return defaults when not set
+        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_ref());
+        assert_eq!(args, vec!["--dangerously-skip-permissions"]);
+    }
 }

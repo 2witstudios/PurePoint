@@ -196,6 +196,7 @@ impl Engine {
                 root,
                 worktree,
                 command,
+                no_auto,
             } => {
                 self.handle_spawn(
                     &project_root,
@@ -206,6 +207,7 @@ impl Engine {
                     root,
                     worktree,
                     command,
+                    no_auto,
                 )
                 .await
             }
@@ -611,6 +613,7 @@ impl Engine {
         root: bool,
         worktree: Option<String>,
         terminal_command: Option<String>,
+        no_auto: bool,
     ) -> Response {
         let root_path = Path::new(project_root);
 
@@ -713,19 +716,17 @@ impl Engine {
             };
             let mut args = cmd_args;
 
-            // Add agent-type-specific flags (not stored in config — engine concern)
-            match agent_type {
-                "claude" => {
-                    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
-                        args.insert(0, "--dangerously-skip-permissions".into());
+            // Add agent-type-specific launch args from config (or defaults)
+            if !no_auto {
+                let launch_args = pu_core::types::resolved_launch_args(
+                    agent_type,
+                    agent_cfg.launch_args.as_ref(),
+                );
+                for arg in launch_args.into_iter().rev() {
+                    if !args.iter().any(|a| a == &arg) {
+                        args.insert(0, arg);
                     }
                 }
-                "codex" => {
-                    if !args.iter().any(|a| a == "--full-auto") {
-                        args.insert(0, "--full-auto".into());
-                    }
-                }
-                _ => {}
             }
 
             // Generate session ID for claude agents (enables resume via --resume)
@@ -1461,25 +1462,27 @@ impl Engine {
         agent_cfg: &pu_core::types::AgentConfig,
         session_id: Option<&str>,
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
+        let launch_args =
+            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_ref());
         match agent_type {
             "claude" => {
                 let sid = session_id.ok_or_else(|| Response::Error {
                     code: "RESUME_FAILED".into(),
                     message: "cannot resume Claude agent: no session_id preserved".into(),
                 })?;
-                let args = vec![
-                    "--dangerously-skip-permissions".into(),
-                    "--resume".into(),
-                    sid.to_string(),
-                ];
+                let mut args = launch_args;
+                args.push("--resume".into());
+                args.push(sid.to_string());
                 Ok(("claude".into(), args, Some(sid.to_string())))
             }
             "codex" => {
-                let args = vec!["resume".into(), "--last".into(), "--full-auto".into()];
+                let mut args = vec!["resume".into(), "--last".into()];
+                args.extend(launch_args);
                 Ok(("codex".into(), args, None))
             }
             "opencode" => {
-                let args = vec!["--continue".into()];
+                let mut args = vec!["--continue".into()];
+                args.extend(launch_args);
                 Ok(("opencode".into(), args, None))
             }
             _ => {
@@ -2612,6 +2615,7 @@ impl Engine {
                             false,
                             spawn_worktree,
                             resolved_command,
+                            false,
                         )
                         .await;
 
@@ -2652,6 +2656,7 @@ impl Engine {
                             false,
                             Some(wt_id.clone()),
                             None,
+                            false,
                         )
                         .await;
                     if let Response::SpawnResult { agent_id, .. } = resp {
@@ -3060,6 +3065,7 @@ impl Engine {
                         root: schedule.root,
                         worktree: None,
                         command: def.command.or(template_command),
+                        no_auto: false,
                     })
                     .await
                 } else {
@@ -3087,6 +3093,7 @@ impl Engine {
                     root: schedule.root,
                     worktree: None,
                     command: None,
+                    no_auto: false,
                 })
                 .await
             }
@@ -3477,6 +3484,7 @@ mod tests {
                 root: true,
                 worktree: None,
                 command: None,
+                no_auto: false,
             })
             .await;
 

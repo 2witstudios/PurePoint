@@ -56,6 +56,9 @@ pub enum Request {
         worktree: Option<String>,
         #[serde(default)]
         command: Option<String>,
+        /// Skip auto-mode launch args (--dangerously-skip-permissions, --full-auto, etc.)
+        #[serde(default)]
+        no_auto: bool,
     },
     Status {
         project_root: String,
@@ -627,6 +630,7 @@ mod tests {
             root: false,
             worktree: None,
             command: None,
+            no_auto: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -638,6 +642,37 @@ mod tests {
                 assert_eq!(name.unwrap(), "fix-auth");
                 assert_eq!(base.unwrap(), "develop");
             }
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_without_no_auto_should_default_to_false() {
+        let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::Spawn { no_auto, .. } => assert!(!no_auto),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_with_no_auto_true_should_round_trip() {
+        let req = Request::Spawn {
+            project_root: "/test".into(),
+            prompt: "fix".into(),
+            agent: "claude".into(),
+            name: None,
+            base: None,
+            root: true,
+            worktree: None,
+            command: None,
+            no_auto: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Spawn { no_auto, .. } => assert!(no_auto),
             _ => panic!("expected Spawn"),
         }
     }
