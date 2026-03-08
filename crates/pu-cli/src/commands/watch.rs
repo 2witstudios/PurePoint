@@ -35,7 +35,11 @@ impl Drop for TermGuard {
 pub async fn run(socket: &Path, interval: Option<u64>) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let refresh = std::time::Duration::from_millis(interval.unwrap_or(REFRESH_MS));
+    let refresh_ms = interval.unwrap_or(REFRESH_MS);
+    if refresh_ms == 0 {
+        return Err(CliError::Other("--interval must be at least 1ms".into()));
+    }
+    let refresh = std::time::Duration::from_millis(refresh_ms);
     let mut tick: usize = 0;
     let mut stdout = std::io::stdout();
     let project_root = cwd_string()?;
@@ -260,12 +264,12 @@ fn render_agent_table<'a>(
         let prompt_preview = agent
             .prompt
             .map(|p| {
-                let trimmed = p.trim().replace('\n', " ");
-                if trimmed.chars().count() > 50 {
-                    let truncated: String = trimmed.chars().take(49).collect();
+                let sanitized = sanitize_prompt(p);
+                if sanitized.chars().count() > 50 {
+                    let truncated: String = sanitized.chars().take(49).collect();
                     format!("{truncated}…")
                 } else {
-                    trimmed
+                    sanitized
                 }
             })
             .unwrap_or_default();
@@ -311,6 +315,32 @@ fn count_agent(
             _ => *broken += 1,
         },
     }
+}
+
+/// Strip ANSI escape sequences and control characters, collapse whitespace.
+fn sanitize_prompt(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip CSI sequences: ESC [ <params> <letter>
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            result.push(' ');
+        } else if c.is_control() {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn render_no_daemon(stdout: &mut std::io::Stdout) -> Result<(), CliError> {
@@ -401,5 +431,22 @@ mod tests {
         let (mut s, mut w, mut d, mut b) = (0, 0, 0, 0);
         count_agent(AgentStatus::Broken, None, &mut s, &mut w, &mut d, &mut b);
         assert_eq!((s, w, d, b), (0, 0, 0, 1));
+    }
+
+    #[test]
+    fn given_prompt_with_control_chars_sanitize_should_strip_them() {
+        let input = "hello\x1b[31mworld\rfoo\nbar";
+        let result = sanitize_prompt(input);
+        assert_eq!(result, "hello world foo bar");
+    }
+
+    #[test]
+    fn given_prompt_with_only_whitespace_sanitize_should_return_empty() {
+        assert_eq!(sanitize_prompt("  \n\t\r  "), "");
+    }
+
+    #[test]
+    fn given_clean_prompt_sanitize_should_preserve_content() {
+        assert_eq!(sanitize_prompt("fix the auth bug"), "fix the auth bug");
     }
 }
