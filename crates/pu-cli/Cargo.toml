@@ -14,7 +14,6 @@ tokio = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
 which = "8"
-ctrlc = "3"
 
 [[bin]]
 name = "pu"

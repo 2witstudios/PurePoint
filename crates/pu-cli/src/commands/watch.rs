@@ -12,26 +12,37 @@ use std::path::Path;
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const REFRESH_MS: u64 = 800;
 
+/// RAII guard that restores the terminal on drop (including panics).
+struct TermGuard;
+
+impl TermGuard {
+    fn enter() -> Self {
+        // Hide cursor + enter alt screen
+        print!("\x1b[?1049h\x1b[?25l");
+        let _ = std::io::stdout().flush();
+        Self
+    }
+}
+
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        // Restore cursor + leave alt screen
+        print!("\x1b[?25h\x1b[?1049l");
+        let _ = std::io::stdout().flush();
+    }
+}
+
 pub async fn run(socket: &Path, interval: Option<u64>) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
     let refresh = std::time::Duration::from_millis(interval.unwrap_or(REFRESH_MS));
     let mut tick: usize = 0;
     let mut stdout = std::io::stdout();
+    let project_root = cwd_string()?;
 
-    // Hide cursor + enter alt screen
-    print!("\x1b[?1049h\x1b[?25l");
-    let _ = stdout.flush();
+    let _guard = TermGuard::enter();
 
-    // Ctrl+C handler
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let r = running.clone();
-    let _ = ctrlc::set_handler(move || {
-        r.store(false, std::sync::atomic::Ordering::SeqCst);
-    });
-
-    while running.load(std::sync::atomic::Ordering::SeqCst) {
-        let project_root = cwd_string()?;
+    loop {
         match fetch_status(socket, &project_root).await {
             Ok((worktrees, agents)) => {
                 render_dashboard(&mut stdout, &worktrees, &agents, tick)?;
@@ -44,12 +55,13 @@ pub async fn run(socket: &Path, interval: Option<u64>) -> Result<(), CliError> {
             }
         }
         tick = tick.wrapping_add(1);
-        tokio::time::sleep(refresh).await;
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tokio::time::sleep(refresh) => {}
+        }
     }
 
-    // Restore cursor + leave alt screen
-    print!("\x1b[?25h\x1b[?1049l");
-    let _ = stdout.flush();
     Ok(())
 }
 
