@@ -55,6 +55,13 @@ mod tests {
     }
 
     #[test]
+    fn given_whitespace_padded_traversal_should_reject() {
+        assert!(validate_name(" ../evil").is_err());
+        assert!(validate_name("foo/../bar ").is_err());
+        assert!(validate_name(" /root").is_err());
+    }
+
+    #[test]
     fn given_empty_should_reject() {
         assert!(validate_name("").is_err());
         assert!(validate_name("   ").is_err());

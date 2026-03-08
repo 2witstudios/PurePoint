@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn given_empty_suspend_result_should_not_panic() {
         let resp = Response::SuspendResult { suspended: vec![] };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
