@@ -238,6 +238,14 @@ impl OutputBuffer {
         false
     }
 
+    /// Backdate `last_content_write` for testing purposes so that
+    /// `content_idle_seconds()` returns a value past the idle timeout.
+    #[cfg(test)]
+    fn backdate_content_write(&self, duration: std::time::Duration) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        inner.last_content_write = Instant::now() - duration;
+    }
+
     fn read_tail_inner(&self, inner: &BufferInner, n: usize) -> Vec<u8> {
         let len = inner.data.len();
         let take = n.min(len);
@@ -596,6 +604,45 @@ mod tests {
         buf.write(b"\r\n\t");
         let idle = buf.content_idle_seconds();
         assert!(idle < 2);
+    }
+
+    #[test]
+    fn given_backdated_content_write_spinner_should_not_reset_it() {
+        // given: content_write is backdated past timeout
+        let buf = OutputBuffer::new();
+        buf.backdate_content_write(std::time::Duration::from_secs(60));
+        assert!(buf.content_idle_seconds() >= 59);
+
+        // when: spinner-only output is written
+        buf.write(b"\x1b[2K\x1b[1G");
+        buf.write("✻".as_bytes());
+
+        // then: content_idle should still be past timeout (spinner didn't reset it)
+        assert!(
+            buf.content_idle_seconds() >= 59,
+            "spinner write should not reset content_idle, got {}",
+            buf.content_idle_seconds()
+        );
+        // but raw idle should be near 0
+        assert!(buf.idle_seconds() < 2);
+    }
+
+    #[test]
+    fn given_backdated_content_write_substantive_should_reset_it() {
+        // given: content_write is backdated past timeout
+        let buf = OutputBuffer::new();
+        buf.backdate_content_write(std::time::Duration::from_secs(60));
+        assert!(buf.content_idle_seconds() >= 59);
+
+        // when: substantive content is written
+        buf.write(b"Processing files...");
+
+        // then: content_idle should be near 0 (substantive write reset it)
+        assert!(
+            buf.content_idle_seconds() < 2,
+            "substantive write should reset content_idle, got {}",
+            buf.content_idle_seconds()
+        );
     }
 
     #[test]
