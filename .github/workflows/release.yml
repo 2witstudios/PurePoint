@@ -27,12 +27,11 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           TAG="${TAG#v}"
-          MARKETING="${TAG%.*}"
-          BUILD="${TAG##*.}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$TAG"
+          BUILD_NUMBER=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
           echo "raw=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "marketing=${MARKETING}" >> "$GITHUB_OUTPUT"
-          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${TAG} (marketing=${MARKETING}, build=${BUILD})"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${TAG} (build_number=${BUILD_NUMBER})"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,8 +79,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
-            MARKETING_VERSION="${{ steps.version.outputs.marketing }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}"
+            MARKETING_VERSION="${{ steps.version.outputs.raw }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build_number }}"
 
       - name: Export archive
         run: |
@@ -182,8 +181,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.raw }}"
-          MARKETING="${{ steps.version.outputs.marketing }}"
-          BUILD="${{ steps.version.outputs.build }}"
+          BUILD_NUMBER="${{ steps.version.outputs.build_number }}"
           DMG_URL="https://github.com/2witstudios/purepoint/releases/download/v${VERSION}/PurePoint-${VERSION}.dmg"
           ED_SIGNATURE="${{ steps.sparkle_sign.outputs.ed_signature }}"
           LENGTH="${{ steps.sparkle_sign.outputs.length }}"
@@ -197,8 +195,8 @@ jobs:
               <item>
                 <title>PurePoint v${VERSION}</title>
                 <pubDate>${PUB_DATE}</pubDate>
-                <sparkle:version>${BUILD}</sparkle:version>
-                <sparkle:shortVersionString>${MARKETING}</sparkle:shortVersionString>
+                <sparkle:version>${BUILD_NUMBER}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
                 <enclosure url="${DMG_URL}" sparkle:edSignature="${ED_SIGNATURE}" length="${LENGTH}" type="application/octet-stream" />
               </item>
             </channel>
