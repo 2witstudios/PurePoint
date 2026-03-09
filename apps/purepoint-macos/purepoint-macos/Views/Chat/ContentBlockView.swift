@@ -10,17 +10,29 @@ struct ContentBlockView: View {
             MarkdownTextView(text: text)
         case .codeBlock(_, let language, let code):
             CodeBlockView(language: language, code: code)
-        case .toolUse(_, let name, let input, let status):
-            ToolCallCardView(name: name, input: input, output: nil, isError: false, status: status)
-        case .toolResult(_, let toolUseId, let output, let isError):
-            let toolName = allBlocks.compactMap { block -> String? in
-                if case .toolUse(let id, let name, _, _) = block, id == toolUseId {
-                    return name
-                }
+        case .toolUse(let id, let name, let input, let status):
+            let result = allBlocks.lazy.compactMap { b -> (String, Bool)? in
+                if case .toolResult(_, let tid, let o, let e) = b, tid == id { return (o, e) }
                 return nil
             }.first
             ToolCallCardView(
-                name: toolName, input: nil, output: output, isError: isError, status: isError ? .failed : .completed)
+                name: name, input: input,
+                output: result?.0,
+                isError: result?.1 ?? false,
+                status: status
+            )
+        case .toolResult(_, let toolUseId, let output, let isError):
+            if allBlocks.contains(where: { b in
+                if case .toolUse(let id, _, _, _) = b, id == toolUseId { return true }
+                return false
+            }) {
+                EmptyView()
+            } else {
+                ToolCallCardView(
+                    name: nil, input: nil, output: output, isError: isError,
+                    status: isError ? .failed : .completed
+                )
+            }
         case .pulse(_, let summary):
             pulseCard(summary)
         }
