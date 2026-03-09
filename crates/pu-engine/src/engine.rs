@@ -910,19 +910,19 @@ impl Engine {
             let mut args = cmd_args;
 
             // Add agent-type-specific launch args from config (or defaults).
-            // no_auto is a one-off CLI override; it does not persist to resume.
-            if !no_auto {
-                let launch_args = pu_core::types::resolved_launch_args(
-                    &agent_type,
-                    agent_cfg.launch_args.as_deref(),
-                );
-                if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
-                    tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
-                }
-                for arg in launch_args.into_iter().rev() {
-                    if !args.iter().any(|a| a == &arg) {
-                        args.insert(0, arg);
-                    }
+            // --no-auto skips only the built-in defaults; explicit user-configured
+            // launchArgs are always applied.
+            let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
+                Vec::new()
+            } else {
+                pu_core::types::resolved_launch_args(&agent_type, agent_cfg.launch_args.as_deref())
+            };
+            if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
+                tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
+            }
+            for arg in launch_args.into_iter().rev() {
+                if !args.iter().any(|a| a == &arg) {
+                    args.insert(0, arg);
                 }
             }
 
