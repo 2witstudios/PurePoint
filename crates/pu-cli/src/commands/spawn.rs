@@ -51,10 +51,12 @@ pub async fn run(
         resolved_prompt.unwrap_or_default()
     };
 
-    // Split --agent-args string into individual args
-    let extra_args: Vec<String> = agent_args
-        .map(|s| s.split_whitespace().map(String::from).collect())
-        .unwrap_or_default();
+    // Split --agent-args string into individual args (supports quoted values)
+    let extra_args: Vec<String> = match agent_args {
+        Some(s) => shell_words::split(&s)
+            .map_err(|e| CliError::Other(format!("failed to parse --agent-args: {e}")))?,
+        None => vec![],
+    };
 
     let resp = client::send_request(
         socket,

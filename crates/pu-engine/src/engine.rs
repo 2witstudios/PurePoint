@@ -76,6 +76,30 @@ impl Default for Engine {
     }
 }
 
+/// Build a `ConfigReport` response from a loaded config.
+/// Filters out the terminal agent (no launch args to configure).
+fn config_to_report(cfg: &pu_core::types::Config) -> Response {
+    let agents = cfg
+        .agents
+        .iter()
+        .filter(|(name, _)| name.as_str() != "terminal")
+        .map(|(name, ac)| {
+            let resolved = pu_core::types::resolved_launch_args(name, ac.launch_args.as_deref());
+            AgentConfigInfo {
+                name: ac.name.clone(),
+                command: ac.command.clone(),
+                launch_args: ac.launch_args.clone(),
+                resolved_launch_args: resolved,
+                interactive: ac.interactive,
+            }
+        })
+        .collect();
+    Response::ConfigReport {
+        default_agent: cfg.default_agent.clone(),
+        agents,
+    }
+}
+
 impl Engine {
     pub fn new() -> Self {
         Self {
@@ -613,35 +637,12 @@ impl Engine {
         })
     }
 
-    fn config_to_report(cfg: &pu_core::types::Config) -> Response {
-        let agents = cfg
-            .agents
-            .iter()
-            .filter(|(name, _)| name.as_str() != "terminal")
-            .map(|(name, ac)| {
-                let resolved =
-                    pu_core::types::resolved_launch_args(name, ac.launch_args.as_deref());
-                AgentConfigInfo {
-                    name: ac.name.clone(),
-                    command: ac.command.clone(),
-                    launch_args: ac.launch_args.clone(),
-                    resolved_launch_args: resolved,
-                    interactive: ac.interactive,
-                }
-            })
-            .collect();
-        Response::ConfigReport {
-            default_agent: cfg.default_agent.clone(),
-            agents,
-        }
-    }
-
     async fn handle_get_config(&self, project_root: &str) -> Response {
         let pr = project_root.to_string();
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             match config::load_config_strict(root) {
-                Ok(cfg) => Self::config_to_report(&cfg),
+                Ok(cfg) => config_to_report(&cfg),
                 Err(e) => Response::Error {
                     code: e.code().into(),
                     message: e.to_string(),
@@ -666,7 +667,7 @@ impl Engine {
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             match config::update_agent_config(root, &name, launch_args) {
-                Ok(cfg) => Self::config_to_report(&cfg),
+                Ok(cfg) => config_to_report(&cfg),
                 Err(e) => Response::Error {
                     code: e.code().into(),
                     message: e.to_string(),
@@ -4475,6 +4476,52 @@ mod tests {
         // then — --full-auto is a top-level flag, must come before `resume`
         assert_eq!(cmd, "codex");
         assert_eq!(args, vec!["--full-auto", "resume", "--last"]);
+    }
+
+    /// Test the no_auto + launch_args interaction logic used in handle_spawn.
+    /// When no_auto is true and launch_args is None (defaults), launch args should be empty.
+    /// When no_auto is true but launch_args is explicitly configured, they should be preserved.
+    #[test]
+    fn given_no_auto_with_default_launch_args_should_produce_empty() {
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "claude".into(),
+            command: "claude".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+        };
+        let no_auto = true;
+        let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
+            Vec::new()
+        } else {
+            pu_core::types::resolved_launch_args("claude", agent_cfg.launch_args.as_deref())
+        };
+        assert!(
+            launch_args.is_empty(),
+            "--no-auto should skip default launch args"
+        );
+    }
+
+    #[test]
+    fn given_no_auto_with_explicit_launch_args_should_preserve_them() {
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "claude".into(),
+            command: "claude".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: Some(vec!["--verbose".into()]),
+        };
+        let no_auto = true;
+        let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
+            Vec::new()
+        } else {
+            pu_core::types::resolved_launch_args("claude", agent_cfg.launch_args.as_deref())
+        };
+        assert_eq!(
+            launch_args,
+            vec!["--verbose"],
+            "--no-auto should not affect explicit launch args"
+        );
     }
 
     #[test]

@@ -401,9 +401,8 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("update_agent_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(agentName, forKey: .key("agent_name"))
-            if let launchArgs {
-                try container.encode(launchArgs, forKey: .key("launch_args"))
-            }
+            // Encode null explicitly to signal "reset to defaults" vs omitting the key
+            try container.encode(launchArgs, forKey: .key("launch_args"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
