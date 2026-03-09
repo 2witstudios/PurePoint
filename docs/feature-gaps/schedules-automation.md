@@ -1,5 +1,7 @@
 # Scheduled Agent Runs — Scheduled Agent Runs
 
+> **Status: Implemented.** Schedules and triggers shipped. See [Scheduling & Triggers](../guide/workflows/scheduling-and-triggers.md).
+
 ## User Story
 
 As a user, I want to schedule agents to run automatically on a recurring basis so that routine tasks like code reviews, dependency updates, or test runs happen without manual intervention.

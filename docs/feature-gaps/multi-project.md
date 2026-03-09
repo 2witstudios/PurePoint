@@ -1,5 +1,7 @@
 # Multi-Project Support — Multi-Project Workspace Support
 
+> **Status: Implemented.** Multi-project support shipped. See [macOS App](../guide/workflows/macos-app.md).
+
 ## User Story
 
 As a user, I want to have multiple projects open simultaneously so that I can work across related codebases without closing and reopening projects.

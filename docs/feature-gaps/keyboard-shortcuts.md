@@ -1,5 +1,7 @@
 # Keyboard Shortcuts — Customizable Keyboard Shortcuts
 
+> **Status: Implemented.** Customizable hotkeys shipped. See [macOS App](../guide/workflows/macos-app.md#settings).
+
 ## User Story
 
 As a user, I want to customize keyboard shortcuts so that PurePoint fits my muscle memory and doesn't conflict with other tools I use.

@@ -142,17 +142,24 @@ just build-app
 | `pu init` | Initialize a PurePoint workspace |
 | `pu spawn <prompt>` | Spawn an agent in a new worktree |
 | `pu status` | Show workspace status |
+| `pu bench [agent]` | Suspend agents (pull them off the court) |
+| `pu play <agent>` | Resume a benched agent |
 | `pu kill` | Kill agents (by agent, worktree, or all) |
 | `pu clean` | Remove worktrees, kill agents, delete branches |
 | `pu attach <agent>` | Attach to an agent's terminal |
 | `pu logs <agent>` | View agent output logs |
 | `pu send <agent> <text>` | Send text or keys to an agent's terminal |
 | `pu health` | Check daemon health |
+| `pu pulse` | Workspace pulse — agents, runtimes, git stats |
+| `pu diff` | Show git diffs across agent worktrees |
+| `pu watch` | Live dashboard showing all agents in real-time |
 | `pu prompt list\|show\|create\|delete` | Manage saved prompt templates |
 | `pu agent list\|show\|create\|delete` | Manage saved agent definitions |
 | `pu swarm list\|show\|create\|delete\|run` | Manage and run swarm compositions |
 | `pu grid show\|split\|close\|focus\|assign` | Control the pane grid layout |
 | `pu schedule list\|show\|create\|delete\|enable\|disable` | Manage scheduled tasks |
+| `pu trigger list\|show\|create\|delete` | Manage event-driven triggers |
+| `pu gate <event>` | Evaluate git hook gates |
 
 ### Spawn options
 
@@ -167,6 +174,19 @@ pu spawn --file path/to/prompt.md --name task1            # from file
 ```
 
 Run `pu --help` for full usage.
+
+## Documentation
+
+| | |
+|---|---|
+| [Getting Started](docs/guide/getting-started.md) | Install, first agent, cleanup |
+| [CLI Reference](docs/guide/cli-reference.md) | All 21 commands with examples |
+| [Configuration](docs/guide/configuration.md) | Agent types, launch args, config.yaml |
+| [Concepts](docs/guide/concepts.md) | Mental model: worktrees, agents, swarms, scope |
+| [Templates & Definitions](docs/guide/workflows/templates-and-definitions.md) | Prompts, agent defs, swarm defs |
+| [Scheduling & Triggers](docs/guide/workflows/scheduling-and-triggers.md) | Schedules, triggers, git hooks |
+| [Troubleshooting](docs/guide/troubleshooting.md) | Common issues and solutions |
+| [Contributing](CONTRIBUTING.md) | Build, test, code style, architecture |
 
 ## Current Status
 

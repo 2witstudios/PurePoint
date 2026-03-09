@@ -121,6 +121,52 @@ pu schedule delete <name>          # remove a schedule
 
 **Scope**: `--scope local` (default, project-level) or `--scope global`.
 
+### Bench and play (suspend/resume)
+```bash
+pu bench <agent_id>                # suspend one agent
+pu bench --all                     # suspend all active agents
+pu play <agent_id>                 # resume a benched agent
+```
+
+### Workspace overview
+```bash
+pu pulse                           # agents, runtimes, git stats at a glance
+pu pulse --json                    # machine-readable
+pu watch                           # live dashboard (refreshes every 800ms)
+pu watch --interval 2000           # custom refresh interval
+```
+
+### Diffs
+```bash
+pu diff                            # git diff across all agent worktrees
+pu diff --worktree <wt_id>         # diff a specific worktree
+pu diff --stat                     # file summary instead of full diff
+pu diff --json                     # machine-readable
+```
+
+### Triggers and gates
+```bash
+pu trigger list                    # list trigger definitions
+pu trigger show <name>             # show trigger details
+pu trigger create <name> ...       # create a trigger definition
+pu trigger delete <name>           # delete a trigger definition
+pu gate pre-commit                 # evaluate pre-commit gate
+pu gate pre-push                   # evaluate pre-push gate
+```
+
+### Agent and swarm definitions
+```bash
+pu agent list                      # list agent definitions
+pu agent show <name>               # show agent definition
+pu agent create <name> --agent-type claude --template review  # create
+pu agent delete <name>             # delete agent definition
+pu swarm list                      # list swarm definitions
+pu swarm show <name>               # show swarm definition
+pu swarm create <name> --worktrees 3 --roster "reviewer:review:3"  # create
+pu swarm delete <name>             # delete swarm definition
+pu swarm run <name>                # run a swarm
+```
+
 ### Other
 ```bash
 pu health                          # daemon status

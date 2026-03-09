@@ -1,5 +1,7 @@
 # Settings & Preferences — Settings & Preferences Panel
 
+> **Status: Implemented.** Settings panel shipped. See [macOS App](../guide/workflows/macos-app.md#settings).
+
 ## User Story
 
 As a user, I want a settings panel where I can configure appearance, terminal behavior, and keyboard shortcuts so that I can customize PurePoint to match my workflow and visual preferences.
