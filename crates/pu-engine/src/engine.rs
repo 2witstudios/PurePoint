@@ -41,6 +41,18 @@ struct SpawnParams {
     no_auto: bool,
     /// Extra CLI args from --agent-args, appended after launch args.
     extra_args: Vec<String>,
+    plan_mode: bool,
+    no_trigger: bool,
+}
+
+struct SaveTriggerParams {
+    project_root: String,
+    name: String,
+    description: Option<String>,
+    on: String,
+    sequence: Vec<pu_core::protocol::TriggerActionPayload>,
+    variables: std::collections::HashMap<String, String>,
+    scope: String,
 }
 
 pub struct Engine {
@@ -185,9 +197,13 @@ impl Engine {
             | Request::SaveSchedule { project_root, .. }
             | Request::EnableSchedule { project_root, .. }
             | Request::DisableSchedule { project_root, .. }
+            | Request::ListTriggers { project_root }
+            | Request::SaveTrigger { project_root, .. }
+            | Request::EvaluateGate { project_root, .. }
             | Request::Diff { project_root, .. }
             | Request::GetConfig { project_root }
-            | Request::UpdateAgentConfig { project_root, .. } => {
+            | Request::UpdateAgentConfig { project_root, .. }
+            | Request::Pulse { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -226,6 +242,8 @@ impl Engine {
                 command,
                 no_auto,
                 extra_args,
+                plan_mode,
+                no_trigger,
             } => {
                 self.handle_spawn(SpawnParams {
                     project_root,
@@ -238,6 +256,8 @@ impl Engine {
                     terminal_command: command,
                     no_auto,
                     extra_args,
+                    plan_mode,
+                    no_trigger,
                 })
                 .await
             }
@@ -261,7 +281,11 @@ impl Engine {
             } => self.handle_resume(&project_root, &agent_id).await,
             Request::Logs { agent_id, tail } => self.handle_logs(&agent_id, tail).await,
             Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
-            Request::Input { agent_id, data } => self.handle_input(&agent_id, &data).await,
+            Request::Input {
+                agent_id,
+                data,
+                submit,
+            } => self.handle_input(&agent_id, &data, submit).await,
             Request::Resize {
                 agent_id,
                 cols,
@@ -451,6 +475,49 @@ impl Engine {
             Request::DisableSchedule { project_root, name } => {
                 self.handle_disable_schedule(&project_root, &name).await
             }
+            // Trigger CRUD
+            Request::ListTriggers { project_root } => {
+                self.handle_list_triggers(&project_root).await
+            }
+            Request::GetTrigger { project_root, name } => {
+                self.handle_get_trigger(&project_root, &name).await
+            }
+            Request::SaveTrigger {
+                project_root,
+                name,
+                description,
+                on,
+                sequence,
+                variables,
+                scope,
+            } => {
+                self.handle_save_trigger(SaveTriggerParams {
+                    project_root,
+                    name,
+                    description,
+                    on,
+                    sequence,
+                    variables,
+                    scope,
+                })
+                .await
+            }
+            Request::DeleteTrigger {
+                project_root,
+                name,
+                scope,
+            } => {
+                self.handle_delete_trigger(&project_root, &name, &scope)
+                    .await
+            }
+            Request::EvaluateGate {
+                event,
+                project_root,
+                worktree_path,
+            } => {
+                self.handle_evaluate_gate(&event, &project_root, &worktree_path)
+                    .await
+            }
             Request::Diff {
                 project_root,
                 worktree_id,
@@ -459,6 +526,7 @@ impl Engine {
                 self.handle_diff(&project_root, worktree_id.as_deref(), stat)
                     .await
             }
+            Request::Pulse { project_root } => self.handle_pulse(&project_root).await,
         }
     }
 
@@ -676,6 +744,9 @@ impl Engine {
             session_id: agent.session_id.clone(),
             prompt: agent.prompt.clone(),
             suspended: agent.suspended,
+            trigger_seq_index: agent.trigger_seq_index,
+            trigger_state: agent.trigger_state,
+            trigger_total: agent.trigger_total,
         }
     }
 
@@ -691,7 +762,7 @@ impl Engine {
             Some(handle) => {
                 let exit_code = *handle.exit_rx.borrow();
                 let status = agent_monitor::effective_status(exit_code, &handle.output_buffer);
-                let idle_seconds = Some(handle.output_buffer.idle_seconds());
+                let idle_seconds = Some(handle.output_buffer.content_idle_seconds());
                 (status, exit_code, idle_seconds)
             }
             // No live session — use manifest (agent already exited/killed/etc.)
@@ -711,6 +782,8 @@ impl Engine {
             terminal_command,
             no_auto,
             extra_args,
+            plan_mode,
+            no_trigger,
         } = params;
         let root_path = Path::new(&project_root);
 
@@ -746,14 +819,11 @@ impl Engine {
         let creating_new_worktree = !root && worktree.is_none();
         let agent_name = if creating_new_worktree {
             // Worktree spawns require a user-provided name (becomes the branch slug)
-            let raw = match name {
-                Some(n) => n,
-                None => {
-                    return Response::Error {
-                        code: "INVALID_ARGUMENT".into(),
-                        message: "worktree spawn requires a name".into(),
-                    };
-                }
+            let Some(raw) = name else {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: "worktree spawn requires a name".into(),
+                };
             };
             let normalized = pu_core::id::normalize_worktree_name(&raw);
             if normalized.is_empty() {
@@ -776,6 +846,32 @@ impl Engine {
 
         // Normalize empty command to None
         let terminal_command = terminal_command.filter(|c| !c.is_empty());
+
+        // Plan mode requires a prompt-driven agent that understands EnterPlanMode.
+        // Reject early for terminal agents or terminal_command spawns where the
+        // prefix would be meaningless or actively harmful.
+        if plan_mode
+            && (prompt.is_empty() || terminal_command.is_some() || agent_type == "terminal")
+        {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "plan mode requires a prompt-driven non-terminal agent".into(),
+            };
+        }
+
+        // When plan_mode is active, prefix the prompt with instructions to enter plan mode.
+        // This keeps bypass permissions as the base while guiding the agent into plan mode
+        // via its own tool (EnterPlanMode) rather than conflicting CLI flags.
+        let prompt = if plan_mode {
+            format!(
+                "[PLAN MODE] You MUST call the EnterPlanMode tool immediately before doing anything else. \
+                 Do not read files, do not explore — call EnterPlanMode first. \
+                 Once in plan mode, research and plan before making changes.\n\n{prompt}"
+            )
+        } else {
+            prompt.to_string()
+        };
+        let prompt = &prompt;
 
         // When a terminal command is set, it becomes the PTY process directly
         let (command, args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
@@ -800,7 +896,7 @@ impl Engine {
                 } else {
                     (
                         parts[0].to_string(),
-                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                        parts[1..].iter().map(ToString::to_string).collect(),
                     )
                 }
             };
@@ -846,7 +942,7 @@ impl Engine {
             // Claude prompt via argv can stall first render in some terminals; keep stdin injection
             // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
             let inject_prompt_via_stdin =
-                Self::should_inject_prompt_via_stdin(&agent_type, agent_cfg.interactive, &prompt);
+                Self::should_inject_prompt_via_stdin(&agent_type, agent_cfg.interactive, prompt);
             if !inject_prompt_via_stdin && !prompt.is_empty() {
                 let prompt_flag =
                     Self::resolved_prompt_flag(&agent_type, agent_cfg.prompt_flag.as_deref());
@@ -885,6 +981,11 @@ impl Engine {
                     code: "SPAWN_FAILED".into(),
                     message: format!("failed to create worktree: {e}"),
                 };
+            }
+
+            // Install git hooks for trigger gate enforcement
+            if let Err(e) = git::install_hooks(&wt_path, root_path).await {
+                tracing::warn!("failed to install git hooks in worktree: {e}");
             }
 
             // Copy env files (e.g., .env, .env.local) into new worktree
@@ -997,13 +1098,43 @@ impl Engine {
         // tries to attach — the session must already be in the map.
         self.sessions.lock().await.insert(agent_id.clone(), handle);
 
+        // Find the first idle trigger and bind this agent to it
+        let (trigger_name, trigger_total) = if no_trigger {
+            (None, None)
+        } else {
+            let pr = project_root.to_string();
+            let found = tokio::task::spawn_blocking(move || {
+                let triggers = pu_core::trigger_def::triggers_for_event(
+                    Path::new(&pr),
+                    &pu_core::trigger_def::TriggerEvent::AgentIdle,
+                );
+                if triggers.len() > 1 {
+                    tracing::warn!(
+                        "multiple agent_idle triggers found ({}), using first: {}",
+                        triggers.len(),
+                        triggers[0].name
+                    );
+                }
+                triggers.into_iter().next().map(|t| {
+                    let len = t.sequence.len() as u32;
+                    (t.name, len)
+                })
+            })
+            .await
+            .unwrap_or(None);
+            match found {
+                Some((name, total)) if total > 0 => (Some(name), Some(total)),
+                _ => (None, None),
+            }
+        };
+
         // Update manifest
         let agent_entry = AgentEntry {
             id: agent_id.clone(),
             name: agent_name.clone(),
             agent_type,
             status: AgentStatus::Streaming,
-            prompt: Some(prompt),
+            prompt: Some(prompt.to_string()),
             started_at: chrono::Utc::now(),
             completed_at: None,
             exit_code: None,
@@ -1013,6 +1144,15 @@ impl Engine {
             suspended_at: None,
             suspended: false,
             command: terminal_command,
+            plan_mode,
+            trigger_seq_index: trigger_name.as_ref().map(|_| 0),
+            trigger_state: trigger_name
+                .as_ref()
+                .map(|_| pu_core::types::TriggerState::Active),
+            trigger_total,
+            gate_attempts: trigger_name.as_ref().map(|_| 0),
+            no_trigger,
+            trigger_name: trigger_name.clone(),
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -1100,14 +1240,11 @@ impl Engine {
         };
 
         // Resolve name
-        let raw = match name {
-            Some(n) => n,
-            None => {
-                return Response::Error {
-                    code: "INVALID_ARGUMENT".into(),
-                    message: "worktree creation requires a name".into(),
-                };
-            }
+        let Some(raw) = name else {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "worktree creation requires a name".into(),
+            };
         };
         let worktree_name = pu_core::id::normalize_worktree_name(&raw);
         if worktree_name.is_empty() {
@@ -1133,6 +1270,11 @@ impl Engine {
                 code: "CREATE_WORKTREE_FAILED".into(),
                 message: format!("failed to create worktree: {e}"),
             };
+        }
+
+        // Install git hooks for trigger gate enforcement
+        if let Err(e) = git::install_hooks(&wt_path, root_path).await {
+            tracing::warn!("failed to install git hooks in worktree: {e}");
         }
 
         // Copy env files into new worktree
@@ -1509,6 +1651,14 @@ impl Engine {
 
         let pid = handle.pid;
 
+        // Store handle in session map BEFORE writing manifest.
+        // ManifestWatcher in Swift fires on manifest write and immediately
+        // tries to attach — the session must already be in the map.
+        self.sessions
+            .lock()
+            .await
+            .insert(agent_id.to_string(), handle);
+
         // 6. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
@@ -1532,22 +1682,18 @@ impl Engine {
         .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
 
         if let Err(e) = manifest_result {
-            // Rollback: kill the resumed process
-            self.pty_host
-                .kill(&handle, Duration::from_secs(2))
-                .await
-                .ok();
+            // Rollback: remove session and kill process
+            if let Some(handle) = self.sessions.lock().await.remove(agent_id) {
+                self.pty_host
+                    .kill(&handle, Duration::from_secs(2))
+                    .await
+                    .ok();
+            }
             return Response::Error {
                 code: "RESUME_FAILED".into(),
                 message: format!("failed to update manifest: {e}"),
             };
         }
-
-        // 7. Store handle in session map
-        self.sessions
-            .lock()
-            .await
-            .insert(agent_id.to_string(), handle);
 
         self.notify_status_change(project_root).await;
 
@@ -1705,7 +1851,7 @@ impl Engine {
         }
     }
 
-    async fn handle_input(&self, agent_id: &str, data: &[u8]) -> Response {
+    async fn handle_input(&self, agent_id: &str, data: &[u8], submit: bool) -> Response {
         // Clone the fd Arc under the lock, then drop the lock before the blocking write
         let master_fd = {
             let sessions = self.sessions.lock().await;
@@ -1714,7 +1860,12 @@ impl Engine {
                 None => return Self::agent_not_found(agent_id),
             }
         };
-        match self.pty_host.write_to_fd(&master_fd, data).await {
+        let result = if submit {
+            self.pty_host.write_chunked_submit(&master_fd, data).await
+        } else {
+            self.pty_host.write_to_fd(&master_fd, data).await
+        };
+        match result {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error {
                 code: "IO_ERROR".into(),
@@ -1942,9 +2093,8 @@ impl Engine {
     /// Called synchronously inside handle_init so state is correct before the first status read.
     fn reconcile_agents_on_init(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
@@ -1989,9 +2139,8 @@ impl Engine {
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let needs_reap = |a: &AgentEntry| {
             !a.suspended
@@ -2723,6 +2872,8 @@ impl Engine {
                             terminal_command: resolved_command,
                             no_auto: false,
                             extra_args: vec![],
+                            plan_mode: false,
+                            no_trigger: false,
                         })
                         .await;
 
@@ -2765,6 +2916,8 @@ impl Engine {
                             terminal_command: None,
                             no_auto: false,
                             extra_args: vec![],
+                            plan_mode: false,
+                            no_trigger: false,
                         })
                         .await;
                     if let Response::SpawnResult { agent_id, .. } = resp {
@@ -3094,6 +3247,199 @@ impl Engine {
         }
     }
 
+    // --- Trigger CRUD handlers ---
+
+    async fn handle_list_triggers(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        tokio::task::spawn_blocking(move || {
+            let defs = pu_core::trigger_def::list_trigger_defs(Path::new(&pr));
+            let triggers: Vec<_> = defs
+                .into_iter()
+                .map(pu_core::protocol::TriggerInfo::from)
+                .collect();
+            Response::TriggerList { triggers }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_get_trigger(&self, project_root: &str, name: &str) -> Response {
+        let pr = project_root.to_string();
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || {
+            match pu_core::trigger_def::find_trigger_def(Path::new(&pr), &name) {
+                Some(def) => Response::TriggerDetail(pu_core::protocol::TriggerInfo::from(def)),
+                None => Response::Error {
+                    code: "NOT_FOUND".into(),
+                    message: format!("trigger not found: {name}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_save_trigger(&self, params: SaveTriggerParams) -> Response {
+        let pr = params.project_root;
+        let name = params.name;
+        // Normalize hyphenated form to underscored form (consistent with handle_evaluate_gate)
+        let on = params.on.replace('-', "_");
+        let scope = params.scope;
+        let description = params.description;
+        let sequence = params.sequence;
+        let variables = params.variables;
+        tokio::task::spawn_blocking(move || {
+            let event = match on.as_str() {
+                "agent_idle" => pu_core::trigger_def::TriggerEvent::AgentIdle,
+                "pre_commit" => pu_core::trigger_def::TriggerEvent::PreCommit,
+                "pre_push" => pu_core::trigger_def::TriggerEvent::PrePush,
+                other => {
+                    return Response::Error {
+                        code: "INVALID_ARGUMENT".into(),
+                        message: format!("unknown trigger event: {other}"),
+                    };
+                }
+            };
+            let actions: Vec<pu_core::trigger_def::TriggerAction> =
+                sequence.into_iter().map(Into::into).collect();
+            let def = pu_core::trigger_def::TriggerDef {
+                name: name.clone(),
+                description,
+                on: event,
+                sequence: actions,
+                variables,
+                scope: scope.clone(),
+            };
+            let dir = match Self::resolve_scope_dir(
+                &pr,
+                &scope,
+                pu_core::paths::triggers_dir,
+                pu_core::paths::global_triggers_dir,
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    return Response::Error {
+                        code: "IO_ERROR".into(),
+                        message: e,
+                    };
+                }
+            };
+            match pu_core::trigger_def::save_trigger_def(&dir, &def) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("failed to save trigger: {e}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_delete_trigger(&self, project_root: &str, name: &str, scope: &str) -> Response {
+        let pr = project_root.to_string();
+        let name = name.to_string();
+        let scope = scope.to_string();
+        tokio::task::spawn_blocking(move || {
+            let dir = match Self::resolve_scope_dir(
+                &pr,
+                &scope,
+                pu_core::paths::triggers_dir,
+                pu_core::paths::global_triggers_dir,
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    return Response::Error {
+                        code: "IO_ERROR".into(),
+                        message: e,
+                    };
+                }
+            };
+            match pu_core::trigger_def::delete_trigger_def(&dir, &name) {
+                Ok(true) => Response::Ok,
+                Ok(false) => Response::Error {
+                    code: "NOT_FOUND".into(),
+                    message: format!("trigger not found: {name}"),
+                },
+                Err(e) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("failed to delete trigger: {e}"),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_evaluate_gate(
+        &self,
+        event: &str,
+        project_root: &str,
+        worktree_path: &str,
+    ) -> Response {
+        // Normalize hyphenated form (from git hooks) to underscored form
+        let normalized_event = event.replace('-', "_");
+        let trigger_event = match normalized_event.as_str() {
+            "pre_commit" => pu_core::trigger_def::TriggerEvent::PreCommit,
+            "pre_push" => pu_core::trigger_def::TriggerEvent::PrePush,
+            other => {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: format!("unsupported gate event: {other}"),
+                };
+            }
+        };
+
+        let triggers = {
+            let pr = project_root.to_string();
+            let evt = trigger_event.clone();
+            match tokio::task::spawn_blocking(move || {
+                pu_core::trigger_def::triggers_for_event(Path::new(&pr), &evt)
+            })
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    return Response::Error {
+                        code: "INTERNAL_ERROR".into(),
+                        message: format!("task join error: {e}"),
+                    };
+                }
+            }
+        };
+
+        if triggers.is_empty() {
+            return Response::GateResult {
+                passed: true,
+                output: String::new(),
+            };
+        }
+
+        let wt = worktree_path.to_string();
+        match crate::gate::evaluate_trigger_gates(&triggers, Path::new(&wt)).await {
+            Ok(result) => Response::GateResult {
+                passed: result.passed,
+                output: result.output,
+            },
+            Err(e) => Response::GateResult {
+                passed: false,
+                output: format!("gate evaluation error: {e}"),
+            },
+        }
+    }
+
     // --- Scheduler ---
 
     /// Start a background task that periodically checks for due schedules and fires them.
@@ -3136,6 +3482,284 @@ impl Engine {
                     }
                 }
             }
+
+            // Evaluate agent_idle triggers for active agents
+            self.evaluate_idle_triggers(&project_root).await;
+        }
+    }
+
+    /// Check all agents with active trigger sequences and advance them when idle.
+    async fn evaluate_idle_triggers(&self, project_root: &str) {
+        let manifest = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        // Collect candidate agents with their trigger name, seq index, and worktree path.
+        // Briefly hold the sessions lock to check live status, then release before I/O.
+        let candidates: Vec<(String, String, u32, Option<std::path::PathBuf>)> = {
+            let sessions = self.sessions.lock().await;
+            let mut result = Vec::new();
+            for agent in manifest.all_agents() {
+                if agent.trigger_state != Some(pu_core::types::TriggerState::Active) {
+                    continue;
+                }
+                let trigger_name = match &agent.trigger_name {
+                    Some(name) => name.clone(),
+                    None => continue, // No bound trigger, skip
+                };
+                let seq_index = agent.trigger_seq_index.unwrap_or(0);
+                let (status, _, _) = self.live_agent_status_sync(&agent.id, agent, &sessions);
+                if status != AgentStatus::Waiting {
+                    continue;
+                }
+                let wt_path = match manifest.find_agent(&agent.id) {
+                    Some(pu_core::types::AgentLocation::Worktree { worktree, .. }) => {
+                        Some(std::path::PathBuf::from(&worktree.path))
+                    }
+                    _ => None,
+                };
+                result.push((agent.id.clone(), trigger_name, seq_index, wt_path));
+            }
+            result
+            // sessions lock dropped here
+        };
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        // Load trigger defs once for this project
+        let pr = project_root.to_string();
+        let idle_triggers = match tokio::task::spawn_blocking(move || {
+            pu_core::trigger_def::triggers_for_event(
+                Path::new(&pr),
+                &pu_core::trigger_def::TriggerEvent::AgentIdle,
+            )
+        })
+        .await
+        {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+
+        // Index triggers by name for O(1) lookup
+        let trigger_map: std::collections::HashMap<&str, &pu_core::trigger_def::TriggerDef> =
+            idle_triggers.iter().map(|t| (t.name.as_str(), t)).collect();
+
+        for (agent_id, trigger_name, seq_index, wt_path) in &candidates {
+            let trigger = match trigger_map.get(trigger_name.as_str()) {
+                Some(t) => t,
+                None => {
+                    // Trigger was removed since spawn — mark failed
+                    self.update_trigger_state(
+                        project_root,
+                        agent_id,
+                        pu_core::types::TriggerState::Failed,
+                        None,
+                        None,
+                    )
+                    .await;
+                    continue;
+                }
+            };
+
+            let sequence = &trigger.sequence;
+            let seq_index = *seq_index as usize;
+            if seq_index >= sequence.len() {
+                self.update_trigger_state(
+                    project_root,
+                    agent_id,
+                    pu_core::types::TriggerState::Completed,
+                    None,
+                    None,
+                )
+                .await;
+                continue;
+            }
+
+            let action = &sequence[seq_index];
+            let cwd = wt_path
+                .as_deref()
+                .unwrap_or_else(|| Path::new(project_root));
+
+            // If action has a gate, evaluate it first (no lock held)
+            if let Some(ref gate) = action.gate {
+                let resolved_run =
+                    pu_core::trigger_def::substitute_variables(&gate.run, &trigger.variables);
+
+                // Mark as Gating while the command runs
+                self.update_trigger_state(
+                    project_root,
+                    agent_id,
+                    pu_core::types::TriggerState::Gating,
+                    None,
+                    None,
+                )
+                .await;
+
+                match crate::gate::run_gate_command(&resolved_run, cwd).await {
+                    Ok((exit_code, stdout, stderr)) => {
+                        let expect_exit = gate.expect_exit.unwrap_or(0);
+                        if exit_code != expect_exit {
+                            let max_retries = action
+                                .max_retries
+                                .unwrap_or(crate::gate::DEFAULT_GATE_MAX_RETRIES);
+                            let manifest = self.read_manifest_async(project_root).await;
+                            let attempts = manifest
+                                .ok()
+                                .and_then(|m| {
+                                    m.find_agent(agent_id).map(|loc| match loc {
+                                        pu_core::types::AgentLocation::Root(a) => a.gate_attempts,
+                                        pu_core::types::AgentLocation::Worktree {
+                                            agent, ..
+                                        } => agent.gate_attempts,
+                                    })
+                                })
+                                .flatten()
+                                .unwrap_or(0);
+
+                            if attempts < max_retries {
+                                let failure_msg = format!(
+                                    "\n\nGate '{resolved_run}' failed (exit {exit_code}, expected {expect_exit}):\n{stdout}{stderr}\nPlease fix the issues and try again.\n"
+                                );
+                                if let Err(e) = self.inject_text(agent_id, &failure_msg).await {
+                                    tracing::warn!(agent_id, "failed to inject gate failure: {e}");
+                                }
+                                self.update_trigger_state(
+                                    project_root,
+                                    agent_id,
+                                    pu_core::types::TriggerState::Active,
+                                    None,
+                                    Some(attempts + 1),
+                                )
+                                .await;
+                            } else {
+                                self.update_trigger_state(
+                                    project_root,
+                                    agent_id,
+                                    pu_core::types::TriggerState::Failed,
+                                    None,
+                                    None,
+                                )
+                                .await;
+                            }
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(agent_id, gate = %resolved_run, "gate command error: {e}");
+                        self.update_trigger_state(
+                            project_root,
+                            agent_id,
+                            pu_core::types::TriggerState::Failed,
+                            None,
+                            None,
+                        )
+                        .await;
+                        continue;
+                    }
+                }
+            }
+
+            // Inject text if present — only advance on success
+            if let Some(ref inject_text) = action.inject {
+                let resolved =
+                    pu_core::trigger_def::substitute_variables(inject_text, &trigger.variables);
+                let text_with_newline = format!("{resolved}\n");
+                match self.inject_text(agent_id, &text_with_newline).await {
+                    Ok(true) => {} // success, proceed to advance
+                    Ok(false) => {
+                        tracing::warn!(agent_id, "inject_text: session not found, marking failed");
+                        self.update_trigger_state(
+                            project_root,
+                            agent_id,
+                            pu_core::types::TriggerState::Failed,
+                            None,
+                            None,
+                        )
+                        .await;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(agent_id, "inject_text failed: {e}, marking failed");
+                        self.update_trigger_state(
+                            project_root,
+                            agent_id,
+                            pu_core::types::TriggerState::Failed,
+                            None,
+                            None,
+                        )
+                        .await;
+                        continue;
+                    }
+                }
+            }
+
+            // Advance sequence index
+            let new_index = seq_index as u32 + 1;
+            let new_state = if new_index >= sequence.len() as u32 {
+                pu_core::types::TriggerState::Completed
+            } else {
+                pu_core::types::TriggerState::Active
+            };
+            self.update_trigger_state(project_root, agent_id, new_state, Some(new_index), Some(0))
+                .await;
+        }
+    }
+
+    /// Inject text into an agent's PTY. Clones the fd under the lock, then drops
+    /// the lock before the potentially-blocking write. Returns `Ok(true)` on
+    /// success, `Ok(false)` if the session was not found.
+    async fn inject_text(&self, agent_id: &str, text: &str) -> Result<bool, std::io::Error> {
+        let fd = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(agent_id).map(|handle| handle.master_fd())
+        };
+        match fd {
+            Some(fd) => {
+                self.pty_host.write_to_fd(&fd, text.as_bytes()).await?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    async fn update_trigger_state(
+        &self,
+        project_root: &str,
+        agent_id: &str,
+        state: pu_core::types::TriggerState,
+        seq_index: Option<u32>,
+        gate_attempts: Option<u32>,
+    ) {
+        let agent_id = agent_id.to_string();
+        let pr = project_root.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
+                if let Some(agent) = m.find_agent_mut(&agent_id) {
+                    agent.trigger_state = Some(state);
+                    if let Some(idx) = seq_index {
+                        agent.trigger_seq_index = Some(idx);
+                    }
+                    if let Some(attempts) = gate_attempts {
+                        agent.gate_attempts = Some(attempts);
+                    }
+                }
+                m
+            })
+        })
+        .await;
+        match result {
+            Ok(Ok(_)) => {
+                self.notify_status_change(project_root).await;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("failed to update trigger state in manifest: {e}");
+            }
+            Err(e) => {
+                tracing::warn!("trigger state update task panicked: {e}");
+            }
         }
     }
 
@@ -3175,6 +3799,8 @@ impl Engine {
                         command: def.command.or(template_command),
                         no_auto: false,
                         extra_args: vec![],
+                        plan_mode: false,
+                        no_trigger: false,
                     })
                     .await
                 } else {
@@ -3204,6 +3830,8 @@ impl Engine {
                     command: None,
                     no_auto: false,
                     extra_args: vec![],
+                    plan_mode: false,
+                    no_trigger: false,
                 })
                 .await
             }
@@ -3269,6 +3897,113 @@ impl Engine {
             other => Err(format!(
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
+        }
+    }
+
+    fn agent_pulse_entry(
+        &self,
+        agent: &AgentEntry,
+        sessions: &HashMap<String, AgentHandle>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> pu_core::protocol::AgentPulseEntry {
+        let (status, exit_code, idle_seconds) =
+            self.live_agent_status_sync(&agent.id, agent, sessions);
+        let runtime = (now - agent.started_at).num_seconds();
+        let snippet = agent.prompt.as_ref().map(|p| {
+            let trimmed = p.trim();
+            let truncated: String = trimmed.chars().take(77).collect();
+            if truncated.len() < trimmed.len() {
+                format!("{truncated}...")
+            } else {
+                truncated
+            }
+        });
+        pu_core::protocol::AgentPulseEntry {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            agent_type: agent.agent_type.clone(),
+            status,
+            exit_code,
+            runtime_seconds: runtime,
+            idle_seconds,
+            prompt_snippet: snippet,
+        }
+    }
+
+    async fn handle_pulse(&self, project_root: &str) -> Response {
+        let m = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let sessions = self.sessions.lock().await;
+        let now = chrono::Utc::now();
+
+        // Build root-level agents
+        let root_agents: Vec<pu_core::protocol::AgentPulseEntry> = m
+            .agents
+            .values()
+            .map(|a| self.agent_pulse_entry(a, &sessions, now))
+            .collect();
+
+        // Build worktree entries — collect all agent data in one lock acquisition
+        let active_worktrees: Vec<_> = m
+            .worktrees
+            .values()
+            .filter(|wt| wt.status == WorktreeStatus::Active)
+            .cloned()
+            .collect();
+
+        let wt_agents: Vec<Vec<pu_core::protocol::AgentPulseEntry>> = active_worktrees
+            .iter()
+            .map(|wt| {
+                wt.agents
+                    .values()
+                    .map(|a| self.agent_pulse_entry(a, &sessions, now))
+                    .collect()
+            })
+            .collect();
+
+        // Drop sessions lock before shelling out to git
+        drop(sessions);
+
+        let mut worktrees = Vec::new();
+        for (wt, agents) in active_worktrees.iter().zip(wt_agents) {
+            let elapsed = (now - wt.created_at).num_seconds();
+
+            // Get git diff stats
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            let (files_changed, insertions, deletions, diff_error) = if wt_path.exists() {
+                let base = wt.base_branch.as_deref();
+                match git::diff_worktree(&wt_path, base, true).await {
+                    Ok(output) => (
+                        output.files_changed,
+                        output.insertions,
+                        output.deletions,
+                        None,
+                    ),
+                    Err(e) => (0, 0, 0, Some(format!("{e}"))),
+                }
+            } else {
+                (0, 0, 0, None)
+            };
+
+            worktrees.push(pu_core::protocol::WorktreePulseEntry {
+                worktree_id: wt.id.clone(),
+                worktree_name: wt.name.clone(),
+                branch: wt.branch.clone(),
+                elapsed_seconds: elapsed,
+                agents,
+                files_changed,
+                insertions,
+                deletions,
+                diff_error,
+            });
+        }
+
+        Response::PulseReport {
+            worktrees,
+            root_agents,
         }
     }
 
@@ -3376,8 +4111,8 @@ impl Drop for Engine {
     }
 }
 
-/// Inject prompt text into a PTY in small chunks to mimic typing, avoiding
-/// TUI paste-mode behaviors. Returns `true` on success.
+/// Inject prompt text into a PTY and submit with Enter via chunked typing.
+/// Returns `true` on success.
 async fn inject_initial_prompt(
     pty_host: &NativePtyHost,
     master_fd: &Arc<OwnedFd>,
@@ -3387,26 +4122,8 @@ async fn inject_initial_prompt(
     if prompt.is_empty() {
         return true;
     }
-    // Write in small chunks to mimic typing and avoid TUI paste-mode behaviors.
-    for chunk in prompt.chunks(8) {
-        if let Err(e) = pty_host.write_to_fd(master_fd, chunk).await {
-            tracing::warn!(
-                "failed to inject initial prompt text for {}: {}",
-                agent_id,
-                e
-            );
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(6)).await;
-    }
-    // Give the input widget a moment to process buffered bytes before submit.
-    tokio::time::sleep(Duration::from_millis(180)).await;
-    if let Err(e) = pty_host.write_to_fd(master_fd, b"\r").await {
-        tracing::warn!(
-            "failed to inject initial prompt submit key for {}: {}",
-            agent_id,
-            e
-        );
+    if let Err(e) = pty_host.write_chunked_submit(master_fd, prompt).await {
+        tracing::warn!("failed to inject initial prompt for {}: {}", agent_id, e);
         return false;
     }
     true
@@ -3596,6 +4313,8 @@ mod tests {
                 command: None,
                 no_auto: false,
                 extra_args: vec![],
+                plan_mode: false,
+                no_trigger: false,
             })
             .await;
 
@@ -3842,6 +4561,53 @@ mod tests {
             .collect();
         // u3's parentUuid should now point to u2 (nearest preceding)
         assert_eq!(lines[2]["parentUuid"], "u2");
+    }
+
+    // --- build_resume_command tests ---
+
+    fn dummy_agent_cfg(name: &str) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: name.into(),
+            command: name.into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+        }
+    }
+
+    #[test]
+    fn given_claude_resume_should_use_bypass_and_resume() {
+        let engine = Engine::new();
+        let cfg = dummy_agent_cfg("claude");
+        let (cmd, args, sid) = engine
+            .build_resume_command("claude", &cfg, Some("sess-1"))
+            .unwrap();
+        assert_eq!(cmd, "claude");
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"sess-1".to_string()));
+        assert_eq!(sid, Some("sess-1".to_string()));
+    }
+
+    #[test]
+    fn given_codex_resume_should_use_full_auto() {
+        let engine = Engine::new();
+        let cfg = dummy_agent_cfg("codex");
+        let (cmd, args, _) = engine.build_resume_command("codex", &cfg, None).unwrap();
+        assert_eq!(cmd, "codex");
+        assert!(args.contains(&"--full-auto".to_string()));
+        assert!(args.contains(&"resume".to_string()));
+        assert!(args.contains(&"--last".to_string()));
+    }
+
+    #[test]
+    fn given_opencode_resume_should_use_continue() {
+        let engine = Engine::new();
+        let cfg = dummy_agent_cfg("opencode");
+        let (cmd, args, _) = engine.build_resume_command("opencode", &cfg, None).unwrap();
+        assert_eq!(cmd, "opencode");
+        assert!(args.contains(&"--continue".to_string()));
+        assert!(!args.contains(&"--agent".to_string()));
     }
 
     #[test]

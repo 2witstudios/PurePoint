@@ -23,6 +23,8 @@ pub async fn run(
     vars: Vec<String>,
     no_auto: bool,
     agent_args: Option<String>,
+    plan_mode: bool,
+    no_trigger: bool,
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -67,11 +69,13 @@ pub async fn run(
             command: resolved_command,
             no_auto,
             extra_args,
+            plan_mode,
+            no_trigger,
         },
     )
     .await?;
     let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }
 

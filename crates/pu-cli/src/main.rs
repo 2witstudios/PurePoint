@@ -59,6 +59,12 @@ enum Commands {
         /// Extra CLI flags passed directly to the agent (space-separated)
         #[arg(long)]
         agent_args: Option<String>,
+        /// Launch agent in plan/architect mode (read-only research)
+        #[arg(long)]
+        plan: bool,
+        /// Disable event triggers for this agent
+        #[arg(long)]
+        no_trigger: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -68,6 +74,29 @@ enum Commands {
         /// Show single agent status
         #[arg(long)]
         agent: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bench (suspend) agents — pull them off the court
+    #[command(long_about = "Bench (suspend) agents — pull them off the court.\n\n\
+        When using --all, the invoking agent may also be suspended.\n\
+        Use `pu play <agent_id>` to resume a benched agent.")]
+    Bench {
+        /// Agent ID to bench
+        #[arg(conflicts_with = "all")]
+        agent_id: Option<String>,
+        /// Bench all active agents
+        #[arg(long)]
+        all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Put a benched agent back in play (resume)
+    Play {
+        /// Agent ID to resume
+        agent_id: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -153,6 +182,25 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Manage event-driven triggers
+    Trigger {
+        #[command(subcommand)]
+        action: TriggerAction,
+    },
+    /// Evaluate git hook gates
+    Gate {
+        /// Event type: pre-commit or pre-push
+        event: String,
+        /// Project root path
+        #[arg(long)]
+        project_root: Option<String>,
+    },
+    /// Workspace pulse — agents, runtimes, and git stats at a glance
+    Pulse {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show git diffs across agent worktrees
     Diff {
         /// Diff a specific worktree
@@ -164,6 +212,12 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Live dashboard showing all agents in real-time
+    Watch {
+        /// Refresh interval in milliseconds (default: 800)
+        #[arg(long)]
+        interval: Option<u64>,
     },
     /// Remove worktrees, their agents, and branches
     Clean {
@@ -471,6 +525,58 @@ enum ScheduleAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TriggerAction {
+    /// List triggers
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a trigger
+    Show {
+        /// Trigger name
+        name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a trigger
+    Create {
+        /// Trigger name
+        name: String,
+        /// Event type: agent_idle, pre_commit, pre_push
+        #[arg(long = "on")]
+        event: String,
+        /// Description
+        #[arg(long)]
+        description: Option<String>,
+        /// Inject text (repeatable, creates sequence steps)
+        #[arg(long)]
+        inject: Vec<String>,
+        /// Gate command (repeatable, creates gate-only sequence steps)
+        #[arg(long)]
+        gate: Vec<String>,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a trigger
+    Delete {
+        /// Trigger name
+        name: String,
+        /// Scope: local or global
+        #[arg(long, default_value = "local")]
+        scope: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -500,13 +606,23 @@ async fn main() {
             vars,
             no_auto,
             agent_args,
+            plan,
+            no_trigger,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                no_auto, agent_args, json,
+                no_auto, agent_args, plan, no_trigger, json,
             )
             .await
+        }
+        Commands::Bench {
+            agent_id,
+            all,
+            json,
+        } => commands::bench::run_bench(&socket, agent_id, all, json).await,
+        Commands::Play { agent_id, json } => {
+            commands::bench::run_play(&socket, &agent_id, json).await
         }
         Commands::Status { agent, json } => commands::status::run(&socket, agent, json).await,
         Commands::Kill {
@@ -624,11 +740,49 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Trigger { action } => match action {
+            TriggerAction::List { json } => commands::trigger::run_list(&socket, json).await,
+            TriggerAction::Show { name, json } => {
+                commands::trigger::run_show(&socket, &name, json).await
+            }
+            TriggerAction::Create {
+                name,
+                event,
+                description,
+                inject,
+                gate,
+                scope,
+                json,
+            } => {
+                commands::trigger::run_create(
+                    &socket,
+                    commands::trigger::CreateTriggerParams {
+                        name,
+                        event,
+                        description,
+                        injects: inject,
+                        gates: gate,
+                        scope,
+                        json,
+                    },
+                )
+                .await
+            }
+            TriggerAction::Delete { name, scope, json } => {
+                commands::trigger::run_delete(&socket, &name, &scope, json).await
+            }
+        },
+        Commands::Gate {
+            event,
+            project_root,
+        } => commands::gate::run(&socket, &event, project_root).await,
+        Commands::Pulse { json } => commands::pulse::run(&socket, json).await,
         Commands::Diff {
             worktree,
             stat,
             json,
         } => commands::diff::run(&socket, worktree, stat, json).await,
+        Commands::Watch { interval } => commands::watch::run(&socket, interval).await,
         Commands::Clean {
             worktree,
             all,

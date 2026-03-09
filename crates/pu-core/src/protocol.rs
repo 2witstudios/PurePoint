@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 4;
 
-/// Serde helper: encode Vec<u8> as hex in JSON for binary PTY data.
+/// Serde helper: encode `Vec<u8>` as hex in JSON for binary PTY data.
 mod hex_bytes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -62,6 +62,10 @@ pub enum Request {
         /// Additional CLI args appended after launch args (from --agent-args)
         #[serde(default)]
         extra_args: Vec<String>,
+        #[serde(default)]
+        plan_mode: bool,
+        #[serde(default)]
+        no_trigger: bool,
     },
     Status {
         project_root: String,
@@ -94,6 +98,11 @@ pub enum Request {
         agent_id: String,
         #[serde(with = "hex_bytes")]
         data: Vec<u8>,
+        /// When true, the engine sends data as chunked typed input then submits
+        /// with Enter (\r). This avoids a race where a single atomic write of
+        /// text+Enter causes the TUI to swallow the Enter keypress.
+        #[serde(default)]
+        submit: bool,
     },
     Resize {
         agent_id: String,
@@ -259,6 +268,35 @@ pub enum Request {
         agent_name: String,
         launch_args: Option<Vec<String>>,
     },
+    // Trigger CRUD
+    ListTriggers {
+        project_root: String,
+    },
+    GetTrigger {
+        project_root: String,
+        name: String,
+    },
+    SaveTrigger {
+        project_root: String,
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+        on: String,
+        sequence: Vec<TriggerActionPayload>,
+        #[serde(default)]
+        variables: std::collections::HashMap<String, String>,
+        scope: String,
+    },
+    DeleteTrigger {
+        project_root: String,
+        name: String,
+        scope: String,
+    },
+    EvaluateGate {
+        event: String,
+        project_root: String,
+        worktree_path: String,
+    },
     Shutdown,
     Diff {
         project_root: String,
@@ -266,6 +304,9 @@ pub enum Request {
         worktree_id: Option<String>,
         #[serde(default)]
         stat: bool,
+    },
+    Pulse {
+        project_root: String,
     },
 }
 
@@ -384,6 +425,93 @@ pub enum ScheduleTriggerPayload {
         #[serde(default = "crate::serde_defaults::default_agent_type")]
         agent: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TriggerActionPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GatePayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GatePayload {
+    pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_exit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub on: String,
+    pub sequence: Vec<TriggerActionPayload>,
+    pub variables: std::collections::HashMap<String, String>,
+    pub scope: String,
+}
+
+impl From<crate::trigger_def::TriggerDef> for TriggerInfo {
+    fn from(d: crate::trigger_def::TriggerDef) -> Self {
+        let on = match &d.on {
+            crate::trigger_def::TriggerEvent::AgentIdle => "agent_idle",
+            crate::trigger_def::TriggerEvent::PreCommit => "pre_commit",
+            crate::trigger_def::TriggerEvent::PrePush => "pre_push",
+        };
+        TriggerInfo {
+            name: d.name,
+            description: d.description,
+            on: on.to_string(),
+            sequence: d
+                .sequence
+                .into_iter()
+                .map(TriggerActionPayload::from)
+                .collect(),
+            variables: d.variables,
+            scope: d.scope,
+        }
+    }
+}
+
+impl From<crate::trigger_def::TriggerAction> for TriggerActionPayload {
+    fn from(a: crate::trigger_def::TriggerAction) -> Self {
+        TriggerActionPayload {
+            inject: a.inject,
+            gate: a.gate.map(GatePayload::from),
+            max_retries: a.max_retries,
+        }
+    }
+}
+
+impl From<crate::trigger_def::GateDef> for GatePayload {
+    fn from(g: crate::trigger_def::GateDef) -> Self {
+        GatePayload {
+            run: g.run,
+            expect_exit: g.expect_exit,
+        }
+    }
+}
+
+impl From<TriggerActionPayload> for crate::trigger_def::TriggerAction {
+    fn from(a: TriggerActionPayload) -> Self {
+        crate::trigger_def::TriggerAction {
+            inject: a.inject,
+            gate: a.gate.map(crate::trigger_def::GateDef::from),
+            max_retries: a.max_retries,
+        }
+    }
+}
+
+impl From<GatePayload> for crate::trigger_def::GateDef {
+    fn from(g: GatePayload) -> Self {
+        crate::trigger_def::GateDef {
+            run: g.run,
+            expect_exit: g.expect_exit,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -546,8 +674,20 @@ pub enum Response {
         default_agent: String,
         agents: Vec<AgentConfigInfo>,
     },
+    TriggerList {
+        triggers: Vec<TriggerInfo>,
+    },
+    TriggerDetail(TriggerInfo),
+    GateResult {
+        passed: bool,
+        output: String,
+    },
     DiffResult {
         diffs: Vec<WorktreeDiffEntry>,
+    },
+    PulseReport {
+        worktrees: Vec<WorktreePulseEntry>,
+        root_agents: Vec<AgentPulseEntry>,
     },
     Ok,
     ShuttingDown,
@@ -575,6 +715,12 @@ pub struct AgentStatusReport {
     pub prompt: Option<String>,
     #[serde(default)]
     pub suspended: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_seq_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_state: Option<crate::types::TriggerState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_total: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -599,6 +745,34 @@ pub struct AgentConfigInfo {
     pub launch_args: Option<Vec<String>>,
     pub resolved_launch_args: Vec<String>,
     pub interactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentPulseEntry {
+    pub id: String,
+    pub name: String,
+    pub agent_type: String,
+    pub status: AgentStatus,
+    pub exit_code: Option<i32>,
+    pub runtime_seconds: i64,
+    pub idle_seconds: Option<u64>,
+    pub prompt_snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WorktreePulseEntry {
+    pub worktree_id: String,
+    pub worktree_name: String,
+    pub branch: String,
+    pub elapsed_seconds: i64,
+    pub agents: Vec<AgentPulseEntry>,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -657,6 +831,8 @@ mod tests {
             command: None,
             no_auto: false,
             extra_args: vec![],
+            plan_mode: false,
+            no_trigger: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -683,6 +859,16 @@ mod tests {
     }
 
     #[test]
+    fn given_spawn_request_should_default_plan_mode_to_false() {
+        let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::Spawn { plan_mode, .. } => assert!(!plan_mode),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
     fn given_spawn_request_with_no_auto_true_should_round_trip() {
         let req = Request::Spawn {
             project_root: "/test".into(),
@@ -695,6 +881,8 @@ mod tests {
             command: None,
             no_auto: true,
             extra_args: vec![],
+            plan_mode: false,
+            no_trigger: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -727,6 +915,8 @@ mod tests {
             command: None,
             no_auto: false,
             extra_args: vec!["--model".into(), "opus".into()],
+            plan_mode: false,
+            no_trigger: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -734,6 +924,30 @@ mod tests {
             Request::Spawn { extra_args, .. } => {
                 assert_eq!(extra_args, vec!["--model", "opus"]);
             }
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_with_plan_mode_should_round_trip() {
+        let req = Request::Spawn {
+            project_root: "/test".into(),
+            prompt: "research auth".into(),
+            agent: "claude".into(),
+            name: Some("plan-auth".into()),
+            base: None,
+            root: false,
+            worktree: None,
+            command: None,
+            no_auto: false,
+            extra_args: vec![],
+            plan_mode: true,
+            no_trigger: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Spawn { plan_mode, .. } => assert!(plan_mode),
             _ => panic!("expected Spawn"),
         }
     }
@@ -1045,7 +1259,7 @@ mod tests {
 
     #[test]
     fn given_protocol_version_should_be_current() {
-        assert_eq!(PROTOCOL_VERSION, 2);
+        assert_eq!(PROTOCOL_VERSION, 4);
     }
 
     // --- GridCommand round-trips ---
@@ -2288,6 +2502,31 @@ mod tests {
         }
     }
 
+    // --- Input submit field ---
+
+    #[test]
+    fn given_input_with_submit_should_round_trip() {
+        let req = Request::Input {
+            agent_id: "ag-abc".into(),
+            data: b"hello world".to_vec(),
+            submit: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Input {
+                agent_id,
+                data,
+                submit,
+            } => {
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(data, b"hello world");
+                assert!(submit);
+            }
+            _ => panic!("expected Input"),
+        }
+    }
+
     #[test]
     fn given_update_agent_config_request_with_none_should_round_trip() {
         let req = Request::UpdateAgentConfig {
@@ -2342,6 +2581,31 @@ mod tests {
                 assert_eq!(agents[1].resolved_launch_args, vec!["--full-auto"]);
             }
             _ => panic!("expected ConfigReport"),
+        }
+    }
+
+    #[test]
+    fn given_input_without_submit_field_should_default_false() {
+        let json = r#"{"type":"input","agent_id":"ag-abc","data":"68656c6c6f"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::Input { submit, .. } => assert!(!submit),
+            _ => panic!("expected Input"),
+        }
+    }
+
+    #[test]
+    fn given_input_with_submit_false_should_round_trip() {
+        let req = Request::Input {
+            agent_id: "ag-abc".into(),
+            data: b"raw keys".to_vec(),
+            submit: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Input { submit, .. } => assert!(!submit),
+            _ => panic!("expected Input"),
         }
     }
 }

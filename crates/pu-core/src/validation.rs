@@ -14,7 +14,7 @@ pub fn validate_name(name: &str) -> Result<(), std::io::Error> {
             format!("name must not start with '.': {name}"),
         ));
     }
-    if name.contains('/') || name.contains('\\') || name.contains("..") {
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("name contains invalid characters: {name}"),
@@ -52,6 +52,13 @@ mod tests {
         assert!(validate_name(".hidden").is_err());
         assert!(validate_name(".").is_err());
         assert!(validate_name("..").is_err());
+    }
+
+    #[test]
+    fn given_whitespace_padded_traversal_should_reject() {
+        assert!(validate_name(" ../evil").is_err());
+        assert!(validate_name("foo/../bar ").is_err());
+        assert!(validate_name(" /root").is_err());
     }
 
     #[test]

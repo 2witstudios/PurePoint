@@ -668,6 +668,7 @@ mod tests {
         let input_req = serde_json::to_string(&Request::Input {
             agent_id: agent_id.clone(),
             data: b"hello\n".to_vec(),
+            submit: false,
         })
         .unwrap();
         writer
