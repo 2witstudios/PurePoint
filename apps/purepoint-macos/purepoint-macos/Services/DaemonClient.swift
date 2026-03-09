@@ -161,6 +161,38 @@ nonisolated enum ScheduleTriggerPayload: Codable {
     }
 }
 
+// MARK: - Trigger payload types
+
+nonisolated struct TriggerActionPayload: Codable {
+    let inject: String?
+    let gate: GatePayload?
+    let maxRetries: UInt32?
+
+    enum CodingKeys: String, CodingKey {
+        case inject, gate
+        case maxRetries = "max_retries"
+    }
+}
+
+nonisolated struct GatePayload: Codable {
+    let run: String
+    let expectExit: Int32?
+
+    enum CodingKeys: String, CodingKey {
+        case run
+        case expectExit = "expect_exit"
+    }
+}
+
+nonisolated struct TriggerInfoPayload: Decodable {
+    let name: String
+    let description: String?
+    let on: String
+    let sequence: [TriggerActionPayload]
+    let variables: [String: String]
+    let scope: String
+}
+
 nonisolated struct ScheduleInfoPayload: Decodable {
     let name: String
     let enabled: Bool
@@ -226,6 +258,11 @@ nonisolated enum DaemonRequest: Encodable {
     case deleteSchedule(projectRoot: String, name: String, scope: String)
     case enableSchedule(projectRoot: String, name: String)
     case disableSchedule(projectRoot: String, name: String)
+    case listTriggers(projectRoot: String)
+    case saveTrigger(
+        projectRoot: String, name: String, description: String?, on: String,
+        sequence: [TriggerActionPayload], variables: [String: String], scope: String)
+    case deleteTrigger(projectRoot: String, name: String, scope: String)
     case getConfig(projectRoot: String)
     case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: [String]?)
     case shutdown
@@ -394,6 +431,23 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("disable_schedule", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
+        case .listTriggers(let projectRoot):
+            try container.encode("list_triggers", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .saveTrigger(let projectRoot, let name, let description, let on, let sequence, let variables, let scope):
+            try container.encode("save_trigger", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            if let description { try container.encode(description, forKey: .key("description")) }
+            try container.encode(on, forKey: .key("on"))
+            try container.encode(sequence, forKey: .key("sequence"))
+            try container.encode(variables, forKey: .key("variables"))
+            try container.encode(scope, forKey: .key("scope"))
+        case .deleteTrigger(let projectRoot, let name, let scope):
+            try container.encode("delete_trigger", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(scope, forKey: .key("scope"))
         case .getConfig(let projectRoot):
             try container.encode("get_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -436,6 +490,8 @@ nonisolated enum DaemonResponse: Decodable {
     case runSwarmResult(spawnedAgents: [String])
     case scheduleList(schedules: [ScheduleInfoPayload])
     case scheduleDetail(schedule: ScheduleInfoPayload)
+    case triggerList(triggers: [TriggerInfoPayload])
+    case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
     case ok
     case shuttingDown
@@ -525,6 +581,12 @@ nonisolated enum DaemonResponse: Decodable {
         case "schedule_detail":
             let p = try ScheduleInfoPayload(from: decoder)
             self = .scheduleDetail(schedule: p)
+        case "trigger_list":
+            let p = try TriggerListPayload(from: decoder)
+            self = .triggerList(triggers: p.triggers)
+        case "trigger_detail":
+            let p = try TriggerInfoPayload(from: decoder)
+            self = .triggerDetail(trigger: p)
         case "config_report":
             let p = try ConfigReportPayload(from: decoder)
             self = .configReport(defaultAgent: p.defaultAgent, agents: p.agents)
@@ -678,6 +740,10 @@ private nonisolated struct SwarmDefListPayload: Decodable {
 
 private nonisolated struct ScheduleListPayload: Decodable {
     let schedules: [ScheduleInfoPayload]
+}
+
+private nonisolated struct TriggerListPayload: Decodable {
+    let triggers: [TriggerInfoPayload]
 }
 
 private nonisolated struct RunSwarmResultPayload: Decodable {

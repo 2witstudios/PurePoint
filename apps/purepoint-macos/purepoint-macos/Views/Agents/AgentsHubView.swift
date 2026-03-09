@@ -7,6 +7,10 @@ struct AgentsHubView: View {
         appState.agentsHubState
     }
 
+    private var triggersState: TriggersState {
+        appState.triggersState
+    }
+
     @State private var activeTab: AgentsHubTab = .agents
     @State private var promptDraft = ""
     @State private var promptScope: PromptScopeChoice = .project
@@ -28,6 +32,7 @@ struct AgentsHubView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await hubState.loadAll(projectRoot: projectRoot)
+            await triggersState.loadTriggers(projectRoot: projectRoot)
         }
         .onChange(of: hubState.selectedPromptId) { _, _ in
             syncPromptEditor()
@@ -40,6 +45,9 @@ struct AgentsHubView: View {
         }
         .sheet(isPresented: Bindable(hubState).showingCreateSwarm) {
             SwarmCreationSheet(hubState: hubState, projectRoot: projectRoot)
+        }
+        .sheet(isPresented: Bindable(triggersState).showingCreationSheet) {
+            TriggerCreationSheet(state: triggersState, projectRoot: projectRoot)
         }
     }
 
@@ -108,6 +116,8 @@ struct AgentsHubView: View {
                     agentsContent
                 case .swarms:
                     swarmsContent
+                case .triggers:
+                    triggersContent
                 }
             }
         }
@@ -467,6 +477,66 @@ struct AgentsHubView: View {
         }
     }
 
+    // MARK: - Triggers
+
+    private var triggersContent: some View {
+        HStack(spacing: 0) {
+            triggerListPanel
+                .frame(width: 300)
+
+            Divider()
+
+            if let trigger = triggersState.selectedTrigger {
+                TriggerDetailView(trigger: trigger, state: triggersState, projectRoot: projectRoot)
+            } else {
+                emptyDetailState("Select a trigger or create one to get started.")
+            }
+        }
+    }
+
+    private var triggerListPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Triggers")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button {
+                    triggersState.showingCreationSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            if triggersState.triggers.isEmpty {
+                emptyListState("No triggers yet") {
+                    triggersState.showingCreationSheet = true
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(triggersState.triggers) { trigger in
+                            Button {
+                                triggersState.selectedTriggerId = trigger.id
+                            } label: {
+                                TriggerListRow(
+                                    trigger: trigger,
+                                    isSelected: triggersState.selectedTriggerId == trigger.id
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+        }
+    }
+
     // MARK: - List Panels
 
     private var promptListPanel: some View {
@@ -656,6 +726,7 @@ enum AgentsHubTab: String, CaseIterable, Identifiable {
     case prompts
     case agents
     case swarms
+    case triggers
 
     var id: String { rawValue }
 
@@ -756,6 +827,40 @@ private struct SwarmListRow: View {
             Text("\(swarm.worktreeCount) worktrees \u{00B7} \(swarm.totalAgents) agents")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct TriggerListRow: View {
+    let trigger: TriggerItem
+    let isSelected: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: trigger.event.icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(trigger.event.color)
+                Text(trigger.name)
+                    .font(.system(size: 13, weight: .medium))
+                Spacer()
+                MockBadge(text: trigger.scope, tint: .green)
+            }
+
+            HStack(spacing: 6) {
+                Text(trigger.event.label)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("\(trigger.sequence.count) step\(trigger.sequence.count == 1 ? "" : "s")")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

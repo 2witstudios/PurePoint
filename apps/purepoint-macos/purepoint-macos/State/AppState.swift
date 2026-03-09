@@ -19,6 +19,7 @@ final class AppState {
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
     var scheduleState = ScheduleState()
+    var triggersState = TriggersState()
 
     weak var gridState: GridState?
 
