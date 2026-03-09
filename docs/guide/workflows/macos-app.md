@@ -48,13 +48,13 @@ Each pane displays one agent's terminal. Use `pu grid assign <agent_id>` from th
 
 ## Point Guard
 
-Point Guard is a conversational interface built into the app. It can:
+Point Guard is where you direct the work. It's a terminal that auto-launches your configured coding agent (Claude Code by default). From here you can:
 
-- Spawn agents
-- Check status
-- Redirect work
+- Spawn agents and delegate tasks
+- Start new projects
+- Direct and coordinate ongoing work
 
-Tool calls render inline with expandable details. Conversation history persists across sessions.
+Your conversation history lives in the sidebar — search past sessions and resume where you left off. Configure the launch command and permissions in Settings. Supports Claude, Codex, and OpenCode.
 
 ## Diff viewer
 

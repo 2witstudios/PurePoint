@@ -33,7 +33,11 @@ Agents have exactly three states:
 
 ### Root agents
 
-Most agents live inside a worktree. A **root agent** runs in the project root without creating a worktree. Use root agents for read-only tasks, research, or orchestration (e.g., a Point Guard agent that coordinates other agents).
+Most agents live inside a worktree. A **root agent** runs in the project root without creating a worktree. Use root agents for read-only tasks, research, or orchestration.
+
+### Point Guard
+
+The Point Guard screen is a root terminal for interactive work. It auto-launches your configured coding agent and shows conversation history in the sidebar. This is where you direct work, delegate tasks, and coordinate agents.
 
 ## Agent def
 

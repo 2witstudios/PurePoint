@@ -35,13 +35,14 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 |---|---|
 | AppState.swift | @Observable @MainActor — multi-project container with projects array, selectedAgentId, activeProjectRoot, sidebar selection, daemon error |
 | AgentsHubState.swift | Templates, agent defs, swarm defs, selection state |
-| ChatState.swift | Chat UI: messages, sessions, streaming, input text, search query, conversation loading |
+| ChatState.swift | Chat UI: messages, sessions, streaming, input text, search query, conversation loading (secondary to SessionListState for Point Guard) |
 | DiffState.swift | Diff viewing state |
 | GridState.swift | @Observable — pane grid layout: root node, focusedLeafId, ownerAgentId, pendingPaletteLeafId, onCloseAgent callback |
 | KeyBindingState.swift | Hotkey-to-key mappings, delegates to HotkeyMonitor |
 | ProjectState.swift | @Observable @MainActor — per-project: rootAgents, worktrees, manifest watcher, weak refs to gridState/appState |
 | ScheduleState.swift | Schedule events, loading/error state |
-| SettingsState.swift | User preferences: appearance, font sizes |
+| SessionListState.swift | Session list management for Point Guard conversation sidebar |
+| SettingsState.swift | User preferences: appearance, font sizes, pointGuardLaunchCommand, pointGuardSkipPermissions |
 
 ## Services
 
@@ -115,7 +116,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | ConversationSidebarView.swift | Session list with search and timeline grouping |
 | MarkdownTextView.swift | Markdown rendering |
 | MessageBubbleView.swift | User/assistant message bubble |
-| PointGuardView.swift | Token/point guard UI |
+| PointGuardView.swift | Root terminal with conversation sidebar — spawns shell via daemon, auto-launches configured agent, handles conversation switching |
 | ToolCallCardView.swift | Tool use display card |
 
 ## Views — Agents Hub
@@ -135,6 +136,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | SettingsDisplayView.swift | Appearance, font sizes |
 | SettingsGeneralView.swift | General preferences |
 | SettingsHotkeysView.swift | Hotkey customization |
+| SettingsPointGuardView.swift | Point Guard settings (launch command, skip permissions) |
 | SettingsSection.swift | Reusable settings section component |
 | SettingsView.swift | Modal settings panel |
 
@@ -146,7 +148,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | EventBlockView.swift | Event block display |
 | EventPillView.swift | Compact event pill display |
 | MonthCalendarView.swift | Month calendar view |
-| ScheduleCreationSheet.swift | Create event sheet |
+| ScheduleEventSheet.swift | Create/edit event sheet |
 | ScheduleHeaderView.swift | Schedule header with navigation |
 | ScheduleListView.swift | Event list view |
 | ScheduleView.swift | Calendar + time grid container |

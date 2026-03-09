@@ -18,7 +18,7 @@ Desktop App
     Terminal views (SwiftTerm → daemon attach/output)
     Terminal view cache (hide/show, LRU eviction)
     Pane Grid (binary tree splits, spatial nav, daemon sync)
-    Chat / Point Guard (Claude conversation, streaming, history)
+    Point Guard (root terminal, configurable launch command, conversation sidebar)
     Project + Worktree detail views (inline diff viewer)
   Conversation sidebar (session search, timeline grouping)
   Agents Hub (prompt library, agent definitions, swarm definitions)
@@ -36,7 +36,7 @@ Desktop App
 
 ! [APP-003] macOS only. Native SwiftUI + AppKit bridges.
 
-! [APP-004] Chat interface: ChatState manages Claude conversation streaming via ClaudeProcess. ClaudeConversationIndex provides two-phase session loading (fast index → slow JSONL scan). Conversation sidebar with search and timeline grouping.
+! [APP-004] Point Guard: PointGuardView spawns a shell via daemon's SpawnShell request and auto-launches the configured agent. SessionListState manages the conversation sidebar. ConversationSidebarView with search and timeline grouping. Configurable launch command and skip-permissions via SettingsState (SettingsPointGuardView).
 
 ! [APP-005] Hotkey system: HotkeyMonitor registers OS-level shortcuts. KeyBindingState maps HotkeyAction → key equivalent. 20+ actions across 4 categories (application, navigation, panes, chat). Customizable via Settings.
 

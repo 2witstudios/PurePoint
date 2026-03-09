@@ -10,7 +10,7 @@ Maps every product domain to its architecture dependencies, API operations, stor
 | Agent Lifecycle | Agent Execution | Spawn, Kill, Restart, Status, Attach, Logs | agents, events | spawn, kill, restart, status, attach, logs | Agent list, Chat/PointGuard, ConversationSidebar |
 | Worktree Mgmt | — | Create, Merge, Diff, Clean, Rename, Delete | worktrees | worktree, merge, diff, clean | Sidebar, WorktreeDetailView, DiffViewer |
 | Orchestration | — | Swarm, Spawn, Template CRUD, AgentDef CRUD, SwarmDef CRUD | templates, agent_defs, swarm_defs | prompt, agent, swarm | AgentsHub (prompts, agent defs, swarms), creation sheets |
-| Scheduling | — | Schedule CRUD, Enable/Disable | schedules | schedule list/show/create/delete/enable/disable | ScheduleView, calendar views, ScheduleCreationSheet |
+| Scheduling | — | Schedule CRUD, Enable/Disable | schedules | schedule list/show/create/delete/enable/disable | ScheduleView, calendar views, ScheduleEventSheet |
 | Output & Streaming | Agent Execution | Logs, Stream Output, Attach | output chunks, summaries | logs, attach, aggregate | Terminal panes, ChatAreaView |
 | Memory | — | Get/Set Memory | memory | — | — |
 | Recovery | Daemon Engine | Recover | agents, worktrees | recover | — |

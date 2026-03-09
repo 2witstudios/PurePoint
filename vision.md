@@ -39,9 +39,11 @@ dependency audit. Results waiting when you open the app.
 
 A Rust engine that manages worktrees, agents, and orchestration. Lightweight
 and trusted. On macOS, a beautiful native Swift app — sidebar, pane grid,
-command palette, config editors. On Linux, a terminal UI. On your phone, a
-remote connection. The engine is the constant. The interface is native to
-each platform.
+command palette, config editors. The home screen is Point Guard: a terminal
+that launches your preferred coding agent. Not locked to any one tool —
+works with Claude, Codex, and OpenCode. On Linux, a terminal UI. On your
+phone, a remote connection. The engine is the constant. The interface is
+native to each platform.
 
 ## The surface
 
