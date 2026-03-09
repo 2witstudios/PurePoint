@@ -101,8 +101,7 @@ struct PointGuardView: View {
         await respawnShell(cwd: NSHomeDirectory(), then: launchCommand)
     }
 
-    /// Kill the current shell, spawn a new one at `cwd`, optionally running a command.
-    /// The command is passed to the engine so it runs without echo.
+    /// Kill the current shell, spawn a new one at `cwd`, optionally run a command.
     private func respawnShell(cwd: String, then command: String? = nil) async {
         shellError = nil
 
@@ -118,9 +117,14 @@ struct PointGuardView: View {
         do {
             try await DaemonLifecycle.ensureDaemon()
             let client = DaemonClient()
-            let response = try await client.send(.spawnShell(cwd: cwd, command: command))
+            let response = try await client.send(.spawnShell(cwd: cwd))
             if case .spawnResult(_, let agentId, _) = response {
                 shellAgentId = agentId
+                if let command {
+                    // Brief delay for shell to initialize before sending command
+                    try await Task.sleep(for: .milliseconds(300))
+                    _ = try? await client.send(.input(agentId: agentId, data: Data("\(command)\n".utf8)))
+                }
             } else if case .error(_, let message) = response {
                 shellError = message
             }
