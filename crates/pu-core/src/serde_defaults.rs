@@ -17,3 +17,7 @@ pub fn default_worktree_count() -> u32 {
 pub fn default_quantity() -> u32 {
     1
 }
+
+pub fn is_false(b: &bool) -> bool {
+    !*b
+}

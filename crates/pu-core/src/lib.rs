@@ -9,5 +9,6 @@ pub mod schedule_def;
 pub mod serde_defaults;
 pub mod swarm_def;
 pub mod template;
+pub mod trigger_def;
 pub mod types;
 pub mod validation;

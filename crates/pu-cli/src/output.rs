@@ -47,6 +47,34 @@ fn status_colored_with_suspended(
     }
 }
 
+fn trigger_progress(report: &pu_core::protocol::AgentStatusReport) -> String {
+    match (
+        report.trigger_state,
+        report.trigger_seq_index,
+        report.trigger_total,
+    ) {
+        (Some(pu_core::types::TriggerState::Active), Some(idx), Some(total)) => {
+            format!(" [{}{}{}]", idx.to_string().cyan(), "/".dimmed(), total)
+        }
+        (Some(pu_core::types::TriggerState::Gating), Some(idx), Some(total)) => {
+            format!(
+                " [{}{}{} {}]",
+                idx.to_string().cyan(),
+                "/".dimmed(),
+                total,
+                "gating".yellow()
+            )
+        }
+        (Some(pu_core::types::TriggerState::Completed), _, Some(total)) => {
+            format!(" [{}{}{} {}]", total, "/".dimmed(), total, "done".green())
+        }
+        (Some(pu_core::types::TriggerState::Failed), Some(idx), Some(total)) => {
+            format!(" [{}{}{} {}]", idx, "/".dimmed(), total, "failed".red())
+        }
+        _ => String::new(),
+    }
+}
+
 fn format_duration(seconds: i64) -> String {
     if seconds < 60 {
         format!("{seconds}s")
@@ -142,10 +170,11 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
                 );
                 for a in agents {
                     println!(
-                        "{:<14} {:<16} {}",
+                        "{:<14} {:<16} {}{}",
                         a.id.dimmed(),
                         a.name,
-                        status_colored_with_suspended(a.status, a.exit_code, a.suspended)
+                        status_colored_with_suspended(a.status, a.exit_code, a.suspended),
+                        trigger_progress(a)
                     );
                 }
             }
@@ -177,10 +206,11 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         }
         Response::AgentStatus(a) => {
             println!(
-                "{} {} {}",
+                "{} {} {}{}",
                 a.id.dimmed(),
                 a.name.bold(),
-                status_colored_with_suspended(a.status, a.exit_code, a.suspended)
+                status_colored_with_suspended(a.status, a.exit_code, a.suspended),
+                trigger_progress(a)
             );
             if let Some(pid) = a.pid {
                 println!("  PID:    {pid}");
@@ -193,6 +223,11 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
             }
             if let Some(ref wt) = a.worktree_id {
                 println!("  Worktree: {wt}");
+            }
+            if let (Some(state), Some(idx), Some(total)) =
+                (a.trigger_state, a.trigger_seq_index, a.trigger_total)
+            {
+                println!("  Trigger: {idx}/{total} ({state:?})");
             }
         }
         Response::KillResult { killed, .. } => {
@@ -572,6 +607,60 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
                 );
             }
         }
+        Response::TriggerList { triggers } => {
+            if triggers.is_empty() {
+                println!("No triggers");
+                return Ok(());
+            }
+            println!(
+                "{:<20} {:<14} {:<10} {}",
+                "NAME".bold(),
+                "EVENT".bold(),
+                "SCOPE".bold(),
+                "ACTIONS".bold()
+            );
+            for t in triggers {
+                println!(
+                    "{:<20} {:<14} {:<10} {}",
+                    t.name,
+                    t.on,
+                    t.scope,
+                    t.sequence.len()
+                );
+            }
+        }
+        Response::TriggerDetail(t) => {
+            println!("{} ({})", t.name.bold(), t.scope.dimmed());
+            if let Some(ref desc) = t.description {
+                println!("  {desc}");
+            }
+            println!("  Event: {}", t.on);
+            println!("  Actions: {}", t.sequence.len());
+            for (i, action) in t.sequence.iter().enumerate() {
+                if let Some(ref inject) = action.inject {
+                    println!("  [{}] inject: {inject}", i + 1);
+                }
+                if let Some(ref gate) = action.gate {
+                    println!("  [{}] gate: {}", i + 1, gate.run);
+                }
+            }
+            if !t.variables.is_empty() {
+                println!("  Variables:");
+                for (k, v) in &t.variables {
+                    println!("    {k}={v}");
+                }
+            }
+        }
+        Response::GateResult { passed, output } => {
+            if !output.is_empty() {
+                print!("{output}");
+            }
+            if *passed {
+                println!("{}", "All gates passed".green());
+            } else {
+                println!("{}", "Gate check failed".red().bold());
+            }
+        }
         Response::ScheduleDetail {
             name,
             enabled,
@@ -636,6 +725,9 @@ mod tests {
             session_id: None,
             prompt: None,
             suspended: false,
+            trigger_seq_index: None,
+            trigger_state: None,
+            trigger_total: None,
         }
     }
 

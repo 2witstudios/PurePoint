@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
@@ -31,6 +32,49 @@ pub async fn create_worktree(
 
     let wt_str = worktree_path.to_string_lossy();
     run_git(&["worktree", "add", "-b", branch, &wt_str, base], repo_root).await?;
+    Ok(())
+}
+
+/// Install pre-commit and pre-push git hooks that call `pu gate` for trigger enforcement.
+/// Resolves the correct hooks dir for git worktrees (which use a gitdir indirection).
+/// Skips hooks that already exist (to avoid clobbering user/tool-managed hooks).
+pub async fn install_hooks(
+    worktree_path: &Path,
+    project_root: &Path,
+) -> Result<(), std::io::Error> {
+    // Git worktrees have `.git` as a file pointing to the main repo's worktrees dir.
+    // `git rev-parse --git-dir` resolves to the correct gitdir for hooks.
+    let git_dir = run_git(&["rev-parse", "--git-dir"], worktree_path).await?;
+    let hooks_dir = Path::new(&git_dir).join("hooks");
+    tokio::fs::create_dir_all(&hooks_dir).await?;
+
+    // Escape single quotes in the path for shell safety
+    let escaped_root = project_root.display().to_string().replace('\'', "'\\''");
+
+    // Resolve absolute path to `pu` binary so hooks work even when ~/.pu/bin is not in PATH.
+    // Falls back to bare `pu` if resolution fails (e.g., running outside the daemon).
+    let pu_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "pu".to_string());
+    let escaped_pu = pu_bin.replace('\'', "'\\''");
+
+    for (hook_name, event) in [("pre-commit", "pre-commit"), ("pre-push", "pre-push")] {
+        let hook_path = hooks_dir.join(hook_name);
+        if hook_path.exists() {
+            // Don't overwrite hooks managed by the user or other tools (husky, lefthook, etc.)
+            continue;
+        }
+        tokio::fs::write(
+            &hook_path,
+            format!(
+                "#!/bin/sh\nexec '{escaped_pu}' gate {event} --project-root '{escaped_root}'\n"
+            ),
+        )
+        .await?;
+        tokio::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).await?;
+    }
+
     Ok(())
 }
 
@@ -390,6 +434,88 @@ mod tests {
         let output = result.unwrap();
         assert!(output.diff.contains("file.txt"));
         assert!(output.diff.contains("file changed") || output.diff.contains("files changed"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_worktree_should_install_hooks() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        let wt_path = tmp.path().join("wt-hooks");
+        create_worktree(tmp.path(), &wt_path, "pu/hooks-test", "HEAD")
+            .await
+            .unwrap();
+
+        install_hooks(&wt_path, tmp.path()).await.unwrap();
+
+        // Resolve the git dir the same way install_hooks does
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--git-dir"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let hooks_dir = std::path::Path::new(&git_dir).join("hooks");
+
+        let pre_commit = hooks_dir.join("pre-commit");
+        let pre_push = hooks_dir.join("pre-push");
+
+        assert!(pre_commit.exists(), "pre-commit hook should exist");
+        assert!(pre_push.exists(), "pre-push hook should exist");
+
+        // Check content — hook uses absolute path to pu binary in single quotes
+        let content = std::fs::read_to_string(&pre_commit).unwrap();
+        assert!(content.contains("gate pre-commit"));
+        assert!(content.contains("--project-root"));
+
+        let content = std::fs::read_to_string(&pre_push).unwrap();
+        assert!(content.contains("gate pre-push"));
+
+        // Check executable permission
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&pre_commit).unwrap().permissions();
+        assert!(perms.mode() & 0o111 != 0, "pre-commit should be executable");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_existing_hooks_should_not_overwrite() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+
+        let wt_path = tmp.path().join("wt-hooks-exist");
+        create_worktree(tmp.path(), &wt_path, "pu/hooks-exist", "HEAD")
+            .await
+            .unwrap();
+
+        // Resolve hooks dir and pre-create a custom hook
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--git-dir"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let hooks_dir = std::path::Path::new(&git_dir).join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let pre_commit = hooks_dir.join("pre-commit");
+        std::fs::write(&pre_commit, "#!/bin/sh\necho custom\n").unwrap();
+
+        // install_hooks should skip the existing pre-commit but still create pre-push
+        install_hooks(&wt_path, tmp.path()).await.unwrap();
+
+        let content = std::fs::read_to_string(&pre_commit).unwrap();
+        assert!(
+            content.contains("echo custom"),
+            "existing hook should not be overwritten"
+        );
+        assert!(
+            !content.contains("gate pre-commit"),
+            "existing hook should not contain pu gate"
+        );
+
+        let pre_push = hooks_dir.join("pre-push");
+        assert!(pre_push.exists(), "pre-push should be created");
+        let push_content = std::fs::read_to_string(&pre_push).unwrap();
+        assert!(push_content.contains("gate pre-push"));
     }
 
     #[tokio::test(flavor = "current_thread")]
