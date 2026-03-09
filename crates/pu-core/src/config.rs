@@ -35,11 +35,20 @@ pub fn resolve_agent<'a>(config: &'a Config, name: &str) -> Option<&'a AgentConf
 /// Update a specific agent's launch_args in the project config.
 /// Loads existing config, modifies the named agent, writes back to YAML.
 /// Returns the updated (merged) config.
+///
+/// Only known agent types (from `default_agents()`) are accepted.
+/// Unknown agent names return an error to prevent config pollution.
 pub fn update_agent_config(
     project_root: &Path,
     agent_name: &str,
     launch_args: Option<Vec<String>>,
 ) -> Result<Config, PuError> {
+    let defaults = crate::types::default_agents();
+    if !defaults.contains_key(agent_name) {
+        return Err(PuError::InvalidArgument(format!(
+            "unknown agent type: {agent_name}"
+        )));
+    }
     let path = paths::config_path(project_root);
 
     // Load raw config from file (without merging code defaults)
@@ -106,7 +115,7 @@ envFiles:
 #     command: codex
 #     launchArgs:                  # Default: ["--full-auto"]
 #       - "--full-auto"
-#       # -a <full-auto|suggest|ask>  (approval mode)
+#       # -a <untrusted|on-request|never>  (approval mode)
 #       # --model <model>
 #   opencode:
 #     name: opencode
@@ -404,6 +413,18 @@ agents:
             config.agents["codex"].launch_args,
             Some(vec!["--full-auto".to_string()])
         );
+    }
+
+    #[test]
+    fn given_update_agent_config_with_unknown_agent_should_error() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+
+        let result = update_agent_config(root, "unknown-agent", Some(vec!["--verbose".into()]));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "INVALID_ARGUMENT");
     }
 
     #[test]
