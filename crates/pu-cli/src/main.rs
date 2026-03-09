@@ -53,6 +53,12 @@ enum Commands {
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
+        /// Skip auto-mode flags (--dangerously-skip-permissions, --full-auto, etc.)
+        #[arg(long)]
+        no_auto: bool,
+        /// Extra CLI flags passed directly to the agent (space-separated)
+        #[arg(long)]
+        agent_args: Option<String>,
         /// Launch agent in plan/architect mode (read-only research)
         #[arg(long)]
         plan: bool,
@@ -598,13 +604,15 @@ async fn main() {
             file,
             command,
             vars,
+            no_auto,
+            agent_args,
             plan,
             no_trigger,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                plan, no_trigger, json,
+                no_auto, agent_args, plan, no_trigger, json,
             )
             .await
         }

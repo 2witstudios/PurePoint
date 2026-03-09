@@ -17,6 +17,7 @@ final class AppState {
     var pendingFocusAgentId: String?
 
     var agentsHubState = AgentsHubState()
+    var agentConfigState = AgentConfigState()
     var scheduleState = ScheduleState()
 
     weak var gridState: GridState?

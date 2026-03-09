@@ -13,9 +13,9 @@ use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
 use pu_core::protocol::{
-    AgentDefInfo, AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION, Request, Response,
-    ScheduleInfo, ScheduleTriggerPayload, SuspendTarget, SwarmDefInfo, SwarmRosterEntryPayload,
-    TemplateInfo,
+    AgentConfigInfo, AgentDefInfo, AgentStatusReport, GridCommand, KillTarget, PROTOCOL_VERSION,
+    Request, Response, ScheduleInfo, ScheduleTriggerPayload, SuspendTarget, SwarmDefInfo,
+    SwarmRosterEntryPayload, TemplateInfo,
 };
 use pu_core::types::{AgentEntry, AgentStatus, Manifest, WorktreeEntry, WorktreeStatus};
 use tokio::sync::OnceCell;
@@ -25,6 +25,25 @@ use crate::daemon_lifecycle;
 use crate::git;
 use crate::output_buffer::OutputBuffer;
 use crate::pty_manager::{AgentHandle, NativePtyHost, SpawnConfig};
+
+/// Parameters for spawning an agent, extracted to avoid too many positional args.
+struct SpawnParams {
+    project_root: String,
+    prompt: String,
+    agent_type: String,
+    name: Option<String>,
+    base: Option<String>,
+    root: bool,
+    worktree: Option<String>,
+    terminal_command: Option<String>,
+    /// Skip auto-mode launch args for this spawn. One-off override;
+    /// does not affect resume (resume always reads from config).
+    no_auto: bool,
+    /// Extra CLI args from --agent-args, appended after launch args.
+    extra_args: Vec<String>,
+    plan_mode: bool,
+    no_trigger: bool,
+}
 
 struct SaveTriggerParams {
     project_root: String,
@@ -182,6 +201,8 @@ impl Engine {
             | Request::SaveTrigger { project_root, .. }
             | Request::EvaluateGate { project_root, .. }
             | Request::Diff { project_root, .. }
+            | Request::GetConfig { project_root }
+            | Request::UpdateAgentConfig { project_root, .. }
             | Request::Pulse { project_root, .. } => {
                 self.register_project(project_root);
             }
@@ -196,6 +217,15 @@ impl Engine {
                 agent_id,
                 name,
             } => self.handle_rename(&project_root, &agent_id, &name).await,
+            Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
+            Request::UpdateAgentConfig {
+                project_root,
+                agent_name,
+                launch_args,
+            } => {
+                self.handle_update_agent_config(&project_root, &agent_name, launch_args)
+                    .await
+            }
             Request::Shutdown => Response::ShuttingDown,
             Request::Status {
                 project_root,
@@ -210,21 +240,25 @@ impl Engine {
                 root,
                 worktree,
                 command,
+                no_auto,
+                extra_args,
                 plan_mode,
                 no_trigger,
             } => {
-                self.handle_spawn(
-                    &project_root,
-                    &prompt,
-                    &agent,
+                self.handle_spawn(SpawnParams {
+                    project_root,
+                    prompt,
+                    agent_type: agent,
                     name,
                     base,
                     root,
                     worktree,
-                    command,
+                    terminal_command: command,
+                    no_auto,
+                    extra_args,
                     plan_mode,
                     no_trigger,
-                )
+                })
                 .await
             }
             Request::CreateWorktree {
@@ -579,6 +613,73 @@ impl Engine {
         })
     }
 
+    fn config_to_report(cfg: &pu_core::types::Config) -> Response {
+        let agents = cfg
+            .agents
+            .iter()
+            .filter(|(name, _)| name.as_str() != "terminal")
+            .map(|(name, ac)| {
+                let resolved =
+                    pu_core::types::resolved_launch_args(name, ac.launch_args.as_deref());
+                AgentConfigInfo {
+                    name: ac.name.clone(),
+                    command: ac.command.clone(),
+                    launch_args: ac.launch_args.clone(),
+                    resolved_launch_args: resolved,
+                    interactive: ac.interactive,
+                }
+            })
+            .collect();
+        Response::ConfigReport {
+            default_agent: cfg.default_agent.clone(),
+            agents,
+        }
+    }
+
+    async fn handle_get_config(&self, project_root: &str) -> Response {
+        let pr = project_root.to_string();
+        tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            match config::load_config_strict(root) {
+                Ok(cfg) => Self::config_to_report(&cfg),
+                Err(e) => Response::Error {
+                    code: e.code().into(),
+                    message: e.to_string(),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_update_agent_config(
+        &self,
+        project_root: &str,
+        agent_name: &str,
+        launch_args: Option<Vec<String>>,
+    ) -> Response {
+        let pr = project_root.to_string();
+        let name = agent_name.to_string();
+        tokio::task::spawn_blocking(move || {
+            let root = Path::new(&pr);
+            match config::update_agent_config(root, &name, launch_args) {
+                Ok(cfg) => Self::config_to_report(&cfg),
+                Err(e) => Response::Error {
+                    code: e.code().into(),
+                    message: e.to_string(),
+                },
+            }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
     async fn handle_status(&self, project_root: &str, agent_id: Option<&str>) -> Response {
         // On first status call per project, reap agents whose PIDs are dead.
         // Fire-and-forget: first status returns immediately, next refresh corrects.
@@ -669,21 +770,22 @@ impl Engine {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_spawn(
-        &self,
-        project_root: &str,
-        prompt: &str,
-        agent_type: &str,
-        name: Option<String>,
-        base: Option<String>,
-        root: bool,
-        worktree: Option<String>,
-        terminal_command: Option<String>,
-        plan_mode: bool,
-        no_trigger: bool,
-    ) -> Response {
-        let root_path = Path::new(project_root);
+    async fn handle_spawn(&self, params: SpawnParams) -> Response {
+        let SpawnParams {
+            project_root,
+            prompt,
+            agent_type,
+            name,
+            base,
+            root,
+            worktree,
+            terminal_command,
+            no_auto,
+            extra_args,
+            plan_mode,
+            no_trigger,
+        } = params;
+        let root_path = Path::new(&project_root);
 
         // Ensure initialized
         if !paths::manifest_path(root_path).exists() {
@@ -703,7 +805,7 @@ impl Engine {
                 };
             }
         };
-        let agent_cfg = match config::resolve_agent(&cfg, agent_type) {
+        let agent_cfg = match config::resolve_agent(&cfg, &agent_type) {
             Some(c) => c.clone(),
             None => {
                 return Response::Error {
@@ -801,26 +903,31 @@ impl Engine {
             (cmd_bin, cmd_args, None, false)
         } else {
             // Standard agent flow
-            let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, agent_type) {
+            let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, &agent_type) {
                 Ok(v) => v,
                 Err(e) => return e,
             };
             let mut args = cmd_args;
 
-            // Add agent-type-specific flags (not stored in config — engine concern)
-            match agent_type {
-                "claude" => {
-                    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
-                        args.insert(0, "--dangerously-skip-permissions".into());
-                    }
-                }
-                "codex" => {
-                    if !args.iter().any(|a| a == "--full-auto") {
-                        args.insert(0, "--full-auto".into());
-                    }
-                }
-                _ => {}
+            // Add agent-type-specific launch args from config (or defaults).
+            // --no-auto skips only the built-in defaults; explicit user-configured
+            // launchArgs are always applied.
+            let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
+                Vec::new()
+            } else {
+                pu_core::types::resolved_launch_args(&agent_type, agent_cfg.launch_args.as_deref())
+            };
+            if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
+                tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
             }
+            for arg in launch_args.into_iter().rev() {
+                if !args.iter().any(|a| a == &arg) {
+                    args.insert(0, arg);
+                }
+            }
+
+            // Append extra args from --agent-args (always applied, even with --no-auto)
+            args.extend(extra_args.iter().cloned());
 
             // Generate session ID for claude agents (enables resume via --resume)
             let session_id = if agent_type == "claude" {
@@ -835,10 +942,10 @@ impl Engine {
             // Claude prompt via argv can stall first render in some terminals; keep stdin injection
             // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
             let inject_prompt_via_stdin =
-                Self::should_inject_prompt_via_stdin(agent_type, agent_cfg.interactive, prompt);
+                Self::should_inject_prompt_via_stdin(&agent_type, agent_cfg.interactive, prompt);
             if !inject_prompt_via_stdin && !prompt.is_empty() {
                 let prompt_flag =
-                    Self::resolved_prompt_flag(agent_type, agent_cfg.prompt_flag.as_deref());
+                    Self::resolved_prompt_flag(&agent_type, agent_cfg.prompt_flag.as_deref());
                 if let Some(flag) = prompt_flag {
                     args.push(flag);
                     args.push(prompt.to_string());
@@ -1025,7 +1132,7 @@ impl Engine {
         let agent_entry = AgentEntry {
             id: agent_id.clone(),
             name: agent_name.clone(),
-            agent_type: agent_type.to_string(),
+            agent_type,
             status: AgentStatus::Streaming,
             prompt: Some(prompt.to_string()),
             started_at: chrono::Utc::now(),
@@ -1096,7 +1203,7 @@ impl Engine {
             };
         }
 
-        self.notify_status_change(project_root).await;
+        self.notify_status_change(&project_root).await;
 
         Response::SpawnResult {
             worktree_id,
@@ -1605,25 +1712,29 @@ impl Engine {
         agent_cfg: &pu_core::types::AgentConfig,
         session_id: Option<&str>,
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
+        let launch_args =
+            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
         match agent_type {
             "claude" => {
                 let sid = session_id.ok_or_else(|| Response::Error {
                     code: "RESUME_FAILED".into(),
                     message: "cannot resume Claude agent: no session_id preserved".into(),
                 })?;
-                let args = vec![
-                    "--dangerously-skip-permissions".into(),
-                    "--resume".into(),
-                    sid.to_string(),
-                ];
+                let mut args = launch_args;
+                args.push("--resume".into());
+                args.push(sid.to_string());
                 Ok(("claude".into(), args, Some(sid.to_string())))
             }
             "codex" => {
-                let args = vec!["resume".into(), "--last".into(), "--full-auto".into()];
+                // Top-level flags (e.g. --full-auto) must precede the subcommand
+                let mut args = launch_args;
+                args.push("resume".into());
+                args.push("--last".into());
                 Ok(("codex".into(), args, None))
             }
             "opencode" => {
-                let args = vec!["--continue".into()];
+                let mut args = vec!["--continue".into()];
+                args.extend(launch_args);
                 Ok(("opencode".into(), args, None))
             }
             _ => {
@@ -2750,18 +2861,20 @@ impl Engine {
                         .or_else(|| template_command.clone());
 
                     let resp = self
-                        .handle_spawn(
-                            project_root,
-                            prompt,
-                            &agent_def.agent_type,
-                            spawn_name,
-                            None,
-                            false,
-                            spawn_worktree,
-                            resolved_command,
-                            false,
-                            false,
-                        )
+                        .handle_spawn(SpawnParams {
+                            project_root: project_root.to_string(),
+                            prompt: prompt.to_string(),
+                            agent_type: agent_def.agent_type.clone(),
+                            name: spawn_name,
+                            base: None,
+                            root: false,
+                            worktree: spawn_worktree,
+                            terminal_command: resolved_command,
+                            no_auto: false,
+                            extra_args: vec![],
+                            plan_mode: false,
+                            no_trigger: false,
+                        })
                         .await;
 
                     match resp {
@@ -2792,18 +2905,20 @@ impl Engine {
                 if let Some(ref wt_id) = worktree_id {
                     let term_name = format!("{swarm_name}-terminal-{wt_index}");
                     let resp = self
-                        .handle_spawn(
-                            project_root,
-                            "",
-                            "terminal",
-                            Some(term_name),
-                            None,
-                            false,
-                            Some(wt_id.clone()),
-                            None,
-                            false,
-                            false,
-                        )
+                        .handle_spawn(SpawnParams {
+                            project_root: project_root.to_string(),
+                            prompt: String::new(),
+                            agent_type: "terminal".into(),
+                            name: Some(term_name),
+                            base: None,
+                            root: false,
+                            worktree: Some(wt_id.clone()),
+                            terminal_command: None,
+                            no_auto: false,
+                            extra_args: vec![],
+                            plan_mode: false,
+                            no_trigger: false,
+                        })
                         .await;
                     if let Response::SpawnResult { agent_id, .. } = resp {
                         spawned_agents.push(agent_id);
@@ -3682,6 +3797,8 @@ impl Engine {
                         root: schedule.root,
                         worktree: None,
                         command: def.command.or(template_command),
+                        no_auto: false,
+                        extra_args: vec![],
                         plan_mode: false,
                         no_trigger: false,
                     })
@@ -3711,6 +3828,8 @@ impl Engine {
                     root: schedule.root,
                     worktree: None,
                     command: None,
+                    no_auto: false,
+                    extra_args: vec![],
                     plan_mode: false,
                     no_trigger: false,
                 })
@@ -4192,6 +4311,8 @@ mod tests {
                 root: true,
                 worktree: None,
                 command: None,
+                no_auto: false,
+                extra_args: vec![],
                 plan_mode: false,
                 no_trigger: false,
             })
@@ -4262,6 +4383,98 @@ mod tests {
             Engine::resolved_prompt_flag("codex", Some("--prompt")),
             Some("--prompt".to_string())
         );
+    }
+
+    #[test]
+    fn given_claude_build_resume_with_default_launch_args_should_include_yolo() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "claude".into(),
+            command: "claude".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None, // use defaults
+        };
+
+        // when
+        let (cmd, args, sid) = engine
+            .build_resume_command("claude", &agent_cfg, Some("sess-123"))
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, "claude");
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"sess-123".to_string()));
+        assert_eq!(sid, Some("sess-123".to_string()));
+    }
+
+    #[test]
+    fn given_claude_build_resume_with_empty_launch_args_should_omit_yolo() {
+        // given: user configured launchArgs: [] to disable auto-mode
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "claude".into(),
+            command: "claude".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: Some(vec![]),
+        };
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("claude", &agent_cfg, Some("sess-456"))
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, "claude");
+        assert!(!args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn given_codex_build_resume_with_custom_launch_args_should_place_before_subcommand() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "codex".into(),
+            command: "codex".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: Some(vec!["--approval-mode=full-auto".into()]),
+        };
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("codex", &agent_cfg, None)
+            .unwrap();
+
+        // then — top-level flags must precede the subcommand
+        assert_eq!(cmd, "codex");
+        assert_eq!(args, vec!["--approval-mode=full-auto", "resume", "--last"]);
+    }
+
+    #[test]
+    fn given_codex_build_resume_with_defaults_should_place_full_auto_before_subcommand() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = pu_core::types::AgentConfig {
+            name: "codex".into(),
+            command: "codex".into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None, // use defaults
+        };
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("codex", &agent_cfg, None)
+            .unwrap();
+
+        // then — --full-auto is a top-level flag, must come before `resume`
+        assert_eq!(cmd, "codex");
+        assert_eq!(args, vec!["--full-auto", "resume", "--last"]);
     }
 
     #[test]
@@ -4358,6 +4571,7 @@ mod tests {
             command: name.into(),
             prompt_flag: None,
             interactive: true,
+            launch_args: None,
         }
     }
 

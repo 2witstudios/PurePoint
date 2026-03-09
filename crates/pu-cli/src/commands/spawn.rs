@@ -21,6 +21,8 @@ pub async fn run(
     file: Option<String>,
     command: Option<String>,
     vars: Vec<String>,
+    no_auto: bool,
+    agent_args: Option<String>,
     plan_mode: bool,
     no_trigger: bool,
     json: bool,
@@ -49,6 +51,11 @@ pub async fn run(
         resolved_prompt.unwrap_or_default()
     };
 
+    // Split --agent-args string into individual args
+    let extra_args: Vec<String> = agent_args
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default();
+
     let resp = client::send_request(
         socket,
         &Request::Spawn {
@@ -60,6 +67,8 @@ pub async fn run(
             root,
             worktree,
             command: resolved_command,
+            no_auto,
+            extra_args,
             plan_mode,
             no_trigger,
         },
