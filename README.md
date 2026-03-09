@@ -78,10 +78,11 @@ just build-app
 
 </details>
 
-<details>
-<summary><a id="cli"></a>The <code>pu</code> CLI</summary>
+<a id="cli"></a>
 
-All commands support `--json` for structured output.
+## The `pu` CLI
+
+`pu` is the command-line interface to PurePoint. All commands support `--json` for structured output.
 
 | Command | Description |
 |---|---|
@@ -107,17 +108,39 @@ All commands support `--json` for structured output.
 | `pu trigger list\|show\|create\|delete` | Manage event-driven triggers |
 | `pu gate <event>` | Evaluate git hook gates |
 
-Run `pu --help` for full usage.
+### Spawn options
 
-</details>
+```sh
+pu spawn "fix the auth bug" --name fix-auth              # worktree + agent
+pu spawn "refactor tests" --agent codex                   # use codex instead of claude
+pu spawn "review the PR" --worktree wt-existing           # add to existing worktree
+pu spawn --root "run the dev server"                      # root agent (no worktree)
+pu spawn --root --agent terminal                          # plain terminal
+pu spawn --template code-review --var BRANCH=main         # from saved prompt
+pu spawn --file path/to/prompt.md --name task1            # from file
+```
+
+Run `pu --help` for full usage.
 
 ## Documentation
 
 | | |
 |---|---|
 | [Getting Started](docs/guide/getting-started.md) | Install, first agent, cleanup |
-| [CLI Reference](docs/guide/cli-reference.md) | All commands with examples |
-| [Concepts](docs/guide/concepts.md) | Worktrees, agents, swarms, scope |
+| [CLI Reference](docs/guide/cli-reference.md) | All 21 commands with examples |
+| [Configuration](docs/guide/configuration.md) | Agent types, launch args, config.yaml |
+| [Concepts](docs/guide/concepts.md) | Mental model: worktrees, agents, swarms, scope |
+| [Templates & Definitions](docs/guide/workflows/templates-and-definitions.md) | Prompts, agent defs, swarm defs |
+| [Scheduling & Triggers](docs/guide/workflows/scheduling-and-triggers.md) | Schedules, triggers, git hooks |
+| [Troubleshooting](docs/guide/troubleshooting.md) | Common issues and solutions |
 | [Contributing](CONTRIBUTING.md) | Build, test, code style, architecture |
 
-macOS only. Linux TUI planned. MIT License — [2wit Studios](https://github.com/2witstudios)
+## Current Status
+
+macOS only. Linux TUI is planned.
+
+PurePoint is early and under active development — the core works, but some features are still in design. See [`docs/`](docs/) for specs and architecture.
+
+## License
+
+MIT — [2wit Studios](https://github.com/2witstudios)
