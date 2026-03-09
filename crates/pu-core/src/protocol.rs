@@ -58,6 +58,8 @@ pub enum Request {
         command: Option<String>,
         #[serde(default)]
         plan_mode: bool,
+        #[serde(default)]
+        no_trigger: bool,
     },
     Status {
         project_root: String,
@@ -90,6 +92,11 @@ pub enum Request {
         agent_id: String,
         #[serde(with = "hex_bytes")]
         data: Vec<u8>,
+        /// When true, the engine sends data as chunked typed input then submits
+        /// with Enter (\r). This avoids a race where a single atomic write of
+        /// text+Enter causes the TUI to swallow the Enter keypress.
+        #[serde(default)]
+        submit: bool,
     },
     Resize {
         agent_id: String,
@@ -246,6 +253,35 @@ pub enum Request {
         project_root: String,
         name: String,
     },
+    // Trigger CRUD
+    ListTriggers {
+        project_root: String,
+    },
+    GetTrigger {
+        project_root: String,
+        name: String,
+    },
+    SaveTrigger {
+        project_root: String,
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+        on: String,
+        sequence: Vec<TriggerActionPayload>,
+        #[serde(default)]
+        variables: std::collections::HashMap<String, String>,
+        scope: String,
+    },
+    DeleteTrigger {
+        project_root: String,
+        name: String,
+        scope: String,
+    },
+    EvaluateGate {
+        event: String,
+        project_root: String,
+        worktree_path: String,
+    },
     Shutdown,
     Diff {
         project_root: String,
@@ -374,6 +410,93 @@ pub enum ScheduleTriggerPayload {
         #[serde(default = "crate::serde_defaults::default_agent_type")]
         agent: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TriggerActionPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GatePayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GatePayload {
+    pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_exit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerInfo {
+    pub name: String,
+    pub description: Option<String>,
+    pub on: String,
+    pub sequence: Vec<TriggerActionPayload>,
+    pub variables: std::collections::HashMap<String, String>,
+    pub scope: String,
+}
+
+impl From<crate::trigger_def::TriggerDef> for TriggerInfo {
+    fn from(d: crate::trigger_def::TriggerDef) -> Self {
+        let on = match &d.on {
+            crate::trigger_def::TriggerEvent::AgentIdle => "agent_idle",
+            crate::trigger_def::TriggerEvent::PreCommit => "pre_commit",
+            crate::trigger_def::TriggerEvent::PrePush => "pre_push",
+        };
+        TriggerInfo {
+            name: d.name,
+            description: d.description,
+            on: on.to_string(),
+            sequence: d
+                .sequence
+                .into_iter()
+                .map(TriggerActionPayload::from)
+                .collect(),
+            variables: d.variables,
+            scope: d.scope,
+        }
+    }
+}
+
+impl From<crate::trigger_def::TriggerAction> for TriggerActionPayload {
+    fn from(a: crate::trigger_def::TriggerAction) -> Self {
+        TriggerActionPayload {
+            inject: a.inject,
+            gate: a.gate.map(GatePayload::from),
+            max_retries: a.max_retries,
+        }
+    }
+}
+
+impl From<crate::trigger_def::GateDef> for GatePayload {
+    fn from(g: crate::trigger_def::GateDef) -> Self {
+        GatePayload {
+            run: g.run,
+            expect_exit: g.expect_exit,
+        }
+    }
+}
+
+impl From<TriggerActionPayload> for crate::trigger_def::TriggerAction {
+    fn from(a: TriggerActionPayload) -> Self {
+        crate::trigger_def::TriggerAction {
+            inject: a.inject,
+            gate: a.gate.map(crate::trigger_def::GateDef::from),
+            max_retries: a.max_retries,
+        }
+    }
+}
+
+impl From<GatePayload> for crate::trigger_def::GateDef {
+    fn from(g: GatePayload) -> Self {
+        crate::trigger_def::GateDef {
+            run: g.run,
+            expect_exit: g.expect_exit,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -532,6 +655,14 @@ pub enum Response {
         agent_name: Option<String>,
         created_at: DateTime<Utc>,
     },
+    TriggerList {
+        triggers: Vec<TriggerInfo>,
+    },
+    TriggerDetail(TriggerInfo),
+    GateResult {
+        passed: bool,
+        output: String,
+    },
     DiffResult {
         diffs: Vec<WorktreeDiffEntry>,
     },
@@ -565,6 +696,12 @@ pub struct AgentStatusReport {
     pub prompt: Option<String>,
     #[serde(default)]
     pub suspended: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_seq_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_state: Option<crate::types::TriggerState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_total: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -665,6 +802,7 @@ mod tests {
             worktree: None,
             command: None,
             plan_mode: false,
+            no_trigger: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -708,6 +846,7 @@ mod tests {
             worktree: None,
             command: None,
             plan_mode: true,
+            no_trigger: false,
         };
 
         // when
@@ -2232,6 +2371,71 @@ mod tests {
                 assert_eq!(worktree_id, "wt-abc");
             }
             _ => panic!("expected CreateWorktreeResult"),
+        }
+    }
+
+    // --- Input submit field ---
+
+    #[test]
+    fn given_input_with_submit_should_round_trip() {
+        // given
+        let req = Request::Input {
+            agent_id: "ag-abc".into(),
+            data: b"hello world".to_vec(),
+            submit: true,
+        };
+
+        // when
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+
+        // then
+        match parsed {
+            Request::Input {
+                agent_id,
+                data,
+                submit,
+            } => {
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(data, b"hello world");
+                assert!(submit);
+            }
+            _ => panic!("expected Input"),
+        }
+    }
+
+    #[test]
+    fn given_input_without_submit_field_should_default_false() {
+        // given — JSON without the submit field (backward compat)
+        let json = r#"{"type":"input","agent_id":"ag-abc","data":"68656c6c6f"}"#;
+
+        // when
+        let req: Request = serde_json::from_str(json).unwrap();
+
+        // then
+        match req {
+            Request::Input { submit, .. } => assert!(!submit),
+            _ => panic!("expected Input"),
+        }
+    }
+
+    #[test]
+    fn given_input_with_submit_false_should_round_trip() {
+        // given
+        let req = Request::Input {
+            agent_id: "ag-abc".into(),
+            data: b"raw keys".to_vec(),
+            submit: false,
+        };
+
+        // when
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+
+        // then
+        match parsed {
+            Request::Input { submit, .. } => assert!(!submit),
+            _ => panic!("expected Input"),
         }
     }
 }

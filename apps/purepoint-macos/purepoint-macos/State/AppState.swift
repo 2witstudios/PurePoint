@@ -41,6 +41,7 @@ final class AppState {
         project.appState = self
         projects.append(project)
         project.startWatching()
+        initializeActiveProjectIfNeeded(root: root)
 
         // Watch daemon binary for changes (shared — only start once)
         if binaryWatcher == nil, let binPath = DaemonLifecycle.findBinary() {
@@ -67,6 +68,34 @@ final class AppState {
         }
         // Grid layout is restored on-demand when user clicks the owner agent
         // (via ContentView.onChange → gridState.restoreIfOwner)
+    }
+
+    // MARK: - Active Project Routing
+
+    /// Update `activeProjectRoot` and `activeSidebarSelection` based on what the user selected
+    /// in the sidebar. Terminal, agent, worktree, and project selections resolve to their owning
+    /// project; nav and nil selections preserve the last-known project.
+    func updateActiveProject(for selection: SidebarSelection?) {
+        activeSidebarSelection = selection
+
+        switch selection {
+        case .agent(let id), .terminal(let id):
+            activeProjectRoot = projectState(forAgentId: id)?.projectRoot
+        case .worktree(let id):
+            activeProjectRoot = projectState(forWorktreeId: id)?.projectRoot
+        case .project(let root):
+            activeProjectRoot = root
+        case nil, .nav:
+            break  // keep last known project
+        }
+    }
+
+    /// Set `activeProjectRoot` to the given root if no project is active yet.
+    /// Called when a project is first opened so Cmd+N works before any sidebar click.
+    func initializeActiveProjectIfNeeded(root: String) {
+        if activeProjectRoot == nil {
+            activeProjectRoot = root
+        }
     }
 
     // MARK: - Cross-Project Queries
@@ -152,6 +181,10 @@ final class AppState {
             agent(byId: savedId) != nil
         {
             selectedAgentId = savedId
+            // Ensure Cmd+N targets the restored agent's project
+            if let root = projectState(forAgentId: savedId)?.projectRoot {
+                activeProjectRoot = root
+            }
         }
     }
 

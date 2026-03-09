@@ -32,6 +32,7 @@ pub(crate) async fn init_and_spawn() -> (Engine, String, TempDir) {
             worktree: None,
             command: None,
             plan_mode: false,
+            no_trigger: false,
         })
         .await;
 

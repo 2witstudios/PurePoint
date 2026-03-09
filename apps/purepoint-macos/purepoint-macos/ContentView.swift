@@ -68,19 +68,7 @@ struct ContentView: View {
             selection = .worktree(worktreeId)
         }
         .onChange(of: selection) { _, newValue in
-            appState.activeSidebarSelection = newValue
-
-            // Track active project for Cmd+N routing
-            switch newValue {
-            case .agent(let id):
-                appState.activeProjectRoot = appState.projectState(forAgentId: id)?.projectRoot
-            case .worktree(let id):
-                appState.activeProjectRoot = appState.projectState(forWorktreeId: id)?.projectRoot
-            case .project(let root):
-                appState.activeProjectRoot = root
-            default:
-                break  // keep last known project
-            }
+            appState.updateActiveProject(for: newValue)
 
             guard case .agent(let agentId) = newValue else {
                 // Non-agent selection (nav items, worktrees): deactivate grid

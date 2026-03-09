@@ -46,6 +46,15 @@ impl<'de> Deserialize<'de> for AgentStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerState {
+    Active,
+    Gating,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorktreeStatus {
     Active,
@@ -86,6 +95,20 @@ pub struct AgentEntry {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plan_mode: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_seq_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_state: Option<TriggerState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_total: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_attempts: Option<u32>,
+    #[serde(default, skip_serializing_if = "crate::serde_defaults::is_false")]
+    pub no_trigger: bool,
+    /// Name of the trigger definition this agent is bound to.
+    /// Set at spawn time so the sequence is stable across ticks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_name: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for AgentEntry {
@@ -111,6 +134,18 @@ impl<'de> Deserialize<'de> for AgentEntry {
             command: Option<String>,
             #[serde(default)]
             plan_mode: bool,
+            #[serde(default)]
+            trigger_seq_index: Option<u32>,
+            #[serde(default)]
+            trigger_state: Option<TriggerState>,
+            #[serde(default)]
+            trigger_total: Option<u32>,
+            #[serde(default)]
+            gate_attempts: Option<u32>,
+            #[serde(default)]
+            no_trigger: bool,
+            #[serde(default)]
+            trigger_name: Option<String>,
         }
         let raw = Raw::deserialize(deserializer)?;
         // Backward compat: old manifests have suspended_at set but no suspended field.
@@ -132,6 +167,12 @@ impl<'de> Deserialize<'de> for AgentEntry {
             suspended,
             command: raw.command,
             plan_mode: raw.plan_mode,
+            trigger_seq_index: raw.trigger_seq_index,
+            trigger_state: raw.trigger_state,
+            trigger_total: raw.trigger_total,
+            gate_attempts: raw.gate_attempts,
+            no_trigger: raw.no_trigger,
+            trigger_name: raw.trigger_name,
         })
     }
 }
@@ -406,6 +447,12 @@ mod tests {
             suspended: false,
             command: None,
             plan_mode: false,
+            trigger_seq_index: None,
+            trigger_state: None,
+            trigger_total: None,
+            gate_attempts: None,
+            no_trigger: false,
+            trigger_name: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -474,6 +521,12 @@ mod tests {
             suspended: false,
             command: None,
             plan_mode: true,
+            trigger_seq_index: None,
+            trigger_state: None,
+            trigger_total: None,
+            gate_attempts: None,
+            no_trigger: false,
+            trigger_name: None,
         };
 
         // when
@@ -528,6 +581,12 @@ mod tests {
                 suspended: false,
                 command: None,
                 plan_mode: false,
+                trigger_seq_index: None,
+                trigger_state: None,
+                trigger_total: None,
+                gate_attempts: None,
+                no_trigger: false,
+                trigger_name: None,
             },
         );
         let entry = WorktreeEntry {
@@ -580,6 +639,12 @@ mod tests {
                 suspended: false,
                 command: None,
                 plan_mode: false,
+                trigger_seq_index: None,
+                trigger_state: None,
+                trigger_total: None,
+                gate_attempts: None,
+                no_trigger: false,
+                trigger_name: None,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -608,6 +673,12 @@ mod tests {
                 suspended: false,
                 command: None,
                 plan_mode: false,
+                trigger_seq_index: None,
+                trigger_state: None,
+                trigger_total: None,
+                gate_attempts: None,
+                no_trigger: false,
+                trigger_name: None,
             },
         );
         m.worktrees.insert(
@@ -650,6 +721,12 @@ mod tests {
             suspended: false,
             command: None,
             plan_mode: false,
+            trigger_seq_index: None,
+            trigger_state: None,
+            trigger_total: None,
+            gate_attempts: None,
+            no_trigger: false,
+            trigger_name: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();
@@ -711,5 +788,60 @@ mod tests {
         let parsed: Config = serde_yml::from_str(&yaml).unwrap();
         assert_eq!(parsed.default_agent, "claude");
         assert!(parsed.agents.contains_key("claude"));
+    }
+
+    // --- TriggerState ---
+
+    #[test]
+    fn given_trigger_state_should_round_trip_json() {
+        let states = vec![
+            TriggerState::Active,
+            TriggerState::Gating,
+            TriggerState::Completed,
+            TriggerState::Failed,
+        ];
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let parsed: TriggerState = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn given_agent_entry_without_trigger_fields_should_deserialize_with_defaults() {
+        let json = r#"{
+            "id": "ag-old",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "streaming",
+            "prompt": null,
+            "startedAt": "2026-03-01T00:00:00Z"
+        }"#;
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.trigger_seq_index.is_none());
+        assert!(entry.trigger_state.is_none());
+        assert!(entry.gate_attempts.is_none());
+        assert!(!entry.no_trigger);
+    }
+
+    #[test]
+    fn given_agent_entry_with_trigger_fields_should_round_trip() {
+        let json = r#"{
+            "id": "ag-new",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "waiting",
+            "prompt": null,
+            "startedAt": "2026-03-01T00:00:00Z",
+            "triggerSeqIndex": 2,
+            "triggerState": "active",
+            "gateAttempts": 1,
+            "noTrigger": false
+        }"#;
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.trigger_seq_index, Some(2));
+        assert_eq!(entry.trigger_state, Some(TriggerState::Active));
+        assert_eq!(entry.gate_attempts, Some(1));
+        assert!(!entry.no_trigger);
     }
 }

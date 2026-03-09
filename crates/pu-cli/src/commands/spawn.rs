@@ -22,6 +22,7 @@ pub async fn run(
     command: Option<String>,
     vars: Vec<String>,
     plan_mode: bool,
+    no_trigger: bool,
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -60,6 +61,7 @@ pub async fn run(
             worktree,
             command: resolved_command,
             plan_mode,
+            no_trigger,
         },
     )
     .await?;
