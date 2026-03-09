@@ -39,10 +39,11 @@ struct ChatAreaView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 12) {
-                    ForEach(chatState.messages) { message in
-                        MessageBubbleView(message: message)
-                            .id(message.id)
+                LazyVStack(spacing: 0) {
+                    ForEach(chatState.messages.indices, id: \.self) { index in
+                        MessageStreamView(message: chatState.messages[index])
+                            .padding(.top, topPadding(for: index))
+                            .id(chatState.messages[index].id)
                     }
                 }
                 .padding(20)
@@ -59,6 +60,18 @@ struct ChatAreaView: View {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
+        }
+    }
+
+    private func topPadding(for index: Int) -> CGFloat {
+        guard index > 0 else { return 0 }
+        let current = chatState.messages[index].role
+        let previous = chatState.messages[index - 1].role
+        switch (previous, current) {
+        case (.user, .user), (.assistant, .assistant):
+            return PurePointTheme.inlineSpacing
+        default:
+            return PurePointTheme.turnSpacing
         }
     }
 

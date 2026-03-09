@@ -35,6 +35,13 @@ enum PurePointTheme {
     static let navFont = Font.system(size: 12, weight: .medium)
     static let treeFont = Font.system(size: 12)
     static let smallFont = Font.system(size: 11)
+
+    // MARK: - Chat Stream
+    static let turnSpacing: CGFloat = 20
+    static let inlineSpacing: CGFloat = 4
+    static let accentBarWidth: CGFloat = 2
+    static let chatFont = Font.system(size: 14)
+    static let chatLabelFont = Font.system(size: 11, weight: .semibold)
 }
 
 extension Bundle {

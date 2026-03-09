@@ -16,7 +16,28 @@ enum TranscriptParser {
 
             switch type {
             case "user":
-                if let msg = parseUserRecord(record) {
+                if let toolResultBlocks = extractToolResultOnlyBlocks(record) {
+                    if let lastIndex = messages.indices.last,
+                        messages[lastIndex].role == .assistant
+                    {
+                        messages[lastIndex].contentBlocks.append(contentsOf: toolResultBlocks)
+                        for resultBlock in toolResultBlocks {
+                            if case .toolResult(_, let toolUseId, _, let isError) = resultBlock {
+                                for i in messages[lastIndex].contentBlocks.indices {
+                                    if case .toolUse(let id, let name, let input, _) =
+                                        messages[lastIndex].contentBlocks[i],
+                                        id == toolUseId
+                                    {
+                                        messages[lastIndex].contentBlocks[i] = .toolUse(
+                                            id: id, name: name, input: input,
+                                            status: isError ? .failed : .completed
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if let msg = parseUserRecord(record) {
                     messages.append(msg)
                 }
             case "assistant":
@@ -44,6 +65,38 @@ enum TranscriptParser {
         return messages
     }
 
+    private static func extractToolResultOnlyBlocks(_ record: [String: Any]) -> [ContentBlock]? {
+        guard let message = record["message"] as? [String: Any],
+            let role = message["role"] as? String,
+            role == "user",
+            let blocks = message["content"] as? [[String: Any]]
+        else { return nil }
+
+        var resultBlocks: [ContentBlock] = []
+        for block in blocks {
+            guard let blockType = block["type"] as? String else { continue }
+            guard blockType == "tool_result" else { return nil }
+
+            let toolUseId = block["tool_use_id"] as? String ?? ""
+            let isError = block["is_error"] as? Bool ?? false
+            let output: String
+            if let text = block["content"] as? String {
+                output = text
+            } else {
+                output = ""
+            }
+            resultBlocks.append(
+                .toolResult(
+                    id: UUID().uuidString,
+                    toolUseId: toolUseId,
+                    output: output,
+                    isError: isError
+                ))
+        }
+
+        return resultBlocks.isEmpty ? nil : resultBlocks
+    }
+
     private static func parseUserRecord(_ record: [String: Any]) -> ChatMessage? {
         guard let message = record["message"] as? [String: Any],
             let role = message["role"] as? String,
@@ -64,7 +117,6 @@ enum TranscriptParser {
 
         if let blocks = content as? [[String: Any]] {
             var contentBlocks: [ContentBlock] = []
-            var hasToolResult = false
 
             for block in blocks {
                 guard let blockType = block["type"] as? String else { continue }
@@ -75,7 +127,6 @@ enum TranscriptParser {
                         contentBlocks.append(.text(id: UUID().uuidString, text: text))
                     }
                 case "tool_result":
-                    hasToolResult = true
                     let toolUseId = block["tool_use_id"] as? String ?? ""
                     let isError = block["is_error"] as? Bool ?? false
                     let output: String
@@ -94,21 +145,6 @@ enum TranscriptParser {
                 default:
                     break
                 }
-            }
-
-            // Skip user messages that only contain tool_results (they're system messages)
-            if hasToolResult
-                && contentBlocks.allSatisfy({ block in
-                    if case .toolResult = block { return true }
-                    return false
-                })
-            {
-                // Still include as a separate message so tool results can be displayed
-                return ChatMessage(
-                    role: .user,
-                    timestamp: timestamp,
-                    contentBlocks: contentBlocks
-                )
             }
 
             guard !contentBlocks.isEmpty else { return nil }

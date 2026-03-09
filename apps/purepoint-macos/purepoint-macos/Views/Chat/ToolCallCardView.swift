@@ -11,7 +11,6 @@ struct ToolCallCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isExpanded.toggle()
@@ -34,19 +33,12 @@ struct ToolCallCardView: View {
                     Spacer()
 
                     statusIndicator
-
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
             }
             .buttonStyle(.plain)
 
-            // Expanded content
             if isExpanded {
-                Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     if let input {
                         Text(input)
@@ -63,15 +55,9 @@ struct ToolCallCardView: View {
                             .textSelection(.enabled)
                     }
                 }
-                .padding(10)
+                .padding(.leading, 24)
             }
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isError ? Color.red.opacity(0.3) : Color.secondary.opacity(0.12), lineWidth: 1)
-        )
     }
 
     private var toolIcon: String {

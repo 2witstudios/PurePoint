@@ -71,12 +71,134 @@ struct TranscriptParserTests {
 
         let messages = try TranscriptParser.parse(transcriptPath: path.path)
 
-        // tool_result lines become part of assistant context, not separate user messages
-        let toolResults = messages.flatMap(\.contentBlocks).compactMap { block -> String? in
-            guard case .toolResult(_, let toolUseId, _, _) = block else { return nil }
-            return toolUseId
+        // Tool result folded into assistant — no separate user message
+        #expect(messages.count == 2)
+        #expect(messages[0].role == .user)
+        #expect(messages[1].role == .assistant)
+
+        // Tool result block is on the assistant message
+        let assistantBlocks = messages[1].contentBlocks
+        let hasToolResult = assistantBlocks.contains { block in
+            if case .toolResult(_, let tid, _, _) = block, tid == "toolu_xyz" { return true }
+            return false
         }
-        #expect(toolResults.contains("toolu_xyz"))
+        #expect(hasToolResult)
+
+        // Tool use status updated to .completed
+        let toolUseCompleted = assistantBlocks.contains { block in
+            if case .toolUse(let id, _, _, let status) = block,
+                id == "toolu_xyz",
+                case .completed = status
+            {
+                return true
+            }
+            return false
+        }
+        #expect(toolUseCompleted)
+    }
+
+    @Test func givenToolResultOnlyUserRecordShouldFoldIntoAssistant() throws {
+        let tempDir = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let path = tempDir.appendingPathComponent("session.jsonl")
+        try Self.writeTranscript(
+            to: path,
+            lines: [
+                .user("Do something"),
+                .assistantWithToolUse(toolId: "toolu_001", toolName: "Bash", toolInput: "{}"),
+                .toolResult(toolUseId: "toolu_001", content: "output", isError: false),
+            ])
+
+        let messages = try TranscriptParser.parse(transcriptPath: path.path)
+
+        // Only 2 messages: original user + assistant (tool result folded in)
+        #expect(messages.count == 2)
+        #expect(messages[0].role == .user)
+        #expect(messages[1].role == .assistant)
+
+        // No user message for the tool result
+        let userMessages = messages.filter { $0.role == .user }
+        #expect(userMessages.count == 1)
+
+        // Tool result is on the assistant message
+        let assistantResults = messages[1].contentBlocks.filter { block in
+            if case .toolResult = block { return true }
+            return false
+        }
+        #expect(assistantResults.count == 1)
+    }
+
+    @Test func givenMixedUserContentShouldKeepUserMessage() throws {
+        let tempDir = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let path = tempDir.appendingPathComponent("session.jsonl")
+
+        // Manually build transcript with mixed user record (text + tool_result)
+        var payloads: [String] = []
+        payloads.append(
+            """
+            {"type":"progress","cwd":"/tmp/test","sessionId":"test-session","gitBranch":"main","timestamp":"2026-03-01T09:00:00.000Z"}
+            """)
+        payloads.append(Self.userLine("Setup"))
+        payloads.append(
+            """
+            {"type":"assistant","sessionId":"test-session","timestamp":"2026-03-01T09:01:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_mix","name":"Read","input":{}}]}}
+            """)
+        payloads.append(
+            """
+            {"type":"user","sessionId":"test-session","timestamp":"2026-03-01T09:02:00.000Z","message":{"role":"user","content":[{"type":"text","text":"Here is context"},{"type":"tool_result","tool_use_id":"toolu_mix","content":"result data","is_error":false}]}}
+            """)
+        try Data(payloads.joined(separator: "\n").utf8).write(to: path)
+
+        let messages = try TranscriptParser.parse(transcriptPath: path.path)
+
+        // Mixed content keeps the user message (not folded)
+        let userMessages = messages.filter { $0.role == .user }
+        #expect(userMessages.count == 2)
+    }
+
+    @Test func givenErrorToolResultShouldSetFailedStatus() throws {
+        let tempDir = try Self.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let path = tempDir.appendingPathComponent("session.jsonl")
+        try Self.writeTranscript(
+            to: path,
+            lines: [
+                .user("Run this"),
+                .assistantWithToolUse(toolId: "toolu_err", toolName: "Bash", toolInput: "{}"),
+                .toolResult(toolUseId: "toolu_err", content: "command failed", isError: true),
+            ])
+
+        let messages = try TranscriptParser.parse(transcriptPath: path.path)
+
+        #expect(messages.count == 2)
+        let assistantBlocks = messages[1].contentBlocks
+
+        // Tool use status should be .failed when isError is true
+        let toolUseFailed = assistantBlocks.contains { block in
+            if case .toolUse(let id, _, _, let status) = block,
+                id == "toolu_err",
+                case .failed = status
+            {
+                return true
+            }
+            return false
+        }
+        #expect(toolUseFailed)
+
+        // Tool result should be marked as error
+        let toolResultIsError = assistantBlocks.contains { block in
+            if case .toolResult(_, let tid, _, let isError) = block,
+                tid == "toolu_err", isError
+            {
+                return true
+            }
+            return false
+        }
+        #expect(toolResultIsError)
     }
 
     @Test func givenAssistantWithCodeBlocksShouldSplitContent() throws {
