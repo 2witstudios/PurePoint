@@ -65,6 +65,11 @@ struct MonthCalendarView: View {
             // Event pills
             ForEach(Array(dayEvents.prefix(maxVisible).enumerated()), id: \.offset) { _, occurrence in
                 EventPillView(event: occurrence.event, occurrence: occurrence.date)
+                    .highPriorityGesture(
+                        TapGesture().onEnded {
+                            state.handleEventClick(event: occurrence.event)
+                        }
+                    )
             }
 
             if dayEvents.count > maxVisible {

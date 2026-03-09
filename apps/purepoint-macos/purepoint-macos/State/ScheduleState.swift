@@ -21,6 +21,7 @@ final class ScheduleState {
     var currentDate: Date = Date()
     var events: [ScheduleEvent] = []
     var showingCreationSheet = false
+    var showingEditSheet = false
     var creationPrefillDate: Date?
     var selectedEvent: ScheduleEvent?
 
@@ -196,6 +197,11 @@ final class ScheduleState {
     func handleTimeSlotClick(date: Date) {
         creationPrefillDate = date
         showingCreationSheet = true
+    }
+
+    func handleEventClick(event: ScheduleEvent) {
+        selectedEvent = event
+        showingEditSheet = true
     }
 
     func addEvent(_ event: ScheduleEvent) {

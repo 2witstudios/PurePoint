@@ -18,8 +18,8 @@ struct ScheduleListView: View {
                 ForEach(groupedOccurrences, id: \.date) { group in
                     sectionHeader(group.label)
 
-                    ForEach(Array(group.items.enumerated()), id: \.offset) { _, occurrence in
-                        eventRow(occurrence)
+                    ForEach(group.items) { item in
+                        eventRow(item)
                         Divider()
                             .padding(.leading, 80)
                     }
@@ -43,7 +43,7 @@ struct ScheduleListView: View {
 
     // MARK: - Event Row
 
-    private func eventRow(_ occurrence: (date: Date, event: ScheduleEvent)) -> some View {
+    private func eventRow(_ occurrence: OccurrenceItem) -> some View {
         HStack(spacing: 10) {
             // Time
             Text(Self.timeFormatter.string(from: occurrence.date))
@@ -91,14 +91,30 @@ struct ScheduleListView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+        .onTapGesture {
+            state.handleEventClick(event: occurrence.event)
+        }
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 
     // MARK: - Grouped Data
 
+    private struct OccurrenceItem: Identifiable {
+        let id: String
+        let date: Date
+        let event: ScheduleEvent
+    }
+
     private struct DayGroup {
         let date: Date
         let label: String
-        let items: [(date: Date, event: ScheduleEvent)]
+        let items: [OccurrenceItem]
     }
 
     private var groupedOccurrences: [DayGroup] {
@@ -107,10 +123,15 @@ struct ScheduleListView: View {
 
         let all = state.expandedOccurrences(from: start, to: end)
 
-        var grouped: [Date: [(date: Date, event: ScheduleEvent)]] = [:]
+        var grouped: [Date: [OccurrenceItem]] = [:]
         for occ in all {
             let dayKey = calendar.startOfDay(for: occ.date)
-            grouped[dayKey, default: []].append(occ)
+            let item = OccurrenceItem(
+                id: "\(occ.event.name)-\(occ.date.timeIntervalSince1970)",
+                date: occ.date,
+                event: occ.event
+            )
+            grouped[dayKey, default: []].append(item)
         }
 
         return grouped.keys.sorted().map { dayKey in

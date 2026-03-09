@@ -104,7 +104,7 @@ enum RecurrenceRule: String, CaseIterable, Identifiable {
 // MARK: - Event Color
 
 enum EventColor {
-    private static let palette: [Color] = [
+    static let palette: [Color] = [
         .blue, .purple, .teal, .indigo,
         .orange, .pink, .green, .yellow,
     ]
@@ -119,8 +119,39 @@ enum EventColor {
     }
 
     static func forProject(_ name: String) -> Color {
+        if let index = savedIndex(forEvent: name) {
+            return palette[index % palette.count]
+        }
         let hash = stableHash(name)
         return palette[Int(hash % UInt(palette.count))]
+    }
+
+    /// Check event-level color first, then fall back to project color.
+    static func forEvent(_ eventName: String, projectName: String) -> Color {
+        if let index = savedIndex(forEvent: eventName) {
+            return palette[index % palette.count]
+        }
+        return forProject(projectName)
+    }
+
+    // MARK: - UserDefaults Color Storage
+
+    private static func key(for eventName: String) -> String {
+        "scheduleColor:\(eventName)"
+    }
+
+    static func save(index: Int, forEvent name: String) {
+        UserDefaults.standard.set(index, forKey: key(for: name))
+    }
+
+    static func savedIndex(forEvent name: String) -> Int? {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: key(for: name)) != nil else { return nil }
+        return defaults.integer(forKey: key(for: name))
+    }
+
+    static func remove(forEvent name: String) {
+        UserDefaults.standard.removeObject(forKey: key(for: name))
     }
 }
 
@@ -158,7 +189,7 @@ struct ScheduleEvent: Identifiable {
         self.recurrence = recurrence
         self.projectName = projectName
         self.target = target
-        self.color = EventColor.forProject(projectName)
+        self.color = EventColor.forEvent(name, projectName: projectName)
         self.enabled = enabled
         self.scope = scope
         self.trigger = trigger
@@ -173,7 +204,7 @@ struct ScheduleEvent: Identifiable {
         self.projectName = payload.projectRoot
         self.target = payload.target
         self.scope = payload.scope
-        self.color = EventColor.forProject(payload.projectRoot)
+        self.color = EventColor.forEvent(payload.name, projectName: payload.projectRoot)
         self.trigger = payload.trigger
 
         // Parse start_at ISO 8601 date (with or without fractional seconds)

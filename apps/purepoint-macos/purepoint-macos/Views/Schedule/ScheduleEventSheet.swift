@@ -1,8 +1,9 @@
 import SwiftUI
 
-struct ScheduleCreationSheet: View {
+struct ScheduleEventSheet: View {
     @Bindable var state: ScheduleState
     let projectRoot: String
+    let editingEvent: ScheduleEvent?
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -10,11 +11,15 @@ struct ScheduleCreationSheet: View {
     @State private var date = Date()
     @State private var recurrence: RecurrenceRule = .none
     @State private var target = ""
+    @State private var selectedColorIndex: Int?
+    @State private var showDeleteConfirm = false
 
     // Trigger fields
     @State private var triggerName = ""
     @State private var triggerPrompt = ""
     @State private var triggerAgent = "claude"
+
+    private var isEditing: Bool { editingEvent != nil }
 
     private static let previewFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -33,11 +38,48 @@ struct ScheduleCreationSheet: View {
             Divider()
             sheetFooter
         }
-        .frame(width: 400, height: 520)
-        .onAppear {
-            if let prefill = state.creationPrefillDate {
-                date = prefill
+        .frame(width: 400, height: 560)
+        .onAppear { prefillFields() }
+        .alert("Delete Schedule", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) {
+                guard let event = editingEvent else { return }
+                Task {
+                    EventColor.remove(forEvent: event.name)
+                    await state.deleteSchedule(projectRoot: projectRoot, name: event.name, scope: event.scope)
+                    dismiss()
+                }
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This schedule will be permanently deleted.")
+        }
+    }
+
+    // MARK: - Prefill
+
+    private func prefillFields() {
+        if let event = editingEvent {
+            name = event.name
+            type = event.type
+            date = event.date
+            recurrence = event.recurrence
+            target = event.target
+            selectedColorIndex = EventColor.savedIndex(forEvent: event.name)
+
+            // Prefill trigger fields
+            if let trigger = event.trigger {
+                switch trigger {
+                case .agentDef(let defName):
+                    triggerName = defName
+                case .swarmDef(let defName, _):
+                    triggerName = defName
+                case .inlinePrompt(let prompt, let agent):
+                    triggerPrompt = prompt
+                    triggerAgent = agent
+                }
+            }
+        } else if let prefill = state.creationPrefillDate {
+            date = prefill
         }
     }
 
@@ -45,7 +87,7 @@ struct ScheduleCreationSheet: View {
 
     private var sheetHeader: some View {
         HStack {
-            Text("New Schedule")
+            Text(isEditing ? "Edit Schedule" : "New Schedule")
                 .font(.system(size: 14, weight: .semibold))
             Spacer()
         }
@@ -92,9 +134,42 @@ struct ScheduleCreationSheet: View {
 
             TextField("Target (path or scope)", text: $target)
                 .textFieldStyle(.roundedBorder)
+
+            colorPicker
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
+    }
+
+    // MARK: - Color Picker
+
+    private var colorPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Color")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                ForEach(Array(EventColor.palette.enumerated()), id: \.offset) { index, color in
+                    Circle()
+                        .fill(color)
+                        .frame(width: 20, height: 20)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(.white, lineWidth: 2)
+                                .opacity(selectedColorIndex == index ? 1 : 0)
+                        )
+                        .overlay(
+                            Circle()
+                                .strokeBorder(color.opacity(0.5), lineWidth: 1)
+                                .opacity(selectedColorIndex == index ? 0 : 1)
+                        )
+                        .onTapGesture {
+                            selectedColorIndex = selectedColorIndex == index ? nil : index
+                        }
+                }
+            }
+        }
     }
 
     // MARK: - Preview
@@ -142,6 +217,13 @@ struct ScheduleCreationSheet: View {
 
     private var sheetFooter: some View {
         HStack {
+            if isEditing {
+                Button("Delete") {
+                    showDeleteConfirm = true
+                }
+                .foregroundStyle(.red)
+            }
+
             Button("Cancel") {
                 dismiss()
             }
@@ -149,27 +231,48 @@ struct ScheduleCreationSheet: View {
 
             Spacer()
 
-            Button("Create") {
-                Task {
-                    let trigger = buildTrigger()
-                    await state.saveSchedule(
-                        projectRoot: projectRoot,
-                        name: name.isEmpty ? "Untitled Schedule" : name,
-                        enabled: true,
-                        recurrence: recurrence,
-                        startAt: date,
-                        trigger: trigger,
-                        target: target,
-                        scope: "local"
-                    )
-                    dismiss()
-                }
+            Button(isEditing ? "Save" : "Create") {
+                Task { await saveAndDismiss() }
             }
             .keyboardShortcut(.defaultAction)
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+
+    private func saveAndDismiss() async {
+        let effectiveName = name.isEmpty ? "Untitled Schedule" : name
+
+        // If editing and name changed, delete old entry first (name is the backend key)
+        if let original = editingEvent, original.name != effectiveName {
+            await state.deleteSchedule(projectRoot: projectRoot, name: original.name, scope: original.scope)
+            EventColor.remove(forEvent: original.name)
+        }
+
+        // Save color preference
+        if let index = selectedColorIndex {
+            EventColor.save(index: index, forEvent: effectiveName)
+        } else if let original = editingEvent {
+            // Clear color override if deselected
+            EventColor.remove(forEvent: original.name)
+            if original.name != effectiveName {
+                EventColor.remove(forEvent: effectiveName)
+            }
+        }
+
+        let trigger = buildTrigger()
+        await state.saveSchedule(
+            projectRoot: projectRoot,
+            name: effectiveName,
+            enabled: editingEvent?.enabled ?? true,
+            recurrence: recurrence,
+            startAt: date,
+            trigger: trigger,
+            target: target,
+            scope: editingEvent?.scope ?? "local"
+        )
+        dismiss()
     }
 
     private func buildTrigger() -> ScheduleTriggerPayload {

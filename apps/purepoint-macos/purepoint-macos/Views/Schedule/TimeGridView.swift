@@ -89,21 +89,7 @@ struct TimeGridView: View {
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
             let occurrences = state.expandedOccurrences(from: dayStart, to: dayEnd)
 
-            ForEach(Array(occurrences.enumerated()), id: \.offset) { _, occurrence in
-                let comps = calendar.dateComponents([.hour, .minute], from: occurrence.date)
-                let hourFrac = CGFloat(comps.hour ?? 0) + CGFloat(comps.minute ?? 0) / 60.0
-                let y = hourFrac * hourHeight
-                let blockHeight = max(hourHeight * 0.75, 30)
-
-                EventBlockView(event: occurrence.event, occurrence: occurrence.date, height: blockHeight)
-                    .frame(width: columnWidth - 8)
-                    .position(
-                        x: gutterWidth + CGFloat(columnIndex) * columnWidth + columnWidth / 2,
-                        y: y + blockHeight / 2
-                    )
-            }
-
-            // Click-to-create overlay
+            // Click-to-create overlay — rendered FIRST so events sit on top
             Color.clear
                 .contentShape(Rectangle())
                 .frame(width: columnWidth, height: geo.size.height)
@@ -125,6 +111,25 @@ struct TimeGridView: View {
                     }
                 }
                 .allowsHitTesting(true)
+
+            // Event blocks — rendered on top of overlay so clicks hit events first
+            ForEach(Array(occurrences.enumerated()), id: \.offset) { _, occurrence in
+                let comps = calendar.dateComponents([.hour, .minute], from: occurrence.date)
+                let hourFrac = CGFloat(comps.hour ?? 0) + CGFloat(comps.minute ?? 0) / 60.0
+                let y = hourFrac * hourHeight
+                let blockHeight = max(hourHeight * 0.75, 30)
+
+                EventBlockView(event: occurrence.event, occurrence: occurrence.date, height: blockHeight)
+                    .frame(width: columnWidth - 8, height: blockHeight)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        state.handleEventClick(event: occurrence.event)
+                    }
+                    .position(
+                        x: gutterWidth + CGFloat(columnIndex) * columnWidth + columnWidth / 2,
+                        y: y + blockHeight / 2
+                    )
+            }
         }
     }
 
