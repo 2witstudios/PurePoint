@@ -12,7 +12,7 @@ pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
     let project_root = commands::cwd_string()?;
     let resp = client::send_request(socket, &Request::ListTriggers { project_root }).await?;
     let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }
 
@@ -28,7 +28,7 @@ pub async fn run_show(socket: &Path, name: &str, json: bool) -> Result<(), CliEr
     )
     .await?;
     let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }
 
@@ -86,7 +86,7 @@ pub async fn run_create(socket: &Path, params: CreateTriggerParams) -> Result<()
     )
     .await?;
     let resp = output::check_response(resp, params.json)?;
-    output::print_response(&resp, params.json);
+    output::print_response(&resp, params.json)?;
     Ok(())
 }
 
@@ -108,6 +108,6 @@ pub async fn run_delete(
     )
     .await?;
     let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    output::print_response(&resp, json)?;
     Ok(())
 }

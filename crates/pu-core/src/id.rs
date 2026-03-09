@@ -8,7 +8,7 @@ const ID_LEN: usize = 8;
 fn random_id(prefix: &str) -> String {
     let mut rng = rand::rng();
     let suffix: String = (0..ID_LEN)
-        .map(|_| *ALPHABET.choose(&mut rng).unwrap() as char)
+        .map(|_| *ALPHABET.choose(&mut rng).expect("ALPHABET is non-empty") as char)
         .collect();
     format!("{prefix}{suffix}")
 }

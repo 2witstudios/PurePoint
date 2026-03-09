@@ -1,5 +1,6 @@
 pub mod agent_def;
 pub mod attach;
+pub mod bench;
 pub mod clean;
 pub mod diff;
 pub mod gate;
@@ -9,12 +10,14 @@ pub mod init;
 pub mod kill;
 pub mod logs;
 pub mod prompt;
+pub mod pulse;
 pub mod schedule;
 pub mod send;
 pub mod spawn;
 pub mod status;
 pub mod swarm;
 pub mod trigger;
+pub mod watch;
 
 use std::collections::HashMap;
 

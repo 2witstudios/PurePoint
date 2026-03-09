@@ -81,12 +81,12 @@ class CommandPalettePanel: NSPanel {
         guard let vc = panel.contentViewController as? CommandPaletteViewController else {
             return panel
         }
-        vc.onSelect = { result in
-            panel.dismiss()
+        vc.onSelect = { [weak panel] result in
+            panel?.dismiss()
             onSelect(result)
         }
-        vc.onDismiss = {
-            panel.dismiss()
+        vc.onDismiss = { [weak panel] in
+            panel?.dismiss()
         }
         vc.setItems(items)
         panel.showRelativeTo(window: window)

@@ -28,7 +28,9 @@ pub fn write_manifest(project_root: &Path, manifest: &Manifest) -> Result<(), Pu
     let file = std::fs::File::create(&tmp_path)?;
     let mut writer = std::io::BufWriter::new(file);
     writer.write_all(content.as_bytes())?;
-    let file = writer.into_inner().map_err(|e| e.into_error())?;
+    let file = writer
+        .into_inner()
+        .map_err(std::io::IntoInnerError::into_error)?;
     file.sync_all()?;
     std::fs::rename(&tmp_path, &path)?;
     Ok(())
