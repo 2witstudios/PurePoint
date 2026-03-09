@@ -126,14 +126,14 @@ Run `pu --help` for full usage.
 
 | | |
 |---|---|
-| [Getting Started](docs/guide/getting-started.md) | Install, first agent, cleanup |
-| [CLI Reference](docs/guide/cli-reference.md) | All 21 commands with examples |
-| [Configuration](docs/guide/configuration.md) | Agent types, launch args, config.yaml |
-| [Concepts](docs/guide/concepts.md) | Mental model: worktrees, agents, swarms, scope |
-| [Templates & Definitions](docs/guide/workflows/templates-and-definitions.md) | Prompts, agent defs, swarm defs |
-| [Scheduling & Triggers](docs/guide/workflows/scheduling-and-triggers.md) | Schedules, triggers, git hooks |
-| [Troubleshooting](docs/guide/troubleshooting.md) | Common issues and solutions |
-| [Contributing](CONTRIBUTING.md) | Build, test, code style, architecture |
+| [Getting Started](https://purepoint.dev/docs/guide/getting-started) | Install, first agent, cleanup |
+| [CLI Reference](https://purepoint.dev/docs/guide/cli-reference) | All 21 commands with examples |
+| [Configuration](https://purepoint.dev/docs/guide/configuration) | Agent types, launch args, config.yaml |
+| [Concepts](https://purepoint.dev/docs/guide/concepts) | Mental model: worktrees, agents, swarms, scope |
+| [Templates & Definitions](https://purepoint.dev/docs/guide/workflows/templates-and-definitions) | Prompts, agent defs, swarm defs |
+| [Scheduling & Triggers](https://purepoint.dev/docs/guide/workflows/scheduling-and-triggers) | Schedules, triggers, git hooks |
+| [Troubleshooting](https://purepoint.dev/docs/guide/troubleshooting) | Common issues and solutions |
+| [Contributing](https://purepoint.dev/docs/contributing/overview) | Build, test, code style, architecture |
 
 ## Current Status
 
