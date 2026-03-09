@@ -141,7 +141,7 @@ mod tests {
     fn given_kill_target_required_should_hint_flags() {
         let err = PuError::KillTargetRequired;
         let msg = format!("{err}");
-        assert!(msg.contains("--agent") || msg.contains("--all"));
+        assert!(msg.contains("--agent") && msg.contains("--worktree") && msg.contains("--all"));
     }
 
     #[test]

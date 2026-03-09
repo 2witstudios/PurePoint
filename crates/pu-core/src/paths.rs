@@ -72,7 +72,25 @@ pub fn global_schedules_dir() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("schedules"))
 }
 
+#[cfg(test)]
+thread_local! {
+    static HOME_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Override `home_dir()` for the current test thread. Thread-safe alternative
+/// to `unsafe { std::env::set_var("HOME", ...) }`.
+#[cfg(test)]
+pub(crate) fn set_home_override(path: Option<PathBuf>) {
+    HOME_OVERRIDE.with(|o| *o.borrow_mut() = path);
+}
+
 fn home_dir() -> Result<PathBuf, std::io::Error> {
+    #[cfg(test)]
+    {
+        if let Some(p) = HOME_OVERRIDE.with(|o| o.borrow().clone()) {
+            return Ok(p);
+        }
+    }
     std::env::var("HOME")
         .map(PathBuf::from)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "$HOME not set"))

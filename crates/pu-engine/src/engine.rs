@@ -168,7 +168,8 @@ impl Engine {
             | Request::SaveSchedule { project_root, .. }
             | Request::EnableSchedule { project_root, .. }
             | Request::DisableSchedule { project_root, .. }
-            | Request::Diff { project_root, .. } => {
+            | Request::Diff { project_root, .. }
+            | Request::Pulse { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -429,6 +430,7 @@ impl Engine {
                 self.handle_diff(&project_root, worktree_id.as_deref(), stat)
                     .await
             }
+            Request::Pulse { project_root } => self.handle_pulse(&project_root).await,
         }
     }
 
@@ -649,14 +651,11 @@ impl Engine {
         let creating_new_worktree = !root && worktree.is_none();
         let agent_name = if creating_new_worktree {
             // Worktree spawns require a user-provided name (becomes the branch slug)
-            let raw = match name {
-                Some(n) => n,
-                None => {
-                    return Response::Error {
-                        code: "INVALID_ARGUMENT".into(),
-                        message: "worktree spawn requires a name".into(),
-                    };
-                }
+            let Some(raw) = name else {
+                return Response::Error {
+                    code: "INVALID_ARGUMENT".into(),
+                    message: "worktree spawn requires a name".into(),
+                };
             };
             let normalized = pu_core::id::normalize_worktree_name(&raw);
             if normalized.is_empty() {
@@ -703,7 +702,7 @@ impl Engine {
                 } else {
                     (
                         parts[0].to_string(),
-                        parts[1..].iter().map(|s| s.to_string()).collect(),
+                        parts[1..].iter().map(ToString::to_string).collect(),
                     )
                 }
             };
@@ -1017,14 +1016,11 @@ impl Engine {
         };
 
         // Resolve name
-        let raw = match name {
-            Some(n) => n,
-            None => {
-                return Response::Error {
-                    code: "INVALID_ARGUMENT".into(),
-                    message: "worktree creation requires a name".into(),
-                };
-            }
+        let Some(raw) = name else {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "worktree creation requires a name".into(),
+            };
         };
         let worktree_name = pu_core::id::normalize_worktree_name(&raw);
         if worktree_name.is_empty() {
@@ -1427,6 +1423,14 @@ impl Engine {
 
         let pid = handle.pid;
 
+        // Store handle in session map BEFORE writing manifest.
+        // ManifestWatcher in Swift fires on manifest write and immediately
+        // tries to attach — the session must already be in the map.
+        self.sessions
+            .lock()
+            .await
+            .insert(agent_id.to_string(), handle);
+
         // 6. Update manifest: Suspended → Running, new PID
         let aid = agent_id.to_string();
         let sid = session_id.clone();
@@ -1450,22 +1454,18 @@ impl Engine {
         .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
 
         if let Err(e) = manifest_result {
-            // Rollback: kill the resumed process
-            self.pty_host
-                .kill(&handle, Duration::from_secs(2))
-                .await
-                .ok();
+            // Rollback: remove session and kill process
+            if let Some(handle) = self.sessions.lock().await.remove(agent_id) {
+                self.pty_host
+                    .kill(&handle, Duration::from_secs(2))
+                    .await
+                    .ok();
+            }
             return Response::Error {
                 code: "RESUME_FAILED".into(),
                 message: format!("failed to update manifest: {e}"),
             };
         }
-
-        // 7. Store handle in session map
-        self.sessions
-            .lock()
-            .await
-            .insert(agent_id.to_string(), handle);
 
         self.notify_status_change(project_root).await;
 
@@ -1875,9 +1875,8 @@ impl Engine {
     /// Called synchronously inside handle_init so state is correct before the first status read.
     fn reconcile_agents_on_init(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
@@ -1922,9 +1921,8 @@ impl Engine {
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
-        let m = match manifest::read_manifest(root) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(m) = manifest::read_manifest(root) else {
+            return;
         };
         let needs_reap = |a: &AgentEntry| {
             !a.suspended
@@ -3198,6 +3196,113 @@ impl Engine {
             other => Err(format!(
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
+        }
+    }
+
+    fn agent_pulse_entry(
+        &self,
+        agent: &AgentEntry,
+        sessions: &HashMap<String, AgentHandle>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> pu_core::protocol::AgentPulseEntry {
+        let (status, exit_code, idle_seconds) =
+            self.live_agent_status_sync(&agent.id, agent, sessions);
+        let runtime = (now - agent.started_at).num_seconds();
+        let snippet = agent.prompt.as_ref().map(|p| {
+            let trimmed = p.trim();
+            let truncated: String = trimmed.chars().take(77).collect();
+            if truncated.len() < trimmed.len() {
+                format!("{truncated}...")
+            } else {
+                truncated
+            }
+        });
+        pu_core::protocol::AgentPulseEntry {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            agent_type: agent.agent_type.clone(),
+            status,
+            exit_code,
+            runtime_seconds: runtime,
+            idle_seconds,
+            prompt_snippet: snippet,
+        }
+    }
+
+    async fn handle_pulse(&self, project_root: &str) -> Response {
+        let m = match self.read_manifest_async(project_root).await {
+            Ok(m) => m,
+            Err(e) => return Self::error_response(&e),
+        };
+
+        let sessions = self.sessions.lock().await;
+        let now = chrono::Utc::now();
+
+        // Build root-level agents
+        let root_agents: Vec<pu_core::protocol::AgentPulseEntry> = m
+            .agents
+            .values()
+            .map(|a| self.agent_pulse_entry(a, &sessions, now))
+            .collect();
+
+        // Build worktree entries — collect all agent data in one lock acquisition
+        let active_worktrees: Vec<_> = m
+            .worktrees
+            .values()
+            .filter(|wt| wt.status == WorktreeStatus::Active)
+            .cloned()
+            .collect();
+
+        let wt_agents: Vec<Vec<pu_core::protocol::AgentPulseEntry>> = active_worktrees
+            .iter()
+            .map(|wt| {
+                wt.agents
+                    .values()
+                    .map(|a| self.agent_pulse_entry(a, &sessions, now))
+                    .collect()
+            })
+            .collect();
+
+        // Drop sessions lock before shelling out to git
+        drop(sessions);
+
+        let mut worktrees = Vec::new();
+        for (wt, agents) in active_worktrees.iter().zip(wt_agents) {
+            let elapsed = (now - wt.created_at).num_seconds();
+
+            // Get git diff stats
+            let wt_path = std::path::PathBuf::from(&wt.path);
+            let (files_changed, insertions, deletions, diff_error) = if wt_path.exists() {
+                let base = wt.base_branch.as_deref();
+                match git::diff_worktree(&wt_path, base, true).await {
+                    Ok(output) => (
+                        output.files_changed,
+                        output.insertions,
+                        output.deletions,
+                        None,
+                    ),
+                    Err(e) => (0, 0, 0, Some(format!("{e}"))),
+                }
+            } else {
+                (0, 0, 0, None)
+            };
+
+            worktrees.push(pu_core::protocol::WorktreePulseEntry {
+                worktree_id: wt.id.clone(),
+                worktree_name: wt.name.clone(),
+                branch: wt.branch.clone(),
+                elapsed_seconds: elapsed,
+                agents,
+                files_changed,
+                insertions,
+                deletions,
+                diff_error,
+            });
+        }
+
+        Response::PulseReport {
+            worktrees,
+            root_agents,
         }
     }
 

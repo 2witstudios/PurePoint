@@ -69,6 +69,29 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Bench (suspend) agents — pull them off the court
+    #[command(long_about = "Bench (suspend) agents — pull them off the court.\n\n\
+        When using --all, the invoking agent may also be suspended.\n\
+        Use `pu play <agent_id>` to resume a benched agent.")]
+    Bench {
+        /// Agent ID to bench
+        #[arg(conflicts_with = "all")]
+        agent_id: Option<String>,
+        /// Bench all active agents
+        #[arg(long)]
+        all: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Put a benched agent back in play (resume)
+    Play {
+        /// Agent ID to resume
+        agent_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Kill agents
     Kill {
         /// Kill specific agent
@@ -150,6 +173,12 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Workspace pulse — agents, runtimes, and git stats at a glance
+    Pulse {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show git diffs across agent worktrees
     Diff {
         /// Diff a specific worktree
@@ -161,6 +190,12 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Live dashboard showing all agents in real-time
+    Watch {
+        /// Refresh interval in milliseconds (default: 800)
+        #[arg(long)]
+        interval: Option<u64>,
     },
     /// Remove worktrees, their agents, and branches
     Clean {
@@ -504,6 +539,14 @@ async fn main() {
             )
             .await
         }
+        Commands::Bench {
+            agent_id,
+            all,
+            json,
+        } => commands::bench::run_bench(&socket, agent_id, all, json).await,
+        Commands::Play { agent_id, json } => {
+            commands::bench::run_play(&socket, &agent_id, json).await
+        }
         Commands::Status { agent, json } => commands::status::run(&socket, agent, json).await,
         Commands::Kill {
             agent,
@@ -620,11 +663,13 @@ async fn main() {
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
         Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Pulse { json } => commands::pulse::run(&socket, json).await,
         Commands::Diff {
             worktree,
             stat,
             json,
         } => commands::diff::run(&socket, worktree, stat, json).await,
+        Commands::Watch { interval } => commands::watch::run(&socket, interval).await,
         Commands::Clean {
             worktree,
             all,

@@ -12,7 +12,7 @@ final class ManifestWatcher: @unchecked Sendable {
     private var debounceWork: DispatchWorkItem?
     private static let debounceInterval: TimeInterval = 0.05
 
-    var isWatching: Bool { source != nil }
+    var isWatching: Bool { queue.sync { source != nil } }
 
     init(path: String, onChange: @escaping @MainActor @Sendable () -> Void) {
         self.path = path
@@ -104,8 +104,10 @@ final class ManifestWatcher: @unchecked Sendable {
 
     deinit {
         debounceWork?.cancel()
-        source?.cancel()
-        if fileDescriptor >= 0 {
+        if source != nil {
+            // Cancel handler will close the fd — do not also close it here.
+            source?.cancel()
+        } else if fileDescriptor >= 0 {
             close(fileDescriptor)
         }
     }

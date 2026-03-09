@@ -58,7 +58,7 @@ pub async fn run(
             )
             .await?;
             let resp = output::check_response(resp, json)?;
-            output::print_response(&resp, json);
+            output::print_response(&resp, json)?;
         }
     } else if let Some(wt_id) = worktree {
         let resp = client::send_request(
@@ -70,7 +70,7 @@ pub async fn run(
         )
         .await?;
         let resp = output::check_response(resp, json)?;
-        output::print_response(&resp, json);
+        output::print_response(&resp, json)?;
     }
 
     Ok(())
