@@ -93,6 +93,12 @@ pub enum Request {
     },
     SpawnShell {
         cwd: String,
+        /// Optional command to run on startup. When set, the shell runs
+        /// `$SHELL -l -c '<command>; exec $SHELL -l'` so the command
+        /// executes without echo and the user gets an interactive shell
+        /// when it exits.
+        #[serde(default)]
+        command: Option<String>,
     },
     Attach {
         agent_id: String,

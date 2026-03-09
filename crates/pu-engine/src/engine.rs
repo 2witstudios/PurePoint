@@ -255,7 +255,9 @@ impl Engine {
                 project_root,
                 agent_id,
             } => self.handle_status(&project_root, agent_id.as_deref()).await,
-            Request::SpawnShell { cwd } => self.handle_spawn_shell(&cwd).await,
+            Request::SpawnShell { cwd, command } => {
+                self.handle_spawn_shell(&cwd, command.as_deref()).await
+            }
             Request::Spawn {
                 project_root,
                 prompt,
@@ -774,14 +776,27 @@ impl Engine {
 
     /// Spawn a bare shell (no project, no manifest, no config).
     /// Used by Point Guard for a root terminal at the given cwd.
-    async fn handle_spawn_shell(&self, cwd: &str) -> Response {
+    async fn handle_spawn_shell(&self, cwd: &str, command: Option<&str>) -> Response {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
         let agent_id = pu_core::id::agent_id();
+
+        let args = if let Some(cmd) = command {
+            // Run the command, then drop into an interactive shell when it exits.
+            // Using -l -i -c ensures login profile + interactive mode (prompt on exit).
+            // `exec $SHELL -l -i` replaces the -c shell so the PTY stays alive.
+            vec![
+                "-l".to_string(),
+                "-c".to_string(),
+                format!("{cmd}; exec {shell} -l -i"),
+            ]
+        } else {
+            vec!["-l".to_string()]
+        };
 
         let env = self.agent_env().await;
         let spawn_config = SpawnConfig {
             command: shell,
-            args: vec!["-l".to_string()],
+            args,
             cwd: cwd.to_string(),
             env,
             env_remove: vec![],
