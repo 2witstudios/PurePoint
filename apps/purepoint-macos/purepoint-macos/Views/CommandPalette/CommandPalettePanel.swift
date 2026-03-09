@@ -3,6 +3,7 @@ import AppKit
 // MARK: - CommandPalettePanel
 
 class CommandPalettePanel: NSPanel {
+    private static weak var current: CommandPalettePanel?
     private var localMouseMonitor: Any?
 
     override var canBecomeKey: Bool { true }
@@ -48,6 +49,9 @@ class CommandPalettePanel: NSPanel {
     }
 
     func dismiss() {
+        if CommandPalettePanel.current === self {
+            CommandPalettePanel.current = nil
+        }
         if let monitor = localMouseMonitor {
             NSEvent.removeMonitor(monitor)
             localMouseMonitor = nil
@@ -77,6 +81,10 @@ class CommandPalettePanel: NSPanel {
             builtInVariants: AgentVariant.allVariants, agents: [], swarms: []),
         onSelect: @escaping (CommandPaletteResult) -> Void
     ) -> CommandPalettePanel {
+        if let existing = current, existing.isVisible {
+            existing.dismiss()
+            return existing
+        }
         let panel = CommandPalettePanel()
         guard let vc = panel.contentViewController as? CommandPaletteViewController else {
             return panel
@@ -90,6 +98,7 @@ class CommandPalettePanel: NSPanel {
         }
         vc.setItems(items)
         panel.showRelativeTo(window: window)
+        current = panel
         return panel
     }
 }
