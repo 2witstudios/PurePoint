@@ -93,6 +93,8 @@ pub struct AgentEntry {
     pub suspended: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_seq_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +133,8 @@ impl<'de> Deserialize<'de> for AgentEntry {
             #[serde(default)]
             command: Option<String>,
             #[serde(default)]
+            plan_mode: bool,
+            #[serde(default)]
             trigger_seq_index: Option<u32>,
             #[serde(default)]
             trigger_state: Option<TriggerState>,
@@ -162,6 +166,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             suspended_at: raw.suspended_at,
             suspended,
             command: raw.command,
+            plan_mode: raw.plan_mode,
             trigger_seq_index: raw.trigger_seq_index,
             trigger_state: raw.trigger_state,
             trigger_total: raw.trigger_total,
@@ -441,6 +446,7 @@ mod tests {
             suspended_at: None,
             suspended: false,
             command: None,
+            plan_mode: false,
             trigger_seq_index: None,
             trigger_state: None,
             trigger_total: None,
@@ -456,6 +462,8 @@ mod tests {
         assert!(!json.contains("completedAt"));
         assert!(!json.contains("exitCode"));
         assert!(!json.contains("sessionId"));
+        // plan_mode false should be omitted
+        assert!(!json.contains("planMode"));
     }
 
     #[test]
@@ -494,6 +502,62 @@ mod tests {
         assert_eq!(entry.pid, Some(5678));
     }
 
+    #[test]
+    fn given_agent_entry_with_plan_mode_true_should_serialize() {
+        // given
+        let entry = AgentEntry {
+            id: "ag-plan".into(),
+            name: "claude".into(),
+            agent_type: "claude".into(),
+            status: AgentStatus::Streaming,
+            prompt: Some("research this".into()),
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            exit_code: None,
+            error: None,
+            pid: Some(1234),
+            session_id: None,
+            suspended_at: None,
+            suspended: false,
+            command: None,
+            plan_mode: true,
+            trigger_seq_index: None,
+            trigger_state: None,
+            trigger_total: None,
+            gate_attempts: None,
+            no_trigger: false,
+            trigger_name: None,
+        };
+
+        // when
+        let json = serde_json::to_string(&entry).unwrap();
+
+        // then
+        assert!(json.contains("planMode"));
+        let parsed: AgentEntry = serde_json::from_str(&json).unwrap();
+        assert!(parsed.plan_mode);
+    }
+
+    #[test]
+    fn given_old_manifest_without_plan_mode_should_default_to_false() {
+        // given: JSON without planMode field (backward compat with old manifests)
+        let json = r#"{
+            "id": "ag-old",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "streaming",
+            "prompt": "hello",
+            "startedAt": "2026-03-01T00:00:00Z",
+            "pid": 1234
+        }"#;
+
+        // when
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+
+        // then
+        assert!(!entry.plan_mode);
+    }
+
     // --- WorktreeEntry ---
 
     #[test]
@@ -516,6 +580,7 @@ mod tests {
                 suspended_at: None,
                 suspended: false,
                 command: None,
+                plan_mode: false,
                 trigger_seq_index: None,
                 trigger_state: None,
                 trigger_total: None,
@@ -573,6 +638,7 @@ mod tests {
                 suspended_at: None,
                 suspended: false,
                 command: None,
+                plan_mode: false,
                 trigger_seq_index: None,
                 trigger_state: None,
                 trigger_total: None,
@@ -606,6 +672,7 @@ mod tests {
                 suspended_at: None,
                 suspended: false,
                 command: None,
+                plan_mode: false,
                 trigger_seq_index: None,
                 trigger_state: None,
                 trigger_total: None,
@@ -653,6 +720,7 @@ mod tests {
             suspended_at: None,
             suspended: false,
             command: None,
+            plan_mode: false,
             trigger_seq_index: None,
             trigger_state: None,
             trigger_total: None,

@@ -21,6 +21,7 @@ pub async fn run(
     file: Option<String>,
     command: Option<String>,
     vars: Vec<String>,
+    plan_mode: bool,
     no_trigger: bool,
     json: bool,
 ) -> Result<(), CliError> {
@@ -59,6 +60,7 @@ pub async fn run(
             root,
             worktree,
             command: resolved_command,
+            plan_mode,
             no_trigger,
         },
     )

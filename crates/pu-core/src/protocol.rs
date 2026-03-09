@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Serde helper: encode `Vec<u8>` as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -56,6 +56,8 @@ pub enum Request {
         worktree: Option<String>,
         #[serde(default)]
         command: Option<String>,
+        #[serde(default)]
+        plan_mode: bool,
         #[serde(default)]
         no_trigger: bool,
     },
@@ -799,6 +801,7 @@ mod tests {
             root: false,
             worktree: None,
             command: None,
+            plan_mode: false,
             no_trigger: false,
         };
         let json = serde_json::to_string(&req).unwrap();
@@ -811,6 +814,48 @@ mod tests {
                 assert_eq!(name.unwrap(), "fix-auth");
                 assert_eq!(base.unwrap(), "develop");
             }
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_should_default_plan_mode_to_false() {
+        // given: JSON without plan_mode field
+        let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
+
+        // when
+        let req: Request = serde_json::from_str(json).unwrap();
+
+        // then
+        match req {
+            Request::Spawn { plan_mode, .. } => assert!(!plan_mode),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_with_plan_mode_should_round_trip() {
+        // given
+        let req = Request::Spawn {
+            project_root: "/test".into(),
+            prompt: "research auth".into(),
+            agent: "claude".into(),
+            name: Some("plan-auth".into()),
+            base: None,
+            root: false,
+            worktree: None,
+            command: None,
+            plan_mode: true,
+            no_trigger: false,
+        };
+
+        // when
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+
+        // then
+        match parsed {
+            Request::Spawn { plan_mode, .. } => assert!(plan_mode),
             _ => panic!("expected Spawn"),
         }
     }
@@ -1122,7 +1167,7 @@ mod tests {
 
     #[test]
     fn given_protocol_version_should_be_current() {
-        assert_eq!(PROTOCOL_VERSION, 3);
+        assert_eq!(PROTOCOL_VERSION, 4);
     }
 
     // --- GridCommand round-trips ---

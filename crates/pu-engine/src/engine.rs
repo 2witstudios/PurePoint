@@ -210,6 +210,7 @@ impl Engine {
                 root,
                 worktree,
                 command,
+                plan_mode,
                 no_trigger,
             } => {
                 self.handle_spawn(
@@ -221,6 +222,7 @@ impl Engine {
                     root,
                     worktree,
                     command,
+                    plan_mode,
                     no_trigger,
                 )
                 .await
@@ -678,6 +680,7 @@ impl Engine {
         root: bool,
         worktree: Option<String>,
         terminal_command: Option<String>,
+        plan_mode: bool,
         no_trigger: bool,
     ) -> Response {
         let root_path = Path::new(project_root);
@@ -741,6 +744,32 @@ impl Engine {
 
         // Normalize empty command to None
         let terminal_command = terminal_command.filter(|c| !c.is_empty());
+
+        // Plan mode requires a prompt-driven agent that understands EnterPlanMode.
+        // Reject early for terminal agents or terminal_command spawns where the
+        // prefix would be meaningless or actively harmful.
+        if plan_mode
+            && (prompt.is_empty() || terminal_command.is_some() || agent_type == "terminal")
+        {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "plan mode requires a prompt-driven non-terminal agent".into(),
+            };
+        }
+
+        // When plan_mode is active, prefix the prompt with instructions to enter plan mode.
+        // This keeps bypass permissions as the base while guiding the agent into plan mode
+        // via its own tool (EnterPlanMode) rather than conflicting CLI flags.
+        let prompt = if plan_mode {
+            format!(
+                "[PLAN MODE] You MUST call the EnterPlanMode tool immediately before doing anything else. \
+                 Do not read files, do not explore — call EnterPlanMode first. \
+                 Once in plan mode, research and plan before making changes.\n\n{prompt}"
+            )
+        } else {
+            prompt.to_string()
+        };
+        let prompt = &prompt;
 
         // When a terminal command is set, it becomes the PTY process directly
         let (command, args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
@@ -1008,6 +1037,7 @@ impl Engine {
             suspended_at: None,
             suspended: false,
             command: terminal_command,
+            plan_mode,
             trigger_seq_index: trigger_name.as_ref().map(|_| 0),
             trigger_state: trigger_name
                 .as_ref()
@@ -2730,6 +2760,7 @@ impl Engine {
                             spawn_worktree,
                             resolved_command,
                             false,
+                            false,
                         )
                         .await;
 
@@ -2770,6 +2801,7 @@ impl Engine {
                             false,
                             Some(wt_id.clone()),
                             None,
+                            false,
                             false,
                         )
                         .await;
@@ -3650,6 +3682,7 @@ impl Engine {
                         root: schedule.root,
                         worktree: None,
                         command: def.command.or(template_command),
+                        plan_mode: false,
                         no_trigger: false,
                     })
                     .await
@@ -3678,6 +3711,7 @@ impl Engine {
                     root: schedule.root,
                     worktree: None,
                     command: None,
+                    plan_mode: false,
                     no_trigger: false,
                 })
                 .await
@@ -4158,6 +4192,7 @@ mod tests {
                 root: true,
                 worktree: None,
                 command: None,
+                plan_mode: false,
                 no_trigger: false,
             })
             .await;
@@ -4313,6 +4348,52 @@ mod tests {
             .collect();
         // u3's parentUuid should now point to u2 (nearest preceding)
         assert_eq!(lines[2]["parentUuid"], "u2");
+    }
+
+    // --- build_resume_command tests ---
+
+    fn dummy_agent_cfg(name: &str) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: name.into(),
+            command: name.into(),
+            prompt_flag: None,
+            interactive: true,
+        }
+    }
+
+    #[test]
+    fn given_claude_resume_should_use_bypass_and_resume() {
+        let engine = Engine::new();
+        let cfg = dummy_agent_cfg("claude");
+        let (cmd, args, sid) = engine
+            .build_resume_command("claude", &cfg, Some("sess-1"))
+            .unwrap();
+        assert_eq!(cmd, "claude");
+        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"sess-1".to_string()));
+        assert_eq!(sid, Some("sess-1".to_string()));
+    }
+
+    #[test]
+    fn given_codex_resume_should_use_full_auto() {
+        let engine = Engine::new();
+        let cfg = dummy_agent_cfg("codex");
+        let (cmd, args, _) = engine.build_resume_command("codex", &cfg, None).unwrap();
+        assert_eq!(cmd, "codex");
+        assert!(args.contains(&"--full-auto".to_string()));
+        assert!(args.contains(&"resume".to_string()));
+        assert!(args.contains(&"--last".to_string()));
+    }
+
+    #[test]
+    fn given_opencode_resume_should_use_continue() {
+        let engine = Engine::new();
+        let cfg = dummy_agent_cfg("opencode");
+        let (cmd, args, _) = engine.build_resume_command("opencode", &cfg, None).unwrap();
+        assert_eq!(cmd, "opencode");
+        assert!(args.contains(&"--continue".to_string()));
+        assert!(!args.contains(&"--agent".to_string()));
     }
 
     #[test]

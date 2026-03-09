@@ -53,6 +53,9 @@ enum Commands {
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
+        /// Launch agent in plan/architect mode (read-only research)
+        #[arg(long)]
+        plan: bool,
         /// Disable event triggers for this agent
         #[arg(long)]
         no_trigger: bool,
@@ -595,12 +598,13 @@ async fn main() {
             file,
             command,
             vars,
+            plan,
             no_trigger,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                no_trigger, json,
+                plan, no_trigger, json,
             )
             .await
         }
