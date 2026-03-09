@@ -676,6 +676,20 @@ impl Engine {
                 .unwrap_or_else(|_| "HEAD".into()),
         };
 
+        // When plan_mode is active, prefix the prompt with instructions to enter plan mode.
+        // This keeps bypass permissions as the base while guiding the agent into plan mode
+        // via its own tool (EnterPlanMode) rather than conflicting CLI flags.
+        let prompt = if plan_mode && !prompt.is_empty() {
+            format!(
+                "[PLAN MODE] You MUST call the EnterPlanMode tool immediately before doing anything else. \
+                 Do not read files, do not explore — call EnterPlanMode first. \
+                 Once in plan mode, research and plan before making changes.\n\n{prompt}"
+            )
+        } else {
+            prompt.to_string()
+        };
+        let prompt = &prompt;
+
         // Normalize empty command to None
         let terminal_command = terminal_command.filter(|c| !c.is_empty());
 
@@ -718,31 +732,13 @@ impl Engine {
             // Add agent-type-specific flags (not stored in config — engine concern)
             match agent_type {
                 "claude" => {
-                    if plan_mode {
-                        // --permission-mode plan auto-approves read-only tools;
-                        // conflicts with --dangerously-skip-permissions (bypass wins).
-                        args.insert(0, "plan".into());
-                        args.insert(0, "--permission-mode".into());
-                    } else if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+                    if !args.iter().any(|a| a == "--dangerously-skip-permissions") {
                         args.insert(0, "--dangerously-skip-permissions".into());
                     }
                 }
                 "codex" => {
-                    if plan_mode {
-                        // --full-auto hardcodes --sandbox workspace-write, overriding
-                        // read-only. Use the component flags instead.
-                        args.insert(0, "on-request".into());
-                        args.insert(0, "--ask-for-approval".into());
-                        args.insert(0, "read-only".into());
-                        args.insert(0, "--sandbox".into());
-                    } else if !args.iter().any(|a| a == "--full-auto") {
+                    if !args.iter().any(|a| a == "--full-auto") {
                         args.insert(0, "--full-auto".into());
-                    }
-                }
-                "opencode" => {
-                    if plan_mode {
-                        args.insert(0, "plan".into());
-                        args.insert(0, "--agent".into());
                     }
                 }
                 _ => {}
@@ -1392,7 +1388,6 @@ impl Engine {
             &agent_entry.agent_type,
             &agent_cfg,
             effective_session_id.as_deref(),
-            agent_entry.plan_mode,
         ) {
             Ok(result) => result,
             Err(response) => return response,
@@ -1483,7 +1478,6 @@ impl Engine {
         agent_type: &str,
         agent_cfg: &pu_core::types::AgentConfig,
         session_id: Option<&str>,
-        plan_mode: bool,
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
         match agent_type {
             "claude" => {
@@ -1491,37 +1485,19 @@ impl Engine {
                     code: "RESUME_FAILED".into(),
                     message: "cannot resume Claude agent: no session_id preserved".into(),
                 })?;
-                let mut args = if plan_mode {
-                    // --permission-mode plan auto-approves read-only tools;
-                    // conflicts with --dangerously-skip-permissions (bypass wins).
-                    vec!["--permission-mode".into(), "plan".into()]
-                } else {
-                    vec!["--dangerously-skip-permissions".into()]
-                };
-                args.push("--resume".into());
-                args.push(sid.to_string());
+                let args = vec![
+                    "--dangerously-skip-permissions".into(),
+                    "--resume".into(),
+                    sid.to_string(),
+                ];
                 Ok(("claude".into(), args, Some(sid.to_string())))
             }
             "codex" => {
-                let mut args = vec!["resume".into(), "--last".into()];
-                if plan_mode {
-                    // --full-auto hardcodes --sandbox workspace-write, overriding
-                    // read-only. Use the component flags instead.
-                    args.push("--sandbox".into());
-                    args.push("read-only".into());
-                    args.push("--ask-for-approval".into());
-                    args.push("on-request".into());
-                } else {
-                    args.push("--full-auto".into());
-                }
+                let args = vec!["resume".into(), "--last".into(), "--full-auto".into()];
                 Ok(("codex".into(), args, None))
             }
             "opencode" => {
-                let mut args = vec!["--continue".into()];
-                if plan_mode {
-                    args.push("--agent".into());
-                    args.push("plan".into());
-                }
+                let args = vec!["--continue".into()];
                 Ok(("opencode".into(), args, None))
             }
             _ => {
@@ -3785,7 +3761,7 @@ mod tests {
         assert_eq!(lines[2]["parentUuid"], "u2");
     }
 
-    // --- build_resume_command plan_mode tests ---
+    // --- build_resume_command tests ---
 
     fn dummy_agent_cfg(name: &str) -> pu_core::types::AgentConfig {
         pu_core::types::AgentConfig {
@@ -3797,69 +3773,38 @@ mod tests {
     }
 
     #[test]
-    fn given_claude_resume_without_plan_should_use_bypass() {
+    fn given_claude_resume_should_use_bypass_and_resume() {
         let engine = Engine::new();
         let cfg = dummy_agent_cfg("claude");
-        let (cmd, args, _) = engine
-            .build_resume_command("claude", &cfg, Some("sess-1"), false)
+        let (cmd, args, sid) = engine
+            .build_resume_command("claude", &cfg, Some("sess-1"))
             .unwrap();
         assert_eq!(cmd, "claude");
         assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
-        assert!(!args.contains(&"--permission-mode".to_string()));
         assert!(args.contains(&"--resume".to_string()));
+        assert!(args.contains(&"sess-1".to_string()));
+        assert_eq!(sid, Some("sess-1".to_string()));
     }
 
     #[test]
-    fn given_claude_resume_with_plan_should_use_permission_mode_not_bypass() {
-        let engine = Engine::new();
-        let cfg = dummy_agent_cfg("claude");
-        let (cmd, args, _) = engine
-            .build_resume_command("claude", &cfg, Some("sess-1"), true)
-            .unwrap();
-        assert_eq!(cmd, "claude");
-        assert!(args.contains(&"--permission-mode".to_string()));
-        assert!(args.contains(&"plan".to_string()));
-        assert!(!args.contains(&"--dangerously-skip-permissions".to_string()));
-        assert!(args.contains(&"--resume".to_string()));
-    }
-
-    #[test]
-    fn given_codex_resume_without_plan_should_use_full_auto() {
+    fn given_codex_resume_should_use_full_auto() {
         let engine = Engine::new();
         let cfg = dummy_agent_cfg("codex");
-        let (cmd, args, _) = engine
-            .build_resume_command("codex", &cfg, None, false)
-            .unwrap();
+        let (cmd, args, _) = engine.build_resume_command("codex", &cfg, None).unwrap();
         assert_eq!(cmd, "codex");
         assert!(args.contains(&"--full-auto".to_string()));
-        assert!(!args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&"resume".to_string()));
+        assert!(args.contains(&"--last".to_string()));
     }
 
     #[test]
-    fn given_codex_resume_with_plan_should_use_sandbox_not_full_auto() {
-        let engine = Engine::new();
-        let cfg = dummy_agent_cfg("codex");
-        let (cmd, args, _) = engine
-            .build_resume_command("codex", &cfg, None, true)
-            .unwrap();
-        assert_eq!(cmd, "codex");
-        assert!(args.contains(&"--sandbox".to_string()));
-        assert!(args.contains(&"read-only".to_string()));
-        assert!(args.contains(&"--ask-for-approval".to_string()));
-        assert!(args.contains(&"on-request".to_string()));
-        assert!(!args.contains(&"--full-auto".to_string()));
-    }
-
-    #[test]
-    fn given_opencode_resume_with_plan_should_use_agent_plan() {
+    fn given_opencode_resume_should_use_continue() {
         let engine = Engine::new();
         let cfg = dummy_agent_cfg("opencode");
-        let (cmd, args, _) = engine
-            .build_resume_command("opencode", &cfg, None, true)
-            .unwrap();
+        let (cmd, args, _) = engine.build_resume_command("opencode", &cfg, None).unwrap();
         assert_eq!(cmd, "opencode");
-        assert!(args.contains(&"--agent".to_string()));
-        assert!(args.contains(&"plan".to_string()));
+        assert!(args.contains(&"--continue".to_string()));
+        assert!(!args.contains(&"--agent".to_string()));
     }
 
     #[test]
