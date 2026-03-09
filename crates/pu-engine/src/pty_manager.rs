@@ -612,8 +612,7 @@ mod tests {
         // cat echoes the \r as a newline
         assert!(
             text.contains('\r') || text.contains('\n'),
-            "expected newline from Enter, got bytes: {:?}",
-            output
+            "expected newline from Enter, got bytes: {output:?}"
         );
 
         host.kill(&handle, Duration::from_secs(1)).await.ok();
