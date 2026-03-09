@@ -4,8 +4,15 @@ use std::time::Duration;
 
 use pu_core::trigger_def::TriggerDef;
 
-/// Default timeout for gate commands (60 seconds).
+/// Default timeout for individual gate commands (60 seconds).
 const GATE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Default timeout for the entire gate evaluation (5 minutes).
+/// Prevents git hooks from blocking the user indefinitely when many gates/retries exist.
+const GATE_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Default max retries for gate commands.
+pub const DEFAULT_GATE_MAX_RETRIES: u32 = 0;
 
 #[derive(Debug)]
 pub struct GateEvalResult {
@@ -15,7 +22,29 @@ pub struct GateEvalResult {
 
 /// Evaluate all gate actions across the given trigger definitions.
 /// Returns passed=true only if every gate command exits with its expected code (default 0).
+/// The entire evaluation is bounded by `GATE_TOTAL_TIMEOUT` to prevent blocking git hooks.
 pub async fn evaluate_trigger_gates(
+    triggers: &[TriggerDef],
+    worktree_path: &Path,
+) -> Result<GateEvalResult, Box<dyn std::error::Error + Send + Sync>> {
+    match tokio::time::timeout(
+        GATE_TOTAL_TIMEOUT,
+        evaluate_trigger_gates_inner(triggers, worktree_path),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Ok(GateEvalResult {
+            passed: false,
+            output: format!(
+                "gate evaluation timed out after {}s\n",
+                GATE_TOTAL_TIMEOUT.as_secs()
+            ),
+        }),
+    }
+}
+
+async fn evaluate_trigger_gates_inner(
     triggers: &[TriggerDef],
     worktree_path: &Path,
 ) -> Result<GateEvalResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -24,7 +53,7 @@ pub async fn evaluate_trigger_gates(
     for trigger in triggers {
         for action in &trigger.sequence {
             if let Some(ref gate) = action.gate {
-                let max_retries = action.max_retries.unwrap_or(0);
+                let max_retries = action.max_retries.unwrap_or(DEFAULT_GATE_MAX_RETRIES);
                 let expect_exit = gate.expect_exit.unwrap_or(0);
                 let mut passed = false;
 

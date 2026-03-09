@@ -26,6 +26,16 @@ use crate::git;
 use crate::output_buffer::OutputBuffer;
 use crate::pty_manager::{AgentHandle, NativePtyHost, SpawnConfig};
 
+struct SaveTriggerParams {
+    project_root: String,
+    name: String,
+    description: Option<String>,
+    on: String,
+    sequence: Vec<pu_core::protocol::TriggerActionPayload>,
+    variables: std::collections::HashMap<String, String>,
+    scope: String,
+}
+
 pub struct Engine {
     start_time: Instant,
     pty_host: NativePtyHost,
@@ -440,15 +450,15 @@ impl Engine {
                 variables,
                 scope,
             } => {
-                self.handle_save_trigger(
-                    &project_root,
-                    &name,
+                self.handle_save_trigger(SaveTriggerParams {
+                    project_root,
+                    name,
                     description,
-                    &on,
+                    on,
                     sequence,
                     variables,
-                    &scope,
-                )
+                    scope,
+                })
                 .await
             }
             Request::DeleteTrigger {
@@ -3116,21 +3126,15 @@ impl Engine {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn handle_save_trigger(
-        &self,
-        project_root: &str,
-        name: &str,
-        description: Option<String>,
-        on: &str,
-        sequence: Vec<pu_core::protocol::TriggerActionPayload>,
-        variables: std::collections::HashMap<String, String>,
-        scope: &str,
-    ) -> Response {
-        let pr = project_root.to_string();
-        let name = name.to_string();
-        let on = on.to_string();
-        let scope = scope.to_string();
+    async fn handle_save_trigger(&self, params: SaveTriggerParams) -> Response {
+        let pr = params.project_root;
+        let name = params.name;
+        // Normalize hyphenated form to underscored form (consistent with handle_evaluate_gate)
+        let on = params.on.replace('-', "_");
+        let scope = params.scope;
+        let description = params.description;
+        let sequence = params.sequence;
+        let variables = params.variables;
         tokio::task::spawn_blocking(move || {
             let event = match on.as_str() {
                 "agent_idle" => pu_core::trigger_def::TriggerEvent::AgentIdle,
@@ -3422,11 +3426,23 @@ impl Engine {
 
             // If action has a gate, evaluate it first (no lock held)
             if let Some(ref gate) = action.gate {
+                // Mark as Gating while the command runs
+                self.update_trigger_state(
+                    project_root,
+                    agent_id,
+                    pu_core::types::TriggerState::Gating,
+                    None,
+                    None,
+                )
+                .await;
+
                 match crate::gate::run_gate_command(&gate.run, cwd).await {
                     Ok((exit_code, stdout, stderr)) => {
                         let expect_exit = gate.expect_exit.unwrap_or(0);
                         if exit_code != expect_exit {
-                            let max_retries = action.max_retries.unwrap_or(3);
+                            let max_retries = action
+                                .max_retries
+                                .unwrap_or(crate::gate::DEFAULT_GATE_MAX_RETRIES);
                             let manifest = self.read_manifest_async(project_root).await;
                             let attempts = manifest
                                 .ok()
