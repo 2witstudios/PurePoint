@@ -1,3 +1,4 @@
+import SwiftTerm
 import SwiftUI
 
 struct PointGuardView: View {
@@ -18,10 +19,13 @@ struct PointGuardView: View {
                     selectedSessionId: selectedSessionId,
                     onSelect: { session in
                         selectedSessionId = session.sessionId
-                        sendCommand("cd \(shellEscape(session.projectPath)) && claude --resume \(session.sessionId)")
+                        Task {
+                            await respawnShell(cwd: session.projectPath, then: "claude --resume \(session.sessionId)")
+                        }
                     },
                     onNewConversation: {
                         selectedSessionId = nil
+                        Task { await respawnShell(cwd: NSHomeDirectory()) }
                     }
                 )
                 .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
@@ -75,31 +79,38 @@ struct PointGuardView: View {
     }
 
     private func spawnShell() async {
+        await respawnShell(cwd: NSHomeDirectory())
+    }
+
+    /// Kill the current shell, spawn a new one at `cwd`, optionally run a command.
+    private func respawnShell(cwd: String, then command: String? = nil) async {
         shellError = nil
+
+        // Tell existing shell to exit: Ctrl-C anything running, then `exit`
+        if let oldId = shellAgentId {
+            shellAgentId = nil
+            let client = DaemonClient()
+            _ = try? await client.send(.input(agentId: oldId, data: Data([0x03])))  // Ctrl-C
+            try? await Task.sleep(for: .milliseconds(50))
+            _ = try? await client.send(.input(agentId: oldId, data: Data("exit\n".utf8)))
+        }
+
         do {
             try await DaemonLifecycle.ensureDaemon()
             let client = DaemonClient()
-            let response = try await client.send(.spawnShell(cwd: NSHomeDirectory()))
+            let response = try await client.send(.spawnShell(cwd: cwd))
             if case .spawnResult(_, let agentId, _) = response {
                 shellAgentId = agentId
+                if let command {
+                    // Brief delay for shell to initialize before sending command
+                    try await Task.sleep(for: .milliseconds(300))
+                    _ = try? await client.send(.input(agentId: agentId, data: Data("\(command)\n".utf8)))
+                }
             } else if case .error(_, let message) = response {
                 shellError = message
             }
         } catch {
             shellError = error.localizedDescription
-        }
-    }
-
-    private func shellEscape(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private func sendCommand(_ command: String) {
-        guard let agentId = shellAgentId else { return }
-        let data = Data("\(command)\n".utf8)
-        Task {
-            let client = DaemonClient()
-            _ = try? await client.send(.input(agentId: agentId, data: data))
         }
     }
 }
@@ -172,6 +183,10 @@ class PointGuardTerminalNSView: NSView {
         }
 
         guard let tv = terminal else { return }
+
+        // Clear terminal buffer so old shell output doesn't linger
+        tv.terminalView.getTerminal().resetToInitialState()
+
         let session = DaemonAttachSession(agentId: agentId, terminalView: tv.terminalView)
         tv.attachSession = session
 
