@@ -19,7 +19,7 @@ struct PointGuardView: View {
                     showSidebar: $showSidebar,
                     selectedSessionId: selectedSessionId,
                     onSelect: { session in
-                        selectedSessionId = session.sessionId
+                        selectedSessionId = session.id
                         Task {
                             await resumeConversation(session)
                         }
@@ -89,12 +89,22 @@ struct PointGuardView: View {
         return cmd
     }
 
-    private func resumeConversation(_ session: ClaudeConversation) async {
-        var cmd = "claude --resume \(session.sessionId)"
-        if settingsState.pointGuardSkipPermissions {
-            cmd = "claude --dangerously-skip-permissions --resume \(session.sessionId)"
+    private func resumeConversation(_ session: Conversation) async {
+        let cmd: String
+        switch session.agentSource {
+        case .claude:
+            if settingsState.pointGuardSkipPermissions {
+                cmd = "claude --dangerously-skip-permissions --resume \(session.sessionId)"
+            } else {
+                cmd = "claude --resume \(session.sessionId)"
+            }
+        case .codex:
+            cmd = "codex --full-auto resume \(session.sessionId)"
+        case .opencode:
+            cmd = "opencode --session \(session.sessionId)"
         }
-        await respawnShell(cwd: session.projectPath, then: cmd)
+        let cwd = (session.projectPath?.isEmpty ?? true) ? NSHomeDirectory() : session.projectPath!
+        await respawnShell(cwd: cwd, then: cmd)
     }
 
     private func spawnShell() async {
@@ -123,7 +133,7 @@ struct PointGuardView: View {
                 if let command {
                     // Brief delay for shell to initialize before sending command
                     try await Task.sleep(for: .milliseconds(300))
-                    _ = try? await client.send(.input(agentId: agentId, data: Data("\(command)\n".utf8)))
+                    _ = try? await client.send(.input(agentId: agentId, data: Data("clear && \(command)\n".utf8)))
                 }
             } else if case .error(_, let message) = response {
                 shellError = message

@@ -11,7 +11,7 @@ nonisolated enum ClaudeConversationIndex {
     }
 
     /// Convenience: loads all sessions (indexed + loose), without snippets.
-    static func loadSessions(baseURL: URL = defaultBaseURL, limit: Int? = nil) throws -> [ClaudeConversation] {
+    static func loadSessions(baseURL: URL = defaultBaseURL, limit: Int? = nil) throws -> [Conversation] {
         var conversations = try loadIndexedSessions(baseURL: baseURL)
         let excludedIds = Set(conversations.map(\.sessionId))
         let loose = try loadLooseSessions(baseURL: baseURL, excluding: excludedIds)
@@ -24,9 +24,9 @@ nonisolated enum ClaudeConversationIndex {
     }
 
     /// Phase 1: fast — reads only sessions-index.json files (no JSONL I/O).
-    static func loadIndexedSessions(baseURL: URL = defaultBaseURL) throws -> [ClaudeConversation] {
+    static func loadIndexedSessions(baseURL: URL = defaultBaseURL) throws -> [Conversation] {
         let directories = try projectDirectories(baseURL: baseURL)
-        var conversations: [ClaudeConversation] = []
+        var conversations: [Conversation] = []
         var seenSessionIds = Set<String>()
         var projectRootCache: [String: String?] = [:]
 
@@ -42,10 +42,10 @@ nonisolated enum ClaudeConversationIndex {
 
     /// Phase 2: slower — scans .jsonl files, skipping already-indexed session IDs.
     static func loadLooseSessions(baseURL: URL = defaultBaseURL, excluding excludedIds: Set<String> = []) throws
-        -> [ClaudeConversation]
+        -> [Conversation]
     {
         let directories = try projectDirectories(baseURL: baseURL)
-        var conversations: [ClaudeConversation] = []
+        var conversations: [Conversation] = []
         var seenSessionIds = excludedIds
         var projectRootCache: [String: String?] = [:]
 
@@ -85,6 +85,45 @@ nonisolated enum ClaudeConversationIndex {
         return snippets.reversed()
     }
 
+    // MARK: - Shared Helpers (used by Codex/OpenCode indexes)
+
+    static func locatePurePointProjectRoot(
+        startingAt path: String,
+        cache: inout [String: String?]
+    ) -> String? {
+        if let cached = cache[path] { return cached }
+
+        var currentURL = URL(fileURLWithPath: path).standardizedFileURL
+        let fileManager = FileManager.default
+
+        while true {
+            let manifestPath =
+                currentURL
+                .appendingPathComponent(".pu", isDirectory: true)
+                .appendingPathComponent("manifest.json")
+                .path
+
+            if fileManager.fileExists(atPath: manifestPath) {
+                let result = currentURL.path
+                cache[path] = result
+                return result
+            }
+
+            let parent = currentURL.deletingLastPathComponent()
+            if parent.path == currentURL.path {
+                cache[path] = nil
+                return nil
+            }
+            currentURL = parent
+        }
+    }
+
+    static func parseTimestamp(_ value: String?) -> Date? {
+        guard let value = value?.trimmedNonEmpty else { return nil }
+        return isoFormatterWithFractionalSeconds.date(from: value)
+            ?? isoFormatter.date(from: value)
+    }
+
     // MARK: - Private Types
 
     private struct SessionIndexFile: Decodable {
@@ -112,13 +151,13 @@ nonisolated enum ClaudeConversationIndex {
         var createdAt: Date?
     }
 
-    private static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+    static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
@@ -149,7 +188,7 @@ nonisolated enum ClaudeConversationIndex {
     private static func loadIndexedSessions(
         in directory: URL,
         projectRootCache: inout [String: String?]
-    ) throws -> [ClaudeConversation] {
+    ) throws -> [Conversation] {
         let indexURL = directory.appendingPathComponent("sessions-index.json")
 
         let data: Data
@@ -174,8 +213,9 @@ nonisolated enum ClaudeConversationIndex {
                 fallback: URL(fileURLWithPath: projectPath).lastPathComponent
             )
 
-            return ClaudeConversation(
+            return Conversation(
                 sessionId: entry.sessionId,
+                agentSource: .claude,
                 title: title,
                 previewSnippets: [],
                 projectPath: projectPath,
@@ -196,7 +236,7 @@ nonisolated enum ClaudeConversationIndex {
     private static func loadLooseSession(
         from transcriptURL: URL,
         projectRootCache: inout [String: String?]
-    ) throws -> ClaudeConversation? {
+    ) throws -> Conversation? {
         let metadata = transcriptMetadata(from: transcriptURL)
         let sessionId = metadata.sessionId?.trimmedNonEmpty ?? transcriptURL.deletingPathExtension().lastPathComponent
         let projectPath = metadata.projectPath?.trimmedNonEmpty ?? transcriptURL.deletingLastPathComponent().path
@@ -212,8 +252,9 @@ nonisolated enum ClaudeConversationIndex {
             fallback: URL(fileURLWithPath: projectPath).lastPathComponent
         )
 
-        return ClaudeConversation(
+        return Conversation(
             sessionId: sessionId,
+            agentSource: .claude,
             title: title,
             previewSnippets: [],
             projectPath: projectPath,
@@ -432,39 +473,6 @@ nonisolated enum ClaudeConversationIndex {
         return fallback
     }
 
-    // MARK: - Project Root Resolution (Cached)
-
-    private static func locatePurePointProjectRoot(
-        startingAt path: String,
-        cache: inout [String: String?]
-    ) -> String? {
-        if let cached = cache[path] { return cached }
-
-        var currentURL = URL(fileURLWithPath: path).standardizedFileURL
-        let fileManager = FileManager.default
-
-        while true {
-            let manifestPath =
-                currentURL
-                .appendingPathComponent(".pu", isDirectory: true)
-                .appendingPathComponent("manifest.json")
-                .path
-
-            if fileManager.fileExists(atPath: manifestPath) {
-                let result = currentURL.path
-                cache[path] = result
-                return result
-            }
-
-            let parent = currentURL.deletingLastPathComponent()
-            if parent.path == currentURL.path {
-                cache[path] = nil
-                return nil
-            }
-            currentURL = parent
-        }
-    }
-
     // MARK: - File I/O
 
     private static func readPrefix(from url: URL, byteCount: Int) throws -> String {
@@ -489,19 +497,13 @@ nonisolated enum ClaudeConversationIndex {
         try? url.resourceValues(forKeys: [key]).allValues[key] as? Date
     }
 
-    private static func parseTimestamp(_ value: String?) -> Date? {
-        guard let value = value?.trimmedNonEmpty else { return nil }
-        return isoFormatterWithFractionalSeconds.date(from: value)
-            ?? isoFormatter.date(from: value)
-    }
-
     private static func dateFromUnixMilliseconds(_ value: Int64?) -> Date? {
         guard let value else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(value) / 1000)
     }
 }
 
-nonisolated private extension String {
+nonisolated internal extension String {
     var trimmedNonEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed

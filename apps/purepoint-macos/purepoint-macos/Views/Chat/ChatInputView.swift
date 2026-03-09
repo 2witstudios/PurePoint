@@ -76,9 +76,10 @@ struct ChatInputView: View {
         // Use the resumed session's project path if available, otherwise fall back to active project
         let cwd: String
         if let sessionId = chatState.currentSessionId,
-            let session = chatState.sessions.first(where: { $0.sessionId == sessionId })
+            let session = chatState.sessions.first(where: { $0.sessionId == sessionId }),
+            let path = session.projectPath
         {
-            cwd = session.projectPath
+            cwd = path
         } else {
             cwd =
                 appState.activeProjectRoot ?? appState.projects.first?.projectRoot

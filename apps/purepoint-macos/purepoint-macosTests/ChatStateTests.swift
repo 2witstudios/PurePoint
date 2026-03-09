@@ -84,15 +84,15 @@ struct ChatStateTests {
     @Test func givenSearchQueryShouldFilterSessions() {
         let state = ChatState(processProvider: MockClaudeProcess())
 
-        let session1 = ClaudeConversation(
-            sessionId: "s1", title: "Dashboard work",
+        let session1 = Conversation(
+            sessionId: "s1", agentSource: .claude, title: "Dashboard work",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: "/tmp/s1.jsonl",
             createdAt: nil, modifiedAt: Date(), messageCount: nil
         )
-        let session2 = ClaudeConversation(
-            sessionId: "s2", title: "Terminal bugs",
+        let session2 = Conversation(
+            sessionId: "s2", agentSource: .claude, title: "Terminal bugs",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: "/tmp/s2.jsonl",
@@ -201,15 +201,15 @@ struct ChatStateTests {
         let calendar = Calendar.autoupdatingCurrent
         let now = Date()
 
-        let todaySession = ClaudeConversation(
-            sessionId: "s-today", title: "Today work",
+        let todaySession = Conversation(
+            sessionId: "s-today", agentSource: .claude, title: "Today work",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: "/tmp/s-today.jsonl",
             createdAt: nil, modifiedAt: now, messageCount: nil
         )
-        let yesterdaySession = ClaudeConversation(
-            sessionId: "s-yesterday", title: "Yesterday work",
+        let yesterdaySession = Conversation(
+            sessionId: "s-yesterday", agentSource: .claude, title: "Yesterday work",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: "/tmp/s-yesterday.jsonl",
@@ -217,8 +217,8 @@ struct ChatStateTests {
             modifiedAt: calendar.date(byAdding: .day, value: -1, to: now)!,
             messageCount: nil
         )
-        let weekSession = ClaudeConversation(
-            sessionId: "s-week", title: "This week work",
+        let weekSession = Conversation(
+            sessionId: "s-week", agentSource: .claude, title: "This week work",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: "/tmp/s-week.jsonl",
@@ -226,8 +226,8 @@ struct ChatStateTests {
             modifiedAt: calendar.date(byAdding: .day, value: -4, to: now)!,
             messageCount: nil
         )
-        let oldSession = ClaudeConversation(
-            sessionId: "s-old", title: "Old work",
+        let oldSession = Conversation(
+            sessionId: "s-old", agentSource: .claude, title: "Old work",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: "/tmp/s-old.jsonl",
@@ -275,8 +275,8 @@ struct ChatStateTests {
             """
         try Data(lines.utf8).write(to: path)
 
-        let session = ClaudeConversation(
-            sessionId: "sess-load", title: "Test Session",
+        let session = Conversation(
+            sessionId: "sess-load", agentSource: .claude, title: "Test Session",
             previewSnippets: [], projectPath: "/tmp",
             purePointProjectRoot: nil, gitBranch: nil,
             transcriptPath: path.path,

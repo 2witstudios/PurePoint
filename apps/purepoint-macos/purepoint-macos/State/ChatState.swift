@@ -15,7 +15,7 @@ final class ChatState {
     var isStreaming = false
     var currentSessionId: String?
     var searchQuery = ""
-    var sessions: [ClaudeConversation] = []
+    var sessions: [Conversation] = []
     var streamError: String?
     var isLoadingSessions = false
 
@@ -23,7 +23,7 @@ final class ChatState {
         !isStreaming && !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    var filteredSessions: [ClaudeConversation] {
+    var filteredSessions: [Conversation] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return sessions }
 
@@ -33,8 +33,9 @@ final class ChatState {
                     session.title,
                     session.projectName,
                     session.workspaceName,
-                    session.projectPath,
+                    session.projectPath ?? "",
                     session.gitBranch ?? "",
+                    session.agentSource.rawValue,
                 ] + session.previewSnippets
 
             return haystacks.contains { $0.localizedCaseInsensitiveContains(query) }
@@ -45,14 +46,14 @@ final class ChatState {
         let calendar = Calendar.autoupdatingCurrent
         let now = Date()
 
-        var today: [ClaudeConversation] = []
-        var yesterday: [ClaudeConversation] = []
-        var thisWeek: [ClaudeConversation] = []
-        var thisMonth: [ClaudeConversation] = []
-        var older: [ClaudeConversation] = []
+        var today: [Conversation] = []
+        var yesterday: [Conversation] = []
+        var thisWeek: [Conversation] = []
+        var thisMonth: [Conversation] = []
+        var older: [Conversation] = []
 
         var seen = Set<String>()
-        for session in filteredSessions where seen.insert(session.sessionId).inserted {
+        for session in filteredSessions where seen.insert(session.id).inserted {
             let date = session.modifiedAt
             if calendar.isDateInToday(date) {
                 today.append(session)
@@ -168,15 +169,21 @@ final class ChatState {
         isStreaming = false
     }
 
-    func selectConversation(_ session: ClaudeConversation) async {
+    func selectConversation(_ session: Conversation) async {
         if isStreaming {
             await stopStreaming()
         }
         currentSessionId = session.sessionId
         streamError = nil
 
+        guard let transcriptPath = session.transcriptPath else {
+            messages = []
+            streamError = "No transcript available for this session."
+            return
+        }
+
         do {
-            let parsed = try TranscriptParser.parse(transcriptPath: session.transcriptPath)
+            let parsed = try TranscriptParser.parse(transcriptPath: transcriptPath)
             messages = parsed
         } catch {
             messages = []
@@ -213,13 +220,17 @@ final class ChatState {
     }
 
     func enrichSnippets(limit: Int = 50) async {
-        let toEnrich = Array(sessions.prefix(limit).filter { $0.previewSnippets.isEmpty })
+        let toEnrich = Array(
+            sessions.prefix(limit).filter {
+                $0.previewSnippets.isEmpty && $0.transcriptPath != nil
+            }
+        )
         guard !toEnrich.isEmpty else { return }
 
         let results = await withTaskGroup(of: (String, [String]).self) { group in
             for session in toEnrich {
-                let sid = session.sessionId
-                let url = URL(fileURLWithPath: session.transcriptPath)
+                let sid = session.id
+                let url = URL(fileURLWithPath: session.transcriptPath!)
                 group.addTask { (sid, ClaudeConversationIndex.recentSnippets(from: url)) }
             }
             var dict: [String: [String]] = [:]
@@ -229,7 +240,7 @@ final class ChatState {
             return dict
         }
         for (sid, snippets) in results {
-            if let idx = sessions.firstIndex(where: { $0.sessionId == sid }) {
+            if let idx = sessions.firstIndex(where: { $0.id == sid }) {
                 sessions[idx] = sessions[idx].withSnippets(snippets)
             }
         }

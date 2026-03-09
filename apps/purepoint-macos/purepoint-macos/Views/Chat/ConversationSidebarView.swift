@@ -4,7 +4,7 @@ struct ConversationSidebarView: View {
     @Bindable var sessionList: SessionListState
     @Binding var showSidebar: Bool
     var selectedSessionId: String?
-    var onSelect: (ClaudeConversation) -> Void
+    var onSelect: (Conversation) -> Void
     var onNewConversation: () -> Void
     @Environment(AppState.self) private var appState
 
@@ -97,15 +97,30 @@ struct ConversationSidebarView: View {
         }
     }
 
-    private func sessionRow(_ session: ClaudeConversation, agentName matchedAgentName: String?) -> some View {
-        let isSelected = selectedSessionId == session.sessionId
+    private func agentBadgeColor(_ source: AgentSource) -> Color {
+        switch source {
+        case .claude: return .orange
+        case .codex: return .green
+        case .opencode: return .blue
+        }
+    }
+
+    private func sessionRow(_ session: Conversation, agentName matchedAgentName: String?) -> some View {
+        let isSelected = selectedSessionId == session.id
 
         return Button {
             onSelect(session)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
-                // Primary line: agent name (or title) + relative time
+                // Primary line: agent badge + agent name (or title) + relative time
                 HStack {
+                    // Show agent badge when no matched agent name (to avoid redundancy)
+                    if matchedAgentName == nil {
+                        Circle()
+                            .fill(agentBadgeColor(session.agentSource))
+                            .frame(width: 6, height: 6)
+                    }
+
                     Text(matchedAgentName ?? session.title)
                         .font(.system(size: 13, weight: matchedAgentName != nil || isSelected ? .semibold : .regular))
                         .lineLimit(1)
