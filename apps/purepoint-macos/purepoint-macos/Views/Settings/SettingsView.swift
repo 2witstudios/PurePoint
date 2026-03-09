@@ -79,6 +79,8 @@ struct SettingsView: View {
                 switch selectedSection {
                 case .general:
                     SettingsGeneralView()
+                case .pointGuard:
+                    SettingsPointGuardView()
                 case .agents:
                     SettingsAgentsView()
                 case .hotkeys:

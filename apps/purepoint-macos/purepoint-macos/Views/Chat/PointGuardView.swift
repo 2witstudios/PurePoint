@@ -4,6 +4,7 @@ import SwiftUI
 struct PointGuardView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
+    @Environment(SettingsState.self) private var settingsState
     @State private var sessionList = SessionListState()
     @State private var showSidebar = true
     @State private var shellAgentId: String?
@@ -20,7 +21,7 @@ struct PointGuardView: View {
                     onSelect: { session in
                         selectedSessionId = session.sessionId
                         Task {
-                            await respawnShell(cwd: session.projectPath, then: "claude --resume \(session.sessionId)")
+                            await resumeConversation(session)
                         }
                     },
                     onNewConversation: {
@@ -78,8 +79,26 @@ struct PointGuardView: View {
         }
     }
 
+    /// Build the claude launch command from settings.
+    private var launchCommand: String? {
+        let cmd = settingsState.pointGuardLaunchCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty else { return nil }
+        if settingsState.pointGuardSkipPermissions {
+            return "\(cmd) --dangerously-skip-permissions"
+        }
+        return cmd
+    }
+
+    private func resumeConversation(_ session: ClaudeConversation) async {
+        var cmd = "claude --resume \(session.sessionId)"
+        if settingsState.pointGuardSkipPermissions {
+            cmd = "claude --dangerously-skip-permissions --resume \(session.sessionId)"
+        }
+        await respawnShell(cwd: session.projectPath, then: cmd)
+    }
+
     private func spawnShell() async {
-        await respawnShell(cwd: NSHomeDirectory(), then: "claude")
+        await respawnShell(cwd: NSHomeDirectory(), then: launchCommand)
     }
 
     /// Kill the current shell, spawn a new one at `cwd`, optionally run a command.

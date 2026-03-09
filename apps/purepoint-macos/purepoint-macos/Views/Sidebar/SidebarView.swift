@@ -18,7 +18,7 @@ struct SidebarView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 16, height: 16)
-                    Text("PurePoint")
+                    Text("Point Guard")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -37,6 +37,16 @@ final class SettingsState {
         didSet { UserDefaults.standard.set(launchAtLogin, forKey: "PP_launchAtLogin") }
     }
 
+    // MARK: - Point Guard
+
+    var pointGuardLaunchCommand: String = "claude" {
+        didSet { UserDefaults.standard.set(pointGuardLaunchCommand, forKey: "PP_pointGuardLaunchCommand") }
+    }
+
+    var pointGuardSkipPermissions: Bool = true {
+        didSet { UserDefaults.standard.set(pointGuardSkipPermissions, forKey: "PP_pointGuardSkipPermissions") }
+    }
+
     // MARK: - Display
 
     var appearance: AppAppearance = .system {
@@ -72,6 +82,13 @@ final class SettingsState {
         }
         if defaults.object(forKey: "PP_gridGap") != nil {
             gridGap = defaults.double(forKey: "PP_gridGap")
+        }
+
+        if let cmd = defaults.string(forKey: "PP_pointGuardLaunchCommand"), !cmd.isEmpty {
+            pointGuardLaunchCommand = cmd
+        }
+        if defaults.object(forKey: "PP_pointGuardSkipPermissions") != nil {
+            pointGuardSkipPermissions = defaults.bool(forKey: "PP_pointGuardSkipPermissions")
         }
 
         // Validate loaded values

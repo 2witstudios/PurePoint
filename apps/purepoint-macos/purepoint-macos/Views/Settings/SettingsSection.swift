@@ -2,6 +2,7 @@ import Foundation
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general
+    case pointGuard
     case agents
     case hotkeys
     case display
@@ -12,6 +13,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: "General"
+        case .pointGuard: "Point Guard"
         case .agents: "Agents"
         case .hotkeys: "Hotkeys"
         case .display: "Display"
@@ -22,6 +24,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: "gear"
+        case .pointGuard: "terminal"
         case .agents: "cpu"
         case .hotkeys: "keyboard"
         case .display: "paintbrush"
