@@ -53,25 +53,27 @@ async fn evaluate_trigger_gates_inner(
     for trigger in triggers {
         for action in &trigger.sequence {
             if let Some(ref gate) = action.gate {
+                let resolved_run =
+                    pu_core::trigger_def::substitute_variables(&gate.run, &trigger.variables);
                 let max_retries = action.max_retries.unwrap_or(DEFAULT_GATE_MAX_RETRIES);
                 let expect_exit = gate.expect_exit.unwrap_or(0);
                 let mut passed = false;
 
                 for attempt in 0..=max_retries {
                     if attempt > 0 {
-                        all_output
-                            .push_str(&format!("  retry {attempt}/{max_retries}: {}\n", gate.run));
+                        all_output.push_str(&format!(
+                            "  retry {attempt}/{max_retries}: {resolved_run}\n"
+                        ));
                     }
 
-                    match run_gate_command(&gate.run, worktree_path).await {
+                    match run_gate_command(&resolved_run, worktree_path).await {
                         Ok((exit_code, stdout, stderr)) => {
                             if exit_code == expect_exit {
                                 passed = true;
                                 break;
                             }
                             all_output.push_str(&format!(
-                                "gate '{}' exited {} (expected {})\n",
-                                gate.run, exit_code, expect_exit
+                                "gate '{resolved_run}' exited {exit_code} (expected {expect_exit})\n"
                             ));
                             if !stdout.is_empty() {
                                 all_output.push_str(&stdout);
@@ -81,7 +83,7 @@ async fn evaluate_trigger_gates_inner(
                             }
                         }
                         Err(e) => {
-                            all_output.push_str(&format!("gate '{}' error: {e}\n", gate.run));
+                            all_output.push_str(&format!("gate '{resolved_run}' error: {e}\n"));
                         }
                     }
                 }
@@ -114,6 +116,7 @@ pub async fn run_gate_command(
             .current_dir(cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .output(),
     )
     .await

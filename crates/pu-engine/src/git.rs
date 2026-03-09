@@ -51,6 +51,14 @@ pub async fn install_hooks(
     // Escape single quotes in the path for shell safety
     let escaped_root = project_root.display().to_string().replace('\'', "'\\''");
 
+    // Resolve absolute path to `pu` binary so hooks work even when ~/.pu/bin is not in PATH.
+    // Falls back to bare `pu` if resolution fails (e.g., running outside the daemon).
+    let pu_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "pu".to_string());
+    let escaped_pu = pu_bin.replace('\'', "'\\''");
+
     for (hook_name, event) in [("pre-commit", "pre-commit"), ("pre-push", "pre-push")] {
         let hook_path = hooks_dir.join(hook_name);
         if hook_path.exists() {
@@ -59,7 +67,9 @@ pub async fn install_hooks(
         }
         tokio::fs::write(
             &hook_path,
-            format!("#!/bin/sh\nexec pu gate {event} --project-root '{escaped_root}'\n"),
+            format!(
+                "#!/bin/sh\nexec '{escaped_pu}' gate {event} --project-root '{escaped_root}'\n"
+            ),
         )
         .await?;
         tokio::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).await?;
@@ -453,13 +463,13 @@ mod tests {
         assert!(pre_commit.exists(), "pre-commit hook should exist");
         assert!(pre_push.exists(), "pre-push hook should exist");
 
-        // Check content
+        // Check content — hook uses absolute path to pu binary in single quotes
         let content = std::fs::read_to_string(&pre_commit).unwrap();
-        assert!(content.contains("pu gate pre-commit"));
+        assert!(content.contains("gate pre-commit"));
         assert!(content.contains("--project-root"));
 
         let content = std::fs::read_to_string(&pre_push).unwrap();
-        assert!(content.contains("pu gate pre-push"));
+        assert!(content.contains("gate pre-push"));
 
         // Check executable permission
         use std::os::unix::fs::PermissionsExt;
@@ -498,14 +508,14 @@ mod tests {
             "existing hook should not be overwritten"
         );
         assert!(
-            !content.contains("pu gate"),
+            !content.contains("gate pre-commit"),
             "existing hook should not contain pu gate"
         );
 
         let pre_push = hooks_dir.join("pre-push");
         assert!(pre_push.exists(), "pre-push should be created");
         let push_content = std::fs::read_to_string(&pre_push).unwrap();
-        assert!(push_content.contains("pu gate pre-push"));
+        assert!(push_content.contains("gate pre-push"));
     }
 
     #[tokio::test(flavor = "current_thread")]

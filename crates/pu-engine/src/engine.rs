@@ -969,6 +969,13 @@ impl Engine {
                     Path::new(&pr),
                     &pu_core::trigger_def::TriggerEvent::AgentIdle,
                 );
+                if triggers.len() > 1 {
+                    tracing::warn!(
+                        "multiple agent_idle triggers found ({}), using first: {}",
+                        triggers.len(),
+                        triggers[0].name
+                    );
+                }
                 triggers.into_iter().next().map(|t| {
                     let len = t.sequence.len() as u32;
                     (t.name, len)
@@ -998,15 +1005,13 @@ impl Engine {
             suspended_at: None,
             suspended: false,
             command: terminal_command,
-            trigger_seq_index: if no_trigger { None } else { Some(0) },
-            trigger_state: if no_trigger {
-                None
-            } else {
-                Some(pu_core::types::TriggerState::Active)
-            },
+            trigger_seq_index: trigger_name.as_ref().map(|_| 0),
+            trigger_state: trigger_name
+                .as_ref()
+                .map(|_| pu_core::types::TriggerState::Active),
             trigger_total,
-            gate_attempts: if no_trigger { None } else { Some(0) },
-            no_trigger: if no_trigger { Some(true) } else { None },
+            gate_attempts: trigger_name.as_ref().map(|_| 0),
+            no_trigger,
             trigger_name: trigger_name.clone(),
         };
 
@@ -3426,6 +3431,9 @@ impl Engine {
 
             // If action has a gate, evaluate it first (no lock held)
             if let Some(ref gate) = action.gate {
+                let resolved_run =
+                    pu_core::trigger_def::substitute_variables(&gate.run, &trigger.variables);
+
                 // Mark as Gating while the command runs
                 self.update_trigger_state(
                     project_root,
@@ -3436,7 +3444,7 @@ impl Engine {
                 )
                 .await;
 
-                match crate::gate::run_gate_command(&gate.run, cwd).await {
+                match crate::gate::run_gate_command(&resolved_run, cwd).await {
                     Ok((exit_code, stdout, stderr)) => {
                         let expect_exit = gate.expect_exit.unwrap_or(0);
                         if exit_code != expect_exit {
@@ -3459,8 +3467,7 @@ impl Engine {
 
                             if attempts < max_retries {
                                 let failure_msg = format!(
-                                    "\n\nGate '{}' failed (exit {exit_code}, expected {expect_exit}):\n{stdout}{stderr}\nPlease fix the issues and try again.\n",
-                                    gate.run
+                                    "\n\nGate '{resolved_run}' failed (exit {exit_code}, expected {expect_exit}):\n{stdout}{stderr}\nPlease fix the issues and try again.\n"
                                 );
                                 self.inject_text(agent_id, &failure_msg).await;
                                 self.update_trigger_state(
@@ -3485,7 +3492,7 @@ impl Engine {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(agent_id, gate = gate.run, "gate command error: {e}");
+                        tracing::warn!(agent_id, gate = %resolved_run, "gate command error: {e}");
                         self.update_trigger_state(
                             project_root,
                             agent_id,
@@ -3501,7 +3508,9 @@ impl Engine {
 
             // Inject text if present (brief lock acquisition)
             if let Some(ref inject_text) = action.inject {
-                let text_with_newline = format!("{inject_text}\n");
+                let resolved =
+                    pu_core::trigger_def::substitute_variables(inject_text, &trigger.variables);
+                let text_with_newline = format!("{resolved}\n");
                 self.inject_text(agent_id, &text_with_newline).await;
             }
 

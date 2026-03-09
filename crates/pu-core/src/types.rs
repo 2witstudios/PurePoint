@@ -101,8 +101,8 @@ pub struct AgentEntry {
     pub trigger_total: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_attempts: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub no_trigger: Option<bool>,
+    #[serde(default, skip_serializing_if = "crate::serde_defaults::is_false")]
+    pub no_trigger: bool,
     /// Name of the trigger definition this agent is bound to.
     /// Set at spawn time so the sequence is stable across ticks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,7 +139,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             #[serde(default)]
             gate_attempts: Option<u32>,
             #[serde(default)]
-            no_trigger: Option<bool>,
+            no_trigger: bool,
             #[serde(default)]
             trigger_name: Option<String>,
         }
@@ -445,7 +445,7 @@ mod tests {
             trigger_state: None,
             trigger_total: None,
             gate_attempts: None,
-            no_trigger: None,
+            no_trigger: false,
             trigger_name: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -520,7 +520,7 @@ mod tests {
                 trigger_state: None,
                 trigger_total: None,
                 gate_attempts: None,
-                no_trigger: None,
+                no_trigger: false,
                 trigger_name: None,
             },
         );
@@ -577,7 +577,7 @@ mod tests {
                 trigger_state: None,
                 trigger_total: None,
                 gate_attempts: None,
-                no_trigger: None,
+                no_trigger: false,
                 trigger_name: None,
             },
         );
@@ -610,7 +610,7 @@ mod tests {
                 trigger_state: None,
                 trigger_total: None,
                 gate_attempts: None,
-                no_trigger: None,
+                no_trigger: false,
                 trigger_name: None,
             },
         );
@@ -657,7 +657,7 @@ mod tests {
             trigger_state: None,
             trigger_total: None,
             gate_attempts: None,
-            no_trigger: None,
+            no_trigger: false,
             trigger_name: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
@@ -753,7 +753,7 @@ mod tests {
         assert!(entry.trigger_seq_index.is_none());
         assert!(entry.trigger_state.is_none());
         assert!(entry.gate_attempts.is_none());
-        assert!(entry.no_trigger.is_none());
+        assert!(!entry.no_trigger);
     }
 
     #[test]
@@ -774,6 +774,6 @@ mod tests {
         assert_eq!(entry.trigger_seq_index, Some(2));
         assert_eq!(entry.trigger_state, Some(TriggerState::Active));
         assert_eq!(entry.gate_attempts, Some(1));
-        assert_eq!(entry.no_trigger, Some(false));
+        assert!(!entry.no_trigger);
     }
 }
