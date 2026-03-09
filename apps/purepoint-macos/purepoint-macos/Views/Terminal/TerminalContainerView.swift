@@ -7,6 +7,34 @@ struct TerminalContainerView: NSViewRepresentable {
     var onFocus: (() -> Void)? = nil
     @Environment(TerminalViewCache.self) private var viewCache
 
+    class Coordinator {
+        var onFocus: (() -> Void)?
+        weak var container: NSView?
+        private var monitor: Any?
+
+        func startMonitor() {
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self, let container = self.container else { return event }
+                guard event.window === container.window, !container.isHidden else { return event }
+                let point = container.convert(event.locationInWindow, from: nil)
+                if container.bounds.contains(point) {
+                    self.onFocus?()
+                }
+                return event
+            }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
         container.wantsLayer = true
@@ -17,12 +45,17 @@ struct TerminalContainerView: NSViewRepresentable {
         termView.isHidden = false
         termView.pinToEdges(of: container)
 
+        context.coordinator.container = container
+        context.coordinator.onFocus = onFocus
+        context.coordinator.startMonitor()
+
         return container
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         let termView = viewCache.terminalView(for: agent)
         termView.onMouseDown = onFocus
+        context.coordinator.onFocus = onFocus
 
         // Already showing the correct agent — just ensure focus
         if termView.superview === nsView && !termView.isHidden {
