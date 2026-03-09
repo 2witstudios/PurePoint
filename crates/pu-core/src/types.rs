@@ -892,7 +892,7 @@ launchArgs:
     #[test]
     fn given_explicit_empty_launch_args_should_override_defaults() {
         // User explicitly sets launchArgs: [] to disable auto-mode
-        let args = resolved_launch_args("claude", Some(&vec![]));
+        let args = resolved_launch_args("claude", Some(&[]));
         assert!(args.is_empty());
     }
 
