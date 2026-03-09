@@ -31,8 +31,8 @@ Project
 Manifest:
   version: u32
   projectRoot: String
-  worktrees: HashMap<String, WorktreeEntry>
-  agents: HashMap<String, AgentEntry>  (root-level agents, no worktree)
+  worktrees: IndexMap<String, WorktreeEntry>  (insertion-order preserved)
+  agents: IndexMap<String, AgentEntry>  (root-level agents, no worktree)
   createdAt: DateTime<Utc>
   updatedAt: DateTime<Utc>
 
@@ -40,7 +40,7 @@ WorktreeEntry:
   id, name, path, branch: String
   baseBranch: Option<String>
   status: WorktreeStatus (Active, Merging, Merged, Failed, Cleaned)
-  agents: HashMap<String, AgentEntry>
+  agents: IndexMap<String, AgentEntry>  (insertion-order preserved)
   createdAt: DateTime<Utc>
   mergedAt: Option<DateTime<Utc>>
 
@@ -56,6 +56,14 @@ AgentEntry:
   sessionId: Option<String>
   suspendedAt: Option<DateTime<Utc>>
   suspended: bool (default false, inferred true when suspendedAt present)
+  command: Option<String>  (terminal command, for terminal agents)
+  planMode: bool (default false, read-only research mode)
+  triggerName: Option<String>  (bound trigger definition name)
+  triggerSeqIndex: Option<u32>  (current step in trigger sequence)
+  triggerState: Option<TriggerState> (Active, Gating, Completed, Failed)
+  triggerTotal: Option<u32>  (total steps in trigger sequence)
+  gateAttempts: Option<u32>  (number of gate evaluation attempts)
+  noTrigger: bool (default false, disable event triggers for this agent)
 ```
 
 **ID generation (`pu-core/src/id.rs`):** nanoid with custom alphabet `[a-z0-9]` (36 chars), length 8:

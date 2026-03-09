@@ -27,27 +27,33 @@ Key behaviors:
 
 ! [CLI-001] Auto-start polls 30x100ms (3s timeout), exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health, then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. Polls `Request::Health` every 100ms up to 30 attempts. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
-! [CLI-002] `--json` flag on `status` command outputs raw JSON response — provides machine-readable output for conductor agents and scripts. Currently on `status` only (not a global flag). Implemented in `pu-cli/src/main.rs` (status command handler).
+! [CLI-002] `--json` flag for machine-readable output — provides raw JSON responses for conductor agents and scripts. Available on nearly every command: `init`, `spawn`, `status`, `bench`, `play`, `kill`, `logs`, `health`, `pulse`, `diff`, `clean`, and all CRUD subcommands (`prompt`, `agent`, `swarm`, `schedule`, `trigger`). Per-command flag (not global). Implemented across command handlers in `pu-cli/src/commands/`.
 
 ## Implemented Commands
 
 | Command | Args/Flags | Description |
 |---|---|---|
 | `pu init` | `--json` | Register current project with daemon |
-| `pu spawn <prompt>` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--var KEY=VALUE`, `--json` | Spawn an agent (in worktree or root) |
+| `pu spawn [prompt]` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--command`, `--var KEY=VALUE`, `--no-auto`, `--agent-args`, `--plan`, `--no-trigger`, `--json` | Spawn an agent (in worktree or root) |
 | `pu status` | `--agent <id>`, `--json` | Show project/agent status |
-| `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive), `--json` | Kill agent(s) |
-| `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Tail agent output buffer |
+| `pu bench [agent_id]` | `--all`, `--json` | Suspend (bench) agents |
+| `pu play <agent_id>` | `--json` | Resume a benched agent |
+| `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive), `--include-root` (requires `--all`), `--json` | Kill agent(s) |
 | `pu attach <agent_id>` | — | Interactive PTY attach to agent |
-| `pu health` | `--json` | Check daemon health |
+| `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Tail agent output buffer |
 | `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal |
+| `pu health` | `--json` | Check daemon health |
+| `pu pulse` | `--json` | Workspace overview (agents, runtimes, git stats) |
+| `pu diff` | `--worktree <id>`, `--stat`, `--json` | Show git diffs across worktrees |
+| `pu watch` | `--interval <ms>` (default 800) | Live TUI dashboard |
+| `pu clean` | `--worktree <id>`, `--all`, `--json` | Remove worktrees, agents, and branches |
 | `pu prompt list` | `--json` | List saved prompt templates |
 | `pu prompt show <name>` | `--json` | Show prompt template details |
 | `pu prompt create <name>` | `--body`, `--description`, `--agent`, `--scope`, `--json` | Create prompt template |
 | `pu prompt delete <name>` | `--scope`, `--json` | Delete prompt template |
 | `pu agent list` | `--json` | List agent definitions |
 | `pu agent show <name>` | `--json` | Show agent definition details |
-| `pu agent create <name>` | `--agent-type`, `--template`, `--inline-prompt`, `--tags`, `--scope`, `--json` | Create agent definition |
+| `pu agent create <name>` | `--agent-type`, `--template`, `--inline-prompt`, `--command`, `--tags`, `--scope`, `--json` | Create agent definition |
 | `pu agent delete <name>` | `--scope`, `--json` | Delete agent definition |
 | `pu swarm list` | `--json` | List swarm definitions |
 | `pu swarm show <name>` | `--json` | Show swarm definition details |
@@ -65,6 +71,11 @@ Key behaviors:
 | `pu grid close` | `--leaf <id>` | Close a pane |
 | `pu grid focus` | `--direction <up\|down\|left\|right>`, `--leaf <id>` | Move focus to another pane |
 | `pu grid assign <agent_id>` | `--leaf <id>` | Assign an agent to a pane |
+| `pu trigger list` | `--json` | List trigger definitions |
+| `pu trigger show <name>` | `--json` | Show trigger details |
+| `pu trigger create <name>` | `--on <event>`, `--inject`, `--gate`, `--description`, `--scope`, `--json` | Create trigger definition |
+| `pu trigger delete <name>` | `--scope`, `--json` | Delete trigger definition |
+| `pu gate <event>` | `--project-root` | Evaluate git hook gates (pre-commit, pre-push) |
 
 ## Research Notes
 

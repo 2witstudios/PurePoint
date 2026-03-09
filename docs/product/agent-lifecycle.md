@@ -34,6 +34,6 @@ Terminal state: Broken.
 
 ## Open Questions
 
-? [AL-002] Should agents support pause/resume, or only the full lifecycle (spawn → running → exited)?
+! [AL-002] Agents support suspend/resume — CLI exposes this as `pu bench` (suspend) and `pu play` (resume). Maps to `Request::Suspend`/`Request::Resume` in the IPC protocol with `SuspendTarget::Agent(id)` or `SuspendTarget::All`. Suspended agents have `suspended: true` and `suspended_at` timestamp in the manifest. Implemented in `pu-engine/src/engine.rs` (suspend/resume handlers) and `pu-cli/src/commands/bench.rs` + `play.rs`.
 
 **App quit behavior:** When the macOS app quits, it sends `Request::Shutdown` to the daemon. The daemon kills all agent processes and exits. Agent state (command, worktree, last status) is persisted in the manifest. On next app launch, agents can be re-spawned from the saved state. Standalone CLI mode does not auto-shutdown — agents persist until explicitly killed or the daemon is stopped.
