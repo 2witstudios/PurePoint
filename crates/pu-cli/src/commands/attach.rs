@@ -18,6 +18,6 @@ pub async fn run(socket: &Path, agent_id: &str) -> Result<(), CliError> {
     )
     .await?;
     let resp = output::check_response(resp, false)?;
-    output::print_response(&resp, false);
+    output::print_response(&resp, false)?;
     Ok(())
 }

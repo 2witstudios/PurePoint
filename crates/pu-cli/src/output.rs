@@ -15,7 +15,7 @@ pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> 
                         message: message.clone(),
                     },
                     true,
-                );
+                )?;
             }
             Err(CliError::DaemonError { code, message })
         }
@@ -23,7 +23,20 @@ pub fn check_response(resp: Response, json: bool) -> Result<Response, CliError> 
     }
 }
 
+/// Return a colored status string for display (delegates with `suspended = false`).
 fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
+    status_colored_with_suspended(status, exit_code, false)
+}
+
+/// Return a colored status string, showing "benched" (yellow) for suspended alive agents.
+fn status_colored_with_suspended(
+    status: AgentStatus,
+    exit_code: Option<i32>,
+    suspended: bool,
+) -> String {
+    if suspended && status.is_alive() {
+        return "benched".yellow().to_string();
+    }
     match status {
         AgentStatus::Streaming => "streaming".green().to_string(),
         AgentStatus::Waiting => "waiting".cyan().to_string(),
@@ -34,13 +47,50 @@ fn status_colored(status: AgentStatus, exit_code: Option<i32>) -> String {
     }
 }
 
-pub fn print_response(response: &Response, json_mode: bool) {
+fn format_duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        let h = seconds / 3600;
+        let m = (seconds % 3600) / 60;
+        format!("{h}h {m}m")
+    }
+}
+
+fn print_agent_pulse(a: &pu_core::protocol::AgentPulseEntry) {
+    let status_str = status_colored(a.status, a.exit_code);
+    let runtime = format_duration(a.runtime_seconds);
+    let idle = a
+        .idle_seconds
+        .map(|s| {
+            if s > 0 {
+                format!(" idle {}", format_duration(s as i64))
+            } else {
+                String::new()
+            }
+        })
+        .unwrap_or_default();
+
+    println!(
+        "  {} {} {} ({}{}){}",
+        a.id.dimmed(),
+        a.name,
+        status_str,
+        runtime.dimmed(),
+        idle.dimmed(),
+        a.prompt_snippet
+            .as_ref()
+            .map(|s| format!("\n    {}", s.dimmed()))
+            .unwrap_or_default()
+    );
+}
+
+pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliError> {
     if json_mode {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(response).expect("response JSON serialization failed")
-        );
-        return;
+        println!("{}", serde_json::to_string_pretty(response)?);
+        return Ok(());
     }
     match response {
         Response::HealthReport {
@@ -81,7 +131,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::StatusReport { worktrees, agents } => {
             if worktrees.is_empty() && agents.is_empty() {
                 println!("No active agents");
-                return;
+                return Ok(());
             }
             if !agents.is_empty() {
                 println!(
@@ -95,7 +145,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
                         "{:<14} {:<16} {}",
                         a.id.dimmed(),
                         a.name,
-                        status_colored(a.status, a.exit_code)
+                        status_colored_with_suspended(a.status, a.exit_code, a.suspended)
                     );
                 }
             }
@@ -119,7 +169,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
                             "  {:<14} {:<16} {}",
                             a.id.dimmed(),
                             a.name,
-                            status_colored(a.status, a.exit_code),
+                            status_colored_with_suspended(a.status, a.exit_code, a.suspended),
                         );
                     }
                 }
@@ -130,7 +180,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 "{} {} {}",
                 a.id.dimmed(),
                 a.name.bold(),
-                status_colored(a.status, a.exit_code)
+                status_colored_with_suspended(a.status, a.exit_code, a.suspended)
             );
             if let Some(pid) = a.pid {
                 println!("  PID:    {pid}");
@@ -149,11 +199,18 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Killed {} agent(s)", killed.len());
         }
         Response::SuspendResult { suspended } => {
-            println!("Suspended {} agent(s)", suspended.len());
+            if suspended.is_empty() {
+                println!("No agents to bench");
+            } else {
+                println!("Benched {} agent(s)", suspended.len());
+                for id in suspended {
+                    println!("  {}", id.dimmed());
+                }
+            }
         }
         Response::ResumeResult { agent_id, status } => {
             println!(
-                "Resumed agent {} ({})",
+                "Back in play: {} ({})",
                 agent_id.bold(),
                 status_colored(*status, None)
             );
@@ -212,10 +269,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
             println!("Grid subscription active");
         }
         Response::GridLayout { layout } => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(layout).expect("layout JSON serialization failed")
-            );
+            println!("{}", serde_json::to_string_pretty(layout)?);
         }
         Response::GridEvent {
             project_root,
@@ -236,7 +290,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::TemplateList { templates } => {
             if templates.is_empty() {
                 println!("No templates");
-                return;
+                return Ok(());
             }
             println!(
                 "{:<20} {:<12} {:<10} {}",
@@ -314,7 +368,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::AgentDefList { agent_defs } => {
             if agent_defs.is_empty() {
                 println!("No agent definitions");
-                return;
+                return Ok(());
             }
             println!(
                 "{:<20} {:<12} {:<10}",
@@ -350,7 +404,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::SwarmDefList { swarm_defs } => {
             if swarm_defs.is_empty() {
                 println!("No swarm definitions");
-                return;
+                return Ok(());
             }
             println!(
                 "{:<20} {:<10} {:<10} {}",
@@ -399,7 +453,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
         Response::DiffResult { diffs } => {
             if diffs.is_empty() {
                 println!("No worktree diffs");
-                return;
+                return Ok(());
             }
             for (i, d) in diffs.iter().enumerate() {
                 if i > 0 {
@@ -429,10 +483,70 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 }
             }
         }
+        Response::PulseReport {
+            worktrees,
+            root_agents,
+        } => {
+            if worktrees.is_empty() && root_agents.is_empty() {
+                println!("{}", "No active workspace".dimmed());
+                return Ok(());
+            }
+
+            // Root-level agents
+            if !root_agents.is_empty() {
+                println!("{}", "Root Agents".bold().underline());
+                for a in root_agents {
+                    print_agent_pulse(a);
+                }
+                if !worktrees.is_empty() {
+                    println!();
+                }
+            }
+
+            for (i, wt) in worktrees.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                // Worktree header with elapsed time
+                let elapsed = format_duration(wt.elapsed_seconds);
+                println!(
+                    "{} {} {} ({})",
+                    "Worktree".bold(),
+                    wt.worktree_name.bold(),
+                    wt.branch.green(),
+                    elapsed.dimmed()
+                );
+
+                // Git stats
+                if let Some(ref err) = wt.diff_error {
+                    println!("  git: {} {}", "error".red(), err);
+                } else if wt.files_changed > 0 {
+                    println!(
+                        "  git: {} file(s), {} {}, {} {}",
+                        wt.files_changed.to_string().bold(),
+                        format!("+{}", wt.insertions).green(),
+                        "ins".dimmed(),
+                        format!("-{}", wt.deletions).red(),
+                        "del".dimmed()
+                    );
+                } else {
+                    println!("  git: {}", "no changes yet".dimmed());
+                }
+
+                // Agents in this worktree
+                if wt.agents.is_empty() {
+                    println!("  {}", "no agents".dimmed());
+                } else {
+                    for a in &wt.agents {
+                        print_agent_pulse(a);
+                    }
+                }
+            }
+        }
         Response::ScheduleList { schedules } => {
             if schedules.is_empty() {
                 println!("No schedules");
-                return;
+                return Ok(());
             }
             println!(
                 "{:<20} {:<10} {:<10} {:<10} {}",
@@ -500,6 +614,7 @@ pub fn print_response(response: &Response, json_mode: bool) {
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -572,7 +687,7 @@ mod tests {
     fn given_json_mode_should_produce_valid_json() {
         // Exercise the print_response JSON path (which calls serde internally)
         let resp = Response::InitResult { created: true };
-        print_response(&resp, true);
+        print_response(&resp, true).unwrap();
         // Verify it round-trips through serde correctly
         let json = serde_json::to_string_pretty(&resp).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -591,17 +706,17 @@ mod tests {
             projects: vec!["/test".into()],
             agent_count: 3,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_init_result_created_should_not_panic() {
-        print_response(&Response::InitResult { created: true }, false);
+        print_response(&Response::InitResult { created: true }, false).unwrap();
     }
 
     #[test]
     fn given_init_result_already_should_not_panic() {
-        print_response(&Response::InitResult { created: false }, false);
+        print_response(&Response::InitResult { created: false }, false).unwrap();
     }
 
     #[test]
@@ -611,7 +726,7 @@ mod tests {
             agent_id: "ag-xyz".into(),
             status: AgentStatus::Streaming,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -621,7 +736,7 @@ mod tests {
             agent_id: "ag-xyz".into(),
             status: AgentStatus::Waiting,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -630,7 +745,7 @@ mod tests {
             worktrees: vec![],
             agents: vec![],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -642,7 +757,7 @@ mod tests {
                 make_agent_report("ag-2", AgentStatus::Broken),
             ],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -674,13 +789,13 @@ mod tests {
             worktrees: vec![wt],
             agents: vec![],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_agent_status_should_not_panic() {
         let resp = Response::AgentStatus(make_agent_report("ag-1", AgentStatus::Waiting));
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -690,7 +805,7 @@ mod tests {
             exit_codes: std::collections::HashMap::new(),
             skipped: vec![],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -698,7 +813,13 @@ mod tests {
         let resp = Response::SuspendResult {
             suspended: vec!["ag-1".into()],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
+    }
+
+    #[test]
+    fn given_empty_suspend_result_should_not_panic() {
+        let resp = Response::SuspendResult { suspended: vec![] };
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -707,7 +828,7 @@ mod tests {
             agent_id: "ag-1".into(),
             status: AgentStatus::Streaming,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -716,7 +837,7 @@ mod tests {
             agent_id: "ag-1".into(),
             name: "new-name".into(),
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -727,7 +848,7 @@ mod tests {
             branch_deleted: true,
             remote_deleted: false,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -736,12 +857,12 @@ mod tests {
             agent_id: "ag-1".into(),
             data: "some log output\n".into(),
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_shutting_down_should_not_panic() {
-        print_response(&Response::ShuttingDown, false);
+        print_response(&Response::ShuttingDown, false).unwrap();
     }
 
     #[test]
@@ -750,12 +871,12 @@ mod tests {
             code: "ERR".into(),
             message: "something failed".into(),
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_ok_response_should_not_panic() {
-        print_response(&Response::Ok, false);
+        print_response(&Response::Ok, false).unwrap();
     }
 
     #[test]
@@ -764,7 +885,7 @@ mod tests {
             agent_id: "ag-1".into(),
             data: b"hello world".to_vec(),
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -772,12 +893,12 @@ mod tests {
         let resp = Response::AttachReady {
             buffered_bytes: 1024,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_grid_subscribed_should_not_panic() {
-        print_response(&Response::GridSubscribed, false);
+        print_response(&Response::GridSubscribed, false).unwrap();
     }
 
     #[test]
@@ -785,7 +906,7 @@ mod tests {
         let resp = Response::GridLayout {
             layout: serde_json::json!({"root": {"type": "leaf", "id": 1}}),
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -794,12 +915,12 @@ mod tests {
             project_root: "/test".into(),
             command: GridCommand::GetLayout,
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_status_subscribed_should_not_panic() {
-        print_response(&Response::StatusSubscribed, false);
+        print_response(&Response::StatusSubscribed, false).unwrap();
     }
 
     #[test]
@@ -808,7 +929,7 @@ mod tests {
             agents: vec![],
             worktrees: vec![],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     // --- status_colored ---
@@ -843,6 +964,33 @@ mod tests {
         assert!(s.contains("waiting"));
     }
 
+    // --- status_colored_with_suspended (bench) ---
+
+    #[test]
+    fn given_suspended_streaming_should_show_benched() {
+        let s = status_colored_with_suspended(AgentStatus::Streaming, None, true);
+        assert!(s.contains("benched"));
+    }
+
+    #[test]
+    fn given_suspended_waiting_should_show_benched() {
+        let s = status_colored_with_suspended(AgentStatus::Waiting, None, true);
+        assert!(s.contains("benched"));
+    }
+
+    #[test]
+    fn given_suspended_broken_should_not_show_benched() {
+        let s = status_colored_with_suspended(AgentStatus::Broken, Some(0), true);
+        assert!(!s.contains("benched"));
+        assert!(s.contains("done"));
+    }
+
+    #[test]
+    fn given_not_suspended_should_show_normal_status() {
+        let s = status_colored_with_suspended(AgentStatus::Streaming, None, false);
+        assert!(s.contains("streaming"));
+    }
+
     // --- diff output ---
 
     #[test]
@@ -860,13 +1008,13 @@ mod tests {
                 error: None,
             }],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_empty_diff_result_should_not_panic() {
         let resp = Response::DiffResult { diffs: vec![] };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -884,7 +1032,91 @@ mod tests {
                 error: None,
             }],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
+    }
+
+    // --- pulse output ---
+
+    #[test]
+    fn given_pulse_report_should_not_panic() {
+        let resp = Response::PulseReport {
+            worktrees: vec![pu_core::protocol::WorktreePulseEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "feature-5".into(),
+                branch: "pu/feature-5".into(),
+                elapsed_seconds: 3661,
+                agents: vec![pu_core::protocol::AgentPulseEntry {
+                    id: "ag-1".into(),
+                    name: "claude".into(),
+                    agent_type: "claude".into(),
+                    status: AgentStatus::Streaming,
+                    exit_code: None,
+                    runtime_seconds: 120,
+                    idle_seconds: Some(5),
+                    prompt_snippet: Some("Add pulse command to CLI".into()),
+                }],
+                files_changed: 3,
+                insertions: 42,
+                deletions: 7,
+                diff_error: None,
+            }],
+            root_agents: vec![pu_core::protocol::AgentPulseEntry {
+                id: "ag-2".into(),
+                name: "point-guard".into(),
+                agent_type: "claude".into(),
+                status: AgentStatus::Waiting,
+                exit_code: None,
+                runtime_seconds: 7200,
+                idle_seconds: Some(30),
+                prompt_snippet: None,
+            }],
+        };
+        print_response(&resp, false).unwrap();
+    }
+
+    #[test]
+    fn given_empty_pulse_report_should_not_panic() {
+        let resp = Response::PulseReport {
+            worktrees: vec![],
+            root_agents: vec![],
+        };
+        print_response(&resp, false).unwrap();
+    }
+
+    #[test]
+    fn given_pulse_report_json_should_produce_valid_json() {
+        let resp = Response::PulseReport {
+            worktrees: vec![pu_core::protocol::WorktreePulseEntry {
+                worktree_id: "wt-1".into(),
+                worktree_name: "test".into(),
+                branch: "pu/test".into(),
+                elapsed_seconds: 60,
+                agents: vec![],
+                files_changed: 0,
+                insertions: 0,
+                deletions: 0,
+                diff_error: None,
+            }],
+            root_agents: vec![],
+        };
+        let json = serde_json::to_string_pretty(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "pulse_report");
+    }
+
+    #[test]
+    fn given_format_duration_under_60s() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn given_format_duration_minutes() {
+        assert_eq!(format_duration(125), "2m 5s");
+    }
+
+    #[test]
+    fn given_format_duration_hours() {
+        assert_eq!(format_duration(3661), "1h 1m");
     }
 
     // --- schedule output ---
@@ -909,13 +1141,13 @@ mod tests {
                 created_at: chrono::Utc::now(),
             }],
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
     fn given_empty_schedule_list_should_not_panic() {
         let resp = Response::ScheduleList { schedules: vec![] };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 
     #[test]
@@ -937,6 +1169,6 @@ mod tests {
             agent_name: None,
             created_at: chrono::Utc::now(),
         };
-        print_response(&resp, false);
+        print_response(&resp, false).unwrap();
     }
 }

@@ -193,8 +193,14 @@ impl NativePtyHost {
                             unsafe { libc::read(read_fd, tmp.as_mut_ptr() as *mut _, tmp.len()) };
                         if n > 0 {
                             read_buf.write(&tmp[..n as usize]);
+                        } else if n == 0 {
+                            break; // EOF
                         } else {
-                            break; // EOF or error
+                            let err = std::io::Error::last_os_error();
+                            if err.kind() == std::io::ErrorKind::Interrupted {
+                                continue; // EINTR — retry
+                            }
+                            break; // Real error
                         }
                     }
                 });
@@ -291,7 +297,11 @@ impl NativePtyHost {
                     libc::write(fd, data[offset..].as_ptr() as *const _, data.len() - offset)
                 };
                 if n < 0 {
-                    return Err(std::io::Error::last_os_error());
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue; // EINTR — retry
+                    }
+                    return Err(err);
                 }
                 offset += n as usize;
             }
