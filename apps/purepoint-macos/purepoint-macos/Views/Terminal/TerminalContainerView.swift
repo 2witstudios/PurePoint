@@ -41,7 +41,6 @@ struct TerminalContainerView: NSViewRepresentable {
         container.layer?.backgroundColor = TerminalTheme.background.cgColor
 
         let termView = viewCache.terminalView(for: agent)
-        termView.onMouseDown = onFocus
         termView.isHidden = false
         termView.pinToEdges(of: container)
 
@@ -54,7 +53,6 @@ struct TerminalContainerView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         let termView = viewCache.terminalView(for: agent)
-        termView.onMouseDown = onFocus
         context.coordinator.onFocus = onFocus
 
         // Already showing the correct agent — just ensure focus
