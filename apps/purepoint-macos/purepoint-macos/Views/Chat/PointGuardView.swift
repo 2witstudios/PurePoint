@@ -79,7 +79,7 @@ struct PointGuardView: View {
     }
 
     private func spawnShell() async {
-        await respawnShell(cwd: NSHomeDirectory())
+        await respawnShell(cwd: NSHomeDirectory(), then: "claude")
     }
 
     /// Kill the current shell, spawn a new one at `cwd`, optionally run a command.
