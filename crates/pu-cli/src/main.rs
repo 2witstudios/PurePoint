@@ -56,6 +56,9 @@ enum Commands {
         /// Skip auto-mode flags (--dangerously-skip-permissions, --full-auto, etc.)
         #[arg(long)]
         no_auto: bool,
+        /// Extra CLI flags passed directly to the agent (space-separated)
+        #[arg(long)]
+        agent_args: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -496,11 +499,12 @@ async fn main() {
             command,
             vars,
             no_auto,
+            agent_args,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                no_auto, json,
+                no_auto, agent_args, json,
             )
             .await
         }

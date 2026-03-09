@@ -32,10 +32,89 @@ pub fn resolve_agent<'a>(config: &'a Config, name: &str) -> Option<&'a AgentConf
     config.agents.get(name)
 }
 
+/// Update a specific agent's launch_args in the project config.
+/// Loads existing config, modifies the named agent, writes back to YAML.
+/// Returns the updated (merged) config.
+pub fn update_agent_config(
+    project_root: &Path,
+    agent_name: &str,
+    launch_args: Option<Vec<String>>,
+) -> Result<Config, PuError> {
+    let path = paths::config_path(project_root);
+
+    // Load raw config from file (without merging code defaults)
+    let mut raw_config: Config = match std::fs::read_to_string(&path) {
+        Ok(content) => serde_yml::from_str(&content)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config {
+            default_agent: "claude".into(),
+            agents: indexmap::IndexMap::new(),
+            env_files: vec![".env".into(), ".env.local".into()],
+        },
+        Err(e) => return Err(PuError::Io(e)),
+    };
+
+    // Ensure the agent entry exists
+    let agent = raw_config
+        .agents
+        .entry(agent_name.to_string())
+        .or_insert_with(|| {
+            let defaults = crate::types::default_agents();
+            defaults.get(agent_name).cloned().unwrap_or(AgentConfig {
+                name: agent_name.to_string(),
+                command: agent_name.to_string(),
+                prompt_flag: None,
+                interactive: true,
+                launch_args: None,
+            })
+        });
+
+    agent.launch_args = launch_args;
+
+    // Write back to YAML
+    let yaml = serde_yml::to_string(&raw_config)?;
+    std::fs::write(&path, yaml)?;
+
+    // Return fully merged config (with code defaults filled in)
+    load_config_strict(project_root)
+}
+
 pub fn write_default_config(project_root: &Path) -> Result<(), PuError> {
     let path = paths::config_path(project_root);
     // Only write user-level settings. Agent defaults come from code.
-    let yaml = "defaultAgent: claude\nenvFiles:\n- .env\n- .env.local\n";
+    // Commented-out agents section documents available flags per agent type.
+    let yaml = r#"defaultAgent: claude
+envFiles:
+  - .env
+  - .env.local
+
+# Agent launch configuration — uncomment and customize as needed.
+# Agents not listed here use built-in defaults.
+# agents:
+#   claude:
+#     name: claude
+#     command: claude
+#     launchArgs:                  # Default: ["--dangerously-skip-permissions"]
+#       - "--dangerously-skip-permissions"
+#       # --permission-mode <default|acceptEdits|plan|bypassPermissions>
+#       # --model <sonnet|opus|haiku>
+#       # --effort <low|medium|high>
+#       # --allowedTools <tools...>
+#       # --append-system-prompt <prompt>
+#       # --max-budget-usd <amount>
+#   codex:
+#     name: codex
+#     command: codex
+#     launchArgs:                  # Default: ["--full-auto"]
+#       - "--full-auto"
+#       # -a <full-auto|suggest|ask>  (approval mode)
+#       # --model <model>
+#   opencode:
+#     name: opencode
+#     command: opencode
+#     launchArgs: []               # Default: [] (auto-approves in run mode)
+#       # --model <provider/model>
+#       # --variant <effort>
+"#;
     std::fs::write(&path, yaml)?;
     Ok(())
 }
@@ -119,8 +198,18 @@ envFiles: [".env"]
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("defaultAgent: claude"));
         assert!(content.contains(".env"));
-        // Should NOT contain agents section — defaults come from code
-        assert!(!content.contains("agents:"));
+        // agents section is only in comments — no uncommented "agents:" key
+        // (parser fills defaults but that's from code, not from the file)
+        assert!(
+            !content
+                .lines()
+                .any(|l| !l.starts_with('#') && l.contains("agents:"))
+        );
+        // Comments should document key flags for discoverability
+        assert!(content.contains("--dangerously-skip-permissions"));
+        assert!(content.contains("--full-auto"));
+        assert!(content.contains("--permission-mode"));
+        assert!(content.contains("--model"));
     }
 
     #[test]
@@ -237,5 +326,103 @@ agents:
         // resolved_launch_args should return defaults when not set
         let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_deref());
         assert_eq!(args, vec!["--dangerously-skip-permissions"]);
+    }
+
+    #[test]
+    fn given_update_agent_config_should_write_launch_args() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml =
+            "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n";
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = update_agent_config(
+            root,
+            "claude",
+            Some(vec![
+                "--verbose".to_string(),
+                "--model".to_string(),
+                "opus".to_string(),
+            ]),
+        )
+        .unwrap();
+
+        let claude = &config.agents["claude"];
+        assert_eq!(
+            claude.launch_args,
+            Some(vec![
+                "--verbose".to_string(),
+                "--model".to_string(),
+                "opus".to_string()
+            ])
+        );
+
+        // Re-read from disk to verify persistence
+        let reloaded = load_config(root);
+        assert_eq!(
+            reloaded.agents["claude"].launch_args,
+            Some(vec![
+                "--verbose".to_string(),
+                "--model".to_string(),
+                "opus".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn given_update_agent_config_with_none_should_reset_to_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml = "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n    launchArgs:\n      - '--verbose'\n";
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config = update_agent_config(root, "claude", None).unwrap();
+        let claude = &config.agents["claude"];
+        assert!(claude.launch_args.is_none());
+    }
+
+    #[test]
+    fn given_update_agent_config_should_preserve_other_agents() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+        let yaml = "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n  codex:\n    name: codex\n    command: codex\n    launchArgs:\n      - '--full-auto'\n";
+        std::fs::write(crate::paths::config_path(root), yaml).unwrap();
+
+        let config =
+            update_agent_config(root, "claude", Some(vec!["--verbose".to_string()])).unwrap();
+
+        // Claude should have new args
+        assert_eq!(
+            config.agents["claude"].launch_args,
+            Some(vec!["--verbose".to_string()])
+        );
+        // Codex should be preserved
+        assert_eq!(
+            config.agents["codex"].launch_args,
+            Some(vec!["--full-auto".to_string()])
+        );
+    }
+
+    #[test]
+    fn given_update_agent_config_with_no_config_file_should_create_one() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+
+        let config = update_agent_config(
+            root,
+            "claude",
+            Some(vec!["--permission-mode".to_string(), "plan".to_string()]),
+        )
+        .unwrap();
+
+        assert!(crate::paths::config_path(root).exists());
+        assert_eq!(
+            config.agents["claude"].launch_args,
+            Some(vec!["--permission-mode".to_string(), "plan".to_string()])
+        );
     }
 }

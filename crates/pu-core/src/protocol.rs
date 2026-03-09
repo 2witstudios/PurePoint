@@ -59,6 +59,9 @@ pub enum Request {
         /// Skip auto-mode launch args (--dangerously-skip-permissions, --full-auto, etc.)
         #[serde(default)]
         no_auto: bool,
+        /// Additional CLI args appended after launch args (from --agent-args)
+        #[serde(default)]
+        extra_args: Vec<String>,
     },
     Status {
         project_root: String,
@@ -246,6 +249,15 @@ pub enum Request {
     DisableSchedule {
         project_root: String,
         name: String,
+    },
+    // Config
+    GetConfig {
+        project_root: String,
+    },
+    UpdateAgentConfig {
+        project_root: String,
+        agent_name: String,
+        launch_args: Option<Vec<String>>,
     },
     Shutdown,
     Diff {
@@ -530,6 +542,10 @@ pub enum Response {
         agent_name: Option<String>,
         created_at: DateTime<Utc>,
     },
+    ConfigReport {
+        default_agent: String,
+        agents: Vec<AgentConfigInfo>,
+    },
     DiffResult {
         diffs: Vec<WorktreeDiffEntry>,
     },
@@ -574,6 +590,15 @@ pub struct WorktreeDiffEntry {
     pub deletions: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfigInfo {
+    pub name: String,
+    pub command: String,
+    pub launch_args: Option<Vec<String>>,
+    pub resolved_launch_args: Vec<String>,
+    pub interactive: bool,
 }
 
 #[cfg(test)]
@@ -631,6 +656,7 @@ mod tests {
             worktree: None,
             command: None,
             no_auto: false,
+            extra_args: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -668,11 +694,46 @@ mod tests {
             worktree: None,
             command: None,
             no_auto: true,
+            extra_args: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
             Request::Spawn { no_auto, .. } => assert!(no_auto),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_without_extra_args_should_default_to_empty() {
+        let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::Spawn { extra_args, .. } => assert!(extra_args.is_empty()),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_with_extra_args_should_round_trip() {
+        let req = Request::Spawn {
+            project_root: "/test".into(),
+            prompt: "fix".into(),
+            agent: "claude".into(),
+            name: None,
+            base: None,
+            root: true,
+            worktree: None,
+            command: None,
+            no_auto: false,
+            extra_args: vec!["--model".into(), "opus".into()],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Spawn { extra_args, .. } => {
+                assert_eq!(extra_args, vec!["--model", "opus"]);
+            }
             _ => panic!("expected Spawn"),
         }
     }
@@ -2188,6 +2249,99 @@ mod tests {
                 assert_eq!(worktree_id, "wt-abc");
             }
             _ => panic!("expected CreateWorktreeResult"),
+        }
+    }
+
+    #[test]
+    fn given_get_config_request_should_round_trip() {
+        let req = Request::GetConfig {
+            project_root: "/test".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::GetConfig { project_root } => assert_eq!(project_root, "/test"),
+            _ => panic!("expected GetConfig"),
+        }
+    }
+
+    #[test]
+    fn given_update_agent_config_request_with_args_should_round_trip() {
+        let req = Request::UpdateAgentConfig {
+            project_root: "/test".into(),
+            agent_name: "claude".into(),
+            launch_args: Some(vec!["--verbose".into(), "--model".into(), "opus".into()]),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::UpdateAgentConfig {
+                project_root,
+                agent_name,
+                launch_args,
+            } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(agent_name, "claude");
+                assert_eq!(launch_args.unwrap(), vec!["--verbose", "--model", "opus"]);
+            }
+            _ => panic!("expected UpdateAgentConfig"),
+        }
+    }
+
+    #[test]
+    fn given_update_agent_config_request_with_none_should_round_trip() {
+        let req = Request::UpdateAgentConfig {
+            project_root: "/test".into(),
+            agent_name: "codex".into(),
+            launch_args: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::UpdateAgentConfig { launch_args, .. } => {
+                assert!(launch_args.is_none());
+            }
+            _ => panic!("expected UpdateAgentConfig"),
+        }
+    }
+
+    #[test]
+    fn given_config_report_response_should_round_trip() {
+        let resp = Response::ConfigReport {
+            default_agent: "claude".into(),
+            agents: vec![
+                AgentConfigInfo {
+                    name: "claude".into(),
+                    command: "claude".into(),
+                    launch_args: Some(vec!["--verbose".into()]),
+                    resolved_launch_args: vec!["--verbose".into()],
+                    interactive: true,
+                },
+                AgentConfigInfo {
+                    name: "codex".into(),
+                    command: "codex".into(),
+                    launch_args: None,
+                    resolved_launch_args: vec!["--full-auto".into()],
+                    interactive: true,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::ConfigReport {
+                default_agent,
+                agents,
+            } => {
+                assert_eq!(default_agent, "claude");
+                assert_eq!(agents.len(), 2);
+                assert_eq!(agents[0].name, "claude");
+                assert_eq!(agents[0].launch_args, Some(vec!["--verbose".to_string()]));
+                assert_eq!(agents[1].name, "codex");
+                assert!(agents[1].launch_args.is_none());
+                assert_eq!(agents[1].resolved_launch_args, vec!["--full-auto"]);
+            }
+            _ => panic!("expected ConfigReport"),
         }
     }
 }

@@ -22,6 +22,7 @@ pub async fn run(
     command: Option<String>,
     vars: Vec<String>,
     no_auto: bool,
+    agent_args: Option<String>,
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -48,6 +49,11 @@ pub async fn run(
         resolved_prompt.unwrap_or_default()
     };
 
+    // Split --agent-args string into individual args
+    let extra_args: Vec<String> = agent_args
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default();
+
     let resp = client::send_request(
         socket,
         &Request::Spawn {
@@ -60,6 +66,7 @@ pub async fn run(
             worktree,
             command: resolved_command,
             no_auto,
+            extra_args,
         },
     )
     .await?;

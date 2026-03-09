@@ -226,6 +226,8 @@ nonisolated enum DaemonRequest: Encodable {
     case deleteSchedule(projectRoot: String, name: String, scope: String)
     case enableSchedule(projectRoot: String, name: String)
     case disableSchedule(projectRoot: String, name: String)
+    case getConfig(projectRoot: String)
+    case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: [String]?)
     case shutdown
 
     func encode(to encoder: Encoder) throws {
@@ -392,6 +394,16 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("disable_schedule", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(name, forKey: .key("name"))
+        case .getConfig(let projectRoot):
+            try container.encode("get_config", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+        case .updateAgentConfig(let projectRoot, let agentName, let launchArgs):
+            try container.encode("update_agent_config", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(agentName, forKey: .key("agent_name"))
+            if let launchArgs {
+                try container.encode(launchArgs, forKey: .key("launch_args"))
+            }
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         }
@@ -425,6 +437,7 @@ nonisolated enum DaemonResponse: Decodable {
     case runSwarmResult(spawnedAgents: [String])
     case scheduleList(schedules: [ScheduleInfoPayload])
     case scheduleDetail(schedule: ScheduleInfoPayload)
+    case configReport(defaultAgent: String, agents: [AgentConfigPayload])
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -513,6 +526,9 @@ nonisolated enum DaemonResponse: Decodable {
         case "schedule_detail":
             let p = try ScheduleInfoPayload(from: decoder)
             self = .scheduleDetail(schedule: p)
+        case "config_report":
+            let p = try ConfigReportPayload(from: decoder)
+            self = .configReport(defaultAgent: p.defaultAgent, agents: p.agents)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -523,6 +539,20 @@ nonisolated enum DaemonResponse: Decodable {
         default:
             self = .unknown(type: type)
         }
+    }
+}
+
+nonisolated struct AgentConfigPayload: Decodable {
+    let name: String
+    let command: String
+    let launchArgs: [String]?
+    let resolvedLaunchArgs: [String]
+    let interactive: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name, command, interactive
+        case launchArgs = "launch_args"
+        case resolvedLaunchArgs = "resolved_launch_args"
     }
 }
 
@@ -612,6 +642,16 @@ nonisolated struct SwarmDefInfo: Decodable {
 }
 
 // MARK: - Response payload helpers
+
+private nonisolated struct ConfigReportPayload: Decodable {
+    let defaultAgent: String
+    let agents: [AgentConfigPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case defaultAgent = "default_agent"
+        case agents
+    }
+}
 
 private nonisolated struct TemplateListPayload: Decodable {
     let templates: [TemplateInfo]

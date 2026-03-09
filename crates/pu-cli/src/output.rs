@@ -499,6 +499,22 @@ pub fn print_response(response: &Response, json_mode: bool) {
                 }
             }
         }
+        Response::ConfigReport {
+            default_agent,
+            agents,
+        } => {
+            println!("{}", "Agent Configuration".bold());
+            println!("  Default agent: {}", default_agent.green());
+            for a in agents {
+                println!("\n  {} ({})", a.name.bold(), a.command.dimmed());
+                if let Some(ref args) = a.launch_args {
+                    println!("    Launch args: {:?}", args);
+                } else {
+                    println!("    Launch args: {} (using defaults)", "none".dimmed());
+                }
+                println!("    Resolved:    {:?}", a.resolved_launch_args);
+            }
+        }
     }
 }
 
