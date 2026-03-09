@@ -145,13 +145,60 @@ pu diff --json                     # machine-readable
 ```
 
 ### Triggers and gates
+
+Triggers fire actions when events occur. Each trigger has an ordered sequence of inject/gate actions.
+
+**Events**: `agent_idle` (agent goes waiting), `pre_commit` (git hook), `pre_push` (git hook).
+
 ```bash
-pu trigger list                    # list trigger definitions
-pu trigger show <name>             # show trigger details
-pu trigger create <name> ...       # create a trigger definition
-pu trigger delete <name>           # delete a trigger definition
-pu gate pre-commit                 # evaluate pre-commit gate
-pu gate pre-push                   # evaluate pre-push gate
+# Inject commands when agent finishes work
+pu trigger create post-task \
+  --on agent_idle \
+  --inject "/simplify" \
+  --inject "/review" \
+  --inject "/commit-push-pr"
+
+# Block commits unless tests pass
+pu trigger create quality-gate \
+  --on pre_commit \
+  --gate "cargo test" \
+  --gate "cargo clippy -- -D warnings"
+
+# Manage triggers
+pu trigger list                              # list all triggers
+pu trigger show <name>                       # show trigger details
+pu trigger delete <name> --scope local       # delete (local or global)
+```
+
+**Scope**: `--scope local` (default, `.pu/triggers/`) or `--scope global` (`~/.pu/triggers/`).
+
+For complex triggers with gates + retries + variables, write YAML directly:
+
+```yaml
+# .pu/triggers/gated-flow.yaml
+name: gated-flow
+description: Review, gate on tests, then commit
+on: agent_idle
+sequence:
+  - inject: "/simplify"
+  - inject: "/review"
+    gate:
+      run: "cargo test"
+      expect_exit: 0
+    max_retries: 3
+  - inject: "/commit-push-pr"
+variables:
+  BRANCH: main
+```
+
+**Gate timeouts**: 60s per command, 5 minutes total. Gates run first; inject follows on success.
+
+**Disable per agent**: `pu spawn "quick fix" --no-trigger --name hotfix`
+
+**Manual gate evaluation** (usually called by auto-installed git hooks):
+```bash
+pu gate pre-commit
+pu gate pre-push
 ```
 
 ### Agent and swarm definitions
