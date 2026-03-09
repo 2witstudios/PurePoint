@@ -1,7 +1,11 @@
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use pu_core::trigger_def::TriggerDef;
+
+/// Default timeout for gate commands (60 seconds).
+const GATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct GateEvalResult {
@@ -73,14 +77,23 @@ pub async fn run_gate_command(
     command: &str,
     cwd: &Path,
 ) -> Result<(i32, String, String), Box<dyn std::error::Error + Send + Sync>> {
-    let output = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
+    let output = tokio::time::timeout(
+        GATE_TIMEOUT,
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "gate command timed out after {}s: {command}",
+            GATE_TIMEOUT.as_secs()
+        )
+    })??;
 
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();

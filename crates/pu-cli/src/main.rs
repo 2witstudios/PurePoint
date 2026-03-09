@@ -701,13 +701,15 @@ async fn main() {
             } => {
                 commands::trigger::run_create(
                     &socket,
-                    &name,
-                    &event,
-                    description,
-                    inject,
-                    gate,
-                    &scope,
-                    json,
+                    commands::trigger::CreateTriggerParams {
+                        name,
+                        event,
+                        description,
+                        injects: inject,
+                        gates: gate,
+                        scope,
+                        json,
+                    },
                 )
                 .await
             }

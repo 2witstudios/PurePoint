@@ -32,30 +32,30 @@ pub async fn run_show(socket: &Path, name: &str, json: bool) -> Result<(), CliEr
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_create(
-    socket: &Path,
-    name: &str,
-    event: &str,
-    description: Option<String>,
-    injects: Vec<String>,
-    gates: Vec<String>,
-    scope: &str,
-    json: bool,
-) -> Result<(), CliError> {
+pub struct CreateTriggerParams {
+    pub name: String,
+    pub event: String,
+    pub description: Option<String>,
+    pub injects: Vec<String>,
+    pub gates: Vec<String>,
+    pub scope: String,
+    pub json: bool,
+}
+
+pub async fn run_create(socket: &Path, params: CreateTriggerParams) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
     let project_root = commands::cwd_string()?;
 
     // Build sequence from --inject and --gate flags
     let mut sequence: Vec<TriggerActionPayload> = Vec::new();
-    for text in &injects {
+    for text in &params.injects {
         sequence.push(TriggerActionPayload {
             inject: Some(text.clone()),
             gate: None,
             max_retries: None,
         });
     }
-    for cmd in &gates {
+    for cmd in &params.gates {
         sequence.push(TriggerActionPayload {
             inject: None,
             gate: Some(GatePayload {
@@ -76,17 +76,17 @@ pub async fn run_create(
         socket,
         &Request::SaveTrigger {
             project_root,
-            name: name.to_string(),
-            description,
-            on: event.to_string(),
+            name: params.name,
+            description: params.description,
+            on: params.event,
             sequence,
             variables: std::collections::HashMap::new(),
-            scope: scope.to_string(),
+            scope: params.scope,
         },
     )
     .await?;
-    let resp = output::check_response(resp, json)?;
-    output::print_response(&resp, json);
+    let resp = output::check_response(resp, params.json)?;
+    output::print_response(&resp, params.json);
     Ok(())
 }
 

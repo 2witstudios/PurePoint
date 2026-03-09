@@ -162,15 +162,18 @@ fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<TriggerDef> {
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut def) = serde_yml::from_str::<TriggerDef>(&content) {
-                def.scope = scope.to_string();
-                return Some(def);
+            match serde_yml::from_str::<TriggerDef>(&content) {
+                Ok(mut def) => {
+                    def.scope = scope.to_string();
+                    return Some(def);
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to parse {}: {e}", path.display());
+                }
             }
         }
     }
-    scan_dir(dir, scope)
-        .into_iter()
-        .find(|def| def.name == name)
+    None
 }
 
 #[cfg(test)]

@@ -949,23 +949,27 @@ impl Engine {
         // tries to attach — the session must already be in the map.
         self.sessions.lock().await.insert(agent_id.clone(), handle);
 
-        // Count trigger sequence steps for trigger_total
-        let trigger_total = if no_trigger {
-            None
+        // Find the first idle trigger and bind this agent to it
+        let (trigger_name, trigger_total) = if no_trigger {
+            (None, None)
         } else {
             let pr = project_root.to_string();
-            let total = tokio::task::spawn_blocking(move || {
-                pu_core::trigger_def::triggers_for_event(
+            let found = tokio::task::spawn_blocking(move || {
+                let triggers = pu_core::trigger_def::triggers_for_event(
                     Path::new(&pr),
                     &pu_core::trigger_def::TriggerEvent::AgentIdle,
-                )
-                .iter()
-                .map(|t| t.sequence.len())
-                .sum::<usize>() as u32
+                );
+                triggers.into_iter().next().map(|t| {
+                    let len = t.sequence.len() as u32;
+                    (t.name, len)
+                })
             })
             .await
-            .unwrap_or(0);
-            if total > 0 { Some(total) } else { None }
+            .unwrap_or(None);
+            match found {
+                Some((name, total)) if total > 0 => (Some(name), Some(total)),
+                _ => (None, None),
+            }
         };
 
         // Update manifest
@@ -993,6 +997,7 @@ impl Engine {
             trigger_total,
             gate_attempts: if no_trigger { None } else { Some(0) },
             no_trigger: if no_trigger { Some(true) } else { None },
+            trigger_name: trigger_name.clone(),
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -3079,7 +3084,10 @@ impl Engine {
         let pr = project_root.to_string();
         tokio::task::spawn_blocking(move || {
             let defs = pu_core::trigger_def::list_trigger_defs(Path::new(&pr));
-            let triggers: Vec<_> = defs.into_iter().map(Self::trigger_def_to_info).collect();
+            let triggers: Vec<_> = defs
+                .into_iter()
+                .map(pu_core::protocol::TriggerInfo::from)
+                .collect();
             Response::TriggerList { triggers }
         })
         .await
@@ -3094,7 +3102,7 @@ impl Engine {
         let name = name.to_string();
         tokio::task::spawn_blocking(move || {
             match pu_core::trigger_def::find_trigger_def(Path::new(&pr), &name) {
-                Some(def) => Response::TriggerDetail(Self::trigger_def_to_info(def)),
+                Some(def) => Response::TriggerDetail(pu_core::protocol::TriggerInfo::from(def)),
                 None => Response::Error {
                     code: "NOT_FOUND".into(),
                     message: format!("trigger not found: {name}"),
@@ -3135,17 +3143,8 @@ impl Engine {
                     };
                 }
             };
-            let actions: Vec<_> = sequence
-                .into_iter()
-                .map(|a| pu_core::trigger_def::TriggerAction {
-                    inject: a.inject,
-                    gate: a.gate.map(|g| pu_core::trigger_def::GateDef {
-                        run: g.run,
-                        expect_exit: g.expect_exit,
-                    }),
-                    max_retries: a.max_retries,
-                })
-                .collect();
+            let actions: Vec<pu_core::trigger_def::TriggerAction> =
+                sequence.into_iter().map(Into::into).collect();
             let def = pu_core::trigger_def::TriggerDef {
                 name: name.clone(),
                 description,
@@ -3227,7 +3226,9 @@ impl Engine {
         project_root: &str,
         worktree_path: &str,
     ) -> Response {
-        let trigger_event = match event {
+        // Normalize hyphenated form (from git hooks) to underscored form
+        let normalized_event = event.replace('-', "_");
+        let trigger_event = match normalized_event.as_str() {
             "pre_commit" => pu_core::trigger_def::TriggerEvent::PreCommit,
             "pre_push" => pu_core::trigger_def::TriggerEvent::PrePush,
             other => {
@@ -3273,33 +3274,6 @@ impl Engine {
                 passed: false,
                 output: format!("gate evaluation error: {e}"),
             },
-        }
-    }
-
-    fn trigger_def_to_info(d: pu_core::trigger_def::TriggerDef) -> pu_core::protocol::TriggerInfo {
-        let on = match &d.on {
-            pu_core::trigger_def::TriggerEvent::AgentIdle => "agent_idle",
-            pu_core::trigger_def::TriggerEvent::PreCommit => "pre_commit",
-            pu_core::trigger_def::TriggerEvent::PrePush => "pre_push",
-        };
-        pu_core::protocol::TriggerInfo {
-            name: d.name,
-            description: d.description,
-            on: on.to_string(),
-            sequence: d
-                .sequence
-                .into_iter()
-                .map(|a| pu_core::protocol::TriggerActionPayload {
-                    inject: a.inject,
-                    gate: a.gate.map(|g| pu_core::protocol::GatePayload {
-                        run: g.run,
-                        expect_exit: g.expect_exit,
-                    }),
-                    max_retries: a.max_retries,
-                })
-                .collect(),
-            variables: d.variables,
-            scope: d.scope,
         }
     }
 
@@ -3358,7 +3332,41 @@ impl Engine {
             Err(_) => return,
         };
 
-        // Load agent_idle triggers for this project
+        // Collect candidate agents with their trigger name, seq index, and worktree path.
+        // Briefly hold the sessions lock to check live status, then release before I/O.
+        let candidates: Vec<(String, String, u32, Option<std::path::PathBuf>)> = {
+            let sessions = self.sessions.lock().await;
+            let mut result = Vec::new();
+            for agent in manifest.all_agents() {
+                if agent.trigger_state != Some(pu_core::types::TriggerState::Active) {
+                    continue;
+                }
+                let trigger_name = match &agent.trigger_name {
+                    Some(name) => name.clone(),
+                    None => continue, // No bound trigger, skip
+                };
+                let seq_index = agent.trigger_seq_index.unwrap_or(0);
+                let (status, _, _) = self.live_agent_status_sync(&agent.id, agent, &sessions);
+                if status != AgentStatus::Waiting {
+                    continue;
+                }
+                let wt_path = match manifest.find_agent(&agent.id) {
+                    Some(pu_core::types::AgentLocation::Worktree { worktree, .. }) => {
+                        Some(std::path::PathBuf::from(&worktree.path))
+                    }
+                    _ => None,
+                };
+                result.push((agent.id.clone(), trigger_name, seq_index, wt_path));
+            }
+            result
+            // sessions lock dropped here
+        };
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        // Load trigger defs once for this project
         let pr = project_root.to_string();
         let idle_triggers = match tokio::task::spawn_blocking(move || {
             pu_core::trigger_def::triggers_for_event(
@@ -3372,52 +3380,30 @@ impl Engine {
             Err(_) => return,
         };
 
-        if idle_triggers.is_empty() {
-            return;
-        }
+        // Index triggers by name for O(1) lookup
+        let trigger_map: std::collections::HashMap<&str, &pu_core::trigger_def::TriggerDef> =
+            idle_triggers.iter().map(|t| (t.name.as_str(), t)).collect();
 
-        // Build the merged sequence from all idle triggers
-        let merged_sequence: Vec<&pu_core::trigger_def::TriggerAction> =
-            idle_triggers.iter().flat_map(|t| &t.sequence).collect();
-
-        if merged_sequence.is_empty() {
-            return;
-        }
-
-        // Collect candidate agents with their worktree path, checking status under the lock
-        // then immediately releasing it before any I/O
-        let candidates: Vec<(String, u32, Option<std::path::PathBuf>)> = {
-            let sessions = self.sessions.lock().await;
-            let mut result = Vec::new();
-            for agent in manifest.all_agents() {
-                if agent.trigger_state != Some(pu_core::types::TriggerState::Active) {
+        for (agent_id, trigger_name, seq_index, wt_path) in &candidates {
+            let trigger = match trigger_map.get(trigger_name.as_str()) {
+                Some(t) => t,
+                None => {
+                    // Trigger was removed since spawn — mark failed
+                    self.update_trigger_state(
+                        project_root,
+                        agent_id,
+                        pu_core::types::TriggerState::Failed,
+                        None,
+                        None,
+                    )
+                    .await;
                     continue;
                 }
-                let seq_index = agent.trigger_seq_index.unwrap_or(0);
-                if seq_index as usize >= merged_sequence.len() {
-                    // Will be marked completed below
-                    result.push((agent.id.clone(), seq_index, None));
-                    continue;
-                }
-                let (status, _, _) = self.live_agent_status_sync(&agent.id, agent, &sessions);
-                if status != AgentStatus::Waiting {
-                    continue;
-                }
-                let wt_path = match manifest.find_agent(&agent.id) {
-                    Some(pu_core::types::AgentLocation::Worktree { worktree, .. }) => {
-                        Some(std::path::PathBuf::from(&worktree.path))
-                    }
-                    _ => None,
-                };
-                result.push((agent.id.clone(), seq_index, wt_path));
-            }
-            result
-            // sessions lock dropped here
-        };
+            };
 
-        for (agent_id, seq_index, wt_path) in &candidates {
+            let sequence = &trigger.sequence;
             let seq_index = *seq_index as usize;
-            if seq_index >= merged_sequence.len() {
+            if seq_index >= sequence.len() {
                 self.update_trigger_state(
                     project_root,
                     agent_id,
@@ -3429,7 +3415,7 @@ impl Engine {
                 continue;
             }
 
-            let action = merged_sequence[seq_index];
+            let action = &sequence[seq_index];
             let cwd = wt_path
                 .as_deref()
                 .unwrap_or_else(|| Path::new(project_root));
@@ -3505,7 +3491,7 @@ impl Engine {
 
             // Advance sequence index
             let new_index = seq_index as u32 + 1;
-            let new_state = if new_index >= merged_sequence.len() as u32 {
+            let new_state = if new_index >= sequence.len() as u32 {
                 pu_core::types::TriggerState::Completed
             } else {
                 pu_core::types::TriggerState::Active

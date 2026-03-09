@@ -429,6 +429,66 @@ pub struct TriggerInfo {
     pub scope: String,
 }
 
+impl From<crate::trigger_def::TriggerDef> for TriggerInfo {
+    fn from(d: crate::trigger_def::TriggerDef) -> Self {
+        let on = match &d.on {
+            crate::trigger_def::TriggerEvent::AgentIdle => "agent_idle",
+            crate::trigger_def::TriggerEvent::PreCommit => "pre_commit",
+            crate::trigger_def::TriggerEvent::PrePush => "pre_push",
+        };
+        TriggerInfo {
+            name: d.name,
+            description: d.description,
+            on: on.to_string(),
+            sequence: d
+                .sequence
+                .into_iter()
+                .map(TriggerActionPayload::from)
+                .collect(),
+            variables: d.variables,
+            scope: d.scope,
+        }
+    }
+}
+
+impl From<crate::trigger_def::TriggerAction> for TriggerActionPayload {
+    fn from(a: crate::trigger_def::TriggerAction) -> Self {
+        TriggerActionPayload {
+            inject: a.inject,
+            gate: a.gate.map(GatePayload::from),
+            max_retries: a.max_retries,
+        }
+    }
+}
+
+impl From<crate::trigger_def::GateDef> for GatePayload {
+    fn from(g: crate::trigger_def::GateDef) -> Self {
+        GatePayload {
+            run: g.run,
+            expect_exit: g.expect_exit,
+        }
+    }
+}
+
+impl From<TriggerActionPayload> for crate::trigger_def::TriggerAction {
+    fn from(a: TriggerActionPayload) -> Self {
+        crate::trigger_def::TriggerAction {
+            inject: a.inject,
+            gate: a.gate.map(crate::trigger_def::GateDef::from),
+            max_retries: a.max_retries,
+        }
+    }
+}
+
+impl From<GatePayload> for crate::trigger_def::GateDef {
+    fn from(g: GatePayload) -> Self {
+        crate::trigger_def::GateDef {
+            run: g.run,
+            expect_exit: g.expect_exit,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KillTarget {

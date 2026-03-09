@@ -103,6 +103,10 @@ pub struct AgentEntry {
     pub gate_attempts: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_trigger: Option<bool>,
+    /// Name of the trigger definition this agent is bound to.
+    /// Set at spawn time so the sequence is stable across ticks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_name: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for AgentEntry {
@@ -136,6 +140,8 @@ impl<'de> Deserialize<'de> for AgentEntry {
             gate_attempts: Option<u32>,
             #[serde(default)]
             no_trigger: Option<bool>,
+            #[serde(default)]
+            trigger_name: Option<String>,
         }
         let raw = Raw::deserialize(deserializer)?;
         // Backward compat: old manifests have suspended_at set but no suspended field.
@@ -161,6 +167,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             trigger_total: raw.trigger_total,
             gate_attempts: raw.gate_attempts,
             no_trigger: raw.no_trigger,
+            trigger_name: raw.trigger_name,
         })
     }
 }
@@ -439,6 +446,7 @@ mod tests {
             trigger_total: None,
             gate_attempts: None,
             no_trigger: None,
+            trigger_name: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -513,6 +521,7 @@ mod tests {
                 trigger_total: None,
                 gate_attempts: None,
                 no_trigger: None,
+                trigger_name: None,
             },
         );
         let entry = WorktreeEntry {
@@ -569,6 +578,7 @@ mod tests {
                 trigger_total: None,
                 gate_attempts: None,
                 no_trigger: None,
+                trigger_name: None,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -601,6 +611,7 @@ mod tests {
                 trigger_total: None,
                 gate_attempts: None,
                 no_trigger: None,
+                trigger_name: None,
             },
         );
         m.worktrees.insert(
@@ -647,6 +658,7 @@ mod tests {
             trigger_total: None,
             gate_attempts: None,
             no_trigger: None,
+            trigger_name: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();
