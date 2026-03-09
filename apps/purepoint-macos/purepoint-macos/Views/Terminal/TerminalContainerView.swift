@@ -12,7 +12,15 @@ struct TerminalContainerView: NSViewRepresentable {
         weak var container: NSView?
         private var monitor: Any?
 
+        func stopMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
         func startMonitor() {
+            stopMonitor()
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                 guard let self, let container = self.container else { return event }
                 guard event.window === container.window, !container.isHidden else { return event }
@@ -25,10 +33,13 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         deinit {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-            }
+            stopMonitor()
         }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stopMonitor()
+        coordinator.container = nil
     }
 
     func makeCoordinator() -> Coordinator {
@@ -58,7 +69,7 @@ struct TerminalContainerView: NSViewRepresentable {
         // Already showing the correct agent — just ensure focus
         if termView.superview === nsView && !termView.isHidden {
             if isFocused {
-                makeTerminalFirstResponder()
+                makeTerminalFirstResponder(in: nsView)
             }
             return
         }
@@ -77,12 +88,13 @@ struct TerminalContainerView: NSViewRepresentable {
         viewCache.show(agentId: agent.id)
 
         // Always focus terminal when switching to a new agent
-        makeTerminalFirstResponder()
+        makeTerminalFirstResponder(in: nsView)
     }
 
-    private func makeTerminalFirstResponder() {
+    private func makeTerminalFirstResponder(in container: NSView) {
         let paneView = viewCache.terminalView(for: agent)
         DispatchQueue.main.async {
+            guard paneView.superview === container, !paneView.isHidden else { return }
             paneView.focusTerminal()
         }
     }
