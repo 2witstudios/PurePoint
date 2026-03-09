@@ -7,7 +7,7 @@ An agent-first coding workspace for macOS.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 
-![PurePoint — 10 agents streaming across 10 worktrees](docs/images/single-terminal-with-many-worktrees-in-sidebar.png)
+![PurePoint — 10 agents streaming across 10 worktrees](docs/images/single-terminal-with-many-worktrees-in-sidebar.jpg)
 
 Your attention is the bottleneck. Other platforms run headless agents in parallel — you get results, but you can't see the work happening, and you can't step in while it's running. PurePoint gives you a terminal command center for your workspace. Terminals, worktrees, agents — all visible, all yours. You call the plays.
 
@@ -29,25 +29,25 @@ Nothing hits your codebase until you say so.
 
 Diffs update live as agents work — file by file, worktree by worktree. You always know exactly what's changing. Step in when something looks off, or let it ride.
 
-![Diff viewer with PR changes](docs/images/diff-viewer.png)
+![Diff viewer with PR changes](docs/images/diff-viewer.jpg)
 
 ## Everything else you need.
 
 **Scheduling** — Schedule agents. Wake up to work.
 
-![Weekly schedule calendar](docs/images/weekly-cal-schedule.png)
+![Weekly schedule calendar](docs/images/weekly-cal-schedule.jpg)
 
 **Custom agents & prompts** — Configure how agents approach your codebase.
 
-![Agent definitions in the Agents Hub](docs/images/agents-screen.png)
+![Agent definitions in the Agents Hub](docs/images/agents-screen.jpg)
 
 **Swarms** — Fan out across many agents at once.
 
-![Swarm definition with roster and execution config](docs/images/swarm-screen.png)
+![Swarm definition with roster and execution config](docs/images/swarm-screen.jpg)
 
 **Hotkeys** — Keyboard-driven everything.
 
-![Customizable hotkeys settings](docs/images/hotkeys-menu.png)
+![Customizable hotkeys settings](docs/images/hotkeys-menu.jpg)
 
 ## Getting Started
 
