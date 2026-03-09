@@ -18,11 +18,10 @@ struct PointGuardView: View {
                     selectedSessionId: selectedSessionId,
                     onSelect: { session in
                         selectedSessionId = session.sessionId
-                        sendCommand("claude --resume \(session.sessionId)")
+                        sendCommand("cd \(shellEscape(session.projectPath)) && claude --resume \(session.sessionId)")
                     },
                     onNewConversation: {
                         selectedSessionId = nil
-                        sendCommand("claude")
                     }
                 )
                 .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
@@ -89,6 +88,10 @@ struct PointGuardView: View {
         } catch {
             shellError = error.localizedDescription
         }
+    }
+
+    private func shellEscape(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func sendCommand(_ command: String) {
