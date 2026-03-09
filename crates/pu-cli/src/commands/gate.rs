@@ -13,8 +13,9 @@ pub async fn run(socket: &Path, event: &str, project_root: Option<String>) -> Re
         None => commands::cwd_string()?,
     };
 
-    // For git hooks, worktree_path is the same as project_root (the hook runs inside the worktree)
-    let worktree_path = project_root.clone();
+    // Git hooks run inside the worktree directory (cwd), while project_root points to
+    // where .pu/triggers/ lives. Gate commands should execute in the worktree.
+    let worktree_path = commands::cwd_string()?;
 
     let resp = client::send_request(
         socket,

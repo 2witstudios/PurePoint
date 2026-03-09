@@ -3467,7 +3467,9 @@ impl Engine {
                                 let failure_msg = format!(
                                     "\n\nGate '{resolved_run}' failed (exit {exit_code}, expected {expect_exit}):\n{stdout}{stderr}\nPlease fix the issues and try again.\n"
                                 );
-                                self.inject_text(agent_id, &failure_msg).await;
+                                if let Err(e) = self.inject_text(agent_id, &failure_msg).await {
+                                    tracing::warn!(agent_id, "failed to inject gate failure: {e}");
+                                }
                                 self.update_trigger_state(
                                     project_root,
                                     agent_id,
@@ -3504,12 +3506,38 @@ impl Engine {
                 }
             }
 
-            // Inject text if present (brief lock acquisition)
+            // Inject text if present — only advance on success
             if let Some(ref inject_text) = action.inject {
                 let resolved =
                     pu_core::trigger_def::substitute_variables(inject_text, &trigger.variables);
                 let text_with_newline = format!("{resolved}\n");
-                self.inject_text(agent_id, &text_with_newline).await;
+                match self.inject_text(agent_id, &text_with_newline).await {
+                    Ok(true) => {} // success, proceed to advance
+                    Ok(false) => {
+                        tracing::warn!(agent_id, "inject_text: session not found, marking failed");
+                        self.update_trigger_state(
+                            project_root,
+                            agent_id,
+                            pu_core::types::TriggerState::Failed,
+                            None,
+                            None,
+                        )
+                        .await;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(agent_id, "inject_text failed: {e}, marking failed");
+                        self.update_trigger_state(
+                            project_root,
+                            agent_id,
+                            pu_core::types::TriggerState::Failed,
+                            None,
+                            None,
+                        )
+                        .await;
+                        continue;
+                    }
+                }
             }
 
             // Advance sequence index
@@ -3524,12 +3552,20 @@ impl Engine {
         }
     }
 
-    /// Inject text into an agent's PTY. Briefly acquires the sessions lock.
-    async fn inject_text(&self, agent_id: &str, text: &str) {
-        let sessions = self.sessions.lock().await;
-        if let Some(handle) = sessions.get(agent_id) {
-            let fd = handle.master_fd();
-            let _ = self.pty_host.write_to_fd(&fd, text.as_bytes()).await;
+    /// Inject text into an agent's PTY. Clones the fd under the lock, then drops
+    /// the lock before the potentially-blocking write. Returns `Ok(true)` on
+    /// success, `Ok(false)` if the session was not found.
+    async fn inject_text(&self, agent_id: &str, text: &str) -> Result<bool, std::io::Error> {
+        let fd = {
+            let sessions = self.sessions.lock().await;
+            sessions.get(agent_id).map(|handle| handle.master_fd())
+        };
+        match fd {
+            Some(fd) => {
+                self.pty_host.write_to_fd(&fd, text.as_bytes()).await?;
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
@@ -3542,18 +3578,33 @@ impl Engine {
         gate_attempts: Option<u32>,
     ) {
         let agent_id = agent_id.to_string();
-        let _ = manifest::update_manifest(Path::new(project_root), move |mut m| {
-            if let Some(agent) = m.find_agent_mut(&agent_id) {
-                agent.trigger_state = Some(state);
-                if let Some(idx) = seq_index {
-                    agent.trigger_seq_index = Some(idx);
+        let pr = project_root.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(Path::new(&pr), move |mut m| {
+                if let Some(agent) = m.find_agent_mut(&agent_id) {
+                    agent.trigger_state = Some(state);
+                    if let Some(idx) = seq_index {
+                        agent.trigger_seq_index = Some(idx);
+                    }
+                    if let Some(attempts) = gate_attempts {
+                        agent.gate_attempts = Some(attempts);
+                    }
                 }
-                if let Some(attempts) = gate_attempts {
-                    agent.gate_attempts = Some(attempts);
-                }
+                m
+            })
+        })
+        .await;
+        match result {
+            Ok(Ok(_)) => {
+                self.notify_status_change(project_root).await;
             }
-            m
-        });
+            Ok(Err(e)) => {
+                tracing::warn!("failed to update trigger state in manifest: {e}");
+            }
+            Err(e) => {
+                tracing::warn!("trigger state update task panicked: {e}");
+            }
+        }
     }
 
     async fn fire_schedule(&self, schedule: &pu_core::schedule_def::ScheduleDef) {
