@@ -676,10 +676,25 @@ impl Engine {
                 .unwrap_or_else(|_| "HEAD".into()),
         };
 
+        // Normalize empty command to None
+        let terminal_command = terminal_command.filter(|c| !c.is_empty());
+
+        // Plan mode requires a prompt-driven agent that understands EnterPlanMode.
+        // Reject early for terminal agents or terminal_command spawns where the
+        // prefix would be meaningless or actively harmful.
+        if plan_mode
+            && (prompt.is_empty() || terminal_command.is_some() || agent_type == "terminal")
+        {
+            return Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: "plan mode requires a prompt-driven non-terminal agent".into(),
+            };
+        }
+
         // When plan_mode is active, prefix the prompt with instructions to enter plan mode.
         // This keeps bypass permissions as the base while guiding the agent into plan mode
         // via its own tool (EnterPlanMode) rather than conflicting CLI flags.
-        let prompt = if plan_mode && !prompt.is_empty() {
+        let prompt = if plan_mode {
             format!(
                 "[PLAN MODE] You MUST call the EnterPlanMode tool immediately before doing anything else. \
                  Do not read files, do not explore — call EnterPlanMode first. \
@@ -689,9 +704,6 @@ impl Engine {
             prompt.to_string()
         };
         let prompt = &prompt;
-
-        // Normalize empty command to None
-        let terminal_command = terminal_command.filter(|c| !c.is_empty());
 
         // When a terminal command is set, it becomes the PTY process directly
         let (command, args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
