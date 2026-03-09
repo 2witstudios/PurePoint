@@ -30,3 +30,12 @@ All specs live in `docs/` as markdown. Read what you need for the task at hand:
 **Maturity gate**: If a product/architecture spec is at SEED or EXPLORING maturity, it needs research before implementation. See the spec advancement process to advance it.
 
 NOTE: This manual protocol is temporary. PurePoint's daemon will handle context assembly automatically once implemented.
+
+## macOS App Build Safety
+
+**Do NOT run `xcodebuild` from Claude Code.** The `purepoint-macos` build phase runs `cargo build` and copies the `pu-engine` binary to `~/.cargo/bin/` and `pu` to `~/.pu/bin/` (see the build script in the Xcode project). If the `pu-engine` daemon managing this agent session is running, overwriting its binary invalidates the code signature on the mapped executable, causing macOS to SIGKILL the process (exit 137) — killing your own session.
+
+**Rules:**
+- Never run `xcodebuild build`, `xcodebuild test`, or `swift build` for the macOS app from an agent session
+- Ask the user to build and run tests in Xcode directly
+- In worktrees: all builds share the same Cargo target directory and the same `~/.pu/bin/` and `~/.cargo/bin/` destinations — concurrent builds from multiple worktrees will race on these binaries and can kill any running daemon
