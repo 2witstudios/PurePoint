@@ -91,6 +91,9 @@ pub enum Request {
         #[serde(default = "default_tail")]
         tail: usize,
     },
+    SpawnShell {
+        cwd: String,
+    },
     Attach {
         agent_id: String,
     },

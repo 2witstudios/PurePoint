@@ -196,7 +196,11 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         case .agent(let id): targetId = id
         case .worktree(let id): targetId = id
         case .project(let root): targetId = root
-        case .nav, .terminal: targetId = nil
+        case .nav, .terminal:
+            suppressSelectionCallback = true
+            outlineView.deselectAll(nil)
+            suppressSelectionCallback = false
+            return
         }
 
         guard let targetId else { return }

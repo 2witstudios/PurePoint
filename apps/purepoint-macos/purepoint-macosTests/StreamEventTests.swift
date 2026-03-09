@@ -91,4 +91,63 @@ struct StreamEventTests {
         let event = StreamEvent.parse("not valid json {{{")
         #expect(event == nil)
     }
+
+    // MARK: - stream_event wrapping tests
+
+    @Test func givenStreamEventWithContentBlockDeltaShouldParseTextDelta() {
+        let json = """
+            {"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}}
+            """
+
+        let event = StreamEvent.parse(json)
+
+        guard case .contentBlockDelta(let index, let delta) = event else {
+            Issue.record("Expected .contentBlockDelta, got \(String(describing: event))")
+            return
+        }
+        #expect(index == 0)
+        #expect(delta == "Hello")
+    }
+
+    @Test func givenStreamEventWithToolUseContentBlockStartShouldParse() {
+        let json = """
+            {"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_xyz789","name":"Write","input":{}}}}
+            """
+
+        let event = StreamEvent.parse(json)
+
+        guard case .contentBlockStart(let index, let id, let name) = event else {
+            Issue.record("Expected .contentBlockStart, got \(String(describing: event))")
+            return
+        }
+        #expect(index == 1)
+        #expect(id == "toolu_xyz789")
+        #expect(name == "Write")
+    }
+
+    @Test func givenStreamEventWithTextContentBlockStartShouldReturnUnknown() {
+        let json = """
+            {"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+            """
+
+        let event = StreamEvent.parse(json)
+
+        guard case .unknown = event else {
+            Issue.record("Expected .unknown for text content_block_start, got \(String(describing: event))")
+            return
+        }
+    }
+
+    @Test func givenStreamEventWithUnknownSubtypeShouldReturnUnknown() {
+        let json = """
+            {"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_01"}}}
+            """
+
+        let event = StreamEvent.parse(json)
+
+        guard case .unknown = event else {
+            Issue.record("Expected .unknown, got \(String(describing: event))")
+            return
+        }
+    }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-enum DaemonLifecycle {
+nonisolated enum DaemonLifecycle {
     private static let launcher = DaemonLauncher()
 
     /// Ensure the daemon is running. If not, start it and wait for readiness.

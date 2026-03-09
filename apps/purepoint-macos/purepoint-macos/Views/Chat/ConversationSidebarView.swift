@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct ConversationSidebarView: View {
-    @Bindable var chatState: ChatState
+    @Bindable var sessionList: SessionListState
     @Binding var showSidebar: Bool
+    var selectedSessionId: String?
+    var onSelect: (ClaudeConversation) -> Void
+    var onNewConversation: () -> Void
     @Environment(AppState.self) private var appState
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -37,12 +40,12 @@ struct ConversationSidebarView: View {
                     Image(systemName: "sidebar.left")
                 }
                 .buttonStyle(.plain)
-                .help("Hide conversations (⌘⇧S)")
+                .help("Hide conversations (Command+Shift+S)")
 
                 Spacer()
 
                 Button {
-                    chatState.newConversation()
+                    onNewConversation()
                 } label: {
                     Label("New Chat", systemImage: "plus.bubble")
                 }
@@ -53,7 +56,7 @@ struct ConversationSidebarView: View {
             .padding(.bottom, 4)
 
             // Search
-            TextField("Search conversations...", text: $chatState.searchQuery)
+            TextField("Search conversations...", text: $sessionList.searchQuery)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -61,16 +64,16 @@ struct ConversationSidebarView: View {
             Divider()
 
             // Session list
-            if chatState.groupedSessions.isEmpty {
+            if sessionList.groupedSessions.isEmpty {
                 ContentUnavailableView(
-                    chatState.searchQuery.isEmpty ? "No conversations" : "No results",
+                    sessionList.searchQuery.isEmpty ? "No conversations" : "No results",
                     systemImage: "text.bubble"
                 )
                 .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2, pinnedViews: .sectionHeaders) {
-                        ForEach(chatState.groupedSessions) { section in
+                        ForEach(sessionList.groupedSessions) { section in
                             Section {
                                 ForEach(section.sessions) { session in
                                     sessionRow(session, agentName: namesBySid[session.sessionId])
@@ -95,10 +98,10 @@ struct ConversationSidebarView: View {
     }
 
     private func sessionRow(_ session: ClaudeConversation, agentName matchedAgentName: String?) -> some View {
-        let isSelected = chatState.currentSessionId == session.sessionId
+        let isSelected = selectedSessionId == session.sessionId
 
         return Button {
-            Task { await chatState.selectConversation(session) }
+            onSelect(session)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 // Primary line: agent name (or title) + relative time

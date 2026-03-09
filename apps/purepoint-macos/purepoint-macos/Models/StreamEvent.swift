@@ -1,12 +1,13 @@
 import Foundation
 
-enum StreamContentBlock: Sendable {
+nonisolated enum StreamContentBlock: Sendable {
     case text(String)
     case toolUse(id: String, name: String, input: String)
 }
 
-enum StreamEvent: Sendable {
+nonisolated enum StreamEvent: Sendable {
     case assistant(content: [StreamContentBlock])
+    case contentBlockStart(index: Int, id: String, name: String)
     case contentBlockDelta(index: Int, delta: String)
     case toolResult(toolUseId: String, content: String, isError: Bool)
     case result(sessionId: String, durationMs: Int?)
@@ -27,6 +28,8 @@ enum StreamEvent: Sendable {
             return parseAssistant(dict)
         case "content_block_delta":
             return parseContentBlockDelta(dict)
+        case "stream_event":
+            return parseStreamEvent(dict)
         case "tool_result":
             return parseToolResult(dict)
         case "result":
@@ -72,6 +75,28 @@ enum StreamEvent: Sendable {
         }
 
         return .assistant(content: blocks)
+    }
+
+    private static func parseStreamEvent(_ dict: [String: Any]) -> StreamEvent {
+        guard let event = dict["event"] as? [String: Any],
+            let eventType = event["type"] as? String
+        else { return .unknown }
+
+        switch eventType {
+        case "content_block_delta":
+            return parseContentBlockDelta(event)
+        case "content_block_start":
+            guard let contentBlock = event["content_block"] as? [String: Any],
+                let blockType = contentBlock["type"] as? String,
+                blockType == "tool_use",
+                let id = contentBlock["id"] as? String,
+                let name = contentBlock["name"] as? String
+            else { return .unknown }
+            let index = event["index"] as? Int ?? 0
+            return .contentBlockStart(index: index, id: id, name: name)
+        default:
+            return .unknown
+        }
     }
 
     private static func parseContentBlockDelta(_ dict: [String: Any]) -> StreamEvent {

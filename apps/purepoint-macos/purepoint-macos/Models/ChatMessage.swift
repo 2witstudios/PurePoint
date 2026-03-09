@@ -23,7 +23,7 @@ struct ChatMessage: Identifiable, Sendable {
     }
 }
 
-enum ToolUseStatus: Sendable {
+enum ToolUseStatus: Sendable, Equatable {
     case running, completed, failed
 }
 

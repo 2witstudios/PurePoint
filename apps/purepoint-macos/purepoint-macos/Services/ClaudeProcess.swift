@@ -31,7 +31,7 @@ actor ClaudeProcess: ClaudeProcessProvider {
         self.process = nil
     }
 
-    static func locateBinary() -> String? {
+    nonisolated static func locateBinary() -> String? {
         let candidates = [
             "\(NSHomeDirectory())/.pu/bin/claude",
             "\(NSHomeDirectory())/.local/bin/claude",

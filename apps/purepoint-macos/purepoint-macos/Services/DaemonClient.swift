@@ -225,6 +225,7 @@ nonisolated enum DaemonRequest: Encodable {
         projectRoot: String, prompt: String, agent: String = "claude",
         name: String? = nil, base: String? = nil, root: Bool = false,
         worktree: String? = nil, command: String? = nil)
+    case spawnShell(cwd: String)
     case kill(projectRoot: String, target: KillTarget)
     case rename(projectRoot: String, agentId: String, name: String)
     case suspend(projectRoot: String, target: SuspendTarget)
@@ -301,6 +302,9 @@ nonisolated enum DaemonRequest: Encodable {
             if root { try container.encode(root, forKey: .key("root")) }
             if let worktree { try container.encode(worktree, forKey: .key("worktree")) }
             if let command { try container.encode(command, forKey: .key("command")) }
+        case .spawnShell(let cwd):
+            try container.encode("spawn_shell", forKey: .key("type"))
+            try container.encode(cwd, forKey: .key("cwd"))
         case .kill(let projectRoot, let target):
             try container.encode("kill", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))

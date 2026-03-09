@@ -255,6 +255,7 @@ impl Engine {
                 project_root,
                 agent_id,
             } => self.handle_status(&project_root, agent_id.as_deref()).await,
+            Request::SpawnShell { cwd } => self.handle_spawn_shell(&cwd).await,
             Request::Spawn {
                 project_root,
                 prompt,
@@ -768,6 +769,56 @@ impl Engine {
             }
             // No live session — use manifest (agent already exited/killed/etc.)
             None => (agent.status, agent.exit_code, None),
+        }
+    }
+
+    /// Spawn a bare shell (no project, no manifest, no config).
+    /// Used by Point Guard for a root terminal at the given cwd.
+    async fn handle_spawn_shell(&self, cwd: &str) -> Response {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let agent_id = pu_core::id::agent_id();
+
+        let env = self.agent_env().await;
+        let spawn_config = SpawnConfig {
+            command: shell,
+            args: vec!["-l".to_string()],
+            cwd: cwd.to_string(),
+            env,
+            env_remove: vec![],
+            cols: 120,
+            rows: 40,
+        };
+
+        let handle = match self.pty_host.spawn(spawn_config).await {
+            Ok(h) => h,
+            Err(e) => {
+                return Response::Error {
+                    code: "SPAWN_FAILED".into(),
+                    message: format!("failed to spawn shell: {e}"),
+                };
+            }
+        };
+
+        // Start exit monitor (cleans up session map when shell exits)
+        let exit_rx = handle.exit_rx.clone();
+        let sessions = self.sessions.clone();
+        let aid = agent_id.clone();
+        tokio::spawn(async move {
+            let mut rx = exit_rx;
+            while rx.changed().await.is_ok() {
+                if rx.borrow().is_some() {
+                    break;
+                }
+            }
+            sessions.lock().await.remove(&aid);
+        });
+
+        self.sessions.lock().await.insert(agent_id.clone(), handle);
+
+        Response::SpawnResult {
+            worktree_id: None,
+            agent_id,
+            status: AgentStatus::Streaming,
         }
     }
 

@@ -36,6 +36,8 @@ struct ChatAreaView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @State private var lastKnownBlockCount = 0
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -49,13 +51,18 @@ struct ChatAreaView: View {
                 .padding(20)
             }
             .onChange(of: chatState.messages.count) { _, _ in
+                lastKnownBlockCount = 0
                 if let last = chatState.messages.last {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
-            .onChange(of: chatState.messages.last?.contentBlocks.count) { _, _ in
+            .onChange(of: chatState.messages.last?.contentBlocks.count) { _, newCount in
+                let count = newCount ?? 0
+                // Only scroll when block count increases, not when it bounces during resets
+                guard count > lastKnownBlockCount else { return }
+                lastKnownBlockCount = count
                 if let last = chatState.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }

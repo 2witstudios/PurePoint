@@ -7,12 +7,6 @@ protocol ClaudeProcessProvider: Sendable {
     func cancel() async
 }
 
-struct ConversationSection: Identifiable {
-    let id: String
-    let title: String
-    let sessions: [ClaudeConversation]
-}
-
 @Observable
 @MainActor
 final class ChatState {
@@ -92,6 +86,8 @@ final class ChatState {
     }
 
     @ObservationIgnored private var streamingText = ""
+    @ObservationIgnored private var pendingFlush: Task<Void, Never>?
+    @ObservationIgnored private var pendingAssistantBlocks: [StreamContentBlock]?
     @ObservationIgnored private let processProvider: any ClaudeProcessProvider
 
     init(processProvider: any ClaudeProcessProvider) {
@@ -99,6 +95,7 @@ final class ChatState {
     }
 
     func newConversation() {
+        resetStreamingState()
         messages = []
         currentSessionId = nil
         inputText = ""
@@ -141,6 +138,9 @@ final class ChatState {
                 handleStreamEvent(event, assistantMessageId: assistantId)
             }
 
+            // Apply final authoritative assistant snapshot
+            finalizeAssistant(assistantMessageId: assistantId)
+
             // Refresh sidebar sessions after conversation completes
             Task { await refreshSessions() }
 
@@ -164,6 +164,7 @@ final class ChatState {
 
     func stopStreaming() async {
         await processProvider.cancel()
+        resetStreamingState()
         isStreaming = false
     }
 
@@ -259,38 +260,27 @@ final class ChatState {
 
         switch event {
         case .assistant(let blocks):
-            // Final authoritative content — replace any streamed deltas
+            // During streaming, assistant snapshots are redundant — deltas drive text.
+            // Only apply as final authoritative state (handled in finalizeAssistant).
+            // Store for finalization but don't reset mid-stream.
+            pendingAssistantBlocks = blocks
+
+        case .contentBlockStart(_, let id, let name):
+            // Flush any pending text deltas before adding tool block
+            flushPendingDeltas(for: index)
+            messages[index].contentBlocks.append(
+                .toolUse(id: id, name: name, input: "{}", status: .running)
+            )
+            // Reset streaming text — tool use starts a new text region
             streamingText = ""
-            messages[index].contentBlocks = []
-            var blockCount = 0
-            for block in blocks {
-                switch block {
-                case .text(let text):
-                    let split = ContentBlockSplitter.split(text, startIndex: blockCount)
-                    blockCount += split.count
-                    messages[index].contentBlocks.append(contentsOf: split)
-                case .toolUse(let id, let name, let input):
-                    messages[index].contentBlocks.append(
-                        .toolUse(
-                            id: id, name: name, input: input, status: .running
-                        ))
-                    blockCount += 1
-                }
-            }
 
         case .contentBlockDelta(_, let delta):
             streamingText += delta
-            // Replace all text blocks with re-split accumulated text
-            let textStartIndex =
-                messages[index].contentBlocks.indices.first(where: {
-                    if case .text = messages[index].contentBlocks[$0] { return true }
-                    return false
-                }) ?? messages[index].contentBlocks.endIndex
-            messages[index].contentBlocks.removeSubrange(textStartIndex...)
-            let split = ContentBlockSplitter.split(streamingText)
-            messages[index].contentBlocks.append(contentsOf: split)
+            scheduleFlush(for: assistantMessageId)
 
         case .toolResult(let toolUseId, let content, let isError):
+            // Flush any pending text first
+            flushPendingDeltas(for: index)
             // Update the matching tool_use status
             for i in messages[index].contentBlocks.indices {
                 if case .toolUse(let id, let name, let input, _) = messages[index].contentBlocks[i],
@@ -310,15 +300,141 @@ final class ChatState {
                     output: content,
                     isError: isError
                 ))
+            // Reset streaming text for post-tool text
+            streamingText = ""
 
         case .result(let sessionId, _):
+            flushPendingDeltas(for: index)
             currentSessionId = sessionId
 
         case .error(let message):
+            flushPendingDeltas(for: index)
             streamError = message
 
         case .unknown:
             break
         }
+    }
+
+    /// Apply the last `assistant` snapshot as authoritative final state.
+    /// Called after the stream ends to reconcile any missed deltas.
+    private func finalizeAssistant(assistantMessageId: String) {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+
+        guard let index = messages.lastIndex(where: { $0.id == assistantMessageId }) else {
+            pendingAssistantBlocks = nil
+            return
+        }
+
+        // Always flush remaining deltas first
+        flushPendingDeltas(for: index)
+
+        guard let blocks = pendingAssistantBlocks else {
+            pendingAssistantBlocks = nil
+            return
+        }
+
+        // If deltas drove content, merge rather than replace:
+        // - Update tool_use inputs from the authoritative snapshot (they have full input JSON)
+        // - Preserve tool_result blocks and tool statuses set by toolResult events
+        // - Don't touch text blocks — delta-driven text is already correct
+        if !messages[index].contentBlocks.isEmpty {
+            for block in blocks {
+                if case .toolUse(let id, _, let input) = block {
+                    if let i = messages[index].contentBlocks.firstIndex(where: {
+                        if case .toolUse(let existingId, _, _, _) = $0 { return existingId == id }
+                        return false
+                    }) {
+                        if case .toolUse(_, let name, _, let status) = messages[index].contentBlocks[i] {
+                            messages[index].contentBlocks[i] = .toolUse(
+                                id: id, name: name, input: input,
+                                status: status == .running ? .completed : status
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: no deltas received — use assistant snapshot fully
+            var blockCount = 0
+            for block in blocks {
+                switch block {
+                case .text(let text):
+                    let split = ContentBlockSplitter.split(text, startIndex: blockCount)
+                    blockCount += split.count
+                    messages[index].contentBlocks.append(contentsOf: split)
+                case .toolUse(let id, let name, let input):
+                    messages[index].contentBlocks.append(
+                        .toolUse(id: id, name: name, input: input, status: .completed)
+                    )
+                    blockCount += 1
+                }
+            }
+        }
+
+        pendingAssistantBlocks = nil
+        streamingText = ""
+    }
+
+    /// Schedule a throttled flush of accumulated text deltas (~60fps).
+    private func scheduleFlush(for assistantMessageId: String) {
+        guard pendingFlush == nil else { return }
+        pendingFlush = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+            self?.flushPendingDeltasById(assistantMessageId)
+            self?.pendingFlush = nil
+        }
+    }
+
+    /// Resolve message ID to index, then flush.
+    private func flushPendingDeltasById(_ assistantMessageId: String) {
+        guard let index = messages.lastIndex(where: { $0.id == assistantMessageId }) else { return }
+        flushPendingDeltas(for: index)
+    }
+
+    /// Apply accumulated streamingText to message content blocks immediately.
+    private func flushPendingDeltas(for messageIndex: Int) {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+        guard messageIndex < messages.count, !streamingText.isEmpty else { return }
+
+        // Find where text blocks start (after any non-text blocks at the beginning or after last tool block)
+        let lastToolIndex = messages[messageIndex].contentBlocks.lastIndex(where: {
+            if case .toolUse = $0 { return true }
+            if case .toolResult = $0 { return true }
+            return false
+        })
+        let textStartIndex = (lastToolIndex ?? -1) + 1
+
+        // Remove existing text/codeBlock entries from textStartIndex onward
+        // Keep any non-text blocks (pulse, etc.) by filtering
+        if textStartIndex < messages[messageIndex].contentBlocks.count {
+            var kept: [ContentBlock] = []
+            for i in textStartIndex..<messages[messageIndex].contentBlocks.count {
+                let block = messages[messageIndex].contentBlocks[i]
+                switch block {
+                case .text, .codeBlock:
+                    continue  // remove these
+                default:
+                    kept.append(block)  // keep pulse, etc.
+                }
+            }
+            messages[messageIndex].contentBlocks.removeSubrange(textStartIndex...)
+            let split = ContentBlockSplitter.split(streamingText, startIndex: textStartIndex)
+            messages[messageIndex].contentBlocks.append(contentsOf: split)
+            messages[messageIndex].contentBlocks.append(contentsOf: kept)
+        } else {
+            let split = ContentBlockSplitter.split(streamingText, startIndex: textStartIndex)
+            messages[messageIndex].contentBlocks.append(contentsOf: split)
+        }
+    }
+
+    private func resetStreamingState() {
+        pendingFlush?.cancel()
+        pendingFlush = nil
+        pendingAssistantBlocks = nil
+        streamingText = ""
     }
 }
