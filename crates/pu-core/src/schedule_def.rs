@@ -178,101 +178,109 @@ pub fn next_occurrence(
         after
     };
     match recurrence {
-        Recurrence::None => {
-            if after <= base {
-                Some(base)
-            } else {
-                None
-            }
-        }
-        Recurrence::Hourly => {
-            // Next occurrence at base's minute, after `after`
-            let mut candidate = after
-                .with_minute(base.minute())
-                .unwrap()
-                .with_second(base.second())
-                .unwrap()
-                .with_nanosecond(0)
-                .unwrap();
-            if candidate <= after {
-                candidate += Duration::hours(1);
-            }
-            Some(candidate)
-        }
-        Recurrence::Daily => {
-            let mut candidate = after
-                .date_naive()
-                .and_hms_opt(base.hour(), base.minute(), base.second())
-                .unwrap();
-            if Utc.from_utc_datetime(&candidate) <= after {
-                candidate += Duration::days(1);
-            }
-            Some(Utc.from_utc_datetime(&candidate))
-        }
-        Recurrence::Weekdays => {
-            let mut candidate = after
-                .date_naive()
-                .and_hms_opt(base.hour(), base.minute(), base.second())
-                .unwrap();
-            if Utc.from_utc_datetime(&candidate) <= after {
-                candidate += Duration::days(1);
-            }
-            // Skip weekends
-            loop {
-                let wd = candidate.weekday();
-                if wd != Weekday::Sat && wd != Weekday::Sun {
-                    break;
-                }
-                candidate += Duration::days(1);
-            }
-            Some(Utc.from_utc_datetime(&candidate))
-        }
-        Recurrence::Weekly => {
-            let mut candidate = after
-                .date_naive()
-                .and_hms_opt(base.hour(), base.minute(), base.second())
-                .unwrap();
-            // Align to same weekday as base
-            let target_weekday = base.weekday();
-            let current_weekday = candidate.weekday();
-            let days_ahead = (target_weekday.num_days_from_monday() as i64
-                - current_weekday.num_days_from_monday() as i64
-                + 7)
-                % 7;
-            candidate += Duration::days(days_ahead);
-            if Utc.from_utc_datetime(&candidate) <= after {
-                candidate += Duration::weeks(1);
-            }
-            Some(Utc.from_utc_datetime(&candidate))
-        }
-        Recurrence::Monthly => {
-            let target_day = base.day();
-            let target_time = base.time();
-            let mut year = after.year();
-            let mut month = after.month();
+        Recurrence::None => next_none_occurrence(base, after),
+        Recurrence::Hourly => next_hourly_occurrence(base, after),
+        Recurrence::Daily => next_daily_occurrence(base, after),
+        Recurrence::Weekdays => next_weekdays_occurrence(base, after),
+        Recurrence::Weekly => next_weekly_occurrence(base, after),
+        Recurrence::Monthly => next_monthly_occurrence(base, after),
+    }
+}
 
-            // Start from after's month
-            loop {
-                if let Some(date) = NaiveDate::from_ymd_opt(year, month, target_day) {
-                    let candidate = Utc.from_utc_datetime(&date.and_time(target_time));
-                    if candidate > after {
-                        return Some(candidate);
-                    }
-                }
-                // Advance month
-                month += 1;
-                if month > 12 {
-                    month = 1;
-                    year += 1;
-                }
-                // Safety: don't loop forever (covers 4 years = 48 months max)
-                if year > after.year() + 4 {
-                    break;
-                }
+/// Build a NaiveDateTime on `after`'s date at `base`'s hour/minute/second.
+/// Shared by Daily, Weekdays, and Weekly recurrence calculations.
+fn naive_at_base_time(base: DateTime<Utc>, after: DateTime<Utc>) -> chrono::NaiveDateTime {
+    after
+        .date_naive()
+        .and_hms_opt(base.hour(), base.minute(), base.second())
+        .unwrap()
+}
+
+fn next_none_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if after <= base { Some(base) } else { None }
+}
+
+fn next_hourly_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    // Next occurrence at base's minute, after `after`
+    let mut candidate = after
+        .with_minute(base.minute())
+        .unwrap()
+        .with_second(base.second())
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap();
+    if candidate <= after {
+        candidate += Duration::hours(1);
+    }
+    Some(candidate)
+}
+
+fn next_daily_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let mut candidate = naive_at_base_time(base, after);
+    if Utc.from_utc_datetime(&candidate) <= after {
+        candidate += Duration::days(1);
+    }
+    Some(Utc.from_utc_datetime(&candidate))
+}
+
+fn next_weekdays_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let mut candidate = naive_at_base_time(base, after);
+    if Utc.from_utc_datetime(&candidate) <= after {
+        candidate += Duration::days(1);
+    }
+    // Skip weekends
+    loop {
+        let wd = candidate.weekday();
+        if wd != Weekday::Sat && wd != Weekday::Sun {
+            break;
+        }
+        candidate += Duration::days(1);
+    }
+    Some(Utc.from_utc_datetime(&candidate))
+}
+
+fn next_weekly_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let mut candidate = naive_at_base_time(base, after);
+    // Align to same weekday as base
+    let target_weekday = base.weekday();
+    let current_weekday = candidate.weekday();
+    let days_ahead = (target_weekday.num_days_from_monday() as i64
+        - current_weekday.num_days_from_monday() as i64
+        + 7)
+        % 7;
+    candidate += Duration::days(days_ahead);
+    if Utc.from_utc_datetime(&candidate) <= after {
+        candidate += Duration::weeks(1);
+    }
+    Some(Utc.from_utc_datetime(&candidate))
+}
+
+fn next_monthly_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let target_day = base.day();
+    let target_time = base.time();
+    let mut year = after.year();
+    let mut month = after.month();
+
+    // Start from after's month
+    loop {
+        if let Some(date) = NaiveDate::from_ymd_opt(year, month, target_day) {
+            let candidate = Utc.from_utc_datetime(&date.and_time(target_time));
+            if candidate > after {
+                return Some(candidate);
             }
-            None
+        }
+        // Advance month
+        month += 1;
+        if month > 12 {
+            month = 1;
+            year += 1;
+        }
+        // Safety: don't loop forever (covers 4 years = 48 months max)
+        if year > after.year() + 4 {
+            break;
         }
     }
+    None
 }
 
 fn scan_dir(dir: &Path, scope: &str) -> Vec<ScheduleDef> {
