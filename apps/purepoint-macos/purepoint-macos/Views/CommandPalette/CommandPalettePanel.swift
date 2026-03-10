@@ -237,6 +237,42 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     }
 
     private func setupPromptViews() {
+        setupPromptHeader()
+        setupNameField()
+        setupPromptTextView()
+
+        promptHeightConstraint = promptScrollView.heightAnchor.constraint(equalToConstant: 60)
+
+        nameFieldConstraints = [
+            nameLabel.topAnchor.constraint(equalTo: promptHeader.bottomAnchor, constant: 12),
+            nameLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+
+            nameField.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
+            nameField.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+            nameField.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+            nameField.heightAnchor.constraint(equalToConstant: 24),
+
+            slugPreview.topAnchor.constraint(equalTo: nameField.bottomAnchor, constant: 4),
+            slugPreview.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+            slugPreview.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+        ]
+
+        NSLayoutConstraint.activate([
+            promptHeader.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 16),
+            promptHeader.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+            promptHeader.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+
+            promptScrollView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+            promptScrollView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+            promptHeightConstraint,
+            promptScrollView.heightAnchor.constraint(lessThanOrEqualToConstant: 120),
+
+            promptHint.topAnchor.constraint(equalTo: promptScrollView.bottomAnchor, constant: 12),
+            promptHint.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+        ])
+    }
+
+    private func setupPromptHeader() {
         promptHeaderIcon.imageScaling = .scaleProportionallyDown
         promptHeaderIcon.translatesAutoresizingMaskIntoConstraints = false
         promptHeaderIcon.setContentHuggingPriority(.required, for: .horizontal)
@@ -258,7 +294,9 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHeader.addArrangedSubview(promptHeaderLabel)
         promptHeader.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(promptHeader)
+    }
 
+    private func setupNameField() {
         nameLabel.font = .systemFont(ofSize: 12, weight: .medium)
         nameLabel.textColor = .secondaryLabelColor
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -279,7 +317,9 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         slugPreview.textColor = .tertiaryLabelColor
         slugPreview.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(slugPreview)
+    }
 
+    private func setupPromptTextView() {
         promptTextView.isEditable = true
         promptTextView.isRichText = false
         promptTextView.allowsUndo = true
@@ -311,36 +351,6 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHint.alignment = .center
         promptHint.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(promptHint)
-
-        promptHeightConstraint = promptScrollView.heightAnchor.constraint(equalToConstant: 60)
-
-        nameFieldConstraints = [
-            nameLabel.topAnchor.constraint(equalTo: promptHeader.bottomAnchor, constant: 12),
-            nameLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
-
-            nameField.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
-            nameField.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
-            nameField.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
-            nameField.heightAnchor.constraint(equalToConstant: 24),
-
-            slugPreview.topAnchor.constraint(equalTo: nameField.bottomAnchor, constant: 4),
-            slugPreview.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
-            slugPreview.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
-        ]
-
-        NSLayoutConstraint.activate([
-            promptHeader.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 16),
-            promptHeader.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
-            promptHeader.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
-
-            promptScrollView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
-            promptScrollView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
-            promptHeightConstraint,
-            promptScrollView.heightAnchor.constraint(lessThanOrEqualToConstant: 120),
-
-            promptHint.topAnchor.constraint(equalTo: promptScrollView.bottomAnchor, constant: 12),
-            promptHint.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
-        ])
     }
 
     // MARK: - Configuration
@@ -437,13 +447,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         } else {
             panelHeight = 170
         }
-        if let panel = view.window as? CommandPalettePanel {
-            var frame = panel.frame
-            let dy = frame.height - panelHeight
-            frame.origin.y += dy
-            frame.size.height = panelHeight
-            panel.setFrame(frame, display: true, animate: true)
-        }
+        resizePanelHeight(to: panelHeight)
 
         DispatchQueue.main.async { [weak self] in
             if showName {
@@ -454,19 +458,21 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         }
     }
 
+    private func resizePanelHeight(to height: CGFloat, animate: Bool = true) {
+        guard let panel = view.window as? CommandPalettePanel else { return }
+        var frame = panel.frame
+        let dy = frame.height - height
+        frame.origin.y += dy
+        frame.size.height = height
+        panel.setFrame(frame, display: true, animate: animate)
+    }
+
     private func resizePanel(rowCount: Int) {
         let headerHeight: CGFloat = 57
         let rowsHeight = CGFloat(max(rowCount, 1)) * 44
         let bottomPadding: CGFloat = 8
         let panelHeight = min(headerHeight + rowsHeight + bottomPadding, 380)
-
-        if let panel = view.window as? CommandPalettePanel {
-            var frame = panel.frame
-            let dy = frame.height - panelHeight
-            frame.origin.y += dy
-            frame.size.height = panelHeight
-            panel.setFrame(frame, display: true, animate: true)
-        }
+        resizePanelHeight(to: panelHeight)
     }
 
     // MARK: - Filtering
@@ -506,16 +512,15 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     // MARK: - Highlight
 
     private func updateHighlight() {
-        let highlightColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
-        let clearColor = NSColor.clear.cgColor
-
         for row in 0..<tableView.numberOfRows {
-            if let cellView = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) {
-                cellView.layer?.backgroundColor =
-                    row == selectedIndex
-                    ? highlightColor
-                    : clearColor
+            guard
+                let cellView = tableView.view(
+                    atColumn: 0, row: row, makeIfNecessary: false
+                ) as? CommandPaletteRowView
+            else {
+                continue
             }
+            cellView.setHighlighted(row == selectedIndex)
         }
     }
 
@@ -587,11 +592,12 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard let command = KeyCommand(selector: commandSelector) else { return false }
         if control === searchField {
-            return handleSearchFieldCommand(commandSelector)
+            return handleSearchFieldKey(command)
         }
         if control === nameField {
-            return handleNameFieldCommand(commandSelector)
+            return handleNameFieldKey(command)
         }
         return false
     }
@@ -599,20 +605,25 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     // MARK: - NSTextViewDelegate
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard textView === promptTextView else { return false }
-        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+        guard textView === promptTextView,
+            let command = KeyCommand(selector: commandSelector)
+        else {
+            return false
+        }
+        switch command {
+        case .enter:
             if NSEvent.modifierFlags.contains(.shift) || NSEvent.modifierFlags.contains(.option) {
                 textView.insertNewlineIgnoringFieldEditor(nil)
-                return true
+            } else {
+                submitPrompt()
             }
-            submitPrompt()
             return true
-        }
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+        case .escape:
             handleEscape()
             return true
+        default:
+            return false
         }
-        return false
     }
 
     func textDidChange(_ notification: Notification) {
@@ -620,80 +631,59 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         adjustPromptHeight()
     }
 
-    private func handleSearchFieldCommand(_ sel: Selector) -> Bool {
-        switch sel {
-        case #selector(NSResponder.moveUp(_:)):
+    private func handleSearchFieldKey(_ command: KeyCommand) -> Bool {
+        switch command {
+        case .moveUp:
             if selectedIndex > 0 {
                 selectedIndex -= 1
                 updateHighlight()
                 tableView.scrollRowToVisible(selectedIndex)
             }
             return true
-        case #selector(NSResponder.moveDown(_:)):
+        case .moveDown:
             if selectedIndex < filteredItems.count - 1 {
                 selectedIndex += 1
                 updateHighlight()
                 tableView.scrollRowToVisible(selectedIndex)
             }
             return true
-        case #selector(NSResponder.insertNewline(_:)):
+        case .enter:
             selectCurrentItem()
             return true
-        case #selector(NSResponder.cancelOperation(_:)):
+        case .escape:
             handleEscape()
             return true
-        default:
+        case .tab:
             return false
         }
     }
 
-    private func handleNameFieldCommand(_ sel: Selector) -> Bool {
-        switch sel {
-        case #selector(NSResponder.insertNewline(_:)):
-            // If no prompt field (worktree), submit directly from name field
+    private func handleNameFieldKey(_ command: KeyCommand) -> Bool {
+        switch command {
+        case .enter:
             if case .prompt(let item) = phase, !item.showsPromptField {
                 submitPrompt()
             } else {
                 view.window?.makeFirstResponder(promptTextView)
             }
             return true
-        case #selector(NSResponder.insertTab(_:)):
-            if case .prompt(let item) = phase, !item.showsPromptField {
-                // No prompt field to tab to — do nothing
-            } else {
+        case .tab:
+            if case .prompt(let item) = phase, item.showsPromptField {
                 view.window?.makeFirstResponder(promptTextView)
             }
             return true
-        case #selector(NSResponder.cancelOperation(_:)):
+        case .escape:
             handleEscape()
             return true
-        default:
+        case .moveUp, .moveDown:
             return false
         }
     }
 
     private func updateSlugPreview() {
         let raw = nameField.stringValue
-        let slug = Self.normalizeWorktreeName(raw)
+        let slug = WorktreeNameNormalizer.normalize(raw)
         slugPreview.stringValue = slug.isEmpty ? "" : "pu/\(slug)"
-    }
-
-    static func normalizeWorktreeName(_ input: String) -> String {
-        let lowered = input.lowercased()
-        var result = ""
-        for ch in lowered {
-            if ch.isASCII && (ch.isLetter || ch.isNumber) {
-                result.append(ch)
-            } else if ch.isWhitespace || ch == "_" {
-                result.append("-")
-            }
-        }
-        // Collapse consecutive hyphens
-        while result.contains("--") {
-            result = result.replacingOccurrences(of: "--", with: "-")
-        }
-        // Trim leading/trailing hyphens
-        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
     private func adjustPromptHeight() {
@@ -707,13 +697,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHeightConstraint.constant = newHeight
 
         let panelHeight: CGFloat = 16 + 22 + 16 + newHeight + 12 + 16 + 16
-        if let panel = view.window as? CommandPalettePanel {
-            var frame = panel.frame
-            let dy = frame.height - panelHeight
-            frame.origin.y += dy
-            frame.size.height = panelHeight
-            panel.setFrame(frame, display: true)
-        }
+        resizePanelHeight(to: panelHeight, animate: false)
     }
 }
 
@@ -727,65 +711,14 @@ extension CommandPaletteViewController: NSTableViewDataSource, NSTableViewDelega
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let item = filteredItems[row]
-
-        let highlightColor = NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
-        let clearColor = NSColor.clear.cgColor
-
-        let cellView = NSTableCellView()
-        cellView.wantsLayer = true
-        cellView.layer?.backgroundColor = row == selectedIndex ? highlightColor : clearColor
-        cellView.layer?.cornerRadius = 6
-
-        let iconView = NSImageView()
-        iconView.image = NSImage(systemSymbolName: item.icon, accessibilityDescription: item.displayName)
-        iconView.contentTintColor = .labelColor
-        iconView.imageScaling = .scaleProportionallyDown
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-
-        let nameLabel = NSTextField(labelWithString: item.displayName)
-        nameLabel.font = .boldSystemFont(ofSize: 14)
-        nameLabel.textColor = .labelColor
-        nameLabel.drawsBackground = false
-        nameLabel.isBordered = false
-
-        let subtitleLabel = NSTextField(labelWithString: item.subtitle)
-        subtitleLabel.font = .systemFont(ofSize: 12)
-        subtitleLabel.textColor = .secondaryLabelColor
-        subtitleLabel.drawsBackground = false
-        subtitleLabel.isBordered = false
-
-        var textViews: [NSView] = [nameLabel, subtitleLabel]
-
-        // Category badge for non-built-in items
-        if let category = item.categoryLabel {
-            let badge = NSTextField(labelWithString: category)
-            badge.font = .systemFont(ofSize: 10, weight: .medium)
-            badge.textColor = .tertiaryLabelColor
-            badge.drawsBackground = false
-            badge.isBordered = false
-            textViews.append(badge)
-        }
-
-        let textStack = NSStackView(views: textViews)
-        textStack.orientation = .horizontal
-        textStack.spacing = 8
-        textStack.alignment = .firstBaseline
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-
-        cellView.addSubview(iconView)
-        cellView.addSubview(textStack)
-
-        NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: cellView.leadingAnchor, constant: 16),
-            iconView.centerYAnchor.constraint(equalTo: cellView.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 20),
-            iconView.heightAnchor.constraint(equalToConstant: 20),
-
-            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 12),
-            textStack.centerYAnchor.constraint(equalTo: cellView.centerYAnchor),
-            textStack.trailingAnchor.constraint(lessThanOrEqualTo: cellView.trailingAnchor, constant: -16),
-        ])
-
+        let cellView =
+            tableView.makeView(
+                withIdentifier: CommandPaletteRowView.identifier,
+                owner: self
+            ) as? CommandPaletteRowView
+            ?? CommandPaletteRowView()
+        cellView.identifier = CommandPaletteRowView.identifier
+        cellView.configure(with: item, isHighlighted: row == selectedIndex)
         return cellView
     }
 
@@ -796,6 +729,23 @@ extension CommandPaletteViewController: NSTableViewDataSource, NSTableViewDelega
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {}
+}
+
+// MARK: - KeyCommand
+
+private enum KeyCommand {
+    case moveUp, moveDown, enter, escape, tab
+
+    init?(selector: Selector) {
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)): self = .moveUp
+        case #selector(NSResponder.moveDown(_:)): self = .moveDown
+        case #selector(NSResponder.insertNewline(_:)): self = .enter
+        case #selector(NSResponder.cancelOperation(_:)): self = .escape
+        case #selector(NSResponder.insertTab(_:)): self = .tab
+        default: return nil
+        }
+    }
 }
 
 // MARK: - NSTextView Placeholder Helper
