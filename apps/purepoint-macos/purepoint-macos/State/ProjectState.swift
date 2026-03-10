@@ -88,8 +88,12 @@ final class ProjectState: Identifiable {
         refreshTask?.cancel()
         gridSubscriptionTask?.cancel()
         statusSubscriptionTask?.cancel()
-        Task { await gridSubscription?.stop() }
-        Task { await statusSubscription?.stop() }
+        let currentGrid = gridSubscription
+        let currentStatus = statusSubscription
+        gridSubscription = nil
+        statusSubscription = nil
+        Task { await currentGrid?.stop() }
+        Task { await currentStatus?.stop() }
         manifestWatcher?.stop()
         manifestWatcher = nil
     }
@@ -337,7 +341,8 @@ final class ProjectState: Identifiable {
 
     private func startStatusSubscription() {
         statusSubscriptionTask?.cancel()
-        Task { await statusSubscription?.stop() }
+        let previousStatus = statusSubscription
+        Task { await previousStatus?.stop() }
         let sub = DaemonStatusSubscription(projectRoot: projectRoot)
         statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in

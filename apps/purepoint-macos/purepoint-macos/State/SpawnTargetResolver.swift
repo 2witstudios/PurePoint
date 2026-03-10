@@ -18,12 +18,7 @@ enum SpawnTargetResolver {
         switch selection {
         case .worktree(let id):
             return SpawnTarget(root: false, worktree: id)
-        case .agent(let id):
-            if let wtId = worktreeIdForAgent(id) {
-                return SpawnTarget(root: false, worktree: wtId)
-            }
-            return SpawnTarget(root: true, worktree: nil)
-        case .terminal(let id):
+        case .agent(let id), .terminal(let id):
             if let wtId = worktreeIdForAgent(id) {
                 return SpawnTarget(root: false, worktree: wtId)
             }

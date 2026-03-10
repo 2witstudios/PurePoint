@@ -24,6 +24,12 @@ struct SpawnTargetResolverTests {
         #expect(target.worktree == nil)
     }
 
+    @Test func isWorktreeTakesPrecedenceOverSelection() {
+        let target = resolve(isWorktree: true, selection: .worktree("wt1"))
+        #expect(target.root == false)
+        #expect(target.worktree == nil)
+    }
+
     @Test func worktreeSelectionReturnsWorktreeId() {
         let target = resolve(selection: .worktree("wt1"))
         #expect(target.root == false)

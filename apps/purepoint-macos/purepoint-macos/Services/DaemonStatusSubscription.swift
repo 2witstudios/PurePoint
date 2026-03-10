@@ -27,6 +27,8 @@ actor DaemonStatusSubscription {
                 break
             } catch is CancellationError {
                 break
+            } catch is DaemonStatusError {
+                break
             } catch {
                 retries += 1
                 guard !stopped, retries <= maxRetries else { break }
