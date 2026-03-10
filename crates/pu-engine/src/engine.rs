@@ -229,7 +229,8 @@ impl Engine {
             | Request::Diff { project_root, .. }
             | Request::GetConfig { project_root }
             | Request::UpdateAgentConfig { project_root, .. }
-            | Request::Pulse { project_root, .. } => {
+            | Request::Pulse { project_root, .. }
+            | Request::AssignTrigger { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -1187,12 +1188,16 @@ impl Engine {
             match found {
                 Some((tname, total)) if total > 0 => (Some(tname), Some(total)),
                 Some(_) => {
-                    tracing::warn!("trigger '{name}' has empty sequence, not binding");
-                    (None, None)
+                    return Response::Error {
+                        code: "INVALID_TRIGGER".into(),
+                        message: format!("trigger '{name}' has empty sequence"),
+                    };
                 }
                 None => {
-                    tracing::warn!("trigger '{name}' not found, not binding");
-                    (None, None)
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("trigger '{name}' not found"),
+                    };
                 }
             }
         } else {
