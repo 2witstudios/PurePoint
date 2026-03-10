@@ -65,6 +65,9 @@ enum Commands {
         /// Disable event triggers for this agent
         #[arg(long)]
         no_trigger: bool,
+        /// Bind an idle trigger to this agent (name of trigger in .pu/triggers/)
+        #[arg(long, conflicts_with = "no_trigger")]
+        trigger: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -575,6 +578,16 @@ enum TriggerAction {
         #[arg(long)]
         json: bool,
     },
+    /// Assign a trigger to an idle agent
+    Assign {
+        /// Agent ID
+        agent_id: String,
+        /// Trigger name
+        trigger_name: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -608,11 +621,12 @@ async fn main() {
             agent_args,
             plan,
             no_trigger,
+            trigger,
             json,
         } => {
             commands::spawn::run(
                 &socket, prompt, agent, name, base, root, worktree, template, file, command, vars,
-                no_auto, agent_args, plan, no_trigger, json,
+                no_auto, agent_args, plan, no_trigger, trigger, json,
             )
             .await
         }
@@ -771,6 +785,11 @@ async fn main() {
             TriggerAction::Delete { name, scope, json } => {
                 commands::trigger::run_delete(&socket, &name, &scope, json).await
             }
+            TriggerAction::Assign {
+                agent_id,
+                trigger_name,
+                json,
+            } => commands::trigger::run_assign(&socket, &agent_id, &trigger_name, json).await,
         },
         Commands::Gate {
             event,

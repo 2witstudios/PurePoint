@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Serde helper: encode `Vec<u8>` as hex in JSON for binary PTY data.
 mod hex_bytes {
@@ -66,6 +66,8 @@ pub enum Request {
         plan_mode: bool,
         #[serde(default)]
         no_trigger: bool,
+        #[serde(default)]
+        trigger: Option<String>,
     },
     Status {
         project_root: String,
@@ -126,6 +128,11 @@ pub enum Request {
         project_root: String,
         agent_id: String,
         name: String,
+    },
+    AssignTrigger {
+        project_root: String,
+        agent_id: String,
+        trigger_name: String,
     },
     CreateWorktree {
         project_root: String,
@@ -598,6 +605,11 @@ pub enum Response {
         agent_id: String,
         name: String,
     },
+    AssignTriggerResult {
+        agent_id: String,
+        trigger_name: String,
+        sequence_len: u32,
+    },
     CreateWorktreeResult {
         worktree_id: String,
     },
@@ -836,6 +848,7 @@ mod tests {
             extra_args: vec![],
             plan_mode: false,
             no_trigger: false,
+            trigger: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -886,6 +899,7 @@ mod tests {
             extra_args: vec![],
             plan_mode: false,
             no_trigger: false,
+            trigger: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -920,6 +934,7 @@ mod tests {
             extra_args: vec!["--model".into(), "opus".into()],
             plan_mode: false,
             no_trigger: false,
+            trigger: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -946,12 +961,71 @@ mod tests {
             extra_args: vec![],
             plan_mode: true,
             no_trigger: false,
+            trigger: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: Request = serde_json::from_str(&json).unwrap();
         match parsed {
             Request::Spawn { plan_mode, .. } => assert!(plan_mode),
             _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_without_trigger_should_default_to_none() {
+        let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::Spawn { trigger, .. } => assert!(trigger.is_none()),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_spawn_request_with_trigger_should_round_trip() {
+        let req = Request::Spawn {
+            project_root: "/test".into(),
+            prompt: "fix".into(),
+            agent: "claude".into(),
+            name: None,
+            base: None,
+            root: true,
+            worktree: None,
+            command: None,
+            no_auto: false,
+            extra_args: vec![],
+            plan_mode: false,
+            no_trigger: false,
+            trigger: Some("review-bot".into()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::Spawn { trigger, .. } => assert_eq!(trigger.unwrap(), "review-bot"),
+            _ => panic!("expected Spawn"),
+        }
+    }
+
+    #[test]
+    fn given_assign_trigger_request_should_round_trip() {
+        let req = Request::AssignTrigger {
+            project_root: "/test".into(),
+            agent_id: "ag-abc123".into(),
+            trigger_name: "review-bot".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Request::AssignTrigger {
+                project_root,
+                agent_id,
+                trigger_name,
+            } => {
+                assert_eq!(project_root, "/test");
+                assert_eq!(agent_id, "ag-abc123");
+                assert_eq!(trigger_name, "review-bot");
+            }
+            _ => panic!("expected AssignTrigger"),
         }
     }
 
@@ -1262,7 +1336,7 @@ mod tests {
 
     #[test]
     fn given_protocol_version_should_be_current() {
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
     }
 
     // --- GridCommand round-trips ---
@@ -1525,6 +1599,29 @@ mod tests {
                 assert_eq!(name, "new-name");
             }
             _ => panic!("expected RenameResult"),
+        }
+    }
+
+    #[test]
+    fn given_assign_trigger_result_should_round_trip() {
+        let resp = Response::AssignTriggerResult {
+            agent_id: "ag-abc".into(),
+            trigger_name: "review-bot".into(),
+            sequence_len: 3,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Response::AssignTriggerResult {
+                agent_id,
+                trigger_name,
+                sequence_len,
+            } => {
+                assert_eq!(agent_id, "ag-abc");
+                assert_eq!(trigger_name, "review-bot");
+                assert_eq!(sequence_len, 3);
+            }
+            _ => panic!("expected AssignTriggerResult"),
         }
     }
 

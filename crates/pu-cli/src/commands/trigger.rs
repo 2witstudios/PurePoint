@@ -111,3 +111,25 @@ pub async fn run_delete(
     output::print_response(&resp, json)?;
     Ok(())
 }
+
+pub async fn run_assign(
+    socket: &Path,
+    agent_id: &str,
+    trigger_name: &str,
+    json: bool,
+) -> Result<(), CliError> {
+    daemon_ctrl::ensure_daemon(socket).await?;
+    let project_root = commands::cwd_string()?;
+    let resp = client::send_request(
+        socket,
+        &Request::AssignTrigger {
+            project_root,
+            agent_id: agent_id.to_string(),
+            trigger_name: trigger_name.to_string(),
+        },
+    )
+    .await?;
+    let resp = output::check_response(resp, json)?;
+    output::print_response(&resp, json)?;
+    Ok(())
+}

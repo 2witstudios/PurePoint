@@ -43,6 +43,8 @@ struct SpawnParams {
     extra_args: Vec<String>,
     plan_mode: bool,
     no_trigger: bool,
+    /// Name of trigger to bind (from --trigger flag)
+    trigger: Option<String>,
 }
 
 struct SaveTriggerParams {
@@ -227,7 +229,8 @@ impl Engine {
             | Request::Diff { project_root, .. }
             | Request::GetConfig { project_root }
             | Request::UpdateAgentConfig { project_root, .. }
-            | Request::Pulse { project_root, .. } => {
+            | Request::Pulse { project_root, .. }
+            | Request::AssignTrigger { project_root, .. } => {
                 self.register_project(project_root);
             }
             _ => {}
@@ -241,6 +244,14 @@ impl Engine {
                 agent_id,
                 name,
             } => self.handle_rename(&project_root, &agent_id, &name).await,
+            Request::AssignTrigger {
+                project_root,
+                agent_id,
+                trigger_name,
+            } => {
+                self.handle_assign_trigger(&project_root, &agent_id, &trigger_name)
+                    .await
+            }
             Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
             Request::UpdateAgentConfig {
                 project_root,
@@ -269,6 +280,7 @@ impl Engine {
                 extra_args,
                 plan_mode,
                 no_trigger,
+                trigger,
             } => {
                 self.handle_spawn(SpawnParams {
                     project_root,
@@ -283,6 +295,7 @@ impl Engine {
                     extra_args,
                     plan_mode,
                     no_trigger,
+                    trigger,
                 })
                 .await
             }
@@ -836,6 +849,7 @@ impl Engine {
             extra_args,
             plan_mode,
             no_trigger,
+            trigger: trigger_param,
         } = params;
         let root_path = Path::new(&project_root);
 
@@ -1150,34 +1164,44 @@ impl Engine {
         // tries to attach — the session must already be in the map.
         self.sessions.lock().await.insert(agent_id.clone(), handle);
 
-        // Find the first idle trigger and bind this agent to it
+        // Bind trigger if explicitly specified via --trigger <name>
         let (trigger_name, trigger_total) = if no_trigger {
             (None, None)
-        } else {
+        } else if let Some(ref name) = trigger_param {
             let pr = project_root.to_string();
+            let name_clone = name.clone();
             let found = tokio::task::spawn_blocking(move || {
                 let triggers = pu_core::trigger_def::triggers_for_event(
                     Path::new(&pr),
                     &pu_core::trigger_def::TriggerEvent::AgentIdle,
                 );
-                if triggers.len() > 1 {
-                    tracing::warn!(
-                        "multiple agent_idle triggers found ({}), using first: {}",
-                        triggers.len(),
-                        triggers[0].name
-                    );
-                }
-                triggers.into_iter().next().map(|t| {
-                    let len = t.sequence.len() as u32;
-                    (t.name, len)
-                })
+                triggers
+                    .into_iter()
+                    .find(|t| t.name == name_clone)
+                    .map(|t| {
+                        let len = t.sequence.len() as u32;
+                        (t.name, len)
+                    })
             })
             .await
             .unwrap_or(None);
             match found {
-                Some((name, total)) if total > 0 => (Some(name), Some(total)),
-                _ => (None, None),
+                Some((tname, total)) if total > 0 => (Some(tname), Some(total)),
+                Some(_) => {
+                    return Response::Error {
+                        code: "INVALID_TRIGGER".into(),
+                        message: format!("trigger '{name}' has empty sequence"),
+                    };
+                }
+                None => {
+                    return Response::Error {
+                        code: "NOT_FOUND".into(),
+                        message: format!("trigger '{name}' not found"),
+                    };
+                }
             }
+        } else {
+            (None, None)
         };
 
         // Update manifest
@@ -1541,6 +1565,108 @@ impl Engine {
             Err(e) => Response::Error {
                 code: "INTERNAL_ERROR".into(),
                 message: format!("rename task failed: {e}"),
+            },
+        }
+    }
+
+    async fn handle_assign_trigger(
+        &self,
+        project_root: &str,
+        agent_id: &str,
+        trigger_name: &str,
+    ) -> Response {
+        let pr = project_root.to_string();
+        let tn = trigger_name.to_string();
+
+        let trigger = tokio::task::spawn_blocking(move || {
+            pu_core::trigger_def::triggers_for_event(
+                Path::new(&pr),
+                &pu_core::trigger_def::TriggerEvent::AgentIdle,
+            )
+            .into_iter()
+            .find(|t| t.name == tn)
+        })
+        .await;
+
+        let trigger = match trigger {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return Response::Error {
+                    code: "NOT_FOUND".into(),
+                    message: format!("trigger '{trigger_name}' not found"),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    code: "INTERNAL_ERROR".into(),
+                    message: format!("trigger lookup failed: {e}"),
+                };
+            }
+        };
+
+        let sequence_len = trigger.sequence.len() as u32;
+        if sequence_len == 0 {
+            return Response::Error {
+                code: "INVALID_TRIGGER".into(),
+                message: format!("trigger '{trigger_name}' has empty sequence"),
+            };
+        }
+
+        // Verify the agent exists in the manifest before assigning
+        let pr_check = project_root.to_string();
+        let aid_check = agent_id.to_string();
+        let agent_exists = tokio::task::spawn_blocking(move || {
+            manifest::read_manifest(Path::new(&pr_check))
+                .map(|m| m.find_agent(&aid_check).is_some())
+        })
+        .await;
+
+        match agent_exists {
+            Ok(Ok(false)) | Ok(Err(_)) => {
+                return Response::Error {
+                    code: "NOT_FOUND".into(),
+                    message: format!("agent '{agent_id}' not found"),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    code: "INTERNAL_ERROR".into(),
+                    message: format!("agent lookup failed: {e}"),
+                };
+            }
+            Ok(Ok(true)) => {} // proceed
+        }
+
+        let pr2 = project_root.to_string();
+        let aid2 = agent_id.to_string();
+        let tn2 = trigger_name.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(Path::new(&pr2), |mut m| {
+                if let Some(agent) = m.find_agent_mut(&aid2) {
+                    agent.trigger_name = Some(tn2.clone());
+                    agent.trigger_state = Some(pu_core::types::TriggerState::Active);
+                    agent.trigger_seq_index = Some(0);
+                    agent.trigger_total = Some(sequence_len);
+                    agent.gate_attempts = Some(0);
+                }
+                m
+            })
+        })
+        .await;
+
+        match result {
+            Ok(Ok(_)) => {
+                self.notify_status_change(project_root).await;
+                Response::AssignTriggerResult {
+                    agent_id: agent_id.to_string(),
+                    trigger_name: trigger_name.to_string(),
+                    sequence_len,
+                }
+            }
+            Ok(Err(e)) => Self::error_response(&e),
+            Err(e) => Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("assign trigger task failed: {e}"),
             },
         }
     }
@@ -2926,6 +3052,7 @@ impl Engine {
                             extra_args: vec![],
                             plan_mode: false,
                             no_trigger: false,
+                            trigger: None,
                         })
                         .await;
 
@@ -2970,6 +3097,7 @@ impl Engine {
                             extra_args: vec![],
                             plan_mode: false,
                             no_trigger: false,
+                            trigger: None,
                         })
                         .await;
                     if let Response::SpawnResult { agent_id, .. } = resp {
@@ -3718,8 +3846,7 @@ impl Engine {
             if let Some(ref inject_text) = action.inject {
                 let resolved =
                     pu_core::trigger_def::substitute_variables(inject_text, &trigger.variables);
-                let text_with_newline = format!("{resolved}\n");
-                match self.inject_text(agent_id, &text_with_newline).await {
+                match self.inject_text(agent_id, &resolved).await {
                     Ok(true) => {} // success, proceed to advance
                     Ok(false) => {
                         tracing::warn!(agent_id, "inject_text: session not found, marking failed");
@@ -3760,9 +3887,8 @@ impl Engine {
         }
     }
 
-    /// Inject text into an agent's PTY. Clones the fd under the lock, then drops
-    /// the lock before the potentially-blocking write. Returns `Ok(true)` on
-    /// success, `Ok(false)` if the session was not found.
+    /// Inject text into an agent's PTY using chunked typing + Enter submission.
+    /// Returns `Ok(true)` on success, `Ok(false)` if the session was not found.
     async fn inject_text(&self, agent_id: &str, text: &str) -> Result<bool, std::io::Error> {
         let fd = {
             let sessions = self.sessions.lock().await;
@@ -3770,7 +3896,9 @@ impl Engine {
         };
         match fd {
             Some(fd) => {
-                self.pty_host.write_to_fd(&fd, text.as_bytes()).await?;
+                self.pty_host
+                    .write_chunked_submit(&fd, text.as_bytes())
+                    .await?;
                 Ok(true)
             }
             None => Ok(false),
@@ -3853,6 +3981,7 @@ impl Engine {
                         extra_args: vec![],
                         plan_mode: false,
                         no_trigger: false,
+                        trigger: None,
                     })
                     .await
                 } else {
@@ -3884,6 +4013,7 @@ impl Engine {
                     extra_args: vec![],
                     plan_mode: false,
                     no_trigger: false,
+                    trigger: None,
                 })
                 .await
             }
@@ -4367,6 +4497,7 @@ mod tests {
                 extra_args: vec![],
                 plan_mode: false,
                 no_trigger: false,
+                trigger: None,
             })
             .await;
 

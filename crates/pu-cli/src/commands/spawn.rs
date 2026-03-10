@@ -25,6 +25,7 @@ pub async fn run(
     agent_args: Option<String>,
     plan_mode: bool,
     no_trigger: bool,
+    trigger: Option<String>,
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
@@ -73,6 +74,7 @@ pub async fn run(
             extra_args,
             plan_mode,
             no_trigger,
+            trigger,
         },
     )
     .await?;
