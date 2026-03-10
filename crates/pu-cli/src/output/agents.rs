@@ -122,6 +122,15 @@ pub(crate) fn print_rename_result(agent_id: &str, name: &str) {
     println!("Renamed agent {} to {}", agent_id.bold(), name.green());
 }
 
+pub(crate) fn print_assign_trigger_result(agent_id: &str, trigger_name: &str, sequence_len: u32) {
+    println!(
+        "Assigned trigger {} to agent {} ({} steps)",
+        trigger_name.green(),
+        agent_id.bold(),
+        sequence_len
+    );
+}
+
 pub(crate) fn print_logs_result(agent_id: &str, data: &str) {
     println!("{}", format!("--- Logs for {agent_id} ---").dimmed());
     print!("{data}");

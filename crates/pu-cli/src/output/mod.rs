@@ -86,6 +86,13 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::RenameResult { agent_id, name } => {
             agents::print_rename_result(agent_id, name);
         }
+        Response::AssignTriggerResult {
+            agent_id,
+            trigger_name,
+            sequence_len,
+        } => {
+            agents::print_assign_trigger_result(agent_id, trigger_name, *sequence_len);
+        }
         Response::CreateWorktreeResult { worktree_id } => {
             agents::print_create_worktree_result(worktree_id);
         }
