@@ -35,6 +35,7 @@ pub(crate) async fn init_and_spawn() -> (Engine, String, TempDir) {
             extra_args: vec![],
             plan_mode: false,
             no_trigger: false,
+            trigger: None,
         })
         .await;
 

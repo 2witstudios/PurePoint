@@ -253,6 +253,18 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::RenameResult { agent_id, name } => {
             println!("Renamed agent {} to {}", agent_id.bold(), name.green());
         }
+        Response::AssignTriggerResult {
+            agent_id,
+            trigger_name,
+            sequence_len,
+        } => {
+            println!(
+                "Assigned trigger {} to agent {} ({} steps)",
+                trigger_name.green(),
+                agent_id.bold(),
+                sequence_len
+            );
+        }
         Response::CreateWorktreeResult { worktree_id } => {
             println!("Created worktree {}", worktree_id.bold());
         }
