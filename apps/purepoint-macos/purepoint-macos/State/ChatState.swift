@@ -36,7 +36,10 @@ final class ChatState {
         }
     }
 
-    func newConversation() {
+    func newConversation() async {
+        if isStreaming {
+            await stopStreaming()
+        }
         accumulator.reset()
         messages = []
         currentSessionId = nil

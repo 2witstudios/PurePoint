@@ -148,6 +148,37 @@ struct StreamAccumulatorTests {
         #expect(texts.joined() == "Full text from snapshot")
     }
 
+    @Test func givenDeltasPlusSnapshot_finalizeShouldPreserveDeltaText() {
+        let accumulator = StreamAccumulator()
+        var messages: [ChatMessage] = [
+            ChatMessage(id: "a1", role: .assistant, isStreaming: true)
+        ]
+
+        // Deltas drive the text content
+        _ = accumulator.handle(
+            .contentBlockDelta(index: 0, delta: "partial "),
+            assistantMessageId: "a1", messages: &messages
+        )
+        _ = accumulator.handle(
+            .contentBlockDelta(index: 0, delta: "text"),
+            assistantMessageId: "a1", messages: &messages
+        )
+        // Snapshot arrives — stored but does NOT replace delta-driven text
+        _ = accumulator.handle(
+            .assistant(content: [.text("partial text")]),
+            assistantMessageId: "a1", messages: &messages
+        )
+
+        accumulator.finalize(assistantMessageId: "a1", messages: &messages)
+
+        let texts = messages[0].contentBlocks.compactMap { block -> String? in
+            if case .text(_, let text) = block { return text }
+            return nil
+        }
+        // Delta-driven text is authoritative when blocks are non-empty
+        #expect(texts.joined() == "partial text")
+    }
+
     // MARK: - Reset clears state
 
     @Test func givenResetShouldClearAllBufferingState() {

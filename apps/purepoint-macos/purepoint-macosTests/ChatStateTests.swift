@@ -5,12 +5,12 @@ import Testing
 @MainActor
 struct ChatStateTests {
 
-    @Test func givenNewConversationShouldClearMessagesAndSessionId() {
+    @Test func givenNewConversationShouldClearMessagesAndSessionId() async {
         let state = ChatState(processProvider: MockClaudeProcess())
         state.messages.append(ChatMessage(role: .user, contentBlocks: [.text(id: "1", text: "old")]))
         state.currentSessionId = "old-session"
 
-        state.newConversation()
+        await state.newConversation()
 
         #expect(state.messages.isEmpty)
         #expect(state.currentSessionId == nil)
