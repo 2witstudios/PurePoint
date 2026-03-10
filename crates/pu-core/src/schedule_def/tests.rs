@@ -180,22 +180,36 @@ fn given_trigger_inline_prompt_should_round_trip() {
 
 #[test]
 fn given_local_and_global_schedule_defs_should_list_local_first() {
-    let tmp = TempDir::new().unwrap();
-    isolate_home(&tmp);
-    let root = tmp.path();
-    let local_dir = paths::schedules_dir(root);
+    // Use separate temp dirs: one for project root (local), one for HOME (global)
+    let home_tmp = TempDir::new().unwrap();
+    let project_tmp = TempDir::new().unwrap();
+    isolate_home(&home_tmp);
+
+    let project_root = project_tmp.path();
+    let local_dir = paths::schedules_dir(project_root);
     std::fs::create_dir_all(&local_dir).unwrap();
 
+    // Write local schedules
     let mut def = make_schedule_def("nightly");
     save_schedule_def(&local_dir, &def).unwrap();
     def.name = "weekly".to_string();
     save_schedule_def(&local_dir, &def).unwrap();
 
-    let defs = list_schedule_defs(root);
-    assert_eq!(defs.len(), 2);
+    // Write a global schedule
+    let global_dir = paths::global_schedules_dir().unwrap();
+    std::fs::create_dir_all(&global_dir).unwrap();
+    def.name = "global-only".to_string();
+    save_schedule_def(&global_dir, &def).unwrap();
+
+    let defs = list_schedule_defs(project_root);
+    assert_eq!(defs.len(), 3);
+    // Local schedules come first (sorted), then global (appended)
     assert_eq!(defs[0].name, "nightly");
-    assert_eq!(defs[1].name, "weekly");
     assert_eq!(defs[0].scope, "local");
+    assert_eq!(defs[1].name, "weekly");
+    assert_eq!(defs[1].scope, "local");
+    assert_eq!(defs[2].name, "global-only");
+    assert_eq!(defs[2].scope, "global");
 }
 
 #[test]
@@ -271,16 +285,30 @@ fn given_nonexistent_schedule_def_should_return_false() {
 
 #[test]
 fn given_duplicate_name_in_local_and_global_should_prefer_local() {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
-    let local_dir = paths::schedules_dir(root);
+    // Use separate temp dirs: one for project root (local), one for HOME (global)
+    let home_tmp = TempDir::new().unwrap();
+    let project_tmp = TempDir::new().unwrap();
+    isolate_home(&home_tmp);
+
+    let project_root = project_tmp.path();
+    let local_dir = paths::schedules_dir(project_root);
     std::fs::create_dir_all(&local_dir).unwrap();
 
-    let def = make_schedule_def("nightly");
-    save_schedule_def(&local_dir, &def).unwrap();
+    // Write global schedule first
+    let global_dir = paths::global_schedules_dir().unwrap();
+    std::fs::create_dir_all(&global_dir).unwrap();
+    let mut global_def = make_schedule_def("nightly");
+    global_def.project_root = "/global/path".to_string();
+    save_schedule_def(&global_dir, &global_def).unwrap();
 
-    let found = find_schedule_def(root, "nightly").unwrap();
+    // Write local schedule with same name
+    let local_def = make_schedule_def("nightly");
+    save_schedule_def(&local_dir, &local_def).unwrap();
+
+    // Local should take priority
+    let found = find_schedule_def(project_root, "nightly").unwrap();
     assert_eq!(found.scope, "local");
+    assert_eq!(found.project_root, "/projects/myapp"); // local's project_root
 }
 
 #[test]
@@ -309,6 +337,14 @@ fn given_none_recurrence_before_base_should_return_base() {
 fn given_none_recurrence_after_base_should_return_none() {
     let base = utc(2025, 6, 15, 10, 0, 0);
     let after = utc(2025, 6, 16, 10, 0, 0);
+    assert_eq!(next_occurrence(base, &Recurrence::None, after), None);
+}
+
+#[test]
+fn given_none_recurrence_at_base_should_return_none() {
+    // Exclusive-after semantics: after == base means already ran, so None
+    let base = utc(2025, 6, 15, 10, 0, 0);
+    let after = base;
     assert_eq!(next_occurrence(base, &Recurrence::None, after), None);
 }
 

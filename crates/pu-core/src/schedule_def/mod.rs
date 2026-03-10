@@ -120,6 +120,9 @@ pub fn list_schedule_defs(project_root: &Path) -> Vec<ScheduleDef> {
 
 /// Find a schedule definition by name. Checks local first, then global.
 pub fn find_schedule_def(project_root: &Path, name: &str) -> Option<ScheduleDef> {
+    if crate::validation::validate_name(name).is_err() {
+        return None;
+    }
     let local_dir = paths::schedules_dir(project_root);
     if local_dir.is_dir() {
         if let Some(def) = find_in_dir(&local_dir, name, "local") {
@@ -197,7 +200,7 @@ fn naive_at_base_time(base: DateTime<Utc>, after: DateTime<Utc>) -> chrono::Naiv
 }
 
 fn next_none_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    if after <= base { Some(base) } else { None }
+    if after < base { Some(base) } else { None }
 }
 
 fn next_hourly_occurrence(base: DateTime<Utc>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {

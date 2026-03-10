@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Churn hotspot analysis for Rust + Swift
+# Score = LoC x churn x cyclomatic_complexity
+# Requires: scc (brew install scc), jq
+
+# --- Defaults ---
+DAYS=90
+TOP=20
+MIN_LOC=50
+NO_TESTS=false
+JSON_OUT=false
+
+# --- Arg parsing ---
+usage() {
+    cat <<'USAGE'
+Usage: scripts/churn [OPTIONS]
+
+Rank files by hotspot score (LoC x churn x complexity).
+
+Options:
+  --days N       Git log window in days (default: 90)
+  --top N        Show top N results (default: 20)
+  --min-loc N    Skip files with fewer code lines (default: 50)
+  --no-tests     Exclude test files
+  --json         Output as JSON array
+  -h, --help     Show this help
+USAGE
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --days)    DAYS="$2";    shift 2 ;;
+        --top)     TOP="$2";     shift 2 ;;
+        --min-loc) MIN_LOC="$2"; shift 2 ;;
+        --no-tests) NO_TESTS=true; shift ;;
+        --json)    JSON_OUT=true; shift ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+# --- Dependency check ---
+missing=""
+command -v scc  >/dev/null 2>&1 || missing="$missing scc"
+command -v jq   >/dev/null 2>&1 || missing="$missing jq"
+if [[ -n "$missing" ]]; then
+    echo "Missing dependencies:$missing" >&2
+    echo "Install with: brew install$missing" >&2
+    exit 1
+fi
+
+# --- Temp files ---
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+churn_file="$tmpdir/churn.tsv"
+scc_file="$tmpdir/scc.tsv"
+joined_file="$tmpdir/joined.tsv"
+
+# --- Git churn ---
+# Count how many commits touched each .rs/.swift file in the window
+git log --since="${DAYS} days ago" --name-only --pretty=format: --diff-filter=ACMR \
+    -- '*.rs' '*.swift' \
+    | grep -E '\.(rs|swift)$' \
+    | sort \
+    | uniq -c \
+    | awk '{ print $2 "\t" $1 }' \
+    > "$churn_file"
+
+if [[ ! -s "$churn_file" ]]; then
+    echo "No .rs/.swift file changes in the last ${DAYS} days." >&2
+    exit 0
+fi
+
+# --- scc metrics ---
+# Get per-file metrics as JSON, excluding build/worktree dirs
+scc --by-file --format json --include-ext rs,swift \
+    --exclude-dir .pu,target,DerivedData,build . \
+    | jq -r '.[] | .Files[]? | [.Location, (.Code | tostring), (.Complexity | tostring)] | @tsv' \
+    | sed 's|^\./||' \
+    > "$scc_file"
+
+# --- Join churn + scc, compute score, filter ---
+# For each file with churn, look up scc metrics and compute gzip density
+while IFS=$'\t' read -r file churn; do
+    # Skip files that no longer exist (deleted/renamed)
+    [[ ! -f "$file" ]] && continue
+
+    # Look up scc metrics
+    scc_line=$(grep -F "$file" "$scc_file" | head -1) || true
+    [[ -z "$scc_line" ]] && continue
+
+    loc=$(echo "$scc_line" | cut -f2)
+    cx=$(echo "$scc_line" | cut -f3)
+
+    # Skip below min-loc
+    [[ "$loc" -lt "$MIN_LOC" ]] && continue
+
+    # Skip tests if requested
+    if $NO_TESTS; then
+        base=$(basename "$file")
+        case "$base" in
+            *test*|*Test*|*_test.*|*_tests.*|*Tests.*) continue ;;
+        esac
+    fi
+
+    # Score
+    score=$(( loc * churn * cx ))
+    [[ "$score" -eq 0 ]] && continue
+
+    # Gzip density
+    raw_size=$(wc -c < "$file" | tr -d ' ')
+    if [[ "$raw_size" -gt 0 ]]; then
+        gz_size=$(gzip -c "$file" | wc -c | tr -d ' ')
+        density=$(( gz_size * 100 / raw_size ))
+    else
+        density=0
+    fi
+
+    printf '%d\t%s\t%s\t%s\t%d%%\t%s\n' "$score" "$loc" "$churn" "$cx" "$density" "$file"
+done < "$churn_file" | sort -t$'\t' -k1 -nr | head -n "$TOP" > "$joined_file"
+
+if [[ ! -s "$joined_file" ]]; then
+    echo "No hotspots found (try --days with a wider window or --min-loc with a lower threshold)." >&2
+    exit 0
+fi
+
+# --- Output ---
+if $JSON_OUT; then
+    jq -Rsn '
+        [inputs | split("\n")[] | select(length > 0) | split("\t") |
+         { score: (.[0] | tonumber),
+           loc: (.[1] | tonumber),
+           churn: (.[2] | tonumber),
+           complexity: (.[3] | tonumber),
+           density: .[4],
+           file: .[5] }]
+    ' < "$joined_file"
+else
+    printf '  %7s  %5s  %5s  %3s  %7s  %s\n' "Score" "LoC" "Churn" "Cx" "Density" "File"
+    printf '  %7s  %5s  %5s  %3s  %7s  %s\n' "───────" "─────" "─────" "───" "───────" "──────────────────────────────────────"
+    while IFS=$'\t' read -r score loc churn cx density file; do
+        printf '  %7s  %5s  %5s  %3s  %7s  %s\n' "$score" "$loc" "$churn" "$cx" "$density" "$file"
+    done < "$joined_file"
+fi
