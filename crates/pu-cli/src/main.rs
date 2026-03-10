@@ -66,7 +66,7 @@ enum Commands {
         #[arg(long)]
         no_trigger: bool,
         /// Bind an idle trigger to this agent (name of trigger in .pu/triggers/)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "no_trigger")]
         trigger: Option<String>,
         /// Output as JSON
         #[arg(long)]

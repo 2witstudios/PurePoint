@@ -1588,7 +1588,7 @@ impl Engine {
             Ok(None) => {
                 return Response::Error {
                     code: "NOT_FOUND".into(),
-                    message: format!("trigger '{}' not found", trigger_name),
+                    message: format!("trigger '{trigger_name}' not found"),
                 };
             }
             Err(e) => {
@@ -1603,8 +1603,33 @@ impl Engine {
         if sequence_len == 0 {
             return Response::Error {
                 code: "INVALID_TRIGGER".into(),
-                message: format!("trigger '{}' has empty sequence", trigger_name),
+                message: format!("trigger '{trigger_name}' has empty sequence"),
             };
+        }
+
+        // Verify the agent exists in the manifest before assigning
+        let pr_check = project_root.to_string();
+        let aid_check = agent_id.to_string();
+        let agent_exists = tokio::task::spawn_blocking(move || {
+            manifest::read_manifest(Path::new(&pr_check))
+                .map(|m| m.find_agent(&aid_check).is_some())
+        })
+        .await;
+
+        match agent_exists {
+            Ok(Ok(false)) | Ok(Err(_)) => {
+                return Response::Error {
+                    code: "NOT_FOUND".into(),
+                    message: format!("agent '{agent_id}' not found"),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    code: "INTERNAL_ERROR".into(),
+                    message: format!("agent lookup failed: {e}"),
+                };
+            }
+            Ok(Ok(true)) => {} // proceed
         }
 
         let pr2 = project_root.to_string();
