@@ -97,19 +97,3 @@ nonisolated final class DaemonClient: @unchecked Sendable {
         }
     }
 }
-
-// MARK: - Errors
-
-nonisolated enum DaemonClientError: Error, LocalizedError {
-    case eof
-    case cancelled
-    case notRunning
-
-    var errorDescription: String? {
-        switch self {
-        case .eof: "Connection to daemon closed"
-        case .cancelled: "Connection cancelled"
-        case .notRunning: "Daemon is not running"
-        }
-    }
-}
