@@ -97,82 +97,46 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Rebuild the node tree from AppState projects.
     func rebuildNodes(projects: [ProjectState]) {
-        let oldExpanded = expandedNodeIds()
         let oldSelectedId = selectedNodeId()
 
-        var newNodes: [SidebarNode] = []
-        for project in projects {
-            let isGridProject = project.projectRoot == gridProjectRoot
-
-            // Root agents (filtered for grid children)
-            let rootAgents: [AgentModel]
-            if isGridProject {
-                rootAgents = project.rootAgents.filter { !hiddenAgentIds.contains($0.id) }
-            } else {
-                rootAgents = project.rootAgents
-            }
-
-            var projectChildren: [SidebarNode] = rootAgents.map {
-                SidebarNode(kind: .agent($0))
-            }
-
-            for worktree in project.worktrees {
-                let agents: [AgentModel]
-                if isGridProject {
-                    agents = worktree.agents.filter { !hiddenAgentIds.contains($0.id) }
-                } else {
-                    agents = worktree.agents
-                }
-                let agentNodes = agents.map { SidebarNode(kind: .agent($0)) }
-                let wtNode = SidebarNode(kind: .worktree(worktree), children: agentNodes)
-                projectChildren.append(wtNode)
-            }
-
-            let projectNode = SidebarNode(kind: .project(project), children: projectChildren)
-            newNodes.append(projectNode)
-        }
-
-        projectNodes = newNodes
+        projectNodes = projects.map { buildProjectNode(from: $0) }
         outlineView.reloadData()
+        restoreExpansionState()
 
-        // Restore expansion — auto-expand new items
-        for node in projectNodes {
-            outlineView.expandItem(node)  // Always expand projects
-            for child in node.children {
-                if case .worktree = child.kind {
-                    if oldExpanded.contains(child.id)
-                        || !oldExpanded.contains(child.id) && isNewWorktree(child.id, oldExpanded: oldExpanded)
-                    {
-                        outlineView.expandItem(child)
-                    }
-                }
-            }
-        }
-
-        // Restore selection
         if let oldSelectedId {
             selectNode(withId: oldSelectedId)
         }
     }
 
-    private func isNew(_ id: String, in expanded: Set<String>, allOldIds: Set<String>) -> Bool {
-        !allOldIds.contains(id)
+    private func buildProjectNode(from project: ProjectState) -> SidebarNode {
+        let isGridProject = project.projectRoot == gridProjectRoot
+
+        var projectChildren: [SidebarNode] = filterAgents(project.rootAgents, isGridProject: isGridProject).map {
+            SidebarNode(kind: .agent($0))
+        }
+
+        for worktree in project.worktrees {
+            let agents = filterAgents(worktree.agents, isGridProject: isGridProject)
+            let agentNodes = agents.map { SidebarNode(kind: .agent($0)) }
+            projectChildren.append(SidebarNode(kind: .worktree(worktree), children: agentNodes))
+        }
+
+        return SidebarNode(kind: .project(project), children: projectChildren)
     }
 
-    private func isNewWorktree(_ id: String, oldExpanded: Set<String>) -> Bool {
-        // If it wasn't in the old set at all, it's new — auto-expand
-        !oldExpanded.contains(id)
+    private func filterAgents(_ agents: [AgentModel], isGridProject: Bool) -> [AgentModel] {
+        isGridProject ? agents.filter { !hiddenAgentIds.contains($0.id) } : agents
     }
 
-    private func expandedNodeIds() -> Set<String> {
-        var ids = Set<String>()
+    private func restoreExpansionState() {
         for node in projectNodes {
-            if outlineView.isItemExpanded(node) { ids.insert(node.id) }
+            outlineView.expandItem(node)
             for child in node.children {
-                if outlineView.isItemExpanded(child) { ids.insert(child.id) }
+                if case .worktree = child.kind {
+                    outlineView.expandItem(child)
+                }
             }
         }
-        return ids
     }
 
     private func selectedNodeId() -> String? {
@@ -185,9 +149,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     func selectNode(for selection: SidebarSelection?) {
         guard let selection else {
-            suppressSelectionCallback = true
-            outlineView.deselectAll(nil)
-            suppressSelectionCallback = false
+            deselectAll()
             return
         }
 
@@ -197,14 +159,18 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         case .worktree(let id): targetId = id
         case .project(let root): targetId = root
         case .nav, .terminal:
-            suppressSelectionCallback = true
-            outlineView.deselectAll(nil)
-            suppressSelectionCallback = false
+            deselectAll()
             return
         }
 
         guard let targetId else { return }
         selectNode(withId: targetId)
+    }
+
+    private func deselectAll() {
+        suppressSelectionCallback = true
+        outlineView.deselectAll(nil)
+        suppressSelectionCallback = false
     }
 
     private func selectNode(withId targetId: String) {
@@ -276,17 +242,9 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     // MARK: - Cell Factories
 
     private func makeProjectCell(_ project: ProjectState) -> NSView {
-        let cell = NSTableCellView()
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let (cell, stack) = makeCellWithStack(spacing: 6)
 
-        let icon = NSImageView(image: NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Project")!)
-        icon.contentTintColor = .secondaryLabelColor
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
-        icon.setContentHuggingPriority(.required, for: .horizontal)
-
+        let icon = makeSymbolIcon("folder.fill", description: "Project", pointSize: 11)
         let name = NSTextField(labelWithString: project.projectName)
         name.font = .systemFont(ofSize: 12, weight: .semibold)
         name.lineBreakMode = .byTruncatingTail
@@ -298,29 +256,13 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.addArrangedSubview(name)
         stack.addArrangedSubview(spacerView())
         stack.addArrangedSubview(addBtn)
-
-        cell.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
         return cell
     }
 
     private func makeWorktreeCell(_ worktree: WorktreeModel, node: SidebarNode) -> NSView {
-        let cell = NSTableCellView()
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let (cell, stack) = makeCellWithStack(spacing: 6)
 
-        let icon = NSImageView(
-            image: NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "Worktree")!)
-        icon.contentTintColor = .secondaryLabelColor
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
-        icon.setContentHuggingPriority(.required, for: .horizontal)
-
+        let icon = makeSymbolIcon("arrow.triangle.branch", description: "Worktree", pointSize: 10)
         let name = NSTextField(labelWithString: worktree.branch)
         name.font = .systemFont(ofSize: 12)
         name.lineBreakMode = .byTruncatingTail
@@ -333,75 +275,89 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.addArrangedSubview(spacerView())
         stack.addArrangedSubview(addBtn)
 
-        // Agent count badge
-        let agentCount = worktree.agents.count
-        if agentCount > 0 {
-            let badge = NSTextField(labelWithString: "\(agentCount)")
-            badge.font = .systemFont(ofSize: 10)
-            badge.textColor = .secondaryLabelColor
-            badge.alignment = .center
-            badge.wantsLayer = true
-            badge.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
-            badge.layer?.cornerRadius = 6
-            badge.setContentHuggingPriority(.required, for: .horizontal)
-            let badgeWidth = max(18, badge.intrinsicContentSize.width + 8)
-            badge.widthAnchor.constraint(equalToConstant: badgeWidth).isActive = true
-            stack.addArrangedSubview(badge)
+        if worktree.agents.count > 0 {
+            stack.addArrangedSubview(makeBadge(count: worktree.agents.count))
+        }
+        return cell
+    }
+
+    private func makeAgentCell(_ agent: AgentModel) -> NSView {
+        let (cell, stack) = makeCellWithStack(spacing: 5)
+
+        stack.addArrangedSubview(makeStatusDot(color: agent.status.nsColor))
+
+        let label = NSTextField(labelWithString: agent.displayName)
+        label.font = .systemFont(ofSize: 11)
+        label.lineBreakMode = .byTruncatingTail
+        stack.addArrangedSubview(label)
+
+        if agent.id == gridOwnerAgentId {
+            stack.addArrangedSubview(makeGridOwnerIcon())
         }
 
+        cell.setAccessibilityLabel("\(agent.displayName), \(agent.status.rawValue)")
+        return cell
+    }
+
+    // MARK: - Cell Component Helpers
+
+    private func makeCellWithStack(spacing: CGFloat) -> (NSTableCellView, NSStackView) {
+        let cell = NSTableCellView()
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.spacing = spacing
+        stack.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
             stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
             stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
-        return cell
+        return (cell, stack)
     }
 
-    private func makeAgentCell(_ agent: AgentModel) -> NSView {
-        let cell = NSTableCellView()
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.spacing = 5
-        stack.translatesAutoresizingMaskIntoConstraints = false
+    private func makeSymbolIcon(_ name: String, description: String, pointSize: CGFloat) -> NSImageView {
+        let icon = NSImageView(image: NSImage(systemSymbolName: name, accessibilityDescription: description)!)
+        icon.contentTintColor = .secondaryLabelColor
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        return icon
+    }
 
-        // Status dot
+    private func makeStatusDot(color: NSColor) -> NSView {
         let dot = NSView()
         dot.wantsLayer = true
-        dot.layer?.backgroundColor = agent.status.nsColor.cgColor
+        dot.layer?.backgroundColor = color.cgColor
         dot.layer?.cornerRadius = CGFloat(PurePointTheme.statusDotSize) / 2
         dot.translatesAutoresizingMaskIntoConstraints = false
         let dotSize = CGFloat(PurePointTheme.statusDotSize)
         dot.widthAnchor.constraint(equalToConstant: dotSize).isActive = true
         dot.heightAnchor.constraint(equalToConstant: dotSize).isActive = true
         dot.setContentHuggingPriority(.required, for: .horizontal)
+        return dot
+    }
 
-        let label = NSTextField(labelWithString: agent.displayName)
-        label.font = .systemFont(ofSize: 11)
-        label.lineBreakMode = .byTruncatingTail
+    private func makeBadge(count: Int) -> NSTextField {
+        let badge = NSTextField(labelWithString: "\(count)")
+        badge.font = .systemFont(ofSize: 10)
+        badge.textColor = .secondaryLabelColor
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+        badge.layer?.cornerRadius = 6
+        badge.setContentHuggingPriority(.required, for: .horizontal)
+        let badgeWidth = max(18, badge.intrinsicContentSize.width + 8)
+        badge.widthAnchor.constraint(equalToConstant: badgeWidth).isActive = true
+        return badge
+    }
 
-        stack.addArrangedSubview(dot)
-        stack.addArrangedSubview(label)
-
-        // Grid owner icon
-        if agent.id == gridOwnerAgentId {
-            let gridIcon = NSImageView(
-                image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Grid owner")!)
-            gridIcon.contentTintColor = .tertiaryLabelColor
-            gridIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
-            gridIcon.setContentHuggingPriority(.required, for: .horizontal)
-            stack.addArrangedSubview(gridIcon)
-        }
-
-        cell.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            stack.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
-
-        cell.setAccessibilityLabel("\(agent.displayName), \(agent.status.rawValue)")
-        return cell
+    private func makeGridOwnerIcon() -> NSImageView {
+        let icon = NSImageView(
+            image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Grid owner")!)
+        icon.contentTintColor = .tertiaryLabelColor
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        return icon
     }
 
     // MARK: - Helpers
@@ -429,31 +385,32 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return button
     }
 
+    private func makeMenuItem(title: String, action: Selector, context: Any? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.representedObject = context
+        return item
+    }
+
     // MARK: - Button Actions
 
     @objc private func projectAddClicked(_ sender: NSButton) {
-        guard let projectRoot = sender.identifier?.rawValue else { return }
-        guard let project = findProject(byRoot: projectRoot) else { return }
+        guard let projectRoot = sender.identifier?.rawValue,
+            let project = findProject(byRoot: projectRoot)
+        else { return }
         onShowCommandPalette?(project, nil, true)
     }
 
     @objc private func worktreeAddClicked(_ sender: NSButton) {
-        guard let worktreeId = sender.identifier?.rawValue else { return }
-        guard let project = findProject(forWorktreeId: worktreeId) else { return }
+        guard let worktreeId = sender.identifier?.rawValue,
+            let project = findProject(forWorktreeId: worktreeId)
+        else { return }
 
+        let ctx = WorktreeMenuContext(project: project, worktreeId: worktreeId)
         let menu = NSMenu()
-
-        let agentItem = NSMenuItem(
-            title: "New Agent", action: #selector(menuNewAgentForWorktree(_:)), keyEquivalent: "")
-        agentItem.target = self
-        agentItem.representedObject = WorktreeMenuContext(project: project, worktreeId: worktreeId)
-        menu.addItem(agentItem)
-
-        let termItem = NSMenuItem(
-            title: "New Terminal", action: #selector(menuNewTerminalForWorktree(_:)), keyEquivalent: "")
-        termItem.target = self
-        termItem.representedObject = WorktreeMenuContext(project: project, worktreeId: worktreeId)
-        menu.addItem(termItem)
+        menu.addItem(makeMenuItem(title: "New Agent", action: #selector(menuNewAgentForWorktree(_:)), context: ctx))
+        menu.addItem(
+            makeMenuItem(title: "New Terminal", action: #selector(menuNewTerminalForWorktree(_:)), context: ctx))
 
         let point = NSPoint(x: 0, y: sender.bounds.height)
         menu.popUp(positioning: nil, at: point, in: sender)
@@ -496,6 +453,14 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         }
         return nil
     }
+
+    // MARK: - Inline Rename State
+
+    private func cleanupEditingState() {
+        editingTextField = nil
+        editingOriginalName = nil
+        editingAgentId = nil
+    }
 }
 
 // MARK: - Context Menu
@@ -509,49 +474,39 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         contextClickedNode = node
 
         switch node.kind {
-        case .agent:
-            let renameItem = NSMenuItem(title: "Rename…", action: #selector(contextRenameAgent(_:)), keyEquivalent: "")
-            renameItem.target = self
-            menu.addItem(renameItem)
-
-            menu.addItem(.separator())
-
-            let killItem = NSMenuItem(title: "Kill Agent", action: #selector(contextKillAgent(_:)), keyEquivalent: "")
-            killItem.target = self
-            menu.addItem(killItem)
-
-        case .worktree(let worktree):
-            let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
-            if aliveCount > 0 {
-                let killAllItem = NSMenuItem(
-                    title: "Kill All Agents (\(aliveCount))",
-                    action: #selector(contextKillWorktreeAgents(_:)),
-                    keyEquivalent: ""
-                )
-                killAllItem.target = self
-                menu.addItem(killAllItem)
-                menu.addItem(.separator())
-            }
-
-            let deleteItem = NSMenuItem(
-                title: "Delete Worktree…",
-                action: #selector(contextDeleteWorktree(_:)),
-                keyEquivalent: ""
-            )
-            deleteItem.target = self
-            menu.addItem(deleteItem)
-
-        case .project(let project):
-            let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
-            guard aliveCount > 0 else { return }
-            let killAllItem = NSMenuItem(
-                title: "Kill All Agents (\(aliveCount))",
-                action: #selector(contextKillAllProjectAgents(_:)),
-                keyEquivalent: ""
-            )
-            killAllItem.target = self
-            menu.addItem(killAllItem)
+        case .agent: buildAgentContextMenu(menu)
+        case .worktree(let worktree): buildWorktreeContextMenu(menu, worktree: worktree)
+        case .project(let project): buildProjectContextMenu(menu, project: project)
         }
+    }
+
+    private func buildAgentContextMenu(_ menu: NSMenu) {
+        menu.addItem(makeMenuItem(title: "Rename\u{2026}", action: #selector(contextRenameAgent(_:))))
+        menu.addItem(.separator())
+        menu.addItem(makeMenuItem(title: "Kill Agent", action: #selector(contextKillAgent(_:))))
+    }
+
+    private func buildWorktreeContextMenu(_ menu: NSMenu, worktree: WorktreeModel) {
+        let aliveCount = worktree.agents.filter { $0.status.isAlive }.count
+        if aliveCount > 0 {
+            menu.addItem(
+                makeMenuItem(
+                    title: "Kill All Agents (\(aliveCount))",
+                    action: #selector(contextKillWorktreeAgents(_:))
+                ))
+            menu.addItem(.separator())
+        }
+        menu.addItem(makeMenuItem(title: "Delete Worktree\u{2026}", action: #selector(contextDeleteWorktree(_:))))
+    }
+
+    private func buildProjectContextMenu(_ menu: NSMenu, project: ProjectState) {
+        let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
+        guard aliveCount > 0 else { return }
+        menu.addItem(
+            makeMenuItem(
+                title: "Kill All Agents (\(aliveCount))",
+                action: #selector(contextKillAllProjectAgents(_:))
+            ))
     }
 
     @objc private func contextKillAgent(_ sender: NSMenuItem) {
@@ -602,14 +557,11 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     @objc private func contextRenameAgent(_ sender: NSMenuItem) {
         guard let node = contextClickedNode, case .agent(let agent) = node.kind else { return }
-
         let clickedRow = outlineView.row(forItem: node)
-        guard clickedRow >= 0 else { return }
-
-        guard let cellView = outlineView.view(atColumn: 0, row: clickedRow, makeIfNecessary: false) else { return }
-
-        // Find the name label NSTextField within the cell's stack view
-        guard let textField = findNameTextField(in: cellView) else { return }
+        guard clickedRow >= 0,
+            let cellView = outlineView.view(atColumn: 0, row: clickedRow, makeIfNecessary: false),
+            let textField = findNameTextField(in: cellView)
+        else { return }
 
         editingAgentId = agent.id
         editingOriginalName = textField.stringValue
@@ -631,7 +583,7 @@ extension SidebarOutlineViewController: NSMenuDelegate {
                         tf.isKind(of: NSTextField.self),
                         !tf.stringValue.isEmpty,
                         tf.font?.pointSize == 11
-                    {  // Agent name font size
+                    {
                         return tf
                     }
                 }
@@ -672,15 +624,12 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 extension SidebarOutlineViewController: NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            // Escape: cancel editing, restore original name
             if let tf = editingTextField, let original = editingOriginalName {
                 tf.stringValue = original
                 tf.isEditable = false
                 tf.isSelectable = false
             }
-            editingTextField = nil
-            editingOriginalName = nil
-            editingAgentId = nil
+            cleanupEditingState()
             view.window?.makeFirstResponder(outlineView)
             return true
         }
@@ -694,20 +643,13 @@ extension SidebarOutlineViewController: NSTextFieldDelegate {
         tf.isEditable = false
         tf.isSelectable = false
 
-        if !newName.isEmpty, newName != editingOriginalName {
-            if let project = findProject(forAgentId: agentId) {
-                onRenameAgent?(project, agentId, newName)
-            }
-        } else {
-            // Restore original on empty or unchanged
-            if let original = editingOriginalName {
-                tf.stringValue = original
-            }
+        if !newName.isEmpty, newName != editingOriginalName, let project = findProject(forAgentId: agentId) {
+            onRenameAgent?(project, agentId, newName)
+        } else if let original = editingOriginalName {
+            tf.stringValue = original
         }
 
-        editingTextField = nil
-        editingOriginalName = nil
-        editingAgentId = nil
+        cleanupEditingState()
     }
 }
 
