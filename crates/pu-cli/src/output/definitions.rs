@@ -48,6 +48,7 @@ pub(crate) fn print_template_detail(
     print!("{body}");
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn print_agent_def_detail(
     name: &str,
     agent_type: &str,

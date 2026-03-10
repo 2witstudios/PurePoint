@@ -183,6 +183,7 @@ pub(crate) fn print_schedule_list(schedules: &[ScheduleInfo]) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn print_schedule_detail(
     name: &str,
     enabled: bool,
