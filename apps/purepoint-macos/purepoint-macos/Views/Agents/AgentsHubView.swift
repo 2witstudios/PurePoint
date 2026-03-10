@@ -1,5 +1,27 @@
 import SwiftUI
 
+// MARK: - Selectable Row Style
+
+private struct SelectableRowStyle: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+extension View {
+    fileprivate func selectableRow(isSelected: Bool) -> some View {
+        modifier(SelectableRowStyle(isSelected: isSelected))
+    }
+}
+
+// MARK: - AgentsHubView
+
 struct AgentsHubView: View {
     @Environment(AppState.self) private var appState
 
@@ -126,382 +148,398 @@ struct AgentsHubView: View {
     // MARK: - Prompts
 
     private var promptsContent: some View {
-        HStack(spacing: 0) {
-            promptListPanel
-                .frame(width: 300)
-
-            Divider()
-
+        masterDetail(
+            list: listPanel(
+                title: "Prompt library",
+                items: hubState.prompts,
+                selectedId: hubState.selectedPromptId,
+                onSelect: { hubState.selectedPromptId = $0 },
+                onCreate: { hubState.showingCreatePrompt = true },
+                emptyMessage: "No prompts yet"
+            ) { prompt, isSelected in
+                PromptListRow(prompt: prompt, isSelected: isSelected)
+            },
+            hasSelection: hubState.selectedPrompt != nil,
+            emptyMessage: "Select a prompt or create one to get started."
+        ) {
             if let prompt = hubState.selectedPrompt {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        CommandHintBar(
-                            icon: "text.alignleft",
-                            text:
-                                "Prompts can be stored globally or inside a project, then assigned to agents and swarms."
-                        )
+                promptDetailView(prompt)
+            }
+        }
+    }
 
-                        MockSurfaceCard(
-                            title: "Prompt editor",
-                            subtitle: "Edit reusable prompt template."
-                        ) {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Picker("Scope", selection: $promptScope) {
-                                        ForEach(PromptScopeChoice.allCases) { scope in
-                                            Text(scope.title)
-                                                .tag(scope)
-                                        }
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .frame(maxWidth: 220)
+    private func promptDetailView(_ prompt: SavedPrompt) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                CommandHintBar(
+                    icon: "text.alignleft",
+                    text:
+                        "Prompts can be stored globally or inside a project, then assigned to agents and swarms."
+                )
 
-                                    Spacer()
-
-                                    Picker("Agent", selection: $promptAgent) {
-                                        ForEach(AgentTypes.withAny, id: \.self) { t in
-                                            Text(t.isEmpty ? "Any" : t).tag(t)
-                                        }
-                                    }
-                                    .frame(maxWidth: 140)
-
-                                    if promptAgent == "terminal" {
-                                        TextField("Command (e.g. npm run dev)", text: $promptCommand)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(maxWidth: 200)
-                                    }
-
-                                    HStack(spacing: 8) {
-                                        Button("Save") {
-                                            Task {
-                                                let trimmed =
-                                                    promptCommand
-                                                    .trimmingCharacters(
-                                                        in: .whitespaces)
-                                                let cmd =
-                                                    promptAgent == "terminal"
-                                                        && !trimmed.isEmpty
-                                                    ? trimmed : nil
-                                                await hubState.saveTemplate(
-                                                    projectRoot: projectRoot,
-                                                    name: prompt.name,
-                                                    description: prompt.description,
-                                                    agent: promptAgent,
-                                                    body: promptDraft,
-                                                    scope: promptScope.wireValue,
-                                                    command: cmd
-                                                )
-                                            }
-                                        }
-                                        Button("Delete") {
-                                            Task {
-                                                await hubState.deleteTemplate(
-                                                    projectRoot: projectRoot,
-                                                    name: prompt.name,
-                                                    scope: prompt.source
-                                                )
-                                            }
-                                        }
-                                        .foregroundStyle(.red)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
+                MockSurfaceCard(
+                    title: "Prompt editor",
+                    subtitle: "Edit reusable prompt template."
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Picker("Scope", selection: $promptScope) {
+                                ForEach(PromptScopeChoice.allCases) { scope in
+                                    Text(scope.title)
+                                        .tag(scope)
                                 }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 220)
 
-                                TextEditor(text: $promptDraft)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .frame(minHeight: 330)
-                                    .padding(8)
-                                    .background(Color.primary.opacity(0.035))
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            Spacer()
 
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Detected variables")
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(.secondary)
+                            Picker("Agent", selection: $promptAgent) {
+                                ForEach(AgentTypes.withAny, id: \.self) { t in
+                                    Text(t.isEmpty ? "Any" : t).tag(t)
+                                }
+                            }
+                            .frame(maxWidth: 140)
 
-                                        HStack(spacing: 8) {
-                                            ForEach(prompt.variables, id: \.self) { variable in
-                                                MockBadge(text: variable, tint: .orange)
-                                            }
-                                        }
+                            if promptAgent == "terminal" {
+                                TextField("Command (e.g. npm run dev)", text: $promptCommand)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 200)
+                            }
+
+                            HStack(spacing: 8) {
+                                Button("Save") {
+                                    Task {
+                                        let trimmed =
+                                            promptCommand
+                                            .trimmingCharacters(
+                                                in: .whitespaces)
+                                        let cmd =
+                                            promptAgent == "terminal"
+                                                && !trimmed.isEmpty
+                                            ? trimmed : nil
+                                        await hubState.saveTemplate(
+                                            projectRoot: projectRoot,
+                                            name: prompt.name,
+                                            description: prompt.description,
+                                            agent: promptAgent,
+                                            body: promptDraft,
+                                            scope: promptScope.wireValue,
+                                            command: cmd
+                                        )
                                     }
+                                }
+                                Button("Delete") {
+                                    Task {
+                                        await hubState.deleteTemplate(
+                                            projectRoot: projectRoot,
+                                            name: prompt.name,
+                                            scope: prompt.source
+                                        )
+                                    }
+                                }
+                                .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
 
-                                    Spacer()
+                        TextEditor(text: $promptDraft)
+                            .font(.system(size: 13, design: .monospaced))
+                            .frame(minHeight: 330)
+                            .padding(8)
+                            .background(Color.primary.opacity(0.035))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                                    VStack(alignment: .trailing, spacing: 6) {
-                                        Text("Source: \(prompt.source)")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.secondary)
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionLabel("Detected variables")
+
+                                HStack(spacing: 8) {
+                                    ForEach(prompt.variables, id: \.self) { variable in
+                                        MockBadge(text: variable, tint: .orange)
                                     }
                                 }
                             }
-                        }
 
-                        MockSurfaceCard(
-                            title: "Prompt usage",
-                            subtitle: "Selected prompt details."
-                        ) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                usageRow(
-                                    title: "Agent",
-                                    value: prompt.agent.isEmpty ? "Any" : prompt.agent,
-                                    icon: "cpu"
-                                )
-                                usageRow(
-                                    title: "Description",
-                                    value: prompt.description.isEmpty ? "None" : prompt.description,
-                                    icon: "text.alignleft"
-                                )
-                                usageRow(
-                                    title: "Source",
-                                    value: prompt.source,
-                                    icon: "globe"
-                                )
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 6) {
+                                Text("Source: \(prompt.source)")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
-                    .padding(20)
                 }
-            } else {
-                emptyDetailState("Select a prompt or create one to get started.")
+
+                MockSurfaceCard(
+                    title: "Prompt usage",
+                    subtitle: "Selected prompt details."
+                ) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        usageRow(
+                            title: "Agent",
+                            value: prompt.agent.isEmpty ? "Any" : prompt.agent,
+                            icon: "cpu"
+                        )
+                        usageRow(
+                            title: "Description",
+                            value: prompt.description.isEmpty ? "None" : prompt.description,
+                            icon: "text.alignleft"
+                        )
+                        usageRow(
+                            title: "Source",
+                            value: prompt.source,
+                            icon: "globe"
+                        )
+                    }
+                }
             }
+            .padding(20)
         }
     }
 
     // MARK: - Agents
 
     private var agentsContent: some View {
-        HStack(spacing: 0) {
-            agentListPanel
-                .frame(width: 300)
-
-            Divider()
-
+        masterDetail(
+            list: listPanel(
+                title: "Custom agents",
+                items: hubState.agents,
+                selectedId: hubState.selectedAgentId,
+                onSelect: { hubState.selectedAgentId = $0 },
+                onCreate: { hubState.showingCreateAgent = true },
+                emptyMessage: "No agents yet"
+            ) { agent, isSelected in
+                AgentListRow(agent: agent, isSelected: isSelected)
+            },
+            hasSelection: hubState.selectedAgent != nil,
+            emptyMessage: "Select an agent or create one to get started."
+        ) {
             if let agent = hubState.selectedAgent {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        CommandHintBar(
-                            icon: "command",
-                            text: "cmd+n -> @agentname -> spawn agent session"
-                        )
+                agentDetailView(agent)
+            }
+        }
+    }
 
-                        MockSurfaceCard(
-                            title: agent.name,
-                            subtitle: "\(agent.agentType) agent. Scope: \(agent.scope)."
-                        ) {
-                            VStack(alignment: .leading, spacing: 14) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: agent.icon ?? "cpu")
-                                        .foregroundStyle(.secondary)
-                                    ForEach(agent.tags, id: \.self) { tag in
-                                        MockBadge(text: tag, tint: .purple)
-                                    }
-                                    MockBadge(text: agent.scope, tint: .green)
-                                    Spacer()
-                                    Text(agent.availableInCommandDialog ? "In command dialog" : "Not in command dialog")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.secondary)
-                                }
+    private func agentDetailView(_ agent: AgentDefinition) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                CommandHintBar(
+                    icon: "command",
+                    text: "cmd+n -> @agentname -> spawn agent session"
+                )
 
-                                if let template = agent.template, !template.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Prompt template")
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(.secondary)
+                MockSurfaceCard(
+                    title: agent.name,
+                    subtitle: "\(agent.agentType) agent. Scope: \(agent.scope)."
+                ) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 8) {
+                            Image(systemName: agent.icon ?? "cpu")
+                                .foregroundStyle(.secondary)
+                            ForEach(agent.tags, id: \.self) { tag in
+                                MockBadge(text: tag, tint: .purple)
+                            }
+                            MockBadge(text: agent.scope, tint: .green)
+                            Spacer()
+                            Text(agent.availableInCommandDialog ? "In command dialog" : "Not in command dialog")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
 
-                                        Text(template)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(12)
-                                            .background(Color.primary.opacity(0.035))
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    }
-                                }
+                        codeSection(label: "Prompt template", content: agent.template)
+                        codeSection(label: "Inline prompt", content: agent.inlinePrompt)
+                        codeSection(label: "Command", content: agent.command)
 
-                                if let inline = agent.inlinePrompt, !inline.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Inline prompt")
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(.secondary)
-
-                                        Text(inline)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(12)
-                                            .background(Color.primary.opacity(0.035))
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    }
-                                }
-
-                                if let cmd = agent.command, !cmd.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Command")
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(.secondary)
-
-                                        Text(cmd)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(12)
-                                            .background(Color.primary.opacity(0.035))
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                                    }
-                                }
-
-                                HStack {
-                                    Spacer()
-                                    Button("Delete") {
-                                        Task {
-                                            await hubState.deleteAgentDef(
-                                                projectRoot: projectRoot,
-                                                name: agent.name,
-                                                scope: agent.scope
-                                            )
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .foregroundStyle(.red)
-                                    .controlSize(.small)
+                        HStack {
+                            Spacer()
+                            Button("Delete") {
+                                Task {
+                                    await hubState.deleteAgentDef(
+                                        projectRoot: projectRoot,
+                                        name: agent.name,
+                                        scope: agent.scope
+                                    )
                                 }
                             }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(.red)
+                            .controlSize(.small)
                         }
                     }
-                    .padding(20)
                 }
-            } else {
-                emptyDetailState("Select an agent or create one to get started.")
             }
+            .padding(20)
         }
     }
 
     // MARK: - Swarms
 
     private var swarmsContent: some View {
-        HStack(spacing: 0) {
-            swarmListPanel
-                .frame(width: 300)
-
-            Divider()
-
+        masterDetail(
+            list: listPanel(
+                title: "Swarms",
+                items: hubState.swarms,
+                selectedId: hubState.selectedSwarmId,
+                onSelect: { hubState.selectedSwarmId = $0 },
+                onCreate: { hubState.showingCreateSwarm = true },
+                emptyMessage: "No swarms yet"
+            ) { swarm, isSelected in
+                SwarmListRow(swarm: swarm, isSelected: isSelected)
+            },
+            hasSelection: hubState.selectedSwarm != nil,
+            emptyMessage: "Select a swarm or create one to get started."
+        ) {
             if let swarm = hubState.selectedSwarm {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        CommandHintBar(
-                            icon: "command",
-                            text: "cmd+n -> @swarmname -> execute composition"
-                        )
+                swarmDetailView(swarm)
+            }
+        }
+    }
 
-                        MockSurfaceCard(
-                            title: swarm.name,
-                            subtitle: "\(swarm.worktreeCount) worktrees \u{00B7} \(swarm.totalAgents) agents total"
-                        ) {
-                            VStack(alignment: .leading, spacing: 14) {
-                                HStack(spacing: 10) {
-                                    MockBadge(text: swarm.worktreeTemplate, tint: .blue)
-                                    MockBadge(
-                                        text: swarm.includeTerminal ? "Terminal attached" : "No terminal",
-                                        tint: swarm.includeTerminal ? .green : .gray
-                                    )
-                                    Spacer()
-                                }
+    private func swarmDetailView(_ swarm: SwarmDefinition) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                CommandHintBar(
+                    icon: "command",
+                    text: "cmd+n -> @swarmname -> execute composition"
+                )
 
-                                if !swarm.roster.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Text("Roster")
+                MockSurfaceCard(
+                    title: swarm.name,
+                    subtitle: "\(swarm.worktreeCount) worktrees \u{00B7} \(swarm.totalAgents) agents total"
+                ) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 10) {
+                            MockBadge(text: swarm.worktreeTemplate, tint: .blue)
+                            MockBadge(
+                                text: swarm.includeTerminal ? "Terminal attached" : "No terminal",
+                                tint: swarm.includeTerminal ? .green : .gray
+                            )
+                            Spacer()
+                        }
+
+                        if !swarm.roster.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionLabel("Roster")
+
+                                ForEach(swarm.roster) { item in
+                                    HStack(spacing: 10) {
+                                        Text(item.agentDef)
+                                            .font(.system(size: 13, weight: .medium))
+                                        Text(item.role)
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Text("x\(item.quantity)")
                                             .font(.system(size: 12, weight: .medium))
                                             .foregroundStyle(.secondary)
-
-                                        ForEach(swarm.roster) { item in
-                                            HStack(spacing: 10) {
-                                                Text(item.agentDef)
-                                                    .font(.system(size: 13, weight: .medium))
-                                                Text(item.role)
-                                                    .font(.system(size: 12))
-                                                    .foregroundStyle(.secondary)
-                                                Spacer()
-                                                Text("x\(item.quantity)")
-                                                    .font(.system(size: 12, weight: .medium))
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            .padding(10)
-                                            .background(Color.primary.opacity(0.035))
-                                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                                        }
                                     }
-                                }
-
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Composition summary")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(.secondary)
-
-                                    SwarmDiagramView(swarm: swarm)
-                                }
-
-                                HStack {
-                                    Spacer()
-                                    Button("Run") {
-                                        Task {
-                                            await hubState.runSwarm(
-                                                projectRoot: projectRoot,
-                                                name: swarm.name
-                                            )
-                                        }
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.small)
-
-                                    Button("Delete") {
-                                        Task {
-                                            await hubState.deleteSwarmDef(
-                                                projectRoot: projectRoot,
-                                                name: swarm.name,
-                                                scope: swarm.scope
-                                            )
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .foregroundStyle(.red)
-                                    .controlSize(.small)
+                                    .padding(10)
+                                    .background(Color.primary.opacity(0.035))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
                                 }
                             }
                         }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            sectionLabel("Composition summary")
+
+                            SwarmDiagramView(swarm: swarm)
+                        }
+
+                        HStack {
+                            Spacer()
+                            Button("Run") {
+                                Task {
+                                    await hubState.runSwarm(
+                                        projectRoot: projectRoot,
+                                        name: swarm.name
+                                    )
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+
+                            Button("Delete") {
+                                Task {
+                                    await hubState.deleteSwarmDef(
+                                        projectRoot: projectRoot,
+                                        name: swarm.name,
+                                        scope: swarm.scope
+                                    )
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(.red)
+                            .controlSize(.small)
+                        }
                     }
-                    .padding(20)
                 }
-            } else {
-                emptyDetailState("Select a swarm or create one to get started.")
             }
+            .padding(20)
         }
     }
 
     // MARK: - Triggers
 
     private var triggersContent: some View {
-        HStack(spacing: 0) {
-            triggerListPanel
-                .frame(width: 300)
-
-            Divider()
-
+        masterDetail(
+            list: listPanel(
+                title: "Triggers",
+                items: triggersState.triggers,
+                selectedId: triggersState.selectedTriggerId,
+                onSelect: { triggersState.selectedTriggerId = $0 },
+                onCreate: { triggersState.showingCreationSheet = true },
+                emptyMessage: "No triggers yet"
+            ) { trigger, isSelected in
+                TriggerListRow(trigger: trigger, isSelected: isSelected)
+            },
+            hasSelection: triggersState.selectedTrigger != nil,
+            emptyMessage: "Select a trigger or create one to get started."
+        ) {
             if let trigger = triggersState.selectedTrigger {
                 TriggerDetailView(trigger: trigger, state: triggersState, projectRoot: projectRoot)
-            } else {
-                emptyDetailState("Select a trigger or create one to get started.")
             }
         }
     }
 
-    private var triggerListPanel: some View {
+    // MARK: - Reusable Layout Helpers
+
+    private func masterDetail<List: View, Detail: View>(
+        list: List,
+        hasSelection: Bool,
+        emptyMessage: String,
+        @ViewBuilder detail: () -> Detail
+    ) -> some View {
+        HStack(spacing: 0) {
+            list.frame(width: 300)
+            Divider()
+            if hasSelection {
+                detail()
+            } else {
+                emptyDetailState(emptyMessage)
+            }
+        }
+    }
+
+    private func listPanel<Item: Identifiable, RowContent: View>(
+        title: String,
+        items: [Item],
+        selectedId: Item.ID?,
+        onSelect: @escaping (Item.ID) -> Void,
+        onCreate: @escaping () -> Void,
+        emptyMessage: String,
+        @ViewBuilder row: @escaping (Item, Bool) -> RowContent
+    ) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Triggers")
+                Text(title)
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Button {
-                    triggersState.showingCreationSheet = true
+                    onCreate()
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -512,21 +550,16 @@ struct AgentsHubView: View {
 
             Divider()
 
-            if triggersState.triggers.isEmpty {
-                emptyListState("No triggers yet") {
-                    triggersState.showingCreationSheet = true
-                }
+            if items.isEmpty {
+                emptyListState(emptyMessage, onCreate: onCreate)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(triggersState.triggers) { trigger in
+                        ForEach(items) { item in
                             Button {
-                                triggersState.selectedTriggerId = trigger.id
+                                onSelect(item.id)
                             } label: {
-                                TriggerListRow(
-                                    trigger: trigger,
-                                    isSelected: triggersState.selectedTriggerId == trigger.id
-                                )
+                                row(item, selectedId == item.id)
                             }
                             .buttonStyle(.plain)
                         }
@@ -537,126 +570,26 @@ struct AgentsHubView: View {
         }
     }
 
-    // MARK: - List Panels
+    @ViewBuilder
+    private func codeSection(label: String, content: String?) -> some View {
+        if let content, !content.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel(label)
 
-    private var promptListPanel: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Prompt library")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Button {
-                    hubState.showingCreatePrompt = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            if hubState.prompts.isEmpty {
-                emptyListState("No prompts yet") {
-                    hubState.showingCreatePrompt = true
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(hubState.prompts) { prompt in
-                            Button {
-                                hubState.selectedPromptId = prompt.id
-                            } label: {
-                                PromptListRow(prompt: prompt, isSelected: hubState.selectedPromptId == prompt.id)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                Text(content)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                }
+                    .background(Color.primary.opacity(0.035))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
             }
         }
     }
 
-    private var agentListPanel: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Custom agents")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Button {
-                    hubState.showingCreateAgent = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            if hubState.agents.isEmpty {
-                emptyListState("No agents yet") {
-                    hubState.showingCreateAgent = true
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(hubState.agents) { agent in
-                            Button {
-                                hubState.selectedAgentId = agent.id
-                            } label: {
-                                AgentListRow(agent: agent, isSelected: hubState.selectedAgentId == agent.id)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(12)
-                }
-            }
-        }
-    }
-
-    private var swarmListPanel: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Swarms")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Button {
-                    hubState.showingCreateSwarm = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            if hubState.swarms.isEmpty {
-                emptyListState("No swarms yet") {
-                    hubState.showingCreateSwarm = true
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(hubState.swarms) { swarm in
-                            Button {
-                                hubState.selectedSwarmId = swarm.id
-                            } label: {
-                                SwarmListRow(swarm: swarm, isSelected: hubState.selectedSwarmId == swarm.id)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(12)
-                }
-            }
-        }
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
     }
 
     // MARK: - Helpers
@@ -778,10 +711,7 @@ private struct PromptListRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .selectableRow(isSelected: isSelected)
     }
 }
 
@@ -804,10 +734,7 @@ private struct AgentListRow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .selectableRow(isSelected: isSelected)
     }
 }
 
@@ -828,10 +755,7 @@ private struct SwarmListRow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .selectableRow(isSelected: isSelected)
     }
 }
 
@@ -855,17 +779,14 @@ private struct TriggerListRow: View {
                 Text(trigger.event.label)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                Text("·")
+                Text("\u{00B7}")
                     .foregroundStyle(.tertiary)
                 Text("\(trigger.sequence.count) step\(trigger.sequence.count == 1 ? "" : "s")")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .selectableRow(isSelected: isSelected)
     }
 }
 
