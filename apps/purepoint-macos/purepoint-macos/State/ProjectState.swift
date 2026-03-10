@@ -20,6 +20,7 @@ final class ProjectState: Identifiable {
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private var manifestWatcher: ManifestWatcher?
     @ObservationIgnored private var gridSubscription: DaemonGridSubscription?
+    @ObservationIgnored private var statusSubscription: DaemonStatusSubscription?
     @ObservationIgnored private var statusSubscriptionTask: Task<Void, Never>?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var openTask: Task<Void, Never>?
@@ -87,7 +88,12 @@ final class ProjectState: Identifiable {
         refreshTask?.cancel()
         gridSubscriptionTask?.cancel()
         statusSubscriptionTask?.cancel()
-        Task { await gridSubscription?.stop() }
+        let currentGrid = gridSubscription
+        let currentStatus = statusSubscription
+        gridSubscription = nil
+        statusSubscription = nil
+        Task { await currentGrid?.stop() }
+        Task { await currentStatus?.stop() }
         manifestWatcher?.stop()
         manifestWatcher = nil
     }
@@ -142,59 +148,21 @@ final class ProjectState: Identifiable {
         command: String? = nil
     ) {
         let root = projectRoot
+        let target = SpawnTargetResolver.resolve(
+            isWorktree: isWorktree,
+            selection: selection,
+            worktreeIdForAgent: { self.worktreeId(forAgentId: $0) }
+        )
 
-        let spawnRoot: Bool
-        let spawnWorktree: String?
-
-        if isWorktree {
-            spawnRoot = false
-            spawnWorktree = nil
-        } else {
-            switch selection {
-            case .worktree(let id):
-                spawnRoot = false
-                spawnWorktree = id
-            case .agent(let id):
-                if let wtId = worktreeId(forAgentId: id) {
-                    spawnRoot = false
-                    spawnWorktree = wtId
-                } else {
-                    spawnRoot = true
-                    spawnWorktree = nil
-                }
-            case .terminal(let id):
-                if let wtId = worktreeId(forAgentId: id) {
-                    spawnRoot = false
-                    spawnWorktree = wtId
-                } else {
-                    spawnRoot = true
-                    spawnWorktree = nil
-                }
-            case nil, .nav, .project:
-                spawnRoot = true
-                spawnWorktree = nil
-            }
-        }
-
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(
-                    .spawn(
-                        projectRoot: root, prompt: prompt, agent: agent,
-                        name: name, root: spawnRoot, worktree: spawnWorktree,
-                        command: command
-                    ))
-                switch response {
-                case .spawnResult(_, let agentId, _):
-                    self.appState?.pendingSelectAgentId = agentId
-                case .error(_, let message):
-                    self.appState?.daemonError = message
-                default:
-                    break
-                }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
+        sendDaemonRequest(
+            .spawn(
+                projectRoot: root, prompt: prompt, agent: agent,
+                name: name, root: target.root, worktree: target.worktree,
+                command: command
+            )
+        ) { response in
+            if case .spawnResult(_, let agentId, _) = response {
+                self.appState?.pendingSelectAgentId = agentId
             }
         }
     }
@@ -212,46 +180,23 @@ final class ProjectState: Identifiable {
 
         gridState.pendingSpawnLeafIds.insert(leafId)
 
-        Task {
-            defer { gridState.pendingSpawnLeafIds.remove(leafId) }
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(
-                    .spawn(
-                        projectRoot: root, prompt: prompt, agent: agent,
-                        root: spawnWorktree == nil, worktree: spawnWorktree
-                    ))
-                switch response {
-                case .spawnResult(_, let agentId, _):
-                    gridState.setAgent(agentId, forLeafId: leafId)
-                case .error(_, let message):
-                    self.appState?.daemonError = message
-                default:
-                    break
-                }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
+        sendDaemonRequest(
+            .spawn(
+                projectRoot: root, prompt: prompt, agent: agent,
+                root: spawnWorktree == nil, worktree: spawnWorktree
+            ),
+            onComplete: { gridState.pendingSpawnLeafIds.remove(leafId) }
+        ) { response in
+            if case .spawnResult(_, let agentId, _) = response {
+                gridState.setAgent(agentId, forLeafId: leafId)
             }
         }
     }
 
     func createWorktree(name: String?) {
-        let root = projectRoot
-
-        Task {
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.createWorktree(projectRoot: root, name: name))
-                switch response {
-                case .createWorktreeResult(let worktreeId):
-                    self.appState?.pendingSelectWorktreeId = worktreeId
-                case .error(_, let message):
-                    self.appState?.daemonError = message
-                default:
-                    break
-                }
-            } catch {
-                self.appState?.daemonError = error.localizedDescription
+        sendDaemonRequest(.createWorktree(projectRoot: projectRoot, name: name)) { response in
+            if case .createWorktreeResult(let worktreeId) = response {
+                self.appState?.pendingSelectWorktreeId = worktreeId
             }
         }
     }
@@ -355,6 +300,28 @@ final class ProjectState: Identifiable {
         }
     }
 
+    /// Daemon request with response routing and standard error handling.
+    private func sendDaemonRequest(
+        _ request: DaemonRequest,
+        onComplete: (() -> Void)? = nil,
+        onSuccess: @escaping (DaemonResponse) -> Void
+    ) {
+        Task {
+            defer { onComplete?() }
+            do {
+                let client = DaemonClient()
+                let response = try await client.send(request)
+                if case .error(_, let message) = response {
+                    self.appState?.daemonError = message
+                } else {
+                    onSuccess(response)
+                }
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+            }
+        }
+    }
+
     /// Eagerly assign newly-appeared agents to pending grid leaves before merging,
     /// so they appear in childAgentIds immediately (sidebar leak prevention).
     private func assignPendingSpawnsToGrid(_ incomingRootAgents: [AgentModel], incomingWorktrees: [WorktreeModel] = [])
@@ -374,51 +341,15 @@ final class ProjectState: Identifiable {
 
     private func startStatusSubscription() {
         statusSubscriptionTask?.cancel()
-        let root = projectRoot
-
+        let previousStatus = statusSubscription
+        Task { await previousStatus?.stop() }
+        let sub = DaemonStatusSubscription(projectRoot: projectRoot)
+        statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    let client = DaemonClient()
-                    let (connection, reader) = try await client.connect()
-                    defer { connection.cancel() }
-
-                    try await DaemonClient.write(.subscribeStatus(projectRoot: root), to: connection)
-                    let firstLine = try await reader.readLine()
-                    let firstResp = DaemonClient.parse(firstLine)
-                    guard case .statusSubscribed = firstResp else { break }
-
-                    // Read streaming status events
-                    while !Task.isCancelled {
-                        let line = try await reader.readLine()
-                        let resp = DaemonClient.parse(line)
-                        if case .statusEvent(let worktrees, let agents) = resp {
-                            guard let self else { return }
-                            let worktreeModels = DaemonWorkspaceService.parseWorktrees(worktrees)
-                            let agentModels = agents.map { report in
-                                AgentModel(
-                                    id: report.id,
-                                    name: report.name,
-                                    agentType: report.agentType,
-                                    status: AgentStatus(rawValue: report.status) ?? .lost,
-                                    prompt: report.prompt ?? "",
-                                    startedAt: report.startedAt ?? "",
-                                    sessionId: report.sessionId,
-                                    suspended: report.suspended
-                                )
-                            }
-
-                            self.assignPendingSpawnsToGrid(agentModels, incomingWorktrees: worktreeModels)
-                            self.mergeWorktrees(worktreeModels)
-                            self.mergeRootAgents(agentModels)
-                        }
-                    }
-                } catch is CancellationError {
-                    return
-                } catch {
-                    // Reconnect after 1s on failure
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                }
+            await sub.start { worktrees, agents in
+                self?.assignPendingSpawnsToGrid(agents, incomingWorktrees: worktrees)
+                self?.mergeWorktrees(worktrees)
+                self?.mergeRootAgents(agents)
             }
         }
     }
