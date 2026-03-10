@@ -77,9 +77,7 @@ nonisolated enum ClaudeConversationIndex {
             }
 
             snippets.append(snippet)
-            if snippets.count == limit {
-                break
-            }
+            if snippets.count == limit { break }
         }
 
         return snippets.reversed()
@@ -149,6 +147,14 @@ nonisolated enum ClaudeConversationIndex {
         var gitBranch: String?
         var firstPrompt: String?
         var createdAt: Date?
+
+        var isComplete: Bool {
+            projectPath != nil && sessionId != nil && firstPrompt != nil && createdAt != nil
+        }
+
+        var needsTailScan: Bool {
+            projectPath == nil || gitBranch == nil || sessionId == nil
+        }
     }
 
     static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
@@ -199,24 +205,20 @@ nonisolated enum ClaudeConversationIndex {
             let transcriptURL = URL(fileURLWithPath: entry.fullPath)
             guard FileManager.default.fileExists(atPath: transcriptURL.path) else { return nil }
 
-            let modifiedAt =
-                parseTimestamp(entry.modified)
-                ?? dateFromUnixMilliseconds(entry.fileMtime)
-                ?? resourceDate(for: transcriptURL, key: .contentModificationDateKey)
-                ?? Date.distantPast
-
             let projectPath = entry.projectPath?.trimmedNonEmpty ?? directory.path
-            let title = sessionTitle(
-                summary: entry.summary,
-                firstPrompt: entry.firstPrompt,
-                gitBranch: entry.gitBranch,
-                fallback: URL(fileURLWithPath: projectPath).lastPathComponent
+            let modifiedAt = resolveModifiedDate(
+                timestamp: entry.modified, fileMtime: entry.fileMtime, fileURL: transcriptURL
             )
 
             return Conversation(
                 sessionId: entry.sessionId,
                 agentSource: .claude,
-                title: title,
+                title: sessionTitle(
+                    summary: entry.summary,
+                    firstPrompt: entry.firstPrompt,
+                    gitBranch: entry.gitBranch,
+                    fallback: URL(fileURLWithPath: projectPath).lastPathComponent
+                ),
                 previewSnippets: [],
                 projectPath: projectPath,
                 purePointProjectRoot: locatePurePointProjectRoot(
@@ -241,21 +243,15 @@ nonisolated enum ClaudeConversationIndex {
         let sessionId = metadata.sessionId?.trimmedNonEmpty ?? transcriptURL.deletingPathExtension().lastPathComponent
         let projectPath = metadata.projectPath?.trimmedNonEmpty ?? transcriptURL.deletingLastPathComponent().path
 
-        let modifiedAt =
-            resourceDate(for: transcriptURL, key: .contentModificationDateKey)
-            ?? Date.distantPast
-
-        let title = sessionTitle(
-            summary: nil,
-            firstPrompt: metadata.firstPrompt,
-            gitBranch: metadata.gitBranch,
-            fallback: URL(fileURLWithPath: projectPath).lastPathComponent
-        )
-
         return Conversation(
             sessionId: sessionId,
             agentSource: .claude,
-            title: title,
+            title: sessionTitle(
+                summary: nil,
+                firstPrompt: metadata.firstPrompt,
+                gitBranch: metadata.gitBranch,
+                fallback: URL(fileURLWithPath: projectPath).lastPathComponent
+            ),
             previewSnippets: [],
             projectPath: projectPath,
             purePointProjectRoot: locatePurePointProjectRoot(
@@ -264,7 +260,7 @@ nonisolated enum ClaudeConversationIndex {
             gitBranch: metadata.gitBranch?.trimmedNonEmpty,
             transcriptPath: transcriptURL.path,
             createdAt: metadata.createdAt,
-            modifiedAt: modifiedAt,
+            modifiedAt: resourceDate(for: transcriptURL, key: .contentModificationDateKey) ?? .distantPast,
             messageCount: nil
         )
     }
@@ -291,27 +287,22 @@ nonisolated enum ClaudeConversationIndex {
         let head = (try? readPrefix(from: transcriptURL, byteCount: 24 * 1024)) ?? ""
         var metadata = TranscriptMetadata()
 
-        for line in head.split(separator: "\n") {
-            guard let record = parseJSONLine(String(line)) else { continue }
-            updateMetadata(&metadata, with: record)
-            if metadata.projectPath != nil,
-                metadata.sessionId != nil,
-                metadata.firstPrompt != nil,
-                metadata.createdAt != nil
-            {
-                break
-            }
-        }
+        scanLines(head, into: &metadata, untilComplete: true)
 
-        if metadata.projectPath == nil || metadata.gitBranch == nil || metadata.sessionId == nil {
+        if metadata.needsTailScan {
             let tail = (try? readSuffix(from: transcriptURL, byteCount: 32 * 1024)) ?? ""
-            for line in tail.split(separator: "\n") {
-                guard let record = parseJSONLine(String(line)) else { continue }
-                updateMetadata(&metadata, with: record)
-            }
+            scanLines(tail, into: &metadata, untilComplete: false)
         }
 
         return metadata
+    }
+
+    private static func scanLines(_ text: String, into metadata: inout TranscriptMetadata, untilComplete: Bool) {
+        for line in text.split(separator: "\n") {
+            guard let record = parseJSONLine(String(line)) else { continue }
+            updateMetadata(&metadata, with: record)
+            if untilComplete && metadata.isComplete { break }
+        }
     }
 
     private static func updateMetadata(_ metadata: inout TranscriptMetadata, with record: [String: Any]) {
@@ -355,35 +346,27 @@ nonisolated enum ClaudeConversationIndex {
         if let text = content as? String {
             return compact(text, maxLength: maxLength)
         }
-
         if let parts = content as? [Any] {
-            let extracted = parts.compactMap { part -> String? in
-                guard let part = part as? [String: Any],
-                    let type = part["type"] as? String
-                else {
-                    return nil
-                }
-
-                switch type {
-                case "text":
-                    return part["text"] as? String
-                case "tool_result":
-                    if let text = part["content"] as? String {
-                        return text
-                    }
-                    return nil
-                default:
-                    return nil
-                }
-            }
-            return compact(extracted.joined(separator: " "), maxLength: maxLength)
+            return compact(textFromContentParts(parts), maxLength: maxLength)
         }
-
         if let part = content as? [String: Any] {
             return compact(part["text"] as? String, maxLength: maxLength)
         }
-
         return nil
+    }
+
+    private static func textFromContentParts(_ parts: [Any]) -> String {
+        parts.compactMap { part -> String? in
+            guard let dict = part as? [String: Any],
+                let type = dict["type"] as? String
+            else { return nil }
+
+            switch type {
+            case "text": return dict["text"] as? String
+            case "tool_result": return dict["content"] as? String
+            default: return nil
+            }
+        }.joined(separator: " ")
     }
 
     private static func compact(_ text: String?, maxLength: Int) -> String? {
@@ -409,68 +392,69 @@ nonisolated enum ClaudeConversationIndex {
         gitBranch: String?,
         fallback: String
     ) -> String {
-        // Use summary if available and not a known-bad pattern
-        if let summary = summary?.trimmedNonEmpty,
-            summary.lowercased() != "no prompt",
-            !summary.lowercased().contains("invalid api key"),
-            !summary.lowercased().hasPrefix("error:")
-        {
-            return summary
-        }
+        titleFromSummary(summary)
+            ?? titleFromPrompt(firstPrompt)
+            ?? titleFromBranch(gitBranch)
+            ?? fallback
+    }
 
-        // Try first prompt with cleanup
-        if let prompt = firstPrompt?.trimmedNonEmpty {
-            let strippedPrompt = prompt.replacingOccurrences(
-                of: #"(?i)^implement the following plan:\s*"#,
-                with: "",
-                options: .regularExpression
+    private static func titleFromSummary(_ summary: String?) -> String? {
+        guard let summary = summary?.trimmedNonEmpty else { return nil }
+        let lower = summary.lowercased()
+        guard lower != "no prompt",
+            !lower.contains("invalid api key"),
+            !lower.hasPrefix("error:")
+        else { return nil }
+        return summary
+    }
+
+    private static func titleFromPrompt(_ prompt: String?) -> String? {
+        guard let prompt = prompt?.trimmedNonEmpty else { return nil }
+
+        let cleaned =
+            prompt
+            .replacingOccurrences(
+                of: #"(?i)^implement the following plan:\s*"#, with: "", options: .regularExpression
             )
-
-            // Strip low-information filler prefixes
-            let cleanedPrompt = strippedPrompt.replacingOccurrences(
+            .replacingOccurrences(
                 of: #"(?i)^(can you |could you |please |help me |i need to |i want to )"#,
-                with: "",
-                options: .regularExpression
+                with: "", options: .regularExpression
             )
 
-            let lines =
-                cleanedPrompt
-                .split(whereSeparator: \.isNewline)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+        let firstLine =
+            cleaned
+            .split(whereSeparator: \.isNewline)
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map(String.init) ?? cleaned
 
-            let candidateLine = lines.first ?? cleanedPrompt
-            let cleanedLine = candidateLine.replacingOccurrences(
-                of: #"^#+\s*"#,
-                with: "",
-                options: .regularExpression
+        let stripped = firstLine.replacingOccurrences(
+            of: #"^#+\s*"#, with: "", options: .regularExpression
+        )
+        return compact(stripped, maxLength: 72)
+    }
+
+    private static func titleFromBranch(_ branch: String?) -> String? {
+        guard let branch = branch?.trimmedNonEmpty else { return nil }
+        let words =
+            branch
+            .replacingOccurrences(
+                of: #"^(pu|feature|fix|bugfix|hotfix)/"#, with: "", options: .regularExpression
             )
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
+            .joined(separator: " ")
+        return words.isEmpty ? nil : words
+    }
 
-            if let title = compact(cleanedLine, maxLength: 72) {
-                return title
-            }
-        }
+    // MARK: - Date Resolution
 
-        // Use git branch as a descriptive fallback
-        if let branch = gitBranch?.trimmedNonEmpty {
-            let stripped = branch.replacingOccurrences(
-                of: #"^(pu|feature|fix|bugfix|hotfix)/"#,
-                with: "",
-                options: .regularExpression
-            )
-            let words =
-                stripped
-                .replacingOccurrences(of: "-", with: " ")
-                .replacingOccurrences(of: "_", with: " ")
-                .split(separator: " ")
-                .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
-                .joined(separator: " ")
-            if !words.isEmpty {
-                return words
-            }
-        }
-
-        return fallback
+    private static func resolveModifiedDate(timestamp: String?, fileMtime: Int64?, fileURL: URL) -> Date {
+        parseTimestamp(timestamp)
+            ?? dateFromUnixMilliseconds(fileMtime)
+            ?? resourceDate(for: fileURL, key: .contentModificationDateKey)
+            ?? .distantPast
     }
 
     // MARK: - File I/O
