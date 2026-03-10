@@ -5,35 +5,9 @@ struct ConversationSection: Identifiable {
     let id: String
     let title: String
     let sessions: [Conversation]
-}
 
-@Observable
-@MainActor
-final class SessionListState {
-    var sessions: [Conversation] = []
-    var searchQuery = ""
-    var isLoadingSessions = false
-
-    var filteredSessions: [Conversation] {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return sessions }
-
-        return sessions.filter { session in
-            let haystacks =
-                [
-                    session.title,
-                    session.projectName,
-                    session.workspaceName,
-                    session.projectPath ?? "",
-                    session.gitBranch ?? "",
-                    session.agentSource.rawValue,
-                ] + session.previewSnippets
-
-            return haystacks.contains { $0.localizedCaseInsensitiveContains(query) }
-        }
-    }
-
-    var groupedSessions: [ConversationSection] {
+    /// Group conversations by time period (today, yesterday, this week, this month, older).
+    static func grouped(from conversations: [Conversation]) -> [ConversationSection] {
         let calendar = Calendar.autoupdatingCurrent
         let now = Date()
 
@@ -44,7 +18,7 @@ final class SessionListState {
         var older: [Conversation] = []
 
         var seen = Set<String>()
-        for session in filteredSessions where seen.insert(session.id).inserted {
+        for session in conversations where seen.insert(session.id).inserted {
             let date = session.modifiedAt
             if calendar.isDateInToday(date) {
                 today.append(session)
@@ -75,6 +49,37 @@ final class SessionListState {
         }
         if !older.isEmpty { sections.append(ConversationSection(id: "older", title: "Older", sessions: older)) }
         return sections
+    }
+}
+
+@Observable
+@MainActor
+final class SessionListState {
+    var sessions: [Conversation] = []
+    var searchQuery = ""
+    var isLoadingSessions = false
+
+    var filteredSessions: [Conversation] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return sessions }
+
+        return sessions.filter { session in
+            let haystacks =
+                [
+                    session.title,
+                    session.projectName,
+                    session.workspaceName,
+                    session.projectPath ?? "",
+                    session.gitBranch ?? "",
+                    session.agentSource.rawValue,
+                ] + session.previewSnippets
+
+            return haystacks.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    var groupedSessions: [ConversationSection] {
+        ConversationSection.grouped(from: filteredSessions)
     }
 
     func refreshSessions() async {

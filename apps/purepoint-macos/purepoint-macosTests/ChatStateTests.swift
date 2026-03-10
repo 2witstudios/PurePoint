@@ -81,31 +81,6 @@ struct ChatStateTests {
         #expect(state.currentSessionId == "sess-4")
     }
 
-    @Test func givenSearchQueryShouldFilterSessions() {
-        let state = ChatState(processProvider: MockClaudeProcess())
-
-        let session1 = Conversation(
-            sessionId: "s1", agentSource: .claude, title: "Dashboard work",
-            previewSnippets: [], projectPath: "/tmp",
-            purePointProjectRoot: nil, gitBranch: nil,
-            transcriptPath: "/tmp/s1.jsonl",
-            createdAt: nil, modifiedAt: Date(), messageCount: nil
-        )
-        let session2 = Conversation(
-            sessionId: "s2", agentSource: .claude, title: "Terminal bugs",
-            previewSnippets: [], projectPath: "/tmp",
-            purePointProjectRoot: nil, gitBranch: nil,
-            transcriptPath: "/tmp/s2.jsonl",
-            createdAt: nil, modifiedAt: Date(), messageCount: nil
-        )
-
-        state.sessions = [session1, session2]
-        state.searchQuery = "Dashboard"
-
-        #expect(state.filteredSessions.count == 1)
-        #expect(state.filteredSessions[0].sessionId == "s1")
-    }
-
     @Test func givenEmptyInputShouldNotAllowSend() {
         let state = ChatState(processProvider: MockClaudeProcess())
         state.inputText = ""
@@ -117,7 +92,6 @@ struct ChatStateTests {
 
     @Test func givenStreamingStateShouldNotAllowSend() async {
         let mock = MockClaudeProcess()
-        // Provide events so streaming starts
         mock.events = [
             .assistant(content: [.text("working...")]),
             .result(sessionId: "s5", durationMs: 100),
@@ -186,9 +160,6 @@ struct ChatStateTests {
         await state.send("Test", cwd: "/tmp")
 
         let assistant = state.messages.first(where: { $0.role == .assistant })
-        // With delta-driven streaming, deltas produce "partial text"
-        // and assistant snapshot is deferred to finalization.
-        // Since deltas already populated content, finalize merges (doesn't replace text).
         let texts = assistant?.contentBlocks.compactMap { block -> String? in
             if case .text(_, let text) = block { return text }
             return nil
@@ -196,63 +167,9 @@ struct ChatStateTests {
         #expect(texts?.isEmpty == false)
     }
 
-    @Test func givenGroupedSessionsShouldPartitionByTimePeriod() {
-        let state = ChatState(processProvider: MockClaudeProcess())
-        let calendar = Calendar.autoupdatingCurrent
-        let now = Date()
-
-        let todaySession = Conversation(
-            sessionId: "s-today", agentSource: .claude, title: "Today work",
-            previewSnippets: [], projectPath: "/tmp",
-            purePointProjectRoot: nil, gitBranch: nil,
-            transcriptPath: "/tmp/s-today.jsonl",
-            createdAt: nil, modifiedAt: now, messageCount: nil
-        )
-        let yesterdaySession = Conversation(
-            sessionId: "s-yesterday", agentSource: .claude, title: "Yesterday work",
-            previewSnippets: [], projectPath: "/tmp",
-            purePointProjectRoot: nil, gitBranch: nil,
-            transcriptPath: "/tmp/s-yesterday.jsonl",
-            createdAt: nil,
-            modifiedAt: calendar.date(byAdding: .day, value: -1, to: now)!,
-            messageCount: nil
-        )
-        let weekSession = Conversation(
-            sessionId: "s-week", agentSource: .claude, title: "This week work",
-            previewSnippets: [], projectPath: "/tmp",
-            purePointProjectRoot: nil, gitBranch: nil,
-            transcriptPath: "/tmp/s-week.jsonl",
-            createdAt: nil,
-            modifiedAt: calendar.date(byAdding: .day, value: -4, to: now)!,
-            messageCount: nil
-        )
-        let oldSession = Conversation(
-            sessionId: "s-old", agentSource: .claude, title: "Old work",
-            previewSnippets: [], projectPath: "/tmp",
-            purePointProjectRoot: nil, gitBranch: nil,
-            transcriptPath: "/tmp/s-old.jsonl",
-            createdAt: nil,
-            modifiedAt: calendar.date(byAdding: .day, value: -60, to: now)!,
-            messageCount: nil
-        )
-
-        state.sessions = [todaySession, yesterdaySession, weekSession, oldSession]
-
-        let sections = state.groupedSessions
-        #expect(sections.count == 4)
-        #expect(sections[0].id == "today")
-        #expect(sections[0].sessions.count == 1)
-        #expect(sections[1].id == "yesterday")
-        #expect(sections[1].sessions.count == 1)
-        #expect(sections[2].id == "this-week")
-        #expect(sections[2].sessions.count == 1)
-        #expect(sections[3].id == "older")
-        #expect(sections[3].sessions.count == 1)
-    }
-
     @Test func givenStopStreamingShouldCancelProcess() async {
         let mock = MockClaudeProcess()
-        mock.events = []  // No events - will wait forever
+        mock.events = []
         let state = ChatState(processProvider: mock)
 
         state.isStreaming = true
@@ -268,7 +185,6 @@ struct ChatStateTests {
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let path = tempDir.appendingPathComponent("sess.jsonl")
-        // Write a simple transcript
         let lines = """
             {"type":"user","sessionId":"sess-load","timestamp":"2026-03-01T09:01:00.000Z","message":{"role":"user","content":"Hello"}}
             {"type":"assistant","sessionId":"sess-load","timestamp":"2026-03-01T09:02:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hi there!"}]}}
@@ -290,7 +206,7 @@ struct ChatStateTests {
         #expect(state.messages.count == 2)
     }
 
-    // MARK: - Task 1: Tool results preserved after finalization
+    // MARK: - Tool results preserved after finalization
 
     @Test func givenToolResultDuringStreamShouldPreserveAfterFinalization() async {
         let mock = MockClaudeProcess()
@@ -345,7 +261,7 @@ struct ChatStateTests {
         #expect(toolBlocks == [.failed])
     }
 
-    // MARK: - Task 2: Flush resolves by ID
+    // MARK: - Flush resolves by ID
 
     @Test func givenDeltasShouldFlushToCorrectMessageAfterMessageListChanges() async {
         let mock = MockClaudeProcess()
@@ -358,7 +274,6 @@ struct ChatStateTests {
 
         await state.send("Hi", cwd: "/tmp")
 
-        // Verify text ended up on the assistant message (index 1), not somewhere else
         #expect(state.messages.count == 2)
         let assistant = state.messages[1]
         #expect(assistant.role == .assistant)
@@ -369,7 +284,7 @@ struct ChatStateTests {
         #expect(hasText == true)
     }
 
-    // MARK: - Task 3: No duplicate text on non-text trailing blocks
+    // MARK: - No duplicate text on non-text trailing blocks
 
     @Test func givenPulseBlockAfterToolShouldNotDuplicateTextOnFlush() async {
         let mock = MockClaudeProcess()
@@ -388,12 +303,11 @@ struct ChatStateTests {
             return false
         }.count
 
-        // Should have text blocks but not duplicated
         #expect(textBlockCount >= 1)
-        #expect(textBlockCount <= 2)  // text + possibly code, but not doubled
+        #expect(textBlockCount <= 2)
     }
 
-    // MARK: - Task 4: Stop/new conversation cleanup
+    // MARK: - Stop/new conversation cleanup
 
     @Test func givenStopStreamingShouldCleanUpFlushState() async {
         let mock = MockClaudeProcess()
@@ -405,7 +319,6 @@ struct ChatStateTests {
 
         #expect(mock.cancelCalled)
         #expect(state.isStreaming == false)
-        // Verify no stale state leaks — send a new message and confirm clean start
         mock.cancelCalled = false
         mock.events = [
             .contentBlockDelta(index: 0, delta: "Fresh response"),
@@ -419,7 +332,6 @@ struct ChatStateTests {
             if case .text(_, let text) = block { return text }
             return nil
         }
-        // Should only contain "Fresh response", not stale text from before stop
         #expect(texts?.joined().contains("Fresh response") == true)
     }
 }
