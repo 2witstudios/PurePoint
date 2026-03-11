@@ -15,7 +15,9 @@ struct ContentView: View {
             SidebarView(
                 selection: $selection,
                 onOutlineViewReady: { outlineView in
-                    sidebarOutlineView = outlineView
+                    DispatchQueue.main.async {
+                        sidebarOutlineView = outlineView
+                    }
                 }
             )
             .navigationSplitViewColumnWidth(
