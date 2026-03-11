@@ -34,7 +34,7 @@ jobs:
           echo "Version: ${TAG} (build_number=${BUILD_NUMBER})"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
