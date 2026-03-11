@@ -34,6 +34,9 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Callback for killing all agents in a project.
     var onKillAllProjectAgents: ((ProjectState) -> Void)?
 
+    /// Callback for removing a project from the sidebar.
+    var onRemoveProject: ((ProjectState) -> Void)?
+
     /// Agent currently shown in the grid.
     var gridOwnerAgentId: String?
 
@@ -501,12 +504,15 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     private func buildProjectContextMenu(_ menu: NSMenu, project: ProjectState) {
         let aliveCount = project.allAgents.filter { $0.status.isAlive }.count
-        guard aliveCount > 0 else { return }
-        menu.addItem(
-            makeMenuItem(
-                title: "Kill All Agents (\(aliveCount))",
-                action: #selector(contextKillAllProjectAgents(_:))
-            ))
+        if aliveCount > 0 {
+            menu.addItem(
+                makeMenuItem(
+                    title: "Kill All Agents (\(aliveCount))",
+                    action: #selector(contextKillAllProjectAgents(_:))
+                ))
+            menu.addItem(.separator())
+        }
+        menu.addItem(makeMenuItem(title: "Remove Project\u{2026}", action: #selector(contextRemoveProject(_:))))
     }
 
     @objc private func contextKillAgent(_ sender: NSMenuItem) {
@@ -552,6 +558,19 @@ extension SidebarOutlineViewController: NSMenuDelegate {
             message: "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s") in this project."
         ) {
             self.onKillAllProjectAgents?(project)
+        }
+    }
+
+    @objc private func contextRemoveProject(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
+        showConfirmation(
+            title: "Remove \(project.projectName)?",
+            message:
+                "This will close the project in PurePoint and delete .pu/manifest.json and .pu/agents/. "
+                + "The project folder will not be deleted.",
+            confirmTitle: "Remove"
+        ) {
+            self.onRemoveProject?(project)
         }
     }
 

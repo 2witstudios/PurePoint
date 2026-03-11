@@ -66,6 +66,26 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             project.killAllAgents()
         }
 
+        vc.onRemoveProject = { [viewCache] project in
+            // Clean up terminal views
+            for agent in project.allAgents {
+                viewCache.remove(agentId: agent.id)
+            }
+
+            let projectRoot = project.projectRoot
+
+            // Remove from app state (updates UserDefaults persistence)
+            appState.closeProject(projectRoot)
+
+            // Clean up .pu directory: delete manifest.json and agents/
+            let puDir = URL(fileURLWithPath: projectRoot).appendingPathComponent(".pu")
+            let manifestURL = puDir.appendingPathComponent("manifest.json")
+            let agentsDirURL = puDir.appendingPathComponent("agents")
+
+            try? FileManager.default.removeItem(at: manifestURL)
+            try? FileManager.default.removeItem(at: agentsDirURL)
+        }
+
         return vc
     }
 
