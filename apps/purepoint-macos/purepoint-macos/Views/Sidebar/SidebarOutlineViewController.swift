@@ -9,6 +9,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     let outlineView = NSOutlineView()
 
     var projectNodes: [SidebarNode] = []
+    private var lastRenderState: SidebarRenderState?
 
     /// Callback when user clicks a row — maps to SidebarSelection.
     var onSelectionChanged: ((SidebarSelection?) -> Void)?
@@ -57,6 +58,30 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     private var editingOriginalName: String?
     private var editingAgentId: String?
 
+    private struct SidebarRenderState: Equatable {
+        let gridOwnerAgentId: String?
+        let projects: [ProjectRenderState]
+    }
+
+    private struct ProjectRenderState: Equatable {
+        let projectRoot: String
+        let rootAgents: [AgentRenderState]
+        let worktrees: [WorktreeRenderState]
+    }
+
+    private struct WorktreeRenderState: Equatable {
+        let id: String
+        let branch: String
+        let agents: [AgentRenderState]
+    }
+
+    private struct AgentRenderState: Equatable {
+        let id: String
+        let displayName: String
+        let status: AgentStatus
+        let suspended: Bool
+    }
+
     // MARK: - Lifecycle
 
     override func loadView() {
@@ -100,15 +125,23 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Rebuild the node tree from AppState projects.
     func rebuildNodes(projects: [ProjectState]) {
+        let nextRenderState = makeRenderState(projects: projects)
+        guard nextRenderState != lastRenderState else { return }
+
         let oldSelectedId = selectedNodeId()
+        let scrollOrigin = scrollView.contentView.bounds.origin
 
         projectNodes = projects.map { buildProjectNode(from: $0) }
+        lastRenderState = nextRenderState
         outlineView.reloadData()
         restoreExpansionState()
 
         if let oldSelectedId {
             selectNode(withId: oldSelectedId)
         }
+
+        scrollView.contentView.scroll(to: scrollOrigin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func buildProjectNode(from project: ProjectState) -> SidebarNode {
@@ -129,6 +162,46 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     private func filterAgents(_ agents: [AgentModel], isGridProject: Bool) -> [AgentModel] {
         isGridProject ? agents.filter { !hiddenAgentIds.contains($0.id) } : agents
+    }
+
+    private func makeRenderState(projects: [ProjectState]) -> SidebarRenderState {
+        let projectStates = projects.map { project in
+            let isGridProject = project.projectRoot == gridProjectRoot
+
+            let rootAgents = filterAgents(project.rootAgents, isGridProject: isGridProject).map {
+                AgentRenderState(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    status: $0.status,
+                    suspended: $0.suspended
+                )
+            }
+
+            let worktrees = project.worktrees.map { worktree in
+                let agents = filterAgents(worktree.agents, isGridProject: isGridProject).map {
+                    AgentRenderState(
+                        id: $0.id,
+                        displayName: $0.displayName,
+                        status: $0.status,
+                        suspended: $0.suspended
+                    )
+                }
+
+                return WorktreeRenderState(
+                    id: worktree.id,
+                    branch: worktree.branch,
+                    agents: agents
+                )
+            }
+
+            return ProjectRenderState(
+                projectRoot: project.projectRoot,
+                rootAgents: rootAgents,
+                worktrees: worktrees
+            )
+        }
+
+        return SidebarRenderState(gridOwnerAgentId: gridOwnerAgentId, projects: projectStates)
     }
 
     private func restoreExpansionState() {
@@ -177,6 +250,10 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     }
 
     private func selectNode(withId targetId: String) {
+        if selectedNodeId() == targetId {
+            return
+        }
+
         for row in 0..<outlineView.numberOfRows {
             if let node = outlineView.item(atRow: row) as? SidebarNode, node.id == targetId {
                 suppressSelectionCallback = true
