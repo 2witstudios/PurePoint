@@ -45,29 +45,30 @@ Pure data types, serialization, and file I/O. No async runtime.
 
 | Module | Responsibility |
 |---|---|
-| `types.rs` | Manifest, AgentEntry, WorktreeEntry, Config, AgentStatus |
-| `protocol.rs` | IPC Request/Response enums (49 variants), protocol version |
+| `types/` | Domain types: Manifest, AgentEntry, WorktreeEntry, Config, AgentStatus |
+| `protocol/` | IPC Request/Response enums (49 Request variants), protocol version, grid types |
 | `manifest.rs` | Atomic read/write/update with file locking |
 | `config.rs` | Config loading from `.pu/config.yaml` |
 | `paths.rs` | All filesystem path conventions |
 | `template.rs` | Prompt template parsing, rendering, CRUD |
 | `agent_def.rs` | Agent definition YAML format, CRUD |
 | `swarm_def.rs` | Swarm composition format, CRUD |
-| `schedule_def.rs` | Schedule definitions, recurrence calculation |
+| `schedule_def/` | Schedule definitions, recurrence calculation |
 | `trigger_def.rs` | Trigger definitions, event types, gate defs |
 | `id.rs` | ID generation (wt-/ag- prefixed, UUID sessions) |
 | `validation.rs` | Resource name validation (path traversal protection) |
+| `serde_defaults.rs` | Default value helpers for serde deserialization |
 | `error.rs` | PuError enum with error codes |
 
 ### pu-engine
 
-Async daemon. Depends on pu-core + tokio + nix + tracing.
+Async daemon. Depends on pu-core + tokio + nix + tracing + libc + indexmap.
 
 | Module | Responsibility |
 |---|---|
 | `main.rs` | Entry point, arg parsing, server loop |
-| `engine.rs` | Core business logic, request dispatch, state management |
-| `ipc_server.rs` | Unix socket server, NDJSON framing, connection handling |
+| `engine/` | Core business logic, request dispatch, state management |
+| `ipc_server/` | Unix socket server, NDJSON framing, connection handling |
 | `pty_manager.rs` | PTY spawn via fork/setsid/execvp, process monitoring |
 | `output_buffer.rs` | 4MB circular buffer with idle detection |
 | `agent_monitor.rs` | Effective status computation |
@@ -76,9 +77,11 @@ Async daemon. Depends on pu-core + tokio + nix + tracing.
 | `gate.rs` | Gate evaluation with timeouts and retries |
 | `daemon_lifecycle.rs` | PID file management, cleanup |
 
+**`engine/` submodules:** `agent_lifecycle.rs`, `definitions/` (CRUD handlers for templates, agents, swarms, schedules, triggers), `helpers.rs`, `pty_operations.rs`, `scheduler.rs`, `session_repair.rs`, `spawn.rs`, `status.rs`, `subscriptions.rs`, `trigger_executor.rs`, `worktree_ops.rs`
+
 ### pu-cli
 
-Thin client. Depends on pu-core + clap + tokio.
+Thin client. Depends on pu-core + clap + tokio + owo-colors + shell-words + which.
 
 | Module | Responsibility |
 |---|---|
@@ -86,7 +89,7 @@ Thin client. Depends on pu-core + clap + tokio.
 | `client.rs` | NDJSON-over-Unix-socket request sender |
 | `daemon_ctrl.rs` | Daemon auto-start with health polling |
 | `commands/` | One module per CLI command |
-| `output.rs` | Human-readable and JSON output formatting |
+| `output/` | Human-readable and JSON output formatting (agents, definitions, execution, formatters, system) |
 | `skill.rs` | Claude Code skill auto-installation |
 
 ## macOS app
@@ -99,7 +102,7 @@ SwiftUI + AppKit application.
 | State | `AppState`, `SidebarState`, `GridState` | Observable state management |
 | Models | `ManifestModel`, `AgentModel`, `WorkspaceModel` | Data models (Codable for manifest) |
 | Services | `WorkspaceService`, `DaemonClient`, `CLIInstaller` | Daemon communication, CLI installation |
-| Views | `Views/` (97 files) | SwiftUI views organized by feature |
+| Views | `Views/` (~60 files) | SwiftUI views organized by feature |
 | Terminal | `TerminalViewCache`, `ScrollableTerminal` | SwiftTerm integration with LRU caching |
 
 Communication: The app uses `DaemonClient` (NDJSON over Unix socket) mirroring the Rust protocol types.
