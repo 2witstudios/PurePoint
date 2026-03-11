@@ -79,43 +79,73 @@ AgentEntry:
 
 **Orchestration types (pu-core):**
 ```
-AgentDefinition:
+AgentDef:
   name: String
-  agentType: String (default: "claude")
-  defaultPrompt: Option<String> (template name or inline)
+  agent_type: String (default: "claude")
+  template: Option<String> (template name reference)
+  inline_prompt: Option<String> (inline prompt text)
   tags: Vec<String>
-  scope: Scope (Local | Global)
+  scope: String ("local" | "global")
+  available_in_command_dialog: bool (default: true)
+  icon: Option<String>
+  command: Option<String> (for terminal agents)
 
-SwarmDefinition:
+SwarmDef:
   name: String
-  roster: Vec<RosterEntry> (agent:role:qty)
-  worktreeCount: u32
-  worktreeTemplate: String
-  includeTerminal: bool
-  scope: Scope
+  worktree_count: u32 (default: 1)
+  worktree_template: String (branch template with {index} placeholder)
+  roster: Vec<SwarmRosterEntry>
+  include_terminal: bool
+  scope: String
 
-SavedPrompt (template):
+SwarmRosterEntry:
+  agent_def: String (reference to AgentDef name)
+  role: String
+  quantity: u32 (default: 1)
+
+Template:
   name: String
   body: String
   description: String
   agent: String
-  scope: Scope
+  source: String ("local" | "global")
+  command: Option<String> (for terminal templates)
 
 ScheduleDef:
   name: String
   enabled: bool
-  recurrence: String
-  startAt: Option<DateTime<Utc>>
-  trigger: ScheduleTrigger (AgentDef | SwarmDef | InlinePrompt)
-  triggerName: Option<String>
-  triggerPrompt: Option<String>
-  agent: String
-  variables: HashMap<String, String>
-  projectRoot: Option<String>
-  scope: Scope
+  recurrence: Recurrence (None | Hourly | Daily | Weekdays | Weekly | Monthly)
+  start_at: DateTime<Utc>
+  next_run: Option<DateTime<Utc>>
+  trigger: ScheduleTrigger
+  project_root: String
+  target: String
+  root: bool (spawn in project root vs worktree)
+  agent_name: Option<String> (worktree branch name when root=false)
+  scope: String
+  created_at: DateTime<Utc>
+
+ScheduleTrigger (tagged enum):
+  AgentDef { name: String }
+  SwarmDef { name: String, vars: HashMap<String, String> }
+  InlinePrompt { prompt: String, agent: String }
 ```
 
-**Config extension:** `default_agent_type` field on `.pu/config.yaml` — sets default agent type for spawning.
+**Config extension:** `defaultAgent` field on `.pu/config.yaml` — sets default agent type for spawning. Config also includes `agents` map (with per-agent `launchArgs` overrides) and `envFiles` list for environment file copying to worktrees.
+
+```
+Config:
+  default_agent: String (default: "claude")
+  agents: IndexMap<String, AgentConfig>
+  env_files: Vec<String> (default: [".env", ".env.local"])
+
+AgentConfig:
+  name: String
+  command: String
+  prompt_flag: Option<String>
+  interactive: bool (default: true)
+  launch_args: Option<Vec<String>>
+```
 
 ## Open Questions
 

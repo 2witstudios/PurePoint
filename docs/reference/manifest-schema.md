@@ -99,6 +99,14 @@ All fields use camelCase JSON serialization. Optional fields are omitted when nu
 - **Locking**: Advisory exclusive lock via `fs4` during updates
 - **Watching**: macOS app uses GCD `DispatchSource` with 50ms debounce
 
+## Backward Compatibility
+
+- **`suspended` field**: Inferred as `true` when `suspendedAt` is present (supports manifests created before the `suspended` field was added)
+- **Old status values**: Automatically mapped to new values during deserialization:
+  - `spawning`, `running` → `streaming`
+  - `idle`, `suspended` → `waiting`
+  - `completed`, `failed`, `killed`, `lost` → `broken`
+
 ## Example
 
 ```json
