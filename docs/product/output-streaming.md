@@ -10,7 +10,7 @@ How agent output is captured, stored, streamed to clients, and summarized. Cover
 
 ```
 Agent process → PTY master fd → reader task (spawn_blocking, 4096-byte chunks)
-  → OutputBuffer (1MB circular VecDeque<u8>, RwLock)
+  → OutputBuffer (4MB circular VecDeque<u8>, RwLock)
     → Logs request (read_tail: last N bytes, UTF-8 lossy)
     → Attach mode (buffered_bytes sent, then live Output messages)
     → Idle detection (idle_seconds, looks_like_shell_prompt)
@@ -18,7 +18,7 @@ Agent process → PTY master fd → reader task (spawn_blocking, 4096-byte chunk
 
 ## Research Notes
 
-**Daemon output capture (`pu-engine/src/output_buffer.rs`):** 1MB circular buffer per agent (`DEFAULT_CAPACITY = 1024 * 1024`). Internal structure: `VecDeque<u8>` with `RwLock<BufferInner>` for concurrent read access. On write, if `data.len() > capacity`, excess oldest bytes are drained from the front. Tracks `last_write: Instant` for idle detection.
+**Daemon output capture (`pu-engine/src/output_buffer.rs`):** 4MB circular buffer per agent (`DEFAULT_CAPACITY = 4 * 1024 * 1024`). Internal structure: `VecDeque<u8>` with `RwLock<BufferInner>` for concurrent read access. On write, if `data.len() > capacity`, excess oldest bytes are drained from the front. Tracks `last_write: Instant` for idle detection, plus `last_content_write` for spinner-aware idle detection.
 
 **API for output retrieval:**
 - `Request::Logs { agent_id, tail }` — returns last `tail` bytes as UTF-8 lossy string via `read_tail(n)`.
