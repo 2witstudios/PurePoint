@@ -151,7 +151,7 @@ For each action in order:
 2. **Inject phase** (if present): Send the text to the agent's terminal with a newline.
 3. Advance to the next action.
 
-If a gate fails after all retries, the sequence stops with state `failed`.
+If a gate fails after all retries, the sequence stops with state `failed`. On each failure before exhausting retries, a failure message is injected into the agent's terminal showing the exit code and output.
 
 ### Gate timeouts
 
@@ -173,6 +173,7 @@ If a gate fails after all retries, the sequence stops with state `failed`.
 pu trigger list
 pu trigger show post-task
 pu trigger delete post-task --scope local
+pu trigger assign <agent-id> <trigger-name>  # bind trigger to existing agent
 ```
 
 ### Git hook integration
