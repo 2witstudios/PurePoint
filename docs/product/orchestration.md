@@ -1,6 +1,6 @@
 # Orchestration (Swarms & Templates)
 
-**Maturity: EXPLORING** | ID Prefix: ORCH | Dependencies: none
+**Maturity: CONVERGING** | ID Prefix: ORCH | Dependencies: none
 
 ## Purpose
 

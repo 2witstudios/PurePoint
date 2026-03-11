@@ -101,6 +101,8 @@ ScheduleDef:
   trigger: ScheduleTrigger (agent_def|swarm_def|inline_prompt)
   project_root: String
   target: String (path scope, default "")
+  root: bool (default true, spawn in project root vs worktree)
+  agent_name: Option<String> (worktree/branch name when root=false)
   scope: String (local|global, skip serialization)
   created_at: DateTime<Utc>
 
