@@ -21,3 +21,4 @@ The desktop app provides the primary visual interface — project tree sidebar, 
 - WorkspaceService protocol as abstraction boundary
 - Graceful degradation when daemon is unreachable
 - File watching with debounce for live updates
+- Sparkle framework for auto-updates (CheckForUpdatesViewModel)
