@@ -18,6 +18,13 @@ Location: {project_root}/.pu/worktrees/{worktree-id}/  (e.g. .pu/worktrees/wt-ab
 
 **Rename and delete:** `Request::Rename` and `Request::DeleteWorktree` protocol handlers implemented in the engine. Sidebar context menus wire rename/delete into macOS client. CLI exposes worktree deletion via `pu clean --worktree <id>` (or `pu clean --all` for all worktrees), which sends `DeleteWorktree` to the daemon, kills associated agents, and removes the git branch.
 
+**Delete operation sequence:**
+1. Kill all agents running in the worktree
+2. Remove git worktree directory
+3. Delete local branch
+4. Delete remote branch (if exists)
+5. Remove worktree entry from manifest
+
 **Stale cleanup:** Stale worktree cleanup on spawn implemented in engine — removes orphaned worktree directories.
 
 **Shared access:** Current implementation supports multiple agents per worktree (worktree has `agents: IndexMap`, insertion-order preserved).

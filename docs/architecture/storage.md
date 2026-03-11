@@ -6,6 +6,41 @@
 
 PurePoint needs persistent, concurrent, queryable storage for project state — agents, worktrees, output history, events, and configuration. The storage layer must support concurrent reads from multiple clients (CLI, desktop app, daemon internals) while the daemon writes. It must also be portable per-project and simple to operate (no external database server).
 
+## Current Implementation
+
+PurePoint uses flat files for all storage:
+
+### Per-Project Paths (`{project_root}/.pu/`)
+
+| Path | Purpose | Format |
+|------|---------|--------|
+| `manifest.json` | Workspace state (worktrees, agents) | JSON |
+| `config.yaml` | Project configuration (default agent, env files) | YAML |
+| `prompts/{agent_id}.md` | Agent prompt files | Markdown |
+| `templates/{name}.md` | Prompt templates with YAML frontmatter | Markdown |
+| `agents/{name}.yaml` | Agent definitions | YAML |
+| `swarms/{name}.yaml` | Swarm definitions | YAML |
+| `schedules/{name}.yaml` | Schedule definitions | YAML |
+| `triggers/{name}.yaml` | Trigger definitions | YAML |
+| `worktrees/{worktree_id}/` | Git worktree directories | Directory |
+
+### Global Paths (`~/.pu/`)
+
+| Path | Purpose |
+|------|---------|
+| `daemon.pid` | Daemon process ID |
+| `daemon.sock` | Unix domain socket for IPC |
+| `daemon.log` | Daemon log output |
+| `templates/` | Global prompt templates |
+| `agents/` | Global agent definitions |
+| `swarms/` | Global swarm definitions |
+| `schedules/` | Global schedule definitions |
+| `triggers/` | Global trigger definitions |
+
+### Definition Lookup Order
+
+Local definitions (in `.pu/`) take priority over global definitions (in `~/.pu/`) for: templates, agents, swarms, schedules, and triggers.
+
 ## Open Questions
 
 ? [STORE-001] Should configuration live in the database, in files, or both?
