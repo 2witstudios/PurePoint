@@ -39,7 +39,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
