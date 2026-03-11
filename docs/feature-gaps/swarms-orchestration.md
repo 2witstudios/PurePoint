@@ -1,5 +1,7 @@
 # Swarm Management — Swarm Management & Multi-Agent Orchestration
 
+> **Status: Implemented.** Swarms and multi-agent orchestration shipped. See [Agents Hub](../guide/workflows/agents-hub.md).
+
 ## User Story
 
 As a user, I want to define and launch swarms of agents that work together on a coordinated task so that I can parallelize complex work like code reviews, migrations, or feature implementation across multiple agents.

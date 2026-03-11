@@ -1,5 +1,7 @@
 # Theme System — Dynamic Theme System
 
+> **Status: Partially implemented.** Adaptive dark/light theming works automatically via system preference. User-facing theme preference UI (Light/Dark/System choice) is still a gap.
+
 ## User Story
 
 As a user, I want to switch between light, dark, and system-matched themes so that PurePoint matches my visual preferences and adapts to my environment.

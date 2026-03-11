@@ -1,5 +1,7 @@
 # Dashboard View — Project Dashboard & Activity Overview
 
+> **Note:** The sidebar currently has a "Dashboard" nav item, but it shows Point Guard (the AI assistant chat), not the project activity dashboard described here. This doc describes a future project health overview feature.
+
 ## User Story
 
 As a user, I want a project dashboard that shows me aggregate agent activity, recent commits, and project health at a glance so that I can understand what's happening across all my agents without clicking into each one.
