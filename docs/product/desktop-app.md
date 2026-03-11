@@ -23,9 +23,10 @@ Desktop App
   Conversation sidebar (session search, timeline grouping)
   Agents Hub (prompt library, agent definitions, swarm definitions)
   Schedule (calendar views, CRUD via daemon)
-  Settings (appearance, hotkeys, about)
+  Triggers (event-driven automation: agent_idle, pre_commit, pre_push)
+  Settings (general, point guard, agents, hotkeys, display, about)
   Command palette (agent spawning — built-in variants, agent defs, swarms)
-  Hotkey system (20+ OS-level shortcuts, customizable)
+  Hotkey system (17 OS-level shortcuts across 4 categories, customizable)
 ```
 
 ## Decisions
@@ -38,6 +39,8 @@ Desktop App
 
 ! [APP-004] Point Guard: PointGuardView spawns a shell via daemon's SpawnShell request and auto-launches the configured agent. SessionListState manages the conversation sidebar. ConversationSidebarView with search and timeline grouping. Configurable launch command and skip-permissions via SettingsState (SettingsPointGuardView).
 
-! [APP-005] Hotkey system: HotkeyMonitor registers OS-level shortcuts. KeyBindingState maps HotkeyAction → key equivalent. 20+ actions across 4 categories (application, navigation, panes, chat). Customizable via Settings.
+! [APP-005] Hotkey system: HotkeyMonitor registers OS-level shortcuts. KeyBindingState maps HotkeyAction → key equivalent. 17 actions across 4 categories (application: 4, navigation: 7, panes: 7, chat: 1). Customizable via Settings.
+
+! [APP-007] Triggers: Event-driven automation via TriggersState. Supports agent_idle, pre_commit, pre_push events. Each trigger defines a sequence of actions (inject prompts, run gates). Managed via daemon IPC.
 
 ! [APP-006] NSOutlineView sidebar: Replaced SwiftUI List with AppKit NSOutlineView for compact 24pt rows. SidebarOutlineViewController manages outline data source.

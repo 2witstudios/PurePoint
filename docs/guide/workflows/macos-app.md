@@ -81,10 +81,22 @@ Browse schedules in month, week, day, or list view. See upcoming scheduled runs 
 
 Access via the settings panel:
 
-- **General**: Default behaviors
-- **Display**: Appearance preferences
+- **General**: Restore projects on launch, launch at login
+- **Point Guard**: Configure launch command and skip-permissions for the root terminal
+- **Agents**: Per-agent configuration (launch arguments for Claude, Codex, OpenCode)
 - **Hotkeys**: Rebind all keyboard shortcuts with live key recording and conflict detection
+- **Display**: Appearance preferences, terminal font size, grid gap
 - **About**: Version and updates (auto-update via Sparkle)
+
+## Triggers
+
+Automate workflows based on events:
+
+- **Agent Idle**: Run actions when an agent becomes idle
+- **Pre-Commit**: Gate commits with validation scripts
+- **Pre-Push**: Run checks before pushing
+
+Each trigger can inject prompts, run shell commands with exit code gates, and use variables. Configure via the daemon IPC or CLI.
 
 ## Keyboard shortcuts
 
