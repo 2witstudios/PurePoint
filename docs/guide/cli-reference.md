@@ -60,6 +60,7 @@ pu spawn [prompt] [options]
 | `--agent-args <args>` | Extra flags passed to the agent CLI |
 | `--plan` | Launch in plan/architect mode (read-only) |
 | `--no-trigger` | Disable event triggers for this agent |
+| `--trigger <name>` | Bind an idle trigger to this agent (conflicts with `--no-trigger`) |
 | `--json` | Machine-readable output |
 
 ### Examples
@@ -295,6 +296,14 @@ pu trigger delete <name> [--scope local|global] [--json]
 | `--inject <text>` | Text to inject (repeatable, creates sequence steps) |
 | `--gate <cmd>` | Gate command (repeatable, creates gate-only steps) |
 | `--description <text>` | Trigger description |
+
+### trigger assign
+
+Assign a trigger to an idle agent.
+
+```sh
+pu trigger assign <agent_id> <trigger_name> [--json]
+```
 
 ## gate
 

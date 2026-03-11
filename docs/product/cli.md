@@ -34,7 +34,7 @@ Key behaviors:
 | Command | Args/Flags | Description |
 |---|---|---|
 | `pu init` | `--json` | Register current project with daemon |
-| `pu spawn [prompt]` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--command`, `--var KEY=VALUE`, `--no-auto`, `--agent-args`, `--plan`, `--no-trigger`, `--json` | Spawn an agent (in worktree or root) |
+| `pu spawn [prompt]` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--command`, `--var KEY=VALUE`, `--no-auto`, `--agent-args`, `--plan`, `--no-trigger`, `--trigger`, `--json` | Spawn an agent (in worktree or root) |
 | `pu status` | `--agent <id>`, `--json` | Show project/agent status |
 | `pu bench [agent_id]` | `--all`, `--json` | Suspend (bench) agents |
 | `pu play <agent_id>` | `--json` | Resume a benched agent |
@@ -75,6 +75,7 @@ Key behaviors:
 | `pu trigger show <name>` | `--json` | Show trigger details |
 | `pu trigger create <name>` | `--on <event>`, `--inject`, `--gate`, `--description`, `--scope`, `--json` | Create trigger definition |
 | `pu trigger delete <name>` | `--scope`, `--json` | Delete trigger definition |
+| `pu trigger assign <agent_id> <trigger_name>` | `--json` | Assign trigger to idle agent |
 | `pu gate <event>` | `--project-root` | Evaluate git hook gates (pre-commit, pre-push) |
 
 ## Research Notes
