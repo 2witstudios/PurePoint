@@ -1,5 +1,7 @@
 # Prompt Library — Prompt & Template Library
 
+> **Status: Implemented.** Prompt library shipped. See [Agents Hub](../guide/workflows/agents-hub.md).
+
 ## User Story
 
 As a user, I want a library of saved prompts and templates that I can browse, edit, and use when spawning agents so that I can reuse proven prompts and maintain consistency across agent tasks.

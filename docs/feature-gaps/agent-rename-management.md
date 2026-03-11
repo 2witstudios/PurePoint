@@ -1,5 +1,7 @@
 # Agent Rename & Management — Agent & Terminal Rename/Management
 
+> **Status: Implemented.** Agent rename and context menu management shipped. See [macOS App](../guide/workflows/macos-app.md).
+
 ## User Story
 
 As a user, I want to rename agents and access richer management actions from a context menu so that I can organize my workspace and perform common agent operations quickly.
