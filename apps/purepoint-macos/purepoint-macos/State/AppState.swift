@@ -82,9 +82,13 @@ final class AppState {
 
         switch selection {
         case .agent(let id), .terminal(let id):
-            activeProjectRoot = projectState(forAgentId: id)?.projectRoot
+            if let root = projectState(forAgentId: id)?.projectRoot {
+                activeProjectRoot = root
+            }
         case .worktree(let id):
-            activeProjectRoot = projectState(forWorktreeId: id)?.projectRoot
+            if let root = projectState(forWorktreeId: id)?.projectRoot {
+                activeProjectRoot = root
+            }
         case .project(let root):
             activeProjectRoot = root
         case nil, .nav:
