@@ -3,21 +3,52 @@ import SwiftUI
 struct WorktreeDetailView: View {
     let worktree: WorktreeModel
     @State private var diffState = DiffState()
+    @State private var fileTreeState = FileTreeState()
+    @State private var editorState = EditorState()
+    @State private var showFileTree = true
+    @State private var sidebarRatio: CGFloat = 0.22
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            tabBar
-            Divider()
-            content
+            DraggableSplit(
+                axis: .vertical,
+                ratio: showFileTree ? sidebarRatio : 0,
+                onRatioChanged: { sidebarRatio = $0 }
+            ) {
+                FileTreeSidebarView(
+                    fileTreeState: fileTreeState,
+                    showFileTree: $showFileTree,
+                    onFileSelected: { path, name in
+                        editorState.openFile(path: path, name: name)
+                    }
+                )
+            } second: {
+                VStack(spacing: 0) {
+                    EditorTabBar(
+                        editorState: editorState,
+                        onCloseTab: { id in
+                            editorState.closeTab(id: id)
+                        }
+                    )
+                    Divider()
+                    editorContent
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) {
+            externalChangeBanner
+        }
         .task(id: worktree.id) {
             diffState.loadForWorktree(worktree)
+            fileTreeState.load(worktreePath: worktree.path)
         }
         .onDisappear {
             diffState.stopWatching()
+            fileTreeState.stopWatching()
+            editorState.stopWatching()
         }
     }
 
@@ -25,6 +56,18 @@ struct WorktreeDetailView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            if !showFileTree {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showFileTree = true
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .buttonStyle(.plain)
+                .help("Show file tree")
+            }
+
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
@@ -44,6 +87,7 @@ struct WorktreeDetailView: View {
 
             Button {
                 diffState.refresh()
+                fileTreeState.refresh()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 12))
@@ -55,9 +99,46 @@ struct WorktreeDetailView: View {
         .padding(.vertical, 10)
     }
 
-    // MARK: - Tab Bar
+    // MARK: - Editor Content
 
-    private var tabBar: some View {
+    @ViewBuilder
+    private var editorContent: some View {
+        if editorState.showChangesTab {
+            changesContent
+        } else if let tab = editorState.activeTab {
+            if tab.isBinary {
+                binaryPlaceholder(tab)
+            } else {
+                EditorContentRepresentable(
+                    content: tab.content,
+                    isBinary: false,
+                    isEditable: true,
+                    onContentChanged: { newContent in
+                        editorState.updateContent(id: tab.id, content: newContent)
+                    },
+                    onSave: {
+                        Task {
+                            try? await editorState.saveFile(id: tab.id)
+                        }
+                    }
+                )
+            }
+        } else {
+            editorPlaceholder
+        }
+    }
+
+    // MARK: - Changes Content (existing diff views)
+
+    private var changesContent: some View {
+        VStack(spacing: 0) {
+            diffTabBar
+            Divider()
+            diffContent
+        }
+    }
+
+    private var diffTabBar: some View {
         Picker("", selection: $diffState.activeTab) {
             Text("Unstaged Changes")
                 .tag(DiffTab.unstaged)
@@ -69,10 +150,8 @@ struct WorktreeDetailView: View {
         .padding(.vertical, 8)
     }
 
-    // MARK: - Content
-
     @ViewBuilder
-    private var content: some View {
+    private var diffContent: some View {
         switch diffState.activeTab {
         case .unstaged:
             DiffListView(
@@ -109,7 +188,6 @@ struct WorktreeDetailView: View {
 
     private var prContent: some View {
         VStack(spacing: 0) {
-            // PR selector
             HStack {
                 Picker("Pull Request", selection: prBinding) {
                     ForEach(diffState.pullRequests) { pr in
@@ -141,6 +219,66 @@ struct WorktreeDetailView: View {
         }
     }
 
+    // MARK: - Placeholders
+
+    private var editorPlaceholder: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            Text("Select a file to edit")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func binaryPlaceholder(_ tab: EditorTab) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            Text("Binary file")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            Text(tab.name)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - External Change Banner
+
+    @ViewBuilder
+    private var externalChangeBanner: some View {
+        if let changedPath = editorState.externalChangeAlert,
+            let tab = editorState.openTabs.first(where: { $0.id == changedPath })
+        {
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                Text("\(tab.name) changed on disk.")
+                    .font(.system(size: 12))
+                Button("Reload") {
+                    editorState.reloadFile(id: changedPath)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Dismiss") {
+                    editorState.dismissExternalChange()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+            }
+            .padding(8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding(8)
+        }
+    }
+
+    // MARK: - Binding Helpers
+
     private var prBinding: Binding<Int> {
         Binding(
             get: { diffState.selectedPR?.number ?? 0 },
@@ -151,5 +289,4 @@ struct WorktreeDetailView: View {
             }
         )
     }
-
 }
