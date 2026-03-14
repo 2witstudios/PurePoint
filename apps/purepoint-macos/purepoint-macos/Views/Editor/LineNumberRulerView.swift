@@ -7,7 +7,10 @@ class LineNumberRulerView: NSRulerView {
     private var boundsObserver: NSObjectProtocol?
 
     init(textView: NSTextView) {
-        super.init(scrollView: textView.enclosingScrollView!, orientation: .verticalRuler)
+        guard let scrollView = textView.enclosingScrollView else {
+            fatalError("LineNumberRulerView requires textView to be embedded in an NSScrollView")
+        }
+        super.init(scrollView: scrollView, orientation: .verticalRuler)
         clientView = textView
         ruleThickness = gutterWidth
 

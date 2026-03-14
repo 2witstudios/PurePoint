@@ -146,8 +146,11 @@ class FileTreeOutlineViewController: NSViewController, NSOutlineViewDataSource, 
         ])
 
         let iconName = node.isDirectory ? "folder.fill" : fileIcon(for: node.name)
-        let icon = NSImageView(
-            image: NSImage(systemSymbolName: iconName, accessibilityDescription: node.isDirectory ? "Folder" : "File")!)
+        let description = node.isDirectory ? "Folder" : "File"
+        let iconImage =
+            NSImage(systemSymbolName: iconName, accessibilityDescription: description)
+            ?? NSImage(systemSymbolName: "doc", accessibilityDescription: "File")!
+        let icon = NSImageView(image: iconImage)
         icon.contentTintColor = node.isDirectory ? .systemBlue : .secondaryLabelColor
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         icon.setContentHuggingPriority(.required, for: .horizontal)

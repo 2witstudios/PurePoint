@@ -65,47 +65,44 @@ private struct FileTabButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button {
-            onSelect()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: tab.language.icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 4) {
+            Image(systemName: tab.language.icon)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
 
-                Text(tab.name)
-                    .font(.system(size: 11))
-                    .lineLimit(1)
+            Text(tab.name)
+                .font(.system(size: 11))
+                .lineLimit(1)
 
-                if tab.isDirty {
-                    Circle()
-                        .fill(Color.primary.opacity(0.4))
-                        .frame(width: 6, height: 6)
-                }
-
-                if isActive || isHovered {
-                    Button {
-                        onClose()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
+            if tab.isDirty {
+                Circle()
+                    .fill(Color.primary.opacity(0.4))
+                    .frame(width: 6, height: 6)
             }
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background(isActive ? Color(nsColor: Theme.cardBackground) : Color.clear)
-            .overlay(alignment: .bottom) {
-                if isActive {
-                    Rectangle()
-                        .fill(Color.accentColor)
-                        .frame(height: 2)
+
+            if isActive || isHovered {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
             }
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .background(isActive ? Color(nsColor: Theme.cardBackground) : Color.clear)
+        .overlay(alignment: .bottom) {
+            if isActive {
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(height: 2)
+            }
+        }
         .onHover { isHovered = $0 }
     }
 }

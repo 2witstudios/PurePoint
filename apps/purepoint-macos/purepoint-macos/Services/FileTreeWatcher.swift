@@ -32,8 +32,9 @@ nonisolated final class FileTreeWatcher: @unchecked Sendable {
                 if flags.contains(.delete) || flags.contains(.rename) {
                     self.queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                         guard let self else { return }
-                        self.sources.removeValue(forKey: path)
-                        close(fd)
+                        if let entry = self.sources.removeValue(forKey: path) {
+                            entry.source.cancel()
+                        }
                         self.watchDirectory(path: path)
                         self.scheduleDebounce()
                     }
@@ -82,9 +83,12 @@ nonisolated final class FileTreeWatcher: @unchecked Sendable {
     }
 
     deinit {
-        debounceWork?.cancel()
-        for (_, entry) in sources {
-            entry.source.cancel()
+        queue.sync {
+            debounceWork?.cancel()
+            for (_, entry) in sources {
+                entry.source.cancel()
+            }
+            sources.removeAll()
         }
     }
 }

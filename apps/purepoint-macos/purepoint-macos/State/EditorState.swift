@@ -91,10 +91,11 @@ final class EditorState {
     }
 
     func reloadFile(id: String) {
-        guard let idx = openTabs.firstIndex(where: { $0.id == id }) else { return }
+        guard openTabs.contains(where: { $0.id == id }) else { return }
         Task {
             do {
                 let result = try await FileIOService.readFile(at: id)
+                guard let idx = openTabs.firstIndex(where: { $0.id == id }) else { return }
                 openTabs[idx].content = result.content
                 openTabs[idx].isDirty = false
                 openTabs[idx].lastModified = FileIOService.fileModificationDate(at: id)
@@ -146,7 +147,7 @@ final class EditorState {
     }
 
     private func checkForExternalChanges() {
-        for (idx, tab) in openTabs.enumerated() {
+        for tab in openTabs {
             guard let lastMod = tab.lastModified,
                 let currentMod = FileIOService.fileModificationDate(at: tab.id),
                 currentMod > lastMod
@@ -155,10 +156,12 @@ final class EditorState {
             if tab.isDirty {
                 externalChangeAlert = tab.id
             } else {
-                // Auto-reload clean tabs
+                let tabId = tab.id
                 Task {
                     do {
-                        let result = try await FileIOService.readFile(at: tab.id)
+                        let result = try await FileIOService.readFile(at: tabId)
+                        guard let idx = openTabs.firstIndex(where: { $0.id == tabId })
+                        else { return }
                         openTabs[idx].content = result.content
                         openTabs[idx].lastModified = currentMod
                     } catch {}

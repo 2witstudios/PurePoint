@@ -7,6 +7,7 @@ struct WorktreeDetailView: View {
     @State private var editorState = EditorState()
     @State private var showFileTree = true
     @State private var sidebarRatio: CGFloat = 0.22
+    @State private var saveError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,6 +43,8 @@ struct WorktreeDetailView: View {
             externalChangeBanner
         }
         .task(id: worktree.id) {
+            editorState.stopWatching()
+            editorState = EditorState()
             diffState.loadForWorktree(worktree)
             fileTreeState.load(worktreePath: worktree.path)
         }
@@ -118,7 +121,12 @@ struct WorktreeDetailView: View {
                     },
                     onSave: {
                         Task {
-                            try? await editorState.saveFile(id: tab.id)
+                            do {
+                                try await editorState.saveFile(id: tab.id)
+                                saveError = nil
+                            } catch {
+                                saveError = "Failed to save \(tab.name): \(error.localizedDescription)"
+                            }
                         }
                     }
                 )
@@ -248,18 +256,18 @@ struct WorktreeDetailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - External Change Banner
+    // MARK: - Banners
 
     @ViewBuilder
     private var externalChangeBanner: some View {
         if let changedPath = editorState.externalChangeAlert,
             let tab = editorState.openTabs.first(where: { $0.id == changedPath })
         {
-            HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
-                Text("\(tab.name) changed on disk.")
-                    .font(.system(size: 12))
+            bannerView(
+                icon: "exclamationmark.triangle.fill",
+                iconColor: .yellow,
+                message: "\(tab.name) changed on disk."
+            ) {
                 Button("Reload") {
                     editorState.reloadFile(id: changedPath)
                 }
@@ -271,10 +279,39 @@ struct WorktreeDetailView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 11))
             }
-            .padding(8)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-            .padding(8)
         }
+
+        if let error = saveError {
+            bannerView(
+                icon: "xmark.circle.fill",
+                iconColor: .red,
+                message: error
+            ) {
+                Button("Dismiss") {
+                    saveError = nil
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+            }
+        }
+    }
+
+    private func bannerView<Actions: View>(
+        icon: String,
+        iconColor: Color,
+        message: String,
+        @ViewBuilder actions: () -> Actions
+    ) -> some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundStyle(iconColor)
+            Text(message)
+                .font(.system(size: 12))
+            actions()
+        }
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(8)
     }
 
     // MARK: - Binding Helpers

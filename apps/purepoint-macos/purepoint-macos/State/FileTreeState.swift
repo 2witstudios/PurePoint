@@ -11,7 +11,6 @@ final class FileTreeState {
     private var worktreePath: String?
     private var expandedPaths: Set<String> = []
     private var watcher: FileTreeWatcher?
-    private var gitIgnoredCache: Set<String> = []
 
     private static let hiddenNames: Set<String> = [
         ".git", ".DS_Store", ".build", ".swiftpm", "xcuserdata",
@@ -21,8 +20,21 @@ final class FileTreeState {
     func load(worktreePath: String) {
         self.worktreePath = worktreePath
         expandedPaths.removeAll()
-        loadGitIgnored(worktreePath: worktreePath)
         rootNodes = scanDirectory(atPath: worktreePath, relativeTo: worktreePath)
+
+        // Async gitignore filter — rescan after result
+        Task {
+            let ignored = await Self.computeGitIgnored(
+                directory: worktreePath,
+                worktreeRoot: worktreePath
+            )
+            if !ignored.isEmpty {
+                self.rootNodes = self.filterIgnored(
+                    self.rootNodes,
+                    ignored: ignored
+                )
+            }
+        }
 
         watcher?.stopAll()
         watcher = FileTreeWatcher { [weak self] in
@@ -38,6 +50,17 @@ final class FileTreeState {
         guard node.isDirectory, let root = worktreePath else { return }
         expandedPaths.insert(node.absolutePath)
         node.children = scanDirectory(atPath: node.absolutePath, relativeTo: root)
+
+        Task {
+            let ignored = await Self.computeGitIgnored(
+                directory: node.absolutePath,
+                worktreeRoot: root
+            )
+            if !ignored.isEmpty {
+                node.children = self.filterIgnored(node.children, ignored: ignored)
+            }
+        }
+
         watcher?.watchDirectory(path: node.absolutePath)
     }
 
@@ -49,10 +72,7 @@ final class FileTreeState {
 
     func refresh() {
         guard let root = worktreePath else { return }
-        loadGitIgnored(worktreePath: root)
         rootNodes = scanDirectory(atPath: root, relativeTo: root)
-
-        // Refresh expanded directories
         refreshExpanded(nodes: rootNodes, root: root)
     }
 
@@ -70,7 +90,10 @@ final class FileTreeState {
         }
     }
 
-    private func scanDirectory(atPath path: String, relativeTo root: String) -> [FileTreeNode] {
+    private func scanDirectory(
+        atPath path: String,
+        relativeTo root: String
+    ) -> [FileTreeNode] {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: path) else { return [] }
 
@@ -80,8 +103,6 @@ final class FileTreeState {
 
             let absPath = (path as NSString).appendingPathComponent(name)
             let relPath = String(absPath.dropFirst(root.count + 1))
-
-            if gitIgnoredCache.contains(relPath) { continue }
 
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: absPath, isDirectory: &isDir) else { continue }
@@ -99,42 +120,59 @@ final class FileTreeState {
         return FileTreeNode.sorted(nodes)
     }
 
-    private func loadGitIgnored(worktreePath: String) {
-        // Batch check using git check-ignore
-        let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(atPath: worktreePath) else { return }
+    private func filterIgnored(
+        _ nodes: [FileTreeNode],
+        ignored: Set<String>
+    ) -> [FileTreeNode] {
+        nodes.filter { !ignored.contains($0.relativePath) }
+    }
 
-        let paths = contents.filter { !Self.hiddenNames.contains($0) && !$0.hasPrefix(".") }
-        guard !paths.isEmpty else {
-            gitIgnoredCache = []
-            return
-        }
+    // MARK: - Git Ignore (off main actor)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-C", worktreePath, "check-ignore", "--stdin"]
-        process.currentDirectoryURL = URL(fileURLWithPath: worktreePath)
+    private nonisolated static func computeGitIgnored(
+        directory: String,
+        worktreeRoot: String
+    ) async -> Set<String> {
+        await Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            guard let contents = try? fm.contentsOfDirectory(atPath: directory) else {
+                return Set<String>()
+            }
 
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = FileHandle.nullDevice
+            let relativePaths = contents.compactMap { name -> String? in
+                guard !name.hasPrefix(".") else { return nil }
+                let absPath = (directory as NSString).appendingPathComponent(name)
+                return String(absPath.dropFirst(worktreeRoot.count + 1))
+            }
 
-        do {
-            try process.run()
-            let inputData = paths.joined(separator: "\n").data(using: .utf8) ?? Data()
-            inputPipe.fileHandleForWriting.write(inputData)
-            inputPipe.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
+            guard !relativePaths.isEmpty else { return Set<String>() }
 
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: outputData, encoding: .utf8) ?? ""
-            gitIgnoredCache = Set(
-                output.split(separator: "\n").map { String($0) }
-            )
-        } catch {
-            gitIgnoredCache = []
-        }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", worktreeRoot, "check-ignore", "--stdin"]
+            process.currentDirectoryURL = URL(fileURLWithPath: worktreeRoot)
+
+            let inputPipe = Pipe()
+            let outputPipe = Pipe()
+            process.standardInput = inputPipe
+            process.standardOutput = outputPipe
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+                let inputData =
+                    relativePaths.joined(separator: "\n")
+                    .data(using: .utf8) ?? Data()
+                inputPipe.fileHandleForWriting.write(inputData)
+                inputPipe.fileHandleForWriting.closeFile()
+                process.waitUntilExit()
+
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                return Set(output.split(separator: "\n").map { String($0) })
+            } catch {
+                return Set<String>()
+            }
+        }.value
     }
 }
