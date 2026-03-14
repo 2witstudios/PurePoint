@@ -162,7 +162,9 @@ final class ProjectState: Identifiable {
             )
         ) { response in
             if case .spawnResult(_, let agentId, _) = response {
-                self.appState?.activeProjectRoot = self.projectRoot
+                if self.appState?.projectState(forRoot: self.projectRoot) != nil {
+                    self.appState?.activeProjectRoot = self.projectRoot
+                }
                 self.appState?.pendingSelectAgentId = agentId
             }
         }
@@ -197,7 +199,9 @@ final class ProjectState: Identifiable {
     func createWorktree(name: String?) {
         sendDaemonRequest(.createWorktree(projectRoot: projectRoot, name: name)) { response in
             if case .createWorktreeResult(let worktreeId) = response {
-                self.appState?.activeProjectRoot = self.projectRoot
+                if self.appState?.projectState(forRoot: self.projectRoot) != nil {
+                    self.appState?.activeProjectRoot = self.projectRoot
+                }
                 self.appState?.pendingSelectWorktreeId = worktreeId
             }
         }
