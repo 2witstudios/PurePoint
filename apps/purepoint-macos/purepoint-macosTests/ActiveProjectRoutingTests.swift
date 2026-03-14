@@ -111,6 +111,26 @@ struct ActiveProjectRoutingTests {
         #expect(state.activeSidebarSelection == .agent("a1"))
     }
 
+    @Test func unknownWorktreeIdPreservesActiveProjectRoot() {
+        let state = AppState(service: StubWorkspaceService())
+        state.projects = [makeProject(root: "/a"), makeProject(root: "/b")]
+        state.activeProjectRoot = "/a"
+
+        state.updateActiveProject(for: .worktree("nonexistent"))
+
+        #expect(state.activeProjectRoot == "/a")
+    }
+
+    @Test func unknownAgentIdPreservesActiveProjectRoot() {
+        let state = AppState(service: StubWorkspaceService())
+        state.projects = [makeProject(root: "/a"), makeProject(root: "/b")]
+        state.activeProjectRoot = "/a"
+
+        state.updateActiveProject(for: .agent("nonexistent"))
+
+        #expect(state.activeProjectRoot == "/a")
+    }
+
     @Test func worktreeAgentTerminalRoutesThroughWorktree() {
         let state = AppState(service: StubWorkspaceService())
         state.projects = [
