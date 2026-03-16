@@ -53,7 +53,7 @@ enum EditorLanguage: String, CaseIterable {
         case "md", "markdown", "mdx": return .markdown
         case "json", "jsonc", "json5": return .json
         case "yml", "yaml": return .yaml
-        case "toml", "cfg", "ini", "conf": return .toml
+        case "toml": return .toml
         case "html", "htm": return .html
         case "css", "scss", "sass", "less": return .css
         case "sh", "bash", "zsh", "fish": return .shell
@@ -100,9 +100,9 @@ enum EditorLanguage: String, CaseIterable {
         ".npmignore": .shell,
         ".hgignore": .shell,
         // Config dotfiles
-        ".editorconfig": .toml,
-        ".gitconfig": .toml,
-        ".gitmodules": .toml,
+        ".editorconfig": .plaintext,
+        ".gitconfig": .plaintext,
+        ".gitmodules": .plaintext,
         // Shell dotfiles
         ".zshrc": .shell,
         ".bashrc": .shell,

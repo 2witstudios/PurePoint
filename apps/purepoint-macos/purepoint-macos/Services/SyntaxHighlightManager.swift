@@ -63,7 +63,7 @@ final class SyntaxHighlightManager {
             return
         }
 
-        if let storage = textView.textStorage, storage.length > Self.maxHighlightSize {
+        if textView.string.utf8.count > Self.maxHighlightSize {
             clearTemporaryAttributes()
             return
         }

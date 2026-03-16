@@ -121,11 +121,12 @@ struct EditorContentRepresentable: NSViewRepresentable {
         nsView.onContentChanged = onContentChanged
         nsView.onSave = onSave
         nsView.setEditable(isEditable && !isBinary)
-        nsView.setLanguage(language)
 
         // Only update content if it differs (avoid resetting cursor)
         if !isBinary && nsView.getContent() != content {
             nsView.setContent(content)
         }
+
+        nsView.setLanguage(language)
     }
 }

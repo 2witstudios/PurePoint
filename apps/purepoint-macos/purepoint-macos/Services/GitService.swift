@@ -282,7 +282,11 @@ actor GitService {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
         process.waitUntilExit()
         if process.terminationStatus == 0 {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()

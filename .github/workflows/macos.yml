@@ -44,6 +44,15 @@ jobs:
       - name: Install xcbeautify
         run: brew install xcbeautify
 
+      - name: Clone local tree-sitter packages
+        run: |
+          mkdir -p apps/purepoint-macos/LocalPackages
+          git clone --depth 1 https://github.com/tree-sitter/tree-sitter-css.git apps/purepoint-macos/LocalPackages/tree-sitter-css
+          git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git apps/purepoint-macos/LocalPackages/tree-sitter-javascript
+          git clone --depth 1 https://github.com/tree-sitter-grammars/tree-sitter-lua.git apps/purepoint-macos/LocalPackages/tree-sitter-lua
+          git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git apps/purepoint-macos/LocalPackages/tree-sitter-python
+          git clone --depth 1 https://github.com/tree-sitter-grammars/tree-sitter-yaml.git apps/purepoint-macos/LocalPackages/tree-sitter-yaml
+
       - name: Build
         run: |
           xcodebuild build \

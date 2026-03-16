@@ -85,7 +85,20 @@ class LineNumberRulerView: NSRulerView {
 
         // Ensure layout for the visible region
         let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
-        guard glyphRange.length > 0 else { return }
+        if glyphRange.length == 0 {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: lineNumberFont,
+                .foregroundColor: textColor,
+            ]
+            let numStr = "1" as NSString
+            let strSize = numStr.size(withAttributes: attrs)
+            let drawPoint = NSPoint(
+                x: gutterWidth - strSize.width - 6,
+                y: containerOrigin.y
+            )
+            numStr.draw(at: drawPoint, withAttributes: attrs)
+            return
+        }
         let visibleCharRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
 
         let firstLine = lineIndex(forCharacter: visibleCharRange.location)
