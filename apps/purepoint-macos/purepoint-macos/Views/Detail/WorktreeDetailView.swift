@@ -114,6 +114,7 @@ struct WorktreeDetailView: View {
             } else {
                 EditorContentRepresentable(
                     content: tab.content,
+                    language: tab.language,
                     isBinary: false,
                     isEditable: true,
                     onContentChanged: { newContent in

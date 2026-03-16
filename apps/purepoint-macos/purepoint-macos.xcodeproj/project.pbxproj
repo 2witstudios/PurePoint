@@ -9,6 +9,14 @@
 /* Begin PBXBuildFile section */
 		FB0A00012F60000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00022F60000000000001 /* SwiftTerm */; };
 		FB0A00062F60000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00072F60000000000002 /* Sparkle */; };
+		FB57E1282F67B8090077135F /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1272F67B8090077135F /* TreeSitterSwift */; };
+		FB57E12B2F67B83B0077135F /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E12A2F67B83B0077135F /* TreeSitterJavaScript */; };
+		FB57E12F2F67BC020077135F /* Neon in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E12E2F67BC020077135F /* Neon */; };
+		FB57E1322F67BCE90077135F /* TreeSitterRust in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1312F67BCE90077135F /* TreeSitterRust */; };
+		FB57E1352F67BD090077135F /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1342F67BD090077135F /* TreeSitterJSON */; };
+		FB57E1382F67BD5B0077135F /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1372F67BD5B0077135F /* TreeSitterBash */; };
+		FB57E13B2F67BD900077135F /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E13A2F67BD900077135F /* TreeSitterTypeScript */; };
+		FB57E13E2F67BDC00077135F /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E13D2F67BDC00077135F /* TreeSitterPython */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,8 +65,16 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FB57E12F2F67BC020077135F /* Neon in Frameworks */,
 				FB0A00012F60000000000001 /* SwiftTerm in Frameworks */,
 				FB0A00062F60000000000002 /* Sparkle in Frameworks */,
+				FB57E1352F67BD090077135F /* TreeSitterJSON in Frameworks */,
+				FB57E1322F67BCE90077135F /* TreeSitterRust in Frameworks */,
+				FB57E12B2F67B83B0077135F /* TreeSitterJavaScript in Frameworks */,
+				FB57E1282F67B8090077135F /* TreeSitterSwift in Frameworks */,
+				FB57E1382F67BD5B0077135F /* TreeSitterBash in Frameworks */,
+				FB57E13B2F67BD900077135F /* TreeSitterTypeScript in Frameworks */,
+				FB57E13E2F67BDC00077135F /* TreeSitterPython in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -122,6 +138,14 @@
 			packageProductDependencies = (
 				FB0A00022F60000000000001 /* SwiftTerm */,
 				FB0A00072F60000000000002 /* Sparkle */,
+				FB57E1272F67B8090077135F /* TreeSitterSwift */,
+				FB57E12A2F67B83B0077135F /* TreeSitterJavaScript */,
+				FB57E12E2F67BC020077135F /* Neon */,
+				FB57E1312F67BCE90077135F /* TreeSitterRust */,
+				FB57E1342F67BD090077135F /* TreeSitterJSON */,
+				FB57E1372F67BD5B0077135F /* TreeSitterBash */,
+				FB57E13A2F67BD900077135F /* TreeSitterTypeScript */,
+				FB57E13D2F67BDC00077135F /* TreeSitterPython */,
 			);
 			productName = "purepoint-macos";
 			productReference = FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */;
@@ -208,6 +232,14 @@
 			packageReferences = (
 				FB0A00032F60000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				FB57E1262F67B8090077135F /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
+				FB57E1292F67B83B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-javascript" */,
+				FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */,
+				FB57E12D2F67BC020077135F /* XCRemoteSwiftPackageReference "Neon" */,
+				FB57E1302F67BCE90077135F /* XCRemoteSwiftPackageReference "tree-sitter-rust" */,
+				FB57E1332F67BD090077135F /* XCRemoteSwiftPackageReference "tree-sitter-json" */,
+				FB57E1362F67BD5B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-bash" */,
+				FB57E13C2F67BDC00077135F /* XCRemoteSwiftPackageReference "tree-sitter-python" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FBC7CFBB2F53F1FD00F8E0A1 /* Products */;
@@ -652,6 +684,70 @@
 				minimumVersion = 2.7.0;
 			};
 		};
+		FB57E1262F67B8090077135F /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/alex-pinkus/tree-sitter-swift";
+			requirement = {
+				kind = revision;
+				revision = 277b583bbb024f20ba88b95c48bf5a6a0b4f2287;
+			};
+		};
+		FB57E1292F67B83B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-javascript" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-javascript";
+			requirement = {
+				kind = exactVersion;
+				version = 0.23.1;
+			};
+		};
+		FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-typescript";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57E12D2F67BC020077135F /* XCRemoteSwiftPackageReference "Neon" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ChimeHQ/Neon";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		FB57E1302F67BCE90077135F /* XCRemoteSwiftPackageReference "tree-sitter-rust" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-rust";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57E1332F67BD090077135F /* XCRemoteSwiftPackageReference "tree-sitter-json" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-json";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57E1362F67BD5B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-bash" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-bash";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57E13C2F67BDC00077135F /* XCRemoteSwiftPackageReference "tree-sitter-python" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-python";
+			requirement = {
+				kind = exactVersion;
+				version = 0.23.6;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -664,6 +760,46 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		FB57E1272F67B8090077135F /* TreeSitterSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E1262F67B8090077135F /* XCRemoteSwiftPackageReference "tree-sitter-swift" */;
+			productName = TreeSitterSwift;
+		};
+		FB57E12A2F67B83B0077135F /* TreeSitterJavaScript */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E1292F67B83B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-javascript" */;
+			productName = TreeSitterJavaScript;
+		};
+		FB57E12E2F67BC020077135F /* Neon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E12D2F67BC020077135F /* XCRemoteSwiftPackageReference "Neon" */;
+			productName = Neon;
+		};
+		FB57E1312F67BCE90077135F /* TreeSitterRust */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E1302F67BCE90077135F /* XCRemoteSwiftPackageReference "tree-sitter-rust" */;
+			productName = TreeSitterRust;
+		};
+		FB57E1342F67BD090077135F /* TreeSitterJSON */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E1332F67BD090077135F /* XCRemoteSwiftPackageReference "tree-sitter-json" */;
+			productName = TreeSitterJSON;
+		};
+		FB57E1372F67BD5B0077135F /* TreeSitterBash */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E1362F67BD5B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-bash" */;
+			productName = TreeSitterBash;
+		};
+		FB57E13A2F67BD900077135F /* TreeSitterTypeScript */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */;
+			productName = TreeSitterTypeScript;
+		};
+		FB57E13D2F67BDC00077135F /* TreeSitterPython */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57E13C2F67BDC00077135F /* XCRemoteSwiftPackageReference "tree-sitter-python" */;
+			productName = TreeSitterPython;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

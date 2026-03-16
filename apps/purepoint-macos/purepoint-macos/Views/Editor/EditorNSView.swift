@@ -7,6 +7,7 @@ class EditorNSView: NSView {
     private let scrollView = NSScrollView()
     private let textView: EditorTextView
     private var lineRuler: LineNumberRulerView?
+    private var highlightManager: SyntaxHighlightManager?
     private var suppressCallbacks = false
 
     var onContentChanged: ((String) -> Void)?
@@ -65,6 +66,12 @@ class EditorNSView: NSView {
         textView.onSave = { [weak self] in
             self?.onSave?()
         }
+
+        highlightManager = SyntaxHighlightManager(textView: textView)
+    }
+
+    func setLanguage(_ language: EditorLanguage) {
+        highlightManager?.setLanguage(language)
     }
 
     func setContent(_ content: String) {
@@ -85,6 +92,7 @@ class EditorNSView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         textView.backgroundColor = Theme.cardBackground
+        highlightManager?.invalidate()
     }
 }
 
@@ -92,6 +100,7 @@ class EditorNSView: NSView {
 
 struct EditorContentRepresentable: NSViewRepresentable {
     let content: String
+    let language: EditorLanguage
     let isBinary: Bool
     let isEditable: Bool
     var onContentChanged: ((String) -> Void)?
@@ -103,6 +112,7 @@ struct EditorContentRepresentable: NSViewRepresentable {
         view.onSave = onSave
         view.setEditable(isEditable && !isBinary)
         view.setContent(isBinary ? "" : content)
+        view.setLanguage(language)
         return view
     }
 
@@ -110,6 +120,7 @@ struct EditorContentRepresentable: NSViewRepresentable {
         nsView.onContentChanged = onContentChanged
         nsView.onSave = onSave
         nsView.setEditable(isEditable && !isBinary)
+        nsView.setLanguage(language)
 
         // Only update content if it differs (avoid resetting cursor)
         if !isBinary && nsView.getContent() != content {
