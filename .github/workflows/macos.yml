@@ -58,10 +58,8 @@ jobs:
           # Strip non-essential files and rewrite Package.swift so SPM auto-discovers
           # all C sources (works around Xcode 26 ignoring explicit `sources` parameter)
           for pkg in apps/purepoint-macos/LocalPackages/tree-sitter-*; do
-            name=$(basename "$pkg")
             # Remove everything except Package.swift, src/, bindings/swift/, queries/
-            find "$pkg" -maxdepth 1 \
-              -not -name '.' \
+            find "$pkg" -mindepth 1 -maxdepth 1 \
               -not -name 'Package.swift' \
               -not -name 'src' \
               -not -name 'bindings' \
