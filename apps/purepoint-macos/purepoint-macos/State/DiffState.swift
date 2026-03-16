@@ -23,7 +23,8 @@ final class DiffState {
     private var watcher: WorktreeWatcher?
     private var currentWorktreePath: String?
     private var currentProjectRoot: String?
-    private var loadTask: Task<Void, Never>?
+    private var unstagedTask: Task<Void, Never>?
+    private var prTask: Task<Void, Never>?
 
     // MARK: - Load for Worktree
 
@@ -33,12 +34,10 @@ final class DiffState {
         currentWorktreePath = path
         currentProjectRoot = nil
 
-        loadTask?.cancel()
-        loadTask = Task {
-            await fetchUnstaged(path: path)
-            guard !Task.isCancelled else { return }
-            await fetchPRs(cwd: path, branch: branch)
-        }
+        unstagedTask?.cancel()
+        prTask?.cancel()
+        unstagedTask = Task { await fetchUnstaged(path: path) }
+        prTask = Task { await fetchPRs(cwd: path, branch: branch) }
 
         startWatching(path: path)
     }
@@ -49,12 +48,10 @@ final class DiffState {
         currentProjectRoot = projectRoot
         currentWorktreePath = nil
 
-        loadTask?.cancel()
-        loadTask = Task {
-            await fetchUnstaged(path: projectRoot)
-            guard !Task.isCancelled else { return }
-            await fetchPRs(cwd: projectRoot, branch: nil)
-        }
+        unstagedTask?.cancel()
+        prTask?.cancel()
+        unstagedTask = Task { await fetchUnstaged(path: projectRoot) }
+        prTask = Task { await fetchPRs(cwd: projectRoot, branch: nil) }
 
         startWatching(path: projectRoot)
     }
@@ -80,19 +77,11 @@ final class DiffState {
     // MARK: - Refresh
 
     func refresh() {
-        if let path = currentWorktreePath {
-            loadTask?.cancel()
-            loadTask = Task {
-                await fetchUnstaged(path: path)
-            }
-        } else if let root = currentProjectRoot {
-            loadTask?.cancel()
-            loadTask = Task {
-                await fetchUnstaged(path: root)
-                guard !Task.isCancelled else { return }
-                await fetchPRs(cwd: root, branch: nil)
-            }
-        }
+        let path = currentWorktreePath ?? currentProjectRoot
+        guard let path else { return }
+        unstagedTask?.cancel()
+        unstagedTask = Task { await fetchUnstaged(path: path) }
+        // Don't re-fetch PRs on refresh — they don't change on file save
     }
 
     // MARK: - Watcher
@@ -110,7 +99,8 @@ final class DiffState {
     func stopWatching() {
         watcher?.stop()
         watcher = nil
-        loadTask?.cancel()
+        unstagedTask?.cancel()
+        prTask?.cancel()
     }
 
     // MARK: - Private

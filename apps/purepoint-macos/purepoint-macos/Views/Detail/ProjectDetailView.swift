@@ -214,7 +214,7 @@ struct ProjectDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if diffState.pullRequests.isEmpty {
                 VStack(spacing: 12) {
-                    Image(systemName: "pull.request")
+                    Image(systemName: "arrow.triangle.pull")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary)
                     Text("No open pull requests")
