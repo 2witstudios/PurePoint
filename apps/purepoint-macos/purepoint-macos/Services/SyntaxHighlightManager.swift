@@ -17,6 +17,8 @@ final class SyntaxHighlightManager {
 
     private static let maxHighlightSize = 1_000_000
     private static var languageConfigs: [EditorLanguage: LanguageConfiguration] = [:]
+    private static let regularFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private static let boldFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
 
     init(textView: NSTextView) {
         self.textView = textView
@@ -52,8 +54,7 @@ final class SyntaxHighlightManager {
         do {
             let config = TextViewHighlighter.Configuration(
                 languageConfiguration: langConfig,
-                attributeProvider: Self.attributeProvider,
-                locationTransformer: { _ in nil }
+                attributeProvider: Self.attributeProvider
             )
             highlighter = try TextViewHighlighter(textView: textView, configuration: config)
         } catch {
@@ -107,39 +108,39 @@ final class SyntaxHighlightManager {
 
     private static let attributeProvider: TokenAttributeProvider = { token in
         let name = token.name
-        let font: NSFont
         let color: NSColor
+        let font: NSFont
 
         if name.hasPrefix("keyword") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .bold)
             color = EditorTheme.keyword
+            font = boldFont
         } else if name.hasPrefix("string") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.string
+            font = regularFont
         } else if name.hasPrefix("comment") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.comment
+            font = regularFont
         } else if name.hasPrefix("number") || name.hasPrefix("float") || name.hasPrefix("integer") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.number
+            font = regularFont
         } else if name.hasPrefix("type") || name.hasPrefix("constructor") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.type
+            font = regularFont
         } else if name.hasPrefix("function") || name.hasPrefix("method") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.function
+            font = regularFont
         } else if name.hasPrefix("property") || name.hasPrefix("field") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.property
+            font = regularFont
         } else if name.hasPrefix("attribute") || name.hasPrefix("include") || name.hasPrefix("preproc") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = EditorTheme.preprocessor
+            font = regularFont
         } else if name.hasPrefix("operator") || name.hasPrefix("punctuation") {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = .secondaryLabelColor
+            font = regularFont
         } else {
-            font = .monospacedSystemFont(ofSize: 13, weight: .regular)
             color = .labelColor
+            font = regularFont
         }
 
         return [.font: font, .foregroundColor: color]
