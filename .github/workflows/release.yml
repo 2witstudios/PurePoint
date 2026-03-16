@@ -69,6 +69,44 @@ jobs:
       - name: Install tools
         run: brew install xcbeautify create-dmg
 
+      - name: Clone local tree-sitter packages
+        run: |
+          mkdir -p apps/purepoint-macos/LocalPackages
+          git clone --depth 1 https://github.com/tree-sitter/tree-sitter-css.git apps/purepoint-macos/LocalPackages/tree-sitter-css
+          git clone --depth 1 https://github.com/tree-sitter/tree-sitter-javascript.git apps/purepoint-macos/LocalPackages/tree-sitter-javascript
+          git clone --depth 1 https://github.com/tree-sitter-grammars/tree-sitter-lua.git apps/purepoint-macos/LocalPackages/tree-sitter-lua
+          git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git apps/purepoint-macos/LocalPackages/tree-sitter-python
+          git clone --depth 1 https://github.com/tree-sitter-grammars/tree-sitter-yaml.git apps/purepoint-macos/LocalPackages/tree-sitter-yaml
+
+      - name: Prepare local packages for Xcode
+        run: |
+          for pkg in apps/purepoint-macos/LocalPackages/tree-sitter-*; do
+            lib=$(sed -n 's/.*name: "\(TreeSitter[^"]*\)".*/\1/p' "$pkg/Package.swift" | head -1)
+            mkdir -p "$pkg/src/include"
+            find "$pkg/bindings/swift" -name '*.h' -exec cp {} "$pkg/src/include/" \;
+            cp -r "$pkg/queries" "$pkg/src/queries" 2>/dev/null || true
+            find "$pkg/src" -type f -not -name '*.c' -not -name '*.h' -not -name '*.scm' -delete
+            find "$pkg/src" -type d -empty -delete 2>/dev/null || true
+            cat > "$pkg/Package.swift" << PKGEOF
+          // swift-tools-version:5.3
+          import PackageDescription
+          let package = Package(
+              name: "$lib",
+              products: [.library(name: "$lib", targets: ["$lib"])],
+              targets: [
+                  .target(
+                      name: "$lib",
+                      path: "src",
+                      resources: [.copy("queries")],
+                      publicHeadersPath: "include",
+                      cSettings: [.headerSearchPath(".")]
+                  ),
+              ],
+              cLanguageStandard: .c11
+          )
+          PKGEOF
+          done
+
       - name: Archive
         run: |
           xcodebuild archive \
