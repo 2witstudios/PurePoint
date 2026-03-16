@@ -60,7 +60,7 @@ mod tests {
                 id: "ag-1".into(),
                 name: "claude".into(),
                 agent_type: "claude".into(),
-                status: AgentStatus::Streaming,
+                status: AgentStatus::Running,
                 prompt: Some("test".into()),
                 started_at: chrono::Utc::now(),
                 completed_at: None,

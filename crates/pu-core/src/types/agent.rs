@@ -3,22 +3,20 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
-    Streaming,
-    Waiting,
+    Running,
     Broken,
 }
 
 impl AgentStatus {
     pub fn is_alive(self) -> bool {
-        matches!(self, Self::Streaming | Self::Waiting)
+        matches!(self, Self::Running)
     }
 }
 
 impl Serialize for AgentStatus {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let s = match self {
-            AgentStatus::Streaming => "streaming",
-            AgentStatus::Waiting => "waiting",
+            AgentStatus::Running => "running",
             AgentStatus::Broken => "broken",
         };
         serializer.serialize_str(s)
@@ -29,16 +27,14 @@ impl<'de> Deserialize<'de> for AgentStatus {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
-            "streaming" => Ok(AgentStatus::Streaming),
-            "waiting" => Ok(AgentStatus::Waiting),
+            "running" => Ok(AgentStatus::Running),
             "broken" => Ok(AgentStatus::Broken),
             // Backward compat: map old status values
-            "spawning" | "running" => Ok(AgentStatus::Streaming),
-            "idle" | "suspended" => Ok(AgentStatus::Waiting),
+            "streaming" | "waiting" | "spawning" | "idle" | "suspended" => Ok(AgentStatus::Running),
             "completed" | "failed" | "killed" | "lost" => Ok(AgentStatus::Broken),
             other => Err(serde::de::Error::unknown_variant(
                 other,
-                &["streaming", "waiting", "broken"],
+                &["running", "broken"],
             )),
         }
     }
@@ -174,15 +170,9 @@ mod tests {
     // --- AgentStatus ---
 
     #[test]
-    fn given_agent_status_streaming_should_serialize() {
-        let json = serde_json::to_string(&AgentStatus::Streaming).unwrap();
-        assert_eq!(json, r#""streaming""#);
-    }
-
-    #[test]
-    fn given_agent_status_waiting_should_serialize() {
-        let json = serde_json::to_string(&AgentStatus::Waiting).unwrap();
-        assert_eq!(json, r#""waiting""#);
+    fn given_agent_status_running_should_serialize() {
+        let json = serde_json::to_string(&AgentStatus::Running).unwrap();
+        assert_eq!(json, r#""running""#);
     }
 
     #[test]
@@ -193,11 +183,7 @@ mod tests {
 
     #[test]
     fn given_all_agent_statuses_should_round_trip_json() {
-        let statuses = vec![
-            AgentStatus::Streaming,
-            AgentStatus::Waiting,
-            AgentStatus::Broken,
-        ];
+        let statuses = vec![AgentStatus::Running, AgentStatus::Broken];
         for status in statuses {
             let json = serde_json::to_string(&status).unwrap();
             let parsed: AgentStatus = serde_json::from_str(&json).unwrap();
@@ -206,42 +192,34 @@ mod tests {
     }
 
     #[test]
-    fn given_old_status_values_should_deserialize_to_new() {
-        // spawning, running → Streaming
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""spawning""#).unwrap(),
-            AgentStatus::Streaming
-        );
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""running""#).unwrap(),
-            AgentStatus::Streaming
-        );
-        // idle, suspended → Waiting
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""idle""#).unwrap(),
-            AgentStatus::Waiting
-        );
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""suspended""#).unwrap(),
-            AgentStatus::Waiting
-        );
+    fn given_old_status_values_should_deserialize_to_running() {
+        // streaming, waiting, spawning, idle, suspended → Running
+        for value in &[
+            "streaming",
+            "waiting",
+            "spawning",
+            "idle",
+            "suspended",
+            "running",
+        ] {
+            assert_eq!(
+                serde_json::from_str::<AgentStatus>(&format!(r#""{value}""#)).unwrap(),
+                AgentStatus::Running,
+                "{value} should deserialize to Running"
+            );
+        }
+    }
+
+    #[test]
+    fn given_old_broken_status_values_should_deserialize_to_broken() {
         // completed, failed, killed, lost → Broken
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""completed""#).unwrap(),
-            AgentStatus::Broken
-        );
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""failed""#).unwrap(),
-            AgentStatus::Broken
-        );
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""killed""#).unwrap(),
-            AgentStatus::Broken
-        );
-        assert_eq!(
-            serde_json::from_str::<AgentStatus>(r#""lost""#).unwrap(),
-            AgentStatus::Broken
-        );
+        for value in &["completed", "failed", "killed", "lost", "broken"] {
+            assert_eq!(
+                serde_json::from_str::<AgentStatus>(&format!(r#""{value}""#)).unwrap(),
+                AgentStatus::Broken,
+                "{value} should deserialize to Broken"
+            );
+        }
     }
 
     #[test]
@@ -250,9 +228,8 @@ mod tests {
     }
 
     #[test]
-    fn given_active_statuses_should_be_alive() {
-        assert!(AgentStatus::Streaming.is_alive());
-        assert!(AgentStatus::Waiting.is_alive());
+    fn given_running_status_should_be_alive() {
+        assert!(AgentStatus::Running.is_alive());
     }
 
     // --- AgentEntry ---
@@ -263,7 +240,7 @@ mod tests {
             id: "ag-abc".into(),
             name: "claude".into(),
             agent_type: "claude".into(),
-            status: AgentStatus::Streaming,
+            status: AgentStatus::Running,
             prompt: Some("fix bug".into()),
             started_at: chrono::Utc::now(),
             completed_at: None,
@@ -300,7 +277,7 @@ mod tests {
             "id": "ag-old",
             "name": "claude",
             "agentType": "claude",
-            "status": "waiting",
+            "status": "running",
             "prompt": null,
             "startedAt": "2026-03-01T00:00:00Z",
             "suspendedAt": "2026-03-01T01:00:00Z"
@@ -326,7 +303,7 @@ mod tests {
         }"#;
         let entry: AgentEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.id, "ag-xyz");
-        assert_eq!(entry.status, AgentStatus::Waiting);
+        assert_eq!(entry.status, AgentStatus::Running);
         assert_eq!(entry.pid, Some(5678));
     }
 
@@ -337,7 +314,7 @@ mod tests {
             id: "ag-plan".into(),
             name: "claude".into(),
             agent_type: "claude".into(),
-            status: AgentStatus::Streaming,
+            status: AgentStatus::Running,
             prompt: Some("research this".into()),
             started_at: chrono::Utc::now(),
             completed_at: None,
@@ -373,7 +350,7 @@ mod tests {
             "id": "ag-old",
             "name": "claude",
             "agentType": "claude",
-            "status": "streaming",
+            "status": "running",
             "prompt": "hello",
             "startedAt": "2026-03-01T00:00:00Z",
             "pid": 1234
@@ -409,7 +386,7 @@ mod tests {
             "id": "ag-old",
             "name": "claude",
             "agentType": "claude",
-            "status": "streaming",
+            "status": "running",
             "prompt": null,
             "startedAt": "2026-03-01T00:00:00Z"
         }"#;
@@ -426,7 +403,7 @@ mod tests {
             "id": "ag-new",
             "name": "claude",
             "agentType": "claude",
-            "status": "waiting",
+            "status": "running",
             "prompt": null,
             "startedAt": "2026-03-01T00:00:00Z",
             "triggerSeqIndex": 2,

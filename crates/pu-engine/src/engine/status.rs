@@ -95,7 +95,7 @@ impl Engine {
         match sessions.get(id) {
             Some(handle) => {
                 let exit_code = *handle.exit_rx.borrow();
-                let status = agent_monitor::effective_status(exit_code, &handle.output_buffer);
+                let status = agent_monitor::effective_status(exit_code);
                 let idle_seconds = Some(handle.output_buffer.content_idle_seconds());
                 (status, exit_code, idle_seconds)
             }

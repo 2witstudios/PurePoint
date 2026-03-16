@@ -17,8 +17,7 @@ pub(crate) fn status_colored_with_suspended(
         return "benched".yellow().to_string();
     }
     match status {
-        AgentStatus::Streaming => "streaming".green().to_string(),
-        AgentStatus::Waiting => "waiting".cyan().to_string(),
+        AgentStatus::Running => "running".green().to_string(),
         AgentStatus::Broken => match exit_code {
             Some(0) => "done".dimmed().to_string(),
             _ => "broken".red().to_string(),

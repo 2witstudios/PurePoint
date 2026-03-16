@@ -374,7 +374,7 @@ fn given_spawn_result_should_round_trip() {
     let resp = Response::SpawnResult {
         worktree_id: Some("wt-abc".into()),
         agent_id: "ag-xyz".into(),
-        status: crate::types::AgentStatus::Streaming,
+        status: crate::types::AgentStatus::Running,
     };
     let json = serde_json::to_string(&resp).unwrap();
     let parsed: Response = serde_json::from_str(&json).unwrap();
@@ -696,14 +696,14 @@ fn given_suspend_result_should_round_trip() {
 fn given_resume_result_should_round_trip() {
     let resp = Response::ResumeResult {
         agent_id: "ag-abc".into(),
-        status: crate::types::AgentStatus::Streaming,
+        status: crate::types::AgentStatus::Running,
     };
     let json = serde_json::to_string(&resp).unwrap();
     let parsed: Response = serde_json::from_str(&json).unwrap();
     match parsed {
         Response::ResumeResult { agent_id, status } => {
             assert_eq!(agent_id, "ag-abc");
-            assert_eq!(status, crate::types::AgentStatus::Streaming);
+            assert_eq!(status, crate::types::AgentStatus::Running);
         }
         _ => panic!("expected ResumeResult"),
     }

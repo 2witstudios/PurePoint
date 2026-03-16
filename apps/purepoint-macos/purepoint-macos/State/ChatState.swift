@@ -143,11 +143,11 @@ final class ChatState {
 
     func injectPulse(from appState: AppState) {
         let allAgents = appState.projects.flatMap(\.allAgents)
-        let activeAgents = allAgents.filter { $0.status == .streaming || $0.status == .waiting }
+        let activeAgents = allAgents.filter { $0.status.isAlive }
         guard !activeAgents.isEmpty else { return }
 
         let events = activeAgents.prefix(5).map { agent in
-            PulseEvent(agent: agent.name, event: agent.status == .streaming ? "streaming" : "waiting")
+            PulseEvent(agent: agent.name, event: "running")
         }
         let summary = PulseSummary(activeAgents: activeAgents.count, recentEvents: events)
         let pulseMessage = ChatMessage(
