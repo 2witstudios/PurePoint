@@ -53,6 +53,27 @@ jobs:
           git clone --depth 1 https://github.com/tree-sitter/tree-sitter-python.git apps/purepoint-macos/LocalPackages/tree-sitter-python
           git clone --depth 1 https://github.com/tree-sitter-grammars/tree-sitter-yaml.git apps/purepoint-macos/LocalPackages/tree-sitter-yaml
 
+      - name: Prepare local packages for Xcode
+        run: |
+          # Strip non-essential files and rewrite Package.swift so SPM auto-discovers
+          # all C sources (works around Xcode 26 ignoring explicit `sources` parameter)
+          for pkg in apps/purepoint-macos/LocalPackages/tree-sitter-*; do
+            name=$(basename "$pkg")
+            # Remove everything except Package.swift, src/, bindings/swift/, queries/
+            find "$pkg" -maxdepth 1 \
+              -not -name '.' \
+              -not -name 'Package.swift' \
+              -not -name 'src' \
+              -not -name 'bindings' \
+              -not -name 'queries' \
+              -exec rm -rf {} +
+            rm -rf "$pkg/bindings/go" "$pkg/bindings/python" "$pkg/bindings/rust" \
+                   "$pkg/bindings/swift/"*Tests
+            # Remove non-C files from src/ that SPM might choke on
+            find "$pkg/src" -type f -not -name '*.c' -not -name '*.h' -delete
+            find "$pkg/src" -type d -empty -delete 2>/dev/null || true
+          done
+
       - name: Build
         run: |
           xcodebuild build \
