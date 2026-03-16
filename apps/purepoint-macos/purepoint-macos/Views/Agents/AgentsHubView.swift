@@ -39,7 +39,11 @@ struct AgentsHubView: View {
     @State private var promptAgent = ""
     @State private var promptCommand = ""
 
-    private var projectRoot: String {
+    private var projectRoots: [String] {
+        appState.projects.map(\.projectRoot)
+    }
+
+    private var anyProjectRoot: String {
         appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
     }
 
@@ -53,23 +57,29 @@ struct AgentsHubView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            await hubState.loadAll(projectRoot: projectRoot)
-            await triggersState.loadTriggers(projectRoot: projectRoot)
+            await hubState.loadAll(projectRoots: projectRoots)
+            await triggersState.loadTriggers(projectRoots: projectRoots)
+        }
+        .onChange(of: appState.projects.count) { _, _ in
+            Task {
+                await hubState.loadAll(projectRoots: projectRoots)
+                await triggersState.loadTriggers(projectRoots: projectRoots)
+            }
         }
         .onChange(of: hubState.selectedPromptId) { _, _ in
             syncPromptEditor()
         }
         .sheet(isPresented: Bindable(hubState).showingCreatePrompt) {
-            PromptCreationSheet(hubState: hubState, projectRoot: projectRoot)
+            PromptCreationSheet(hubState: hubState)
         }
         .sheet(isPresented: Bindable(hubState).showingCreateAgent) {
-            AgentCreationSheet(hubState: hubState, projectRoot: projectRoot)
+            AgentCreationSheet(hubState: hubState)
         }
         .sheet(isPresented: Bindable(hubState).showingCreateSwarm) {
-            SwarmCreationSheet(hubState: hubState, projectRoot: projectRoot)
+            SwarmCreationSheet(hubState: hubState)
         }
         .sheet(isPresented: Bindable(triggersState).showingCreationSheet) {
-            TriggerCreationSheet(state: triggersState, projectRoot: projectRoot)
+            TriggerCreationSheet(state: triggersState)
         }
     }
 
@@ -218,8 +228,10 @@ struct AgentsHubView: View {
                                             promptAgent == "terminal"
                                                 && !trimmed.isEmpty
                                             ? trimmed : nil
+                                        let saveRoot = prompt.projectRoot ?? anyProjectRoot
                                         await hubState.saveTemplate(
-                                            projectRoot: projectRoot,
+                                            projectRoot: saveRoot,
+                                            projectRoots: projectRoots,
                                             name: prompt.name,
                                             description: prompt.description,
                                             agent: promptAgent,
@@ -231,8 +243,10 @@ struct AgentsHubView: View {
                                 }
                                 Button("Delete") {
                                     Task {
+                                        let deleteRoot = prompt.projectRoot ?? anyProjectRoot
                                         await hubState.deleteTemplate(
-                                            projectRoot: projectRoot,
+                                            projectRoot: deleteRoot,
+                                            projectRoots: projectRoots,
                                             name: prompt.name,
                                             scope: prompt.source
                                         )
@@ -357,8 +371,10 @@ struct AgentsHubView: View {
                             Spacer()
                             Button("Delete") {
                                 Task {
+                                    let deleteRoot = agent.projectRoot ?? anyProjectRoot
                                     await hubState.deleteAgentDef(
-                                        projectRoot: projectRoot,
+                                        projectRoot: deleteRoot,
+                                        projectRoots: projectRoots,
                                         name: agent.name,
                                         scope: agent.scope
                                     )
@@ -453,8 +469,9 @@ struct AgentsHubView: View {
                             Spacer()
                             Button("Run") {
                                 Task {
+                                    let runRoot = swarm.projectRoot ?? anyProjectRoot
                                     await hubState.runSwarm(
-                                        projectRoot: projectRoot,
+                                        projectRoot: runRoot,
                                         name: swarm.name
                                     )
                                 }
@@ -464,8 +481,10 @@ struct AgentsHubView: View {
 
                             Button("Delete") {
                                 Task {
+                                    let deleteRoot = swarm.projectRoot ?? anyProjectRoot
                                     await hubState.deleteSwarmDef(
-                                        projectRoot: projectRoot,
+                                        projectRoot: deleteRoot,
+                                        projectRoots: projectRoots,
                                         name: swarm.name,
                                         scope: swarm.scope
                                     )
@@ -500,7 +519,7 @@ struct AgentsHubView: View {
             emptyMessage: "Select a trigger or create one to get started."
         ) {
             if let trigger = triggersState.selectedTrigger {
-                TriggerDetailView(trigger: trigger, state: triggersState, projectRoot: projectRoot)
+                TriggerDetailView(trigger: trigger, state: triggersState)
             }
         }
     }
@@ -618,8 +637,9 @@ struct AgentsHubView: View {
             promptDraft = prompt.body
         }
         let capturedId = hubState.selectedPromptId
+        let detailRoot = prompt.projectRoot ?? anyProjectRoot
         Task {
-            await hubState.loadPromptDetail(projectRoot: projectRoot, name: prompt.name)
+            await hubState.loadPromptDetail(projectRoot: detailRoot, name: prompt.name)
             guard hubState.selectedPromptId == capturedId else { return }
             if let updated = hubState.selectedPrompt {
                 promptDraft = updated.body
@@ -701,7 +721,7 @@ private struct PromptListRow: View {
                     .font(.system(size: 13, weight: .medium))
                 Spacer()
                 MockBadge(
-                    text: prompt.source == "global" ? "Global" : "Project",
+                    text: prompt.source == "global" ? "Global" : (prompt.projectName ?? "Project"),
                     tint: prompt.source == "global" ? .blue : .green
                 )
             }
@@ -727,7 +747,10 @@ private struct AgentListRow: View {
                 Text(agent.name)
                     .font(.system(size: 13, weight: .medium))
                 Spacer()
-                MockBadge(text: agent.scope, tint: .green)
+                MockBadge(
+                    text: agent.scope == "global" ? "Global" : (agent.projectName ?? "Project"),
+                    tint: agent.scope == "global" ? .blue : .green
+                )
             }
 
             Text(agent.agentType)
@@ -748,7 +771,10 @@ private struct SwarmListRow: View {
                 Text(swarm.name)
                     .font(.system(size: 13, weight: .medium))
                 Spacer()
-                MockBadge(text: swarm.scope, tint: .green)
+                MockBadge(
+                    text: swarm.scope == "global" ? "Global" : (swarm.projectName ?? "Project"),
+                    tint: swarm.scope == "global" ? .blue : .green
+                )
             }
 
             Text("\(swarm.worktreeCount) worktrees \u{00B7} \(swarm.totalAgents) agents")
@@ -772,7 +798,10 @@ private struct TriggerListRow: View {
                 Text(trigger.name)
                     .font(.system(size: 13, weight: .medium))
                 Spacer()
-                MockBadge(text: trigger.scope, tint: .green)
+                MockBadge(
+                    text: trigger.scope == "global" ? "Global" : (trigger.projectName ?? "Project"),
+                    tint: trigger.scope == "global" ? .blue : .green
+                )
             }
 
             HStack(spacing: 6) {

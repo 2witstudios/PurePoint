@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SwarmCreationSheet: View {
     @Bindable var hubState: AgentsHubState
-    let projectRoot: String
+    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -10,7 +10,8 @@ struct SwarmCreationSheet: View {
     @State private var worktreeTemplate = ""
     @State private var rosterItems: [SwarmRosterItem] = []
     @State private var includeTerminal = true
-    @State private var scope: PromptScopeChoice = .project
+    @State private var scope: PromptScopeChoice = .global
+    @State private var selectedProjectRoot = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +22,9 @@ struct SwarmCreationSheet: View {
             sheetFooter
         }
         .frame(width: 420, height: 520)
+        .onAppear {
+            selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+        }
     }
 
     // MARK: - Header
@@ -86,6 +90,14 @@ struct SwarmCreationSheet: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            if scope == .project {
+                Picker("Project", selection: $selectedProjectRoot) {
+                    ForEach(appState.projects) { project in
+                        Text(project.projectName).tag(project.projectRoot)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -106,8 +118,13 @@ struct SwarmCreationSheet: View {
                     includeTerminal: includeTerminal,
                     scope: scope.wireValue
                 )
+                let saveRoot = scope == .project ? selectedProjectRoot : (appState.projects.first?.projectRoot ?? "")
                 Task {
-                    await hubState.saveSwarmDef(projectRoot: projectRoot, def: def)
+                    await hubState.saveSwarmDef(
+                        projectRoot: saveRoot,
+                        projectRoots: appState.projects.map(\.projectRoot),
+                        def: def
+                    )
                     dismiss()
                 }
             }

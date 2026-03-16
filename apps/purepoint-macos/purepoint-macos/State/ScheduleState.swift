@@ -44,12 +44,29 @@ final class ScheduleState {
 
     // MARK: - Backend Integration
 
-    func loadSchedules(projectRoot: String) async {
+    func loadSchedules(projectRoots: [String]) async {
         do {
-            let response = try await client.send(.listSchedules(projectRoot: projectRoot))
-            if case .scheduleList(let schedules) = response {
-                self.events = schedules.map { ScheduleEvent(from: $0) }
+            var merged: [String: ScheduleEvent] = [:]
+            for root in projectRoots {
+                let projectName = URL(fileURLWithPath: root).lastPathComponent
+                let response = try await client.send(.listSchedules(projectRoot: root))
+                if case .scheduleList(let schedules) = response {
+                    for payload in schedules {
+                        var event = ScheduleEvent(from: payload)
+                        if payload.scope != "global" {
+                            event.projectRoot = root
+                            event.projectName = projectName
+                        } else {
+                            event.projectName = "Global"
+                        }
+                        let key = "\(event.scope):\(event.name)"
+                        if merged[key] == nil {
+                            merged[key] = event
+                        }
+                    }
+                }
             }
+            self.events = Array(merged.values).sorted { $0.name < $1.name }
         } catch {
             print("Failed to load schedules: \(error)")
         }
@@ -57,6 +74,7 @@ final class ScheduleState {
 
     func saveSchedule(
         projectRoot: String,
+        projectRoots: [String],
         name: String,
         enabled: Bool,
         recurrence: RecurrenceRule,
@@ -81,29 +99,29 @@ final class ScheduleState {
                     target: target,
                     scope: scope
                 ))
-            await loadSchedules(projectRoot: projectRoot)
+            await loadSchedules(projectRoots: projectRoots)
         } catch {
             print("Failed to save schedule: \(error)")
         }
     }
 
-    func deleteSchedule(projectRoot: String, name: String, scope: String) async {
+    func deleteSchedule(projectRoot: String, projectRoots: [String], name: String, scope: String) async {
         do {
             _ = try await client.send(.deleteSchedule(projectRoot: projectRoot, name: name, scope: scope))
-            await loadSchedules(projectRoot: projectRoot)
+            await loadSchedules(projectRoots: projectRoots)
         } catch {
             print("Failed to delete schedule: \(error)")
         }
     }
 
-    func toggleSchedule(projectRoot: String, name: String, currentlyEnabled: Bool) async {
+    func toggleSchedule(projectRoot: String, projectRoots: [String], name: String, currentlyEnabled: Bool) async {
         do {
             if currentlyEnabled {
                 _ = try await client.send(.disableSchedule(projectRoot: projectRoot, name: name))
             } else {
                 _ = try await client.send(.enableSchedule(projectRoot: projectRoot, name: name))
             }
-            await loadSchedules(projectRoot: projectRoot)
+            await loadSchedules(projectRoots: projectRoots)
         } catch {
             print("Failed to toggle schedule: \(error)")
         }

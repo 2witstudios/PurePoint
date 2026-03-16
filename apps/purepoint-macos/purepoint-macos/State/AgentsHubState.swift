@@ -35,52 +35,97 @@ final class AgentsHubState {
         self.client = client
     }
 
-    func loadAll(projectRoot: String) async {
+    func loadAll(projectRoots: [String]) async {
         isLoading = true
         error = nil
-        async let t: () = loadTemplates(projectRoot: projectRoot)
-        async let a: () = loadAgentDefs(projectRoot: projectRoot)
-        async let s: () = loadSwarmDefs(projectRoot: projectRoot)
+        async let t: () = loadTemplates(projectRoots: projectRoots)
+        async let a: () = loadAgentDefs(projectRoots: projectRoots)
+        async let s: () = loadSwarmDefs(projectRoots: projectRoots)
         _ = await (t, a, s)
         isLoading = false
     }
 
-    func loadTemplates(projectRoot: String) async {
+    func loadTemplates(projectRoots: [String]) async {
         do {
-            let response = try await client.send(.listTemplates(projectRoot: projectRoot))
-            if case .templateList(let templates) = response {
-                prompts = templates.map { SavedPrompt(from: $0) }
-                if selectedPromptId == nil, let first = prompts.first {
-                    selectedPromptId = first.id
+            var merged: [String: SavedPrompt] = [:]
+            for root in projectRoots {
+                let projectName = URL(fileURLWithPath: root).lastPathComponent
+                let response = try await client.send(.listTemplates(projectRoot: root))
+                if case .templateList(let templates) = response {
+                    for info in templates {
+                        var prompt = SavedPrompt(from: info)
+                        if info.source != "global" {
+                            prompt.projectRoot = root
+                            prompt.projectName = projectName
+                        }
+                        let key = prompt.id
+                        if merged[key] == nil {
+                            merged[key] = prompt
+                        }
+                    }
                 }
+            }
+            prompts = Array(merged.values).sorted { $0.name < $1.name }
+            if selectedPromptId == nil, let first = prompts.first {
+                selectedPromptId = first.id
             }
         } catch {
             self.error = "Failed to load templates: \(error.localizedDescription)"
         }
     }
 
-    func loadAgentDefs(projectRoot: String) async {
+    func loadAgentDefs(projectRoots: [String]) async {
         do {
-            let response = try await client.send(.listAgentDefs(projectRoot: projectRoot))
-            if case .agentDefList(let defs) = response {
-                agents = defs.map { AgentDefinition(from: $0) }
-                if selectedAgentId == nil, let first = agents.first {
-                    selectedAgentId = first.id
+            var merged: [String: AgentDefinition] = [:]
+            for root in projectRoots {
+                let projectName = URL(fileURLWithPath: root).lastPathComponent
+                let response = try await client.send(.listAgentDefs(projectRoot: root))
+                if case .agentDefList(let defs) = response {
+                    for info in defs {
+                        var def = AgentDefinition(from: info)
+                        if info.scope != "global" {
+                            def.projectRoot = root
+                            def.projectName = projectName
+                        }
+                        let key = def.id
+                        if merged[key] == nil {
+                            merged[key] = def
+                        }
+                    }
                 }
+            }
+            agents = Array(merged.values).sorted { $0.name < $1.name }
+            if selectedAgentId == nil, let first = agents.first {
+                selectedAgentId = first.id
             }
         } catch {
             self.error = "Failed to load agent defs: \(error.localizedDescription)"
         }
     }
 
-    func loadSwarmDefs(projectRoot: String) async {
+    func loadSwarmDefs(projectRoots: [String]) async {
         do {
-            let response = try await client.send(.listSwarmDefs(projectRoot: projectRoot))
-            if case .swarmDefList(let defs) = response {
-                swarms = defs.map { SwarmDefinition(from: $0) }
-                if selectedSwarmId == nil, let first = swarms.first {
-                    selectedSwarmId = first.id
+            var merged: [String: SwarmDefinition] = [:]
+            for root in projectRoots {
+                let projectName = URL(fileURLWithPath: root).lastPathComponent
+                let response = try await client.send(.listSwarmDefs(projectRoot: root))
+                if case .swarmDefList(let defs) = response {
+                    for info in defs {
+                        var def = SwarmDefinition(from: info)
+                        if info.scope != "global" {
+                            def.projectRoot = root
+                            def.projectName = projectName
+                        }
+                        let key = def.id
+                        if merged[key] == nil {
+                            merged[key] = def
+                        }
+                    }
                 }
+            }
+            swarms = Array(merged.values).sorted { $0.name < $1.name }
+            if selectedSwarmId == nil, let first = swarms.first {
+                selectedSwarmId = first.id
             }
         } catch {
             self.error = "Failed to load swarm defs: \(error.localizedDescription)"
@@ -108,7 +153,8 @@ final class AgentsHubState {
     }
 
     func saveTemplate(
-        projectRoot: String, name: String, description: String, agent: String, body: String, scope: String,
+        projectRoot: String, projectRoots: [String],
+        name: String, description: String, agent: String, body: String, scope: String,
         command: String? = nil
     ) async {
         do {
@@ -116,23 +162,23 @@ final class AgentsHubState {
                 .saveTemplate(
                     projectRoot: projectRoot, name: name, description: description, agent: agent, body: body,
                     scope: scope, command: command))
-            await loadTemplates(projectRoot: projectRoot)
+            await loadTemplates(projectRoots: projectRoots)
             await loadPromptDetail(projectRoot: projectRoot, name: name)
         } catch {
             self.error = "Failed to save template: \(error.localizedDescription)"
         }
     }
 
-    func deleteTemplate(projectRoot: String, name: String, scope: String) async {
+    func deleteTemplate(projectRoot: String, projectRoots: [String], name: String, scope: String) async {
         do {
             _ = try await client.send(.deleteTemplate(projectRoot: projectRoot, name: name, scope: scope))
-            await loadTemplates(projectRoot: projectRoot)
+            await loadTemplates(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to delete template: \(error.localizedDescription)"
         }
     }
 
-    func saveAgentDef(projectRoot: String, def: AgentDefinition) async {
+    func saveAgentDef(projectRoot: String, projectRoots: [String], def: AgentDefinition) async {
         do {
             _ = try await client.send(
                 .saveAgentDef(
@@ -147,22 +193,22 @@ final class AgentsHubState {
                     icon: def.icon,
                     command: def.command
                 ))
-            await loadAgentDefs(projectRoot: projectRoot)
+            await loadAgentDefs(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to save agent def: \(error.localizedDescription)"
         }
     }
 
-    func deleteAgentDef(projectRoot: String, name: String, scope: String) async {
+    func deleteAgentDef(projectRoot: String, projectRoots: [String], name: String, scope: String) async {
         do {
             _ = try await client.send(.deleteAgentDef(projectRoot: projectRoot, name: name, scope: scope))
-            await loadAgentDefs(projectRoot: projectRoot)
+            await loadAgentDefs(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to delete agent def: \(error.localizedDescription)"
         }
     }
 
-    func saveSwarmDef(projectRoot: String, def: SwarmDefinition) async {
+    func saveSwarmDef(projectRoot: String, projectRoots: [String], def: SwarmDefinition) async {
         do {
             _ = try await client.send(
                 .saveSwarmDef(
@@ -176,16 +222,16 @@ final class AgentsHubState {
                     includeTerminal: def.includeTerminal,
                     scope: def.scope
                 ))
-            await loadSwarmDefs(projectRoot: projectRoot)
+            await loadSwarmDefs(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to save swarm def: \(error.localizedDescription)"
         }
     }
 
-    func deleteSwarmDef(projectRoot: String, name: String, scope: String) async {
+    func deleteSwarmDef(projectRoot: String, projectRoots: [String], name: String, scope: String) async {
         do {
             _ = try await client.send(.deleteSwarmDef(projectRoot: projectRoot, name: name, scope: scope))
-            await loadSwarmDefs(projectRoot: projectRoot)
+            await loadSwarmDefs(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to delete swarm def: \(error.localizedDescription)"
         }

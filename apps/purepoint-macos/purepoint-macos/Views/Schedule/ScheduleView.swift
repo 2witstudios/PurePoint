@@ -7,8 +7,8 @@ struct ScheduleView: View {
         appState.scheduleState
     }
 
-    private var projectRoot: String {
-        appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+    private var projectRoots: [String] {
+        appState.projects.map(\.projectRoot)
     }
 
     var body: some View {
@@ -20,13 +20,18 @@ struct ScheduleView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: Bindable(state).showingCreationSheet) {
-            ScheduleEventSheet(state: state, projectRoot: projectRoot, editingEvent: nil)
+            ScheduleEventSheet(state: state, editingEvent: nil)
         }
         .sheet(isPresented: Bindable(state).showingEditSheet) {
-            ScheduleEventSheet(state: state, projectRoot: projectRoot, editingEvent: state.selectedEvent)
+            ScheduleEventSheet(state: state, editingEvent: state.selectedEvent)
         }
         .task {
-            await state.loadSchedules(projectRoot: projectRoot)
+            await state.loadSchedules(projectRoots: projectRoots)
+        }
+        .onChange(of: appState.projects.count) { _, _ in
+            Task {
+                await state.loadSchedules(projectRoots: projectRoots)
+            }
         }
     }
 

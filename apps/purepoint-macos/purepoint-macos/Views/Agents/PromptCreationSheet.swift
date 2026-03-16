@@ -2,15 +2,16 @@ import SwiftUI
 
 struct PromptCreationSheet: View {
     @Bindable var hubState: AgentsHubState
-    let projectRoot: String
+    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
     @State private var description = ""
-    @State private var scope: PromptScopeChoice = .project
+    @State private var scope: PromptScopeChoice = .global
     @State private var agentType = ""
     @State private var promptBody = ""
     @State private var command = ""
+    @State private var selectedProjectRoot = ""
 
     private let agentTypes = AgentTypes.withAny
 
@@ -23,6 +24,9 @@ struct PromptCreationSheet: View {
             sheetFooter
         }
         .frame(width: 420, height: 520)
+        .onAppear {
+            selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+        }
     }
 
     // MARK: - Header
@@ -53,6 +57,14 @@ struct PromptCreationSheet: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            if scope == .project {
+                Picker("Project", selection: $selectedProjectRoot) {
+                    ForEach(appState.projects) { project in
+                        Text(project.projectName).tag(project.projectRoot)
+                    }
+                }
+            }
 
             Picker("Agent type", selection: $agentType) {
                 ForEach(agentTypes, id: \.self) { t in
@@ -85,9 +97,11 @@ struct PromptCreationSheet: View {
             Button("Create") {
                 let trimmedCommand = command.trimmingCharacters(in: .whitespaces)
                 let cmd = agentType == "terminal" && !trimmedCommand.isEmpty ? trimmedCommand : nil
+                let saveRoot = scope == .project ? selectedProjectRoot : (appState.projects.first?.projectRoot ?? "")
                 Task {
                     await hubState.saveTemplate(
-                        projectRoot: projectRoot,
+                        projectRoot: saveRoot,
+                        projectRoots: appState.projects.map(\.projectRoot),
                         name: name.trimmingCharacters(in: .whitespaces),
                         description: description,
                         agent: agentType,

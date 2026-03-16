@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AgentCreationSheet: View {
     @Bindable var hubState: AgentsHubState
-    let projectRoot: String
+    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -11,9 +11,10 @@ struct AgentCreationSheet: View {
     @State private var templateName = ""
     @State private var inlinePrompt = ""
     @State private var tags = ""
-    @State private var scope: PromptScopeChoice = .project
+    @State private var scope: PromptScopeChoice = .global
     @State private var availableInCommandDialog = true
     @State private var command = ""
+    @State private var selectedProjectRoot = ""
 
     private let agentTypes = AgentTypes.all
 
@@ -26,6 +27,9 @@ struct AgentCreationSheet: View {
             sheetFooter
         }
         .frame(width: 420, height: 520)
+        .onAppear {
+            selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+        }
     }
 
     // MARK: - Header
@@ -89,6 +93,14 @@ struct AgentCreationSheet: View {
             }
             .pickerStyle(.segmented)
 
+            if scope == .project {
+                Picker("Project", selection: $selectedProjectRoot) {
+                    ForEach(appState.projects) { project in
+                        Text(project.projectName).tag(project.projectRoot)
+                    }
+                }
+            }
+
             Toggle("Available in command dialog", isOn: $availableInCommandDialog)
                 .toggleStyle(.switch)
         }
@@ -121,8 +133,13 @@ struct AgentCreationSheet: View {
                     availableInCommandDialog: availableInCommandDialog,
                     command: agentType == "terminal" && !trimmedCommand.isEmpty ? trimmedCommand : nil
                 )
+                let saveRoot = scope == .project ? selectedProjectRoot : (appState.projects.first?.projectRoot ?? "")
                 Task {
-                    await hubState.saveAgentDef(projectRoot: projectRoot, def: def)
+                    await hubState.saveAgentDef(
+                        projectRoot: saveRoot,
+                        projectRoots: appState.projects.map(\.projectRoot),
+                        def: def
+                    )
                     dismiss()
                 }
             }

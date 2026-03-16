@@ -9,6 +9,8 @@ struct SavedPrompt: Identifiable {
     var source: String
     var variables: [String]
     var command: String?
+    var projectRoot: String?
+    var projectName: String?
 
     init(from info: TemplateInfo) {
         self.id = "\(info.source):\(info.name)"
@@ -47,6 +49,8 @@ struct AgentDefinition: Identifiable {
     var availableInCommandDialog: Bool
     var icon: String?
     var command: String?
+    var projectRoot: String?
+    var projectName: String?
 
     init(from info: AgentDefInfo) {
         self.id = "\(info.scope):\(info.name)"
@@ -87,6 +91,8 @@ struct SwarmDefinition: Identifiable {
     var roster: [SwarmRosterItem]
     var includeTerminal: Bool
     var scope: String
+    var projectRoot: String?
+    var projectName: String?
 
     var totalAgents: Int {
         worktreeCount * roster.reduce(0) { $0 + $1.quantity }
