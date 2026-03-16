@@ -56,6 +56,9 @@ class FileTreeOutlineViewController: NSViewController, NSOutlineViewDataSource, 
     // MARK: - Data Update
 
     func updateNodes(_ nodes: [FileTreeNode]) {
+        if nodes.count == rootNodes.count && zip(nodes, rootNodes).allSatisfy({ $0 === $1 }) {
+            return
+        }
         let scrollOrigin = scrollView.contentView.bounds.origin
         rootNodes = nodes
         outlineView.reloadData()
@@ -65,8 +68,11 @@ class FileTreeOutlineViewController: NSViewController, NSOutlineViewDataSource, 
     }
 
     private var expandedPaths: Set<String> = []
+    private var isRestoringExpansion = false
 
     private func restoreExpansionState() {
+        isRestoringExpansion = true
+        defer { isRestoringExpansion = false }
         func expandMatching(in nodes: [FileTreeNode]) {
             for node in nodes where node.isDirectory && expandedPaths.contains(node.absolutePath) {
                 outlineView.expandItem(node)
@@ -118,9 +124,12 @@ class FileTreeOutlineViewController: NSViewController, NSOutlineViewDataSource, 
     func outlineViewItemDidExpand(_ notification: Notification) {
         guard let node = notification.userInfo?["NSObject"] as? FileTreeNode else { return }
         expandedPaths.insert(node.absolutePath)
+        guard !isRestoringExpansion else { return }
+        guard node.children.isEmpty else { return }  // already loaded
         onNodeExpanded?(node)
-        // Reload children after expansion to show lazy-loaded data
-        outlineView.reloadItem(node, reloadChildren: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.outlineView.reloadItem(node, reloadChildren: true)
+        }
     }
 
     func outlineViewItemWillCollapse(_ notification: Notification) {
