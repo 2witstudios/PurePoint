@@ -9,14 +9,28 @@
 /* Begin PBXBuildFile section */
 		FB0A00012F60000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00022F60000000000001 /* SwiftTerm */; };
 		FB0A00062F60000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00072F60000000000002 /* Sparkle */; };
+		FB57075A2F6834CC0077135F /* TreeSitterPHP in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707592F6834CC0077135F /* TreeSitterPHP */; };
+		FB57076B2F6840320077135F /* TreeSitterMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = FB57076A2F6840320077135F /* TreeSitterMarkdown */; };
+		FB57076E2F68417C0077135F /* TreeSitterHTML in Frameworks */ = {isa = PBXBuildFile; productRef = FB57076D2F68417C0077135F /* TreeSitterHTML */; };
+		FB5707742F6841F30077135F /* TreeSitterGo in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707732F6841F30077135F /* TreeSitterGo */; };
+		FB5707772F6842360077135F /* TreeSitterRuby in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707762F6842360077135F /* TreeSitterRuby */; };
+		FB57077A2F6842540077135F /* TreeSitterScala in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707792F6842540077135F /* TreeSitterScala */; };
+		FB57077D2F6842700077135F /* TreeSitterHaskell in Frameworks */ = {isa = PBXBuildFile; productRef = FB57077C2F6842700077135F /* TreeSitterHaskell */; };
+		FB5707802F6842C30077135F /* TreeSitterTOML in Frameworks */ = {isa = PBXBuildFile; productRef = FB57077F2F6842C30077135F /* TreeSitterTOML */; };
+		FB5707832F68430B0077135F /* TreeSitterXML in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707822F68430B0077135F /* TreeSitterXML */; };
+		FB57078D2F6847D90077135F /* TreeSitterCSharp in Frameworks */ = {isa = PBXBuildFile; productRef = FB57078C2F6847D90077135F /* TreeSitterCSharp */; };
+		FB57078F2F6847F10077135F /* TreeSitterCPP in Frameworks */ = {isa = PBXBuildFile; productRef = FB57078E2F6847F10077135F /* TreeSitterCPP */; };
+		FB5726972F6851440077135F /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = FB5726962F6851440077135F /* TreeSitterYAML */; };
+		FB57269A2F68515E0077135F /* TreeSitterLua in Frameworks */ = {isa = PBXBuildFile; productRef = FB5726992F68515E0077135F /* TreeSitterLua */; };
+		FB57269D2F6851B90077135F /* TreeSitterCSS in Frameworks */ = {isa = PBXBuildFile; productRef = FB57269C2F6851B90077135F /* TreeSitterCSS */; };
+		FB5726A02F6851DA0077135F /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = FB57269F2F6851DA0077135F /* TreeSitterPython */; };
+		FB5726A32F6851EE0077135F /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = FB5726A22F6851EE0077135F /* TreeSitterJavaScript */; };
 		FB57E1282F67B8090077135F /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1272F67B8090077135F /* TreeSitterSwift */; };
-		FB57E12B2F67B83B0077135F /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E12A2F67B83B0077135F /* TreeSitterJavaScript */; };
 		FB57E12F2F67BC020077135F /* Neon in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E12E2F67BC020077135F /* Neon */; };
 		FB57E1322F67BCE90077135F /* TreeSitterRust in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1312F67BCE90077135F /* TreeSitterRust */; };
 		FB57E1352F67BD090077135F /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1342F67BD090077135F /* TreeSitterJSON */; };
 		FB57E1382F67BD5B0077135F /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1372F67BD5B0077135F /* TreeSitterBash */; };
 		FB57E13B2F67BD900077135F /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E13A2F67BD900077135F /* TreeSitterTypeScript */; };
-		FB57E13E2F67BDC00077135F /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E13D2F67BDC00077135F /* TreeSitterPython */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,11 +84,25 @@
 				FB0A00062F60000000000002 /* Sparkle in Frameworks */,
 				FB57E1352F67BD090077135F /* TreeSitterJSON in Frameworks */,
 				FB57E1322F67BCE90077135F /* TreeSitterRust in Frameworks */,
-				FB57E12B2F67B83B0077135F /* TreeSitterJavaScript in Frameworks */,
+				FB5726A02F6851DA0077135F /* TreeSitterPython in Frameworks */,
+				FB57269A2F68515E0077135F /* TreeSitterLua in Frameworks */,
 				FB57E1282F67B8090077135F /* TreeSitterSwift in Frameworks */,
+				FB5726972F6851440077135F /* TreeSitterYAML in Frameworks */,
+				FB5726A32F6851EE0077135F /* TreeSitterJavaScript in Frameworks */,
 				FB57E1382F67BD5B0077135F /* TreeSitterBash in Frameworks */,
+				FB57269D2F6851B90077135F /* TreeSitterCSS in Frameworks */,
 				FB57E13B2F67BD900077135F /* TreeSitterTypeScript in Frameworks */,
-				FB57E13E2F67BDC00077135F /* TreeSitterPython in Frameworks */,
+				FB57075A2F6834CC0077135F /* TreeSitterPHP in Frameworks */,
+				FB57076B2F6840320077135F /* TreeSitterMarkdown in Frameworks */,
+				FB57076E2F68417C0077135F /* TreeSitterHTML in Frameworks */,
+				FB5707742F6841F30077135F /* TreeSitterGo in Frameworks */,
+				FB5707772F6842360077135F /* TreeSitterRuby in Frameworks */,
+				FB57077A2F6842540077135F /* TreeSitterScala in Frameworks */,
+				FB57077D2F6842700077135F /* TreeSitterHaskell in Frameworks */,
+				FB5707802F6842C30077135F /* TreeSitterTOML in Frameworks */,
+				FB5707832F68430B0077135F /* TreeSitterXML in Frameworks */,
+				FB57078D2F6847D90077135F /* TreeSitterCSharp in Frameworks */,
+				FB57078F2F6847F10077135F /* TreeSitterCPP in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -139,13 +167,27 @@
 				FB0A00022F60000000000001 /* SwiftTerm */,
 				FB0A00072F60000000000002 /* Sparkle */,
 				FB57E1272F67B8090077135F /* TreeSitterSwift */,
-				FB57E12A2F67B83B0077135F /* TreeSitterJavaScript */,
 				FB57E12E2F67BC020077135F /* Neon */,
 				FB57E1312F67BCE90077135F /* TreeSitterRust */,
 				FB57E1342F67BD090077135F /* TreeSitterJSON */,
 				FB57E1372F67BD5B0077135F /* TreeSitterBash */,
 				FB57E13A2F67BD900077135F /* TreeSitterTypeScript */,
-				FB57E13D2F67BDC00077135F /* TreeSitterPython */,
+				FB5726962F6851440077135F /* TreeSitterYAML */,
+				FB5726992F68515E0077135F /* TreeSitterLua */,
+				FB57269C2F6851B90077135F /* TreeSitterCSS */,
+				FB57269F2F6851DA0077135F /* TreeSitterPython */,
+				FB5726A22F6851EE0077135F /* TreeSitterJavaScript */,
+				FB5707592F6834CC0077135F /* TreeSitterPHP */,
+				FB57076A2F6840320077135F /* TreeSitterMarkdown */,
+				FB57076D2F68417C0077135F /* TreeSitterHTML */,
+				FB5707732F6841F30077135F /* TreeSitterGo */,
+				FB5707762F6842360077135F /* TreeSitterRuby */,
+				FB5707792F6842540077135F /* TreeSitterScala */,
+				FB57077C2F6842700077135F /* TreeSitterHaskell */,
+				FB57077F2F6842C30077135F /* TreeSitterTOML */,
+				FB5707822F68430B0077135F /* TreeSitterXML */,
+				FB57078C2F6847D90077135F /* TreeSitterCSharp */,
+				FB57078E2F6847F10077135F /* TreeSitterCPP */,
 			);
 			productName = "purepoint-macos";
 			productReference = FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */;
@@ -233,13 +275,27 @@
 				FB0A00032F60000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				FB57E1262F67B8090077135F /* XCRemoteSwiftPackageReference "tree-sitter-swift" */,
-				FB57E1292F67B83B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-javascript" */,
 				FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */,
 				FB57E12D2F67BC020077135F /* XCRemoteSwiftPackageReference "Neon" */,
 				FB57E1302F67BCE90077135F /* XCRemoteSwiftPackageReference "tree-sitter-rust" */,
 				FB57E1332F67BD090077135F /* XCRemoteSwiftPackageReference "tree-sitter-json" */,
 				FB57E1362F67BD5B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-bash" */,
-				FB57E13C2F67BDC00077135F /* XCRemoteSwiftPackageReference "tree-sitter-python" */,
+				FB5726952F6851440077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-yaml" */,
+				FB5726982F68515E0077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-lua" */,
+				FB57269B2F6851B90077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-css" */,
+				FB57269E2F6851DA0077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-python" */,
+				FB5726A12F6851EE0077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-javascript" */,
+				FB5707582F6834CC0077135F /* XCRemoteSwiftPackageReference "tree-sitter-php" */,
+				FB5707692F6840320077135F /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */,
+				FB57076C2F68417C0077135F /* XCRemoteSwiftPackageReference "tree-sitter-html" */,
+				FB5707722F6841F30077135F /* XCRemoteSwiftPackageReference "tree-sitter-go" */,
+				FB5707752F6842360077135F /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */,
+				FB5707782F6842540077135F /* XCRemoteSwiftPackageReference "tree-sitter-scala" */,
+				FB57077B2F6842700077135F /* XCRemoteSwiftPackageReference "tree-sitter-haskell" */,
+				FB57077E2F6842C30077135F /* XCRemoteSwiftPackageReference "tree-sitter-toml" */,
+				FB5707812F68430B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-xml" */,
+				FB57078B2F6847D90077135F /* XCRemoteSwiftPackageReference "tree-sitter-c-sharp" */,
+				FB57078D2F6847F10077135F /* XCRemoteSwiftPackageReference "tree-sitter-cpp" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FBC7CFBB2F53F1FD00F8E0A1 /* Products */;
@@ -667,6 +723,29 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		FB5726952F6851440077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-yaml" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "LocalPackages/tree-sitter-yaml";
+		};
+		FB5726982F68515E0077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-lua" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "LocalPackages/tree-sitter-lua";
+		};
+		FB57269B2F6851B90077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-css" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "LocalPackages/tree-sitter-css";
+		};
+		FB57269E2F6851DA0077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-python" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "LocalPackages/tree-sitter-python";
+		};
+		FB5726A12F6851EE0077135F /* XCLocalSwiftPackageReference "LocalPackages/tree-sitter-javascript" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "LocalPackages/tree-sitter-javascript";
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		FB0A00032F60000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -684,20 +763,100 @@
 				minimumVersion = 2.7.0;
 			};
 		};
+		FB5707582F6834CC0077135F /* XCRemoteSwiftPackageReference "tree-sitter-php" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-php";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB5707692F6840320077135F /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter-grammars/tree-sitter-markdown";
+			requirement = {
+				branch = split_parser;
+				kind = branch;
+			};
+		};
+		FB57076C2F68417C0077135F /* XCRemoteSwiftPackageReference "tree-sitter-html" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-html";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB5707722F6841F30077135F /* XCRemoteSwiftPackageReference "tree-sitter-go" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-go";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB5707752F6842360077135F /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-ruby";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB5707782F6842540077135F /* XCRemoteSwiftPackageReference "tree-sitter-scala" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-scala";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57077B2F6842700077135F /* XCRemoteSwiftPackageReference "tree-sitter-haskell" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-haskell";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57077E2F6842C30077135F /* XCRemoteSwiftPackageReference "tree-sitter-toml" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter-grammars/tree-sitter-toml";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB5707812F68430B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-xml" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter-grammars/tree-sitter-xml";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57078B2F6847D90077135F /* XCRemoteSwiftPackageReference "tree-sitter-c-sharp" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-c-sharp";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
+		FB57078D2F6847F10077135F /* XCRemoteSwiftPackageReference "tree-sitter-cpp" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-cpp";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
 		FB57E1262F67B8090077135F /* XCRemoteSwiftPackageReference "tree-sitter-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/alex-pinkus/tree-sitter-swift";
 			requirement = {
 				kind = revision;
 				revision = 277b583bbb024f20ba88b95c48bf5a6a0b4f2287;
-			};
-		};
-		FB57E1292F67B83B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-javascript" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/tree-sitter-javascript";
-			requirement = {
-				kind = exactVersion;
-				version = 0.23.1;
 			};
 		};
 		FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */ = {
@@ -740,14 +899,6 @@
 				kind = branch;
 			};
 		};
-		FB57E13C2F67BDC00077135F /* XCRemoteSwiftPackageReference "tree-sitter-python" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tree-sitter/tree-sitter-python";
-			requirement = {
-				kind = exactVersion;
-				version = 0.23.6;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -761,15 +912,85 @@
 			package = FB0A00082F60000000000002 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
+		FB5707592F6834CC0077135F /* TreeSitterPHP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB5707582F6834CC0077135F /* XCRemoteSwiftPackageReference "tree-sitter-php" */;
+			productName = TreeSitterPHP;
+		};
+		FB57076A2F6840320077135F /* TreeSitterMarkdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB5707692F6840320077135F /* XCRemoteSwiftPackageReference "tree-sitter-markdown" */;
+			productName = TreeSitterMarkdown;
+		};
+		FB57076D2F68417C0077135F /* TreeSitterHTML */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57076C2F68417C0077135F /* XCRemoteSwiftPackageReference "tree-sitter-html" */;
+			productName = TreeSitterHTML;
+		};
+		FB5707732F6841F30077135F /* TreeSitterGo */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB5707722F6841F30077135F /* XCRemoteSwiftPackageReference "tree-sitter-go" */;
+			productName = TreeSitterGo;
+		};
+		FB5707762F6842360077135F /* TreeSitterRuby */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB5707752F6842360077135F /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */;
+			productName = TreeSitterRuby;
+		};
+		FB5707792F6842540077135F /* TreeSitterScala */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB5707782F6842540077135F /* XCRemoteSwiftPackageReference "tree-sitter-scala" */;
+			productName = TreeSitterScala;
+		};
+		FB57077C2F6842700077135F /* TreeSitterHaskell */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57077B2F6842700077135F /* XCRemoteSwiftPackageReference "tree-sitter-haskell" */;
+			productName = TreeSitterHaskell;
+		};
+		FB57077F2F6842C30077135F /* TreeSitterTOML */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57077E2F6842C30077135F /* XCRemoteSwiftPackageReference "tree-sitter-toml" */;
+			productName = TreeSitterTOML;
+		};
+		FB5707822F68430B0077135F /* TreeSitterXML */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB5707812F68430B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-xml" */;
+			productName = TreeSitterXML;
+		};
+		FB57078C2F6847D90077135F /* TreeSitterCSharp */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57078B2F6847D90077135F /* XCRemoteSwiftPackageReference "tree-sitter-c-sharp" */;
+			productName = TreeSitterCSharp;
+		};
+		FB57078E2F6847F10077135F /* TreeSitterCPP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FB57078D2F6847F10077135F /* XCRemoteSwiftPackageReference "tree-sitter-cpp" */;
+			productName = TreeSitterCPP;
+		};
+		FB5726962F6851440077135F /* TreeSitterYAML */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterYAML;
+		};
+		FB5726992F68515E0077135F /* TreeSitterLua */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterLua;
+		};
+		FB57269C2F6851B90077135F /* TreeSitterCSS */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterCSS;
+		};
+		FB57269F2F6851DA0077135F /* TreeSitterPython */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterPython;
+		};
+		FB5726A22F6851EE0077135F /* TreeSitterJavaScript */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TreeSitterJavaScript;
+		};
 		FB57E1272F67B8090077135F /* TreeSitterSwift */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = FB57E1262F67B8090077135F /* XCRemoteSwiftPackageReference "tree-sitter-swift" */;
 			productName = TreeSitterSwift;
-		};
-		FB57E12A2F67B83B0077135F /* TreeSitterJavaScript */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FB57E1292F67B83B0077135F /* XCRemoteSwiftPackageReference "tree-sitter-javascript" */;
-			productName = TreeSitterJavaScript;
 		};
 		FB57E12E2F67BC020077135F /* Neon */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -795,11 +1016,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */;
 			productName = TreeSitterTypeScript;
-		};
-		FB57E13D2F67BDC00077135F /* TreeSitterPython */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FB57E13C2F67BDC00077135F /* XCRemoteSwiftPackageReference "tree-sitter-python" */;
-			productName = TreeSitterPython;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

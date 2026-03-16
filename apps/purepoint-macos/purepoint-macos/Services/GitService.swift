@@ -256,15 +256,43 @@ actor GitService {
         if let cached = cachedGhPath {
             ghPath = cached
         } else {
-            let whichResult = runProcess("/usr/bin/env", args: ["which", "gh"], cwd: cwd)
-            let resolved = whichResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard whichResult.success, !resolved.isEmpty else {
+            guard let resolved = locateGh() else {
                 return CommandResult(stdout: "", stderr: "gh not found", exitCode: 1)
             }
             cachedGhPath = resolved
             ghPath = resolved
         }
         return runProcess(ghPath, args: args, cwd: cwd)
+    }
+
+    private nonisolated func locateGh() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/gh",
+            "/usr/local/bin/gh",
+        ]
+        for path in candidates {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["gh"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        if process.terminationStatus == 0 {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let path = String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty && FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
     }
 
     private func runProcess(_ path: String, args: [String], cwd: String) -> CommandResult {
