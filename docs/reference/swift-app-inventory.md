@@ -54,7 +54,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | File | Purpose |
 |---|---|
 | CheckForUpdatesViewModel.swift | Sparkle auto-update integration, check-for-updates UI |
-| CLIInstaller.swift | Copy pu binary + skill from app bundle to ~/.pu/bin on launch (mod-date freshness check) |
+| CLIInstaller.swift | Copy pu binary + plugin from app bundle to ~/.pu/bin and ~/.claude/plugins/purepoint on launch (mod-date freshness check) |
 | ClaudeConversationIndex.swift | Two-phase session loading for Claude (fast index + slow JSONL scan) |
 | ClaudeProcess.swift | Spawn claude CLI process for streaming conversations |
 | CodexConversationIndex.swift | Session index for Codex conversations |

@@ -90,7 +90,7 @@ Thin client. Depends on pu-core + clap + tokio + owo-colors + shell-words + whic
 | `daemon_ctrl.rs` | Daemon auto-start with health polling |
 | `commands/` | One module per CLI command |
 | `output/` | Human-readable and JSON output formatting (agents, definitions, execution, formatters, system) |
-| `skill.rs` | Claude Code skill auto-installation |
+| `skill.rs` | Claude Code plugin auto-installation |
 
 ## macOS app
 

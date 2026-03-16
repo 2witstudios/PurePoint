@@ -1,0 +1,4 @@
+{
+  "name": "pu",
+  "description": "PurePoint agent orchestration — spawn parallel AI agents in isolated worktrees, manage long-horizon tasks, and coordinate agent teams."
+}

@@ -3,16 +3,18 @@ import Foundation
 enum CLIInstaller {
     private static let installDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".pu/bin")
-    private static let skillDir = FileManager.default.homeDirectoryForCurrentUser
+    private static let pluginDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/plugins/purepoint")
+    private static let oldSkillDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/skills/pu")
 
-    /// Copy the bundled `pu` binary to ~/.pu/bin/pu and skill to ~/.claude/skills/pu/SKILL.md
+    /// Copy the bundled `pu` binary to ~/.pu/bin/pu and plugin to ~/.claude/plugins/purepoint/
     /// if they're newer or missing.
     static func installIfNeeded() {
         guard let macosDir = Bundle.main.executableURL?.deletingLastPathComponent() else { return }
 
         installBinary(from: macosDir)
-        installSkill(from: macosDir)
+        installPlugin(from: macosDir)
     }
 
     private static func installBinary(from macosDir: URL) {
@@ -32,24 +34,39 @@ enum CLIInstaller {
         try? FileManager.default.copyItem(at: bundled, to: target)
     }
 
-    private static func installSkill(from macosDir: URL) {
-        let bundled =
+    private static func installPlugin(from macosDir: URL) {
+        let bundledPlugin =
             macosDir
             .deletingLastPathComponent()
-            .appendingPathComponent("Resources/pu-skill.md")
-        guard FileManager.default.fileExists(atPath: bundled.path) else { return }
+            .appendingPathComponent("Resources/pu-plugin")
+        guard FileManager.default.fileExists(atPath: bundledPlugin.path) else { return }
 
-        let target = skillDir.appendingPathComponent("SKILL.md")
+        // Use plugin.json as the freshness sentinel
+        let bundledSentinel =
+            bundledPlugin
+            .appendingPathComponent(".claude-plugin/plugin.json")
+        let targetSentinel =
+            pluginDir
+            .appendingPathComponent(".claude-plugin/plugin.json")
 
-        if FileManager.default.fileExists(atPath: target.path),
-            isUpToDate(source: bundled, target: target)
+        if FileManager.default.fileExists(atPath: targetSentinel.path),
+            isUpToDate(source: bundledSentinel, target: targetSentinel)
         {
             return
         }
 
-        try? FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: target)
-        try? FileManager.default.copyItem(at: bundled, to: target)
+        // Remove old install and copy fresh
+        try? FileManager.default.removeItem(at: pluginDir)
+        try? FileManager.default.createDirectory(
+            at: pluginDir.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? FileManager.default.copyItem(at: bundledPlugin, to: pluginDir)
+
+        // Migrate: remove old skill location
+        if FileManager.default.fileExists(atPath: oldSkillDir.path) {
+            try? FileManager.default.removeItem(at: oldSkillDir)
+        }
     }
 
     private static func isUpToDate(source: URL, target: URL) -> Bool {

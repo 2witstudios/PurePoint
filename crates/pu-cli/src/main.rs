@@ -601,8 +601,8 @@ async fn main() {
         }
     };
 
-    // Background skill freshness check (non-blocking)
-    std::thread::spawn(skill::ensure_skill_current);
+    // Background plugin freshness check (non-blocking)
+    std::thread::spawn(skill::ensure_plugin_current);
 
     let result = match cli.command {
         Commands::Init { json } => commands::init::run(&socket, json).await,
