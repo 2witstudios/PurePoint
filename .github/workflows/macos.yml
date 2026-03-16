@@ -55,21 +55,37 @@ jobs:
 
       - name: Prepare local packages for Xcode
         run: |
-          # Strip non-essential files and rewrite Package.swift so SPM auto-discovers
-          # all C sources (works around Xcode 26 ignoring explicit `sources` parameter)
+          # Xcode 26 ignores the explicit `sources` parameter in local SPM packages,
+          # so restructure each package to use path-based auto-discovery instead.
           for pkg in apps/purepoint-macos/LocalPackages/tree-sitter-*; do
-            # Remove everything except Package.swift, src/, bindings/swift/, queries/
-            find "$pkg" -mindepth 1 -maxdepth 1 \
-              -not -name 'Package.swift' \
-              -not -name 'src' \
-              -not -name 'bindings' \
-              -not -name 'queries' \
-              -exec rm -rf {} +
-            rm -rf "$pkg/bindings/go" "$pkg/bindings/python" "$pkg/bindings/rust" \
-                   "$pkg/bindings/swift/"*Tests
-            # Remove non-C files from src/ that SPM might choke on
-            find "$pkg/src" -type f -not -name '*.c' -not -name '*.h' -delete
+            lib=$(sed -n 's/.*name: "\(TreeSitter[^"]*\)".*/\1/p' "$pkg/Package.swift" | head -1)
+            # Copy public header into src/include/
+            mkdir -p "$pkg/src/include"
+            find "$pkg/bindings/swift" -name '*.h' -exec cp {} "$pkg/src/include/" \;
+            # Copy queries into src/ so resources path works with path: "src"
+            cp -r "$pkg/queries" "$pkg/src/queries" 2>/dev/null || true
+            # Remove non-C/H files from src/ (JSON metadata confuses SPM)
+            find "$pkg/src" -type f -not -name '*.c' -not -name '*.h' -not -name '*.scm' -delete
             find "$pkg/src" -type d -empty -delete 2>/dev/null || true
+            # Rewrite Package.swift: use path "src" so SPM auto-discovers all .c files
+            cat > "$pkg/Package.swift" << PKGEOF
+          // swift-tools-version:5.3
+          import PackageDescription
+          let package = Package(
+              name: "$lib",
+              products: [.library(name: "$lib", targets: ["$lib"])],
+              targets: [
+                  .target(
+                      name: "$lib",
+                      path: "src",
+                      resources: [.copy("queries")],
+                      publicHeadersPath: "include",
+                      cSettings: [.headerSearchPath(".")]
+                  ),
+              ],
+              cLanguageStandard: .c11
+          )
+          PKGEOF
           done
 
       - name: Build
