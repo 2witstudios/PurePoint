@@ -5,6 +5,7 @@ class LineNumberRulerView: NSRulerView {
     private let textColor = NSColor.tertiaryLabelColor
     private let gutterWidth: CGFloat = 40
     private var boundsObserver: NSObjectProtocol?
+    private var lineStarts: [Int] = [0]
 
     init(textView: NSTextView) {
         guard let scrollView = textView.enclosingScrollView else {
@@ -31,6 +32,8 @@ class LineNumberRulerView: NSRulerView {
             name: NSText.didChangeNotification,
             object: textView
         )
+
+        rebuildLineStarts()
     }
 
     required init(coder: NSCoder) {
@@ -45,7 +48,30 @@ class LineNumberRulerView: NSRulerView {
     }
 
     @objc private func textDidChange(_ notification: Notification) {
+        rebuildLineStarts()
         needsDisplay = true
+    }
+
+    func rebuildLineStarts() {
+        guard let textView = clientView as? NSTextView else { return }
+        let s = textView.string as NSString
+        lineStarts = [0]
+        var idx = 0
+        while idx < s.length {
+            let range = s.lineRange(for: NSRange(location: idx, length: 0))
+            let next = NSMaxRange(range)
+            if next < s.length { lineStarts.append(next) }
+            idx = next
+        }
+    }
+
+    private func lineIndex(forCharacter charIndex: Int) -> Int {
+        var lo = 0, hi = lineStarts.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if lineStarts[mid] <= charIndex { lo = mid + 1 } else { hi = mid }
+        }
+        return lo - 1
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -55,40 +81,29 @@ class LineNumberRulerView: NSRulerView {
         else { return }
 
         let visibleRect = scrollView?.contentView.bounds ?? rect
-        let visibleGlyphRange = layoutManager.glyphRange(
-            forBoundingRect: visibleRect,
-            in: textContainer
-        )
-        let visibleCharRange = layoutManager.characterRange(
-            forGlyphRange: visibleGlyphRange,
-            actualGlyphRange: nil
-        )
-
-        let content = textView.string as NSString
         let containerOrigin = textView.textContainerOrigin
+
+        // Ensure layout for the visible region
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+        guard glyphRange.length > 0 else { return }
+        let visibleCharRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+
+        let firstLine = lineIndex(forCharacter: visibleCharRange.location)
+
         let attrs: [NSAttributedString.Key: Any] = [
             .font: lineNumberFont,
             .foregroundColor: textColor,
         ]
 
-        var lineNumber = 1
-        // Count lines before visible range
-        var idx = 0
-        while idx < visibleCharRange.location {
-            let lineRange = content.lineRange(for: NSRange(location: idx, length: 0))
-            lineNumber += 1
-            idx = NSMaxRange(lineRange)
-        }
+        for i in firstLine..<lineStarts.count {
+            let charIdx = lineStarts[i]
+            if charIdx >= NSMaxRange(visibleCharRange) { break }
 
-        // Draw visible line numbers
-        idx = visibleCharRange.location
-        let endIdx = NSMaxRange(visibleCharRange)
-        while idx < endIdx {
-            let lineRange = content.lineRange(for: NSRange(location: idx, length: 0))
-            let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
-            var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+            let glyphIdx = layoutManager.glyphIndexForCharacter(at: charIdx)
+            var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
             lineRect.origin.y += containerOrigin.y
 
+            let lineNumber = i + 1
             let numStr = "\(lineNumber)" as NSString
             let strSize = numStr.size(withAttributes: attrs)
             let drawPoint = NSPoint(
@@ -96,9 +111,6 @@ class LineNumberRulerView: NSRulerView {
                 y: lineRect.origin.y + (lineRect.height - strSize.height) / 2
             )
             numStr.draw(at: drawPoint, withAttributes: attrs)
-
-            lineNumber += 1
-            idx = NSMaxRange(lineRange)
         }
     }
 }

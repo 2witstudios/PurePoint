@@ -78,6 +78,7 @@ class EditorNSView: NSView {
         suppressCallbacks = true
         textView.string = content
         suppressCallbacks = false
+        lineRuler?.rebuildLineStarts()
         lineRuler?.needsDisplay = true
     }
 
