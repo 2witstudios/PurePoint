@@ -3,7 +3,11 @@ import SwiftUI
 struct TriggerDetailView: View {
     let trigger: TriggerItem
     @Bindable var state: TriggersState
-    let projectRoot: String
+    @Environment(AppState.self) private var appState
+
+    private var projectRoots: [String] {
+        appState.projects.map(\.projectRoot)
+    }
 
     var body: some View {
         ScrollView {
@@ -149,8 +153,14 @@ struct TriggerDetailView: View {
         HStack {
             Spacer()
             Button("Delete Trigger", role: .destructive) {
+                let deleteRoot = trigger.projectRoot ?? appState.projects.first?.projectRoot ?? ""
                 Task {
-                    await state.deleteTrigger(projectRoot: projectRoot, name: trigger.name, scope: trigger.scope)
+                    await state.deleteTrigger(
+                        projectRoot: deleteRoot,
+                        projectRoots: projectRoots,
+                        name: trigger.name,
+                        scope: trigger.scope
+                    )
                 }
             }
             .buttonStyle(.bordered)

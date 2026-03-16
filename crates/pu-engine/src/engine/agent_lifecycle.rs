@@ -283,7 +283,7 @@ impl Engine {
                 let now = chrono::Utc::now();
                 for id in &suspended_for_manifest {
                     if let Some(agent) = m.find_agent_mut(id) {
-                        agent.status = AgentStatus::Waiting;
+                        agent.status = AgentStatus::Running;
                         agent.suspended = true;
                         agent.pid = None;
                         agent.suspended_at = Some(now);
@@ -411,7 +411,7 @@ impl Engine {
         let manifest_result = tokio::task::spawn_blocking(move || {
             manifest::update_manifest(Path::new(&pr), move |mut m| {
                 if let Some(agent) = m.find_agent_mut(&aid) {
-                    agent.status = AgentStatus::Streaming;
+                    agent.status = AgentStatus::Running;
                     agent.suspended = false;
                     agent.pid = Some(pid);
                     agent.completed_at = None;
@@ -444,7 +444,7 @@ impl Engine {
 
         Response::ResumeResult {
             agent_id: agent_id.to_string(),
-            status: AgentStatus::Streaming,
+            status: AgentStatus::Running,
         }
     }
 

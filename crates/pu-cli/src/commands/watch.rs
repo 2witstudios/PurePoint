@@ -109,49 +109,29 @@ fn render_dashboard(
     ));
 
     // Count agents across all worktrees + root
-    let mut streaming = 0usize;
-    let mut waiting = 0usize;
+    let mut running = 0usize;
     let mut done = 0usize;
     let mut broken = 0usize;
 
     for a in root_agents {
-        count_agent(
-            a.status,
-            a.exit_code,
-            &mut streaming,
-            &mut waiting,
-            &mut done,
-            &mut broken,
-        );
+        count_agent(a.status, a.exit_code, &mut running, &mut done, &mut broken);
     }
     for wt in worktrees {
         for a in wt.agents.values() {
-            count_agent(
-                a.status,
-                a.exit_code,
-                &mut streaming,
-                &mut waiting,
-                &mut done,
-                &mut broken,
-            );
+            count_agent(a.status, a.exit_code, &mut running, &mut done, &mut broken);
         }
     }
 
-    let total = streaming + waiting + done + broken;
+    let total = running + done + broken;
 
     // Summary bar
     buf.push_str(&format!(
-        " {} agents  {}  {}  {}  {}\n\n",
+        " {} agents  {}  {}  {}\n\n",
         total.to_string().bold(),
-        if streaming > 0 {
-            format!("{streaming} streaming").green().to_string()
+        if running > 0 {
+            format!("{running} running").green().to_string()
         } else {
-            format!("{streaming} streaming").dimmed().to_string()
-        },
-        if waiting > 0 {
-            format!("{waiting} waiting").cyan().to_string()
-        } else {
-            format!("{waiting} waiting").dimmed().to_string()
+            format!("{running} running").dimmed().to_string()
         },
         format!("{done} done").dimmed(),
         if broken > 0 {
@@ -243,16 +223,10 @@ fn render_agent_table<'a>(
         let spinner = SPINNER_FRAMES[tick % SPINNER_FRAMES.len()];
 
         let (indicator, status_str) = match agent.status {
-            AgentStatus::Streaming if agent.suspended => {
+            AgentStatus::Running if agent.suspended => {
                 ("⏸".to_string(), "suspended".yellow().to_string())
             }
-            AgentStatus::Streaming => {
-                (spinner.green().to_string(), "streaming".green().to_string())
-            }
-            AgentStatus::Waiting if agent.suspended => {
-                ("⏸".to_string(), "suspended".yellow().to_string())
-            }
-            AgentStatus::Waiting => ("●".cyan().to_string(), "waiting".cyan().to_string()),
+            AgentStatus::Running => (spinner.green().to_string(), "running".green().to_string()),
             AgentStatus::Broken => match agent.exit_code {
                 Some(0) => ("✓".dimmed().to_string(), "done".dimmed().to_string()),
                 _ => ("✗".red().to_string(), "broken".red().to_string()),
@@ -302,14 +276,12 @@ fn format_elapsed(started_at: chrono::DateTime<Utc>) -> String {
 fn count_agent(
     status: AgentStatus,
     exit_code: Option<i32>,
-    streaming: &mut usize,
-    waiting: &mut usize,
+    running: &mut usize,
     done: &mut usize,
     broken: &mut usize,
 ) {
     match status {
-        AgentStatus::Streaming => *streaming += 1,
-        AgentStatus::Waiting => *waiting += 1,
+        AgentStatus::Running => *running += 1,
         AgentStatus::Broken => match exit_code {
             Some(0) => *done += 1,
             _ => *broken += 1,
@@ -399,38 +371,31 @@ mod tests {
     }
 
     #[test]
-    fn given_streaming_status_should_count_as_streaming() {
-        let (mut s, mut w, mut d, mut b) = (0, 0, 0, 0);
-        count_agent(AgentStatus::Streaming, None, &mut s, &mut w, &mut d, &mut b);
-        assert_eq!((s, w, d, b), (1, 0, 0, 0));
-    }
-
-    #[test]
-    fn given_waiting_status_should_count_as_waiting() {
-        let (mut s, mut w, mut d, mut b) = (0, 0, 0, 0);
-        count_agent(AgentStatus::Waiting, None, &mut s, &mut w, &mut d, &mut b);
-        assert_eq!((s, w, d, b), (0, 1, 0, 0));
+    fn given_running_status_should_count_as_running() {
+        let (mut r, mut d, mut b) = (0, 0, 0);
+        count_agent(AgentStatus::Running, None, &mut r, &mut d, &mut b);
+        assert_eq!((r, d, b), (1, 0, 0));
     }
 
     #[test]
     fn given_broken_with_exit_0_should_count_as_done() {
-        let (mut s, mut w, mut d, mut b) = (0, 0, 0, 0);
-        count_agent(AgentStatus::Broken, Some(0), &mut s, &mut w, &mut d, &mut b);
-        assert_eq!((s, w, d, b), (0, 0, 1, 0));
+        let (mut r, mut d, mut b) = (0, 0, 0);
+        count_agent(AgentStatus::Broken, Some(0), &mut r, &mut d, &mut b);
+        assert_eq!((r, d, b), (0, 1, 0));
     }
 
     #[test]
     fn given_broken_with_nonzero_exit_should_count_as_broken() {
-        let (mut s, mut w, mut d, mut b) = (0, 0, 0, 0);
-        count_agent(AgentStatus::Broken, Some(1), &mut s, &mut w, &mut d, &mut b);
-        assert_eq!((s, w, d, b), (0, 0, 0, 1));
+        let (mut r, mut d, mut b) = (0, 0, 0);
+        count_agent(AgentStatus::Broken, Some(1), &mut r, &mut d, &mut b);
+        assert_eq!((r, d, b), (0, 0, 1));
     }
 
     #[test]
     fn given_broken_with_no_exit_code_should_count_as_broken() {
-        let (mut s, mut w, mut d, mut b) = (0, 0, 0, 0);
-        count_agent(AgentStatus::Broken, None, &mut s, &mut w, &mut d, &mut b);
-        assert_eq!((s, w, d, b), (0, 0, 0, 1));
+        let (mut r, mut d, mut b) = (0, 0, 0);
+        count_agent(AgentStatus::Broken, None, &mut r, &mut d, &mut b);
+        assert_eq!((r, d, b), (0, 0, 1));
     }
 
     #[test]

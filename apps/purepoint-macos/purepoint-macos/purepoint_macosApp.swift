@@ -252,7 +252,7 @@ struct purepoint_macosApp: App {
             agents: hub.agents,
             swarms: hub.swarms
         )
-        Task { await hub.loadAll(projectRoot: project.projectRoot) }
+        Task { await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot)) }
 
         let sel = appState.activeSidebarSelection
         CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in

@@ -44,6 +44,8 @@ struct TriggerItem: Identifiable {
     let sequence: [TriggerActionPayload]
     let variables: [String: String]
     let scope: String
+    var projectRoot: String?
+    var projectName: String?
 
     init(from payload: TriggerInfoPayload) {
         self.id = payload.name

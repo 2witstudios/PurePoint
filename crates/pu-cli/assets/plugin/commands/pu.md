@@ -1,21 +1,18 @@
 ---
-name: pu
-description: Use when user asks to spawn agents, check workspace status, manage parallel coding tasks, schedule future agents, or when you need to run work in isolated worktrees. PurePoint orchestrates parallel AI coding agents.
-user-invocable: true
+description: "PurePoint CLI reference — spawn, status, logs, kill, triggers, swarms"
 ---
 
-# PurePoint (`pu`)
+# PurePoint (`pu`) — CLI Reference
 
 Spawn parallel AI coding agents in isolated git worktrees. Each agent gets its own branch, terminal, and working directory.
 
 ## Status Model
 
-Agents have three observable states:
+Agents have two observable states:
 
 | Status | Meaning |
 |---|---|
-| `streaming` | Output flowing — agent is actively working |
-| `waiting` | Process alive but idle — likely awaiting a prompt or input |
+| `running` | Process alive — agent is working or awaiting input |
 | `broken` | Process exited or gone — check exit_code for details |
 
 ## Agent Lifecycle Rules
@@ -40,6 +37,7 @@ pu spawn --root --agent terminal                          # plain terminal
 pu spawn --template code-review --var BRANCH=main         # from saved prompt
 pu spawn --file path/to/prompt.md --name task1            # from file
 pu spawn "prompt" --name fix-auth --json                  # machine output
+pu spawn "prompt" --name task --plan-mode                 # agent starts in plan mode
 ```
 
 ### Check status

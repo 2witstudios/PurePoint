@@ -60,7 +60,7 @@ impl Engine {
         Response::SpawnResult {
             worktree_id: None,
             agent_id,
-            status: AgentStatus::Streaming,
+            status: AgentStatus::Running,
         }
     }
 
@@ -438,7 +438,7 @@ impl Engine {
             id: agent_id.clone(),
             name: agent_name.clone(),
             agent_type,
-            status: AgentStatus::Streaming,
+            status: AgentStatus::Running,
             prompt: Some(prompt.to_string()),
             started_at: chrono::Utc::now(),
             completed_at: None,
@@ -513,7 +513,7 @@ impl Engine {
         Response::SpawnResult {
             worktree_id,
             agent_id,
-            status: AgentStatus::Streaming,
+            status: AgentStatus::Running,
         }
     }
 }

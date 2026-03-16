@@ -2,14 +2,15 @@ import SwiftUI
 
 struct TriggerCreationSheet: View {
     @Bindable var state: TriggersState
-    let projectRoot: String
+    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
     @State private var description = ""
     @State private var event: TriggerEvent = .agentIdle
-    @State private var scope = "local"
+    @State private var scope = "global"
     @State private var steps: [StepDraft] = [StepDraft()]
+    @State private var selectedProjectRoot = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,6 +24,9 @@ struct TriggerCreationSheet: View {
         }
         .frame(width: 420)
         .frame(minHeight: 480, maxHeight: 700)
+        .onAppear {
+            selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+        }
     }
 
     // MARK: - Header
@@ -55,8 +59,16 @@ struct TriggerCreationSheet: View {
             .pickerStyle(.segmented)
 
             Picker("Scope", selection: $scope) {
-                Text("Local").tag("local")
                 Text("Global").tag("global")
+                Text("Local").tag("local")
+            }
+
+            if scope == "local" {
+                Picker("Project", selection: $selectedProjectRoot) {
+                    ForEach(appState.projects) { project in
+                        Text(project.projectName).tag(project.projectRoot)
+                    }
+                }
             }
 
             Section("Sequence") {
@@ -152,9 +164,11 @@ struct TriggerCreationSheet: View {
             Spacer()
 
             Button("Create") {
+                let saveRoot = scope == "local" ? selectedProjectRoot : (appState.projects.first?.projectRoot ?? "")
                 Task {
                     await state.saveTrigger(
-                        projectRoot: projectRoot,
+                        projectRoot: saveRoot,
+                        projectRoots: appState.projects.map(\.projectRoot),
                         name: name.isEmpty ? "Untitled Trigger" : name,
                         description: description.isEmpty ? nil : description,
                         on: event.rawValue,

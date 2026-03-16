@@ -106,7 +106,7 @@ fn given_spawn_result_with_worktree_should_not_panic() {
     let resp = Response::SpawnResult {
         worktree_id: Some("wt-abc".into()),
         agent_id: "ag-xyz".into(),
-        status: AgentStatus::Streaming,
+        status: AgentStatus::Running,
     };
     print_response(&resp, false).unwrap();
 }
@@ -116,7 +116,7 @@ fn given_spawn_result_without_worktree_should_not_panic() {
     let resp = Response::SpawnResult {
         worktree_id: None,
         agent_id: "ag-xyz".into(),
-        status: AgentStatus::Waiting,
+        status: AgentStatus::Running,
     };
     print_response(&resp, false).unwrap();
 }
@@ -135,7 +135,7 @@ fn given_status_report_with_agents_should_not_panic() {
     let resp = Response::StatusReport {
         worktrees: vec![],
         agents: vec![
-            make_agent_report("ag-1", AgentStatus::Streaming),
+            make_agent_report("ag-1", AgentStatus::Running),
             make_agent_report("ag-2", AgentStatus::Broken),
         ],
     };
@@ -158,7 +158,7 @@ fn given_status_report_with_worktree_should_not_panic() {
                 "id": "ag-1",
                 "name": "claude",
                 "agentType": "claude",
-                "status": "streaming",
+                "status": "running",
                 "prompt": null,
                 "startedAt": now.to_rfc3339()
             }
@@ -176,7 +176,7 @@ fn given_status_report_with_worktree_should_not_panic() {
 
 #[test]
 fn given_agent_status_should_not_panic() {
-    let resp = Response::AgentStatus(make_agent_report("ag-1", AgentStatus::Waiting));
+    let resp = Response::AgentStatus(make_agent_report("ag-1", AgentStatus::Running));
     print_response(&resp, false).unwrap();
 }
 
@@ -208,7 +208,7 @@ fn given_empty_suspend_result_should_not_panic() {
 fn given_resume_result_should_not_panic() {
     let resp = Response::ResumeResult {
         agent_id: "ag-1".into(),
-        status: AgentStatus::Streaming,
+        status: AgentStatus::Running,
     };
     print_response(&resp, false).unwrap();
 }
@@ -335,28 +335,16 @@ fn given_broken_with_no_exit_should_show_broken() {
 }
 
 #[test]
-fn given_streaming_should_show_streaming() {
-    let s = status_colored(AgentStatus::Streaming, None);
-    assert!(s.contains("streaming"));
-}
-
-#[test]
-fn given_waiting_should_show_waiting() {
-    let s = status_colored(AgentStatus::Waiting, None);
-    assert!(s.contains("waiting"));
+fn given_running_should_show_running() {
+    let s = status_colored(AgentStatus::Running, None);
+    assert!(s.contains("running"));
 }
 
 // --- status_colored_with_suspended (bench) ---
 
 #[test]
-fn given_suspended_streaming_should_show_benched() {
-    let s = status_colored_with_suspended(AgentStatus::Streaming, None, true);
-    assert!(s.contains("benched"));
-}
-
-#[test]
-fn given_suspended_waiting_should_show_benched() {
-    let s = status_colored_with_suspended(AgentStatus::Waiting, None, true);
+fn given_suspended_running_should_show_benched() {
+    let s = status_colored_with_suspended(AgentStatus::Running, None, true);
     assert!(s.contains("benched"));
 }
 
@@ -369,8 +357,8 @@ fn given_suspended_broken_should_not_show_benched() {
 
 #[test]
 fn given_not_suspended_should_show_normal_status() {
-    let s = status_colored_with_suspended(AgentStatus::Streaming, None, false);
-    assert!(s.contains("streaming"));
+    let s = status_colored_with_suspended(AgentStatus::Running, None, false);
+    assert!(s.contains("running"));
 }
 
 // --- diff output ---
@@ -431,7 +419,7 @@ fn given_pulse_report_should_not_panic() {
                 id: "ag-1".into(),
                 name: "claude".into(),
                 agent_type: "claude".into(),
-                status: AgentStatus::Streaming,
+                status: AgentStatus::Running,
                 exit_code: None,
                 runtime_seconds: 120,
                 idle_seconds: Some(5),
@@ -446,7 +434,7 @@ fn given_pulse_report_should_not_panic() {
             id: "ag-2".into(),
             name: "point-guard".into(),
             agent_type: "claude".into(),
-            status: AgentStatus::Waiting,
+            status: AgentStatus::Running,
             exit_code: None,
             runtime_seconds: 7200,
             idle_seconds: Some(30),

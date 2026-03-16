@@ -119,9 +119,7 @@ private struct PanePlaceholderView: View {
             agents: hub.agents,
             swarms: []
         )
-        if let root = gs.projectRoot {
-            Task { await hub.loadAll(projectRoot: root) }
-        }
+        Task { await hub.loadAll(projectRoots: state.projects.map(\.projectRoot)) }
 
         CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
             let project = state.projectState(forRoot: gs.projectRoot ?? "")

@@ -55,12 +55,12 @@ The Xcode project includes a "Build Rust Binaries" Run Script phase that runs **
 2. **Debug**: `cargo build -p pu-engine -p pu-cli` (host architecture only)
 3. **Release**: Builds both `aarch64-apple-darwin` and `x86_64-apple-darwin`, merges with `lipo`
 4. Code signs Rust binaries with the app identity
-5. Copies `SKILL.md` to `Resources/pu-skill.md`
+5. Copies `plugin/` directory to `Resources/pu-plugin/`
 
 Binary locations in app bundle:
 - `Contents/MacOS/pu-engine` -- daemon binary
 - `Contents/MacOS/pu` -- CLI binary
-- `Contents/Resources/pu-skill.md` -- Claude Code skill
+- `Contents/Resources/pu-plugin/` -- Claude Code plugin (skills + commands)
 
 ### Development workflow
 

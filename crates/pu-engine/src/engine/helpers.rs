@@ -65,9 +65,7 @@ impl Engine {
         let Ok(m) = manifest::read_manifest(root) else {
             return;
         };
-        let is_stale = |a: &AgentEntry| {
-            !a.suspended && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
-        };
+        let is_stale = |a: &AgentEntry| !a.suspended && matches!(a.status, AgentStatus::Running);
         let has_stale = m
             .agents
             .values()
@@ -84,11 +82,9 @@ impl Engine {
                     .values_mut()
                     .flat_map(|wt| wt.agents.values_mut()),
             ) {
-                if !agent.suspended
-                    && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
-                {
+                if !agent.suspended && matches!(agent.status, AgentStatus::Running) {
                     if agent.session_id.is_some() && is_resumable(&agent.agent_type) {
-                        agent.status = AgentStatus::Waiting;
+                        agent.status = AgentStatus::Running;
                         agent.suspended = true;
                         agent.pid = None;
                         agent.suspended_at = Some(now);
@@ -113,7 +109,7 @@ impl Engine {
         };
         let needs_reap = |a: &AgentEntry| {
             !a.suspended
-                && matches!(a.status, AgentStatus::Streaming | AgentStatus::Waiting)
+                && matches!(a.status, AgentStatus::Running)
                 && a.pid
                     .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
         };
@@ -133,7 +129,7 @@ impl Engine {
                     .flat_map(|wt| wt.agents.values_mut()),
             ) {
                 if !agent.suspended
-                    && matches!(agent.status, AgentStatus::Streaming | AgentStatus::Waiting)
+                    && matches!(agent.status, AgentStatus::Running)
                     && agent
                         .pid
                         .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))

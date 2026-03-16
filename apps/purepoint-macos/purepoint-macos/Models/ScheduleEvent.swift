@@ -164,6 +164,7 @@ struct ScheduleEvent: Identifiable {
     var date: Date
     var recurrence: RecurrenceRule
     var projectName: String
+    var projectRoot: String?
     var target: String
     var color: Color
     var enabled: Bool

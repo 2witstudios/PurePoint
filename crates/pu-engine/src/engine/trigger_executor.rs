@@ -27,8 +27,13 @@ impl Engine {
                     None => continue, // No bound trigger, skip
                 };
                 let seq_index = agent.trigger_seq_index.unwrap_or(0);
-                let (status, _, _) = self.live_agent_status_sync(&agent.id, agent, &sessions);
-                if status != AgentStatus::Waiting {
+                let (status, _, idle_seconds) =
+                    self.live_agent_status_sync(&agent.id, agent, &sessions);
+                if status != AgentStatus::Running {
+                    continue;
+                }
+                // Only fire idle triggers after 30s of content idle time
+                if idle_seconds.unwrap_or(0) < 30 {
                     continue;
                 }
                 let wt_path = match manifest.find_agent(&agent.id) {

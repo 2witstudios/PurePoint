@@ -22,14 +22,29 @@ final class TriggersState {
 
     // MARK: - Backend Integration
 
-    func loadTriggers(projectRoot: String) async {
+    func loadTriggers(projectRoots: [String]) async {
         isLoading = true
         error = nil
         do {
-            let response = try await client.send(.listTriggers(projectRoot: projectRoot))
-            if case .triggerList(let payloads) = response {
-                self.triggers = payloads.map { TriggerItem(from: $0) }
+            var merged: [String: TriggerItem] = [:]
+            for root in projectRoots {
+                let projectName = URL(fileURLWithPath: root).lastPathComponent
+                let response = try await client.send(.listTriggers(projectRoot: root))
+                if case .triggerList(let payloads) = response {
+                    for payload in payloads {
+                        var item = TriggerItem(from: payload)
+                        if payload.scope != "global" {
+                            item.projectRoot = root
+                            item.projectName = projectName
+                        }
+                        let key = "\(item.scope):\(item.name)"
+                        if merged[key] == nil {
+                            merged[key] = item
+                        }
+                    }
+                }
             }
+            self.triggers = Array(merged.values).sorted { $0.name < $1.name }
         } catch {
             self.error = "Failed to load triggers: \(error.localizedDescription)"
             print("Failed to load triggers: \(error)")
@@ -39,6 +54,7 @@ final class TriggersState {
 
     func saveTrigger(
         projectRoot: String,
+        projectRoots: [String],
         name: String,
         description: String?,
         on: String,
@@ -57,18 +73,18 @@ final class TriggersState {
                     variables: variables,
                     scope: scope
                 ))
-            await loadTriggers(projectRoot: projectRoot)
+            await loadTriggers(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to save trigger: \(error.localizedDescription)"
             print("Failed to save trigger: \(error)")
         }
     }
 
-    func deleteTrigger(projectRoot: String, name: String, scope: String) async {
+    func deleteTrigger(projectRoot: String, projectRoots: [String], name: String, scope: String) async {
         do {
             _ = try await client.send(.deleteTrigger(projectRoot: projectRoot, name: name, scope: scope))
             if selectedTriggerId == name { selectedTriggerId = nil }
-            await loadTriggers(projectRoot: projectRoot)
+            await loadTriggers(projectRoots: projectRoots)
         } catch {
             self.error = "Failed to delete trigger: \(error.localizedDescription)"
             print("Failed to delete trigger: \(error)")

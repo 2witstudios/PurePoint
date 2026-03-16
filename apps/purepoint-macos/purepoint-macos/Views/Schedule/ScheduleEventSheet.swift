@@ -2,8 +2,8 @@ import SwiftUI
 
 struct ScheduleEventSheet: View {
     @Bindable var state: ScheduleState
-    let projectRoot: String
     let editingEvent: ScheduleEvent?
+    @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
     @State private var name = ""
@@ -13,6 +13,8 @@ struct ScheduleEventSheet: View {
     @State private var target = ""
     @State private var selectedColorIndex: Int?
     @State private var showDeleteConfirm = false
+    @State private var scope = "global"
+    @State private var selectedProjectRoot = ""
 
     // Trigger fields
     @State private var triggerName = ""
@@ -20,6 +22,10 @@ struct ScheduleEventSheet: View {
     @State private var triggerAgent = "claude"
 
     private var isEditing: Bool { editingEvent != nil }
+
+    private var projectRoots: [String] {
+        appState.projects.map(\.projectRoot)
+    }
 
     private static let previewFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -43,9 +49,15 @@ struct ScheduleEventSheet: View {
         .alert("Delete Schedule", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 guard let event = editingEvent else { return }
+                let deleteRoot = event.projectRoot ?? appState.projects.first?.projectRoot ?? ""
                 Task {
                     EventColor.remove(forEvent: event.name)
-                    await state.deleteSchedule(projectRoot: projectRoot, name: event.name, scope: event.scope)
+                    await state.deleteSchedule(
+                        projectRoot: deleteRoot,
+                        projectRoots: projectRoots,
+                        name: event.name,
+                        scope: event.scope
+                    )
                     dismiss()
                 }
             }
@@ -58,6 +70,8 @@ struct ScheduleEventSheet: View {
     // MARK: - Prefill
 
     private func prefillFields() {
+        selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+
         if let event = editingEvent {
             name = event.name
             type = event.type
@@ -65,6 +79,10 @@ struct ScheduleEventSheet: View {
             recurrence = event.recurrence
             target = event.target
             selectedColorIndex = EventColor.savedIndex(forEvent: event.name)
+            scope = event.scope
+            if let root = event.projectRoot {
+                selectedProjectRoot = root
+            }
 
             // Prefill trigger fields
             if let trigger = event.trigger {
@@ -134,6 +152,19 @@ struct ScheduleEventSheet: View {
 
             TextField("Target (path or scope)", text: $target)
                 .textFieldStyle(.roundedBorder)
+
+            Picker("Scope", selection: $scope) {
+                Text("Global").tag("global")
+                Text("Local").tag("local")
+            }
+
+            if scope == "local" {
+                Picker("Project", selection: $selectedProjectRoot) {
+                    ForEach(appState.projects) { project in
+                        Text(project.projectName).tag(project.projectRoot)
+                    }
+                }
+            }
 
             colorPicker
         }
@@ -243,10 +274,17 @@ struct ScheduleEventSheet: View {
 
     private func saveAndDismiss() async {
         let effectiveName = name.isEmpty ? "Untitled Schedule" : name
+        let saveRoot = scope == "local" ? selectedProjectRoot : (appState.projects.first?.projectRoot ?? "")
 
         // If editing and name changed, delete old entry first (name is the backend key)
         if let original = editingEvent, original.name != effectiveName {
-            await state.deleteSchedule(projectRoot: projectRoot, name: original.name, scope: original.scope)
+            let origRoot = original.projectRoot ?? saveRoot
+            await state.deleteSchedule(
+                projectRoot: origRoot,
+                projectRoots: projectRoots,
+                name: original.name,
+                scope: original.scope
+            )
             EventColor.remove(forEvent: original.name)
         }
 
@@ -263,14 +301,15 @@ struct ScheduleEventSheet: View {
 
         let trigger = buildTrigger()
         await state.saveSchedule(
-            projectRoot: projectRoot,
+            projectRoot: saveRoot,
+            projectRoots: projectRoots,
             name: effectiveName,
             enabled: editingEvent?.enabled ?? true,
             recurrence: recurrence,
             startAt: date,
             trigger: trigger,
             target: target,
-            scope: editingEvent?.scope ?? "local"
+            scope: scope
         )
         dismiss()
     }

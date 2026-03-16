@@ -25,7 +25,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
                 agents: hub.agents,
                 swarms: includeWorktree ? hub.swarms : []
             )
-            Task { await hub.loadAll(projectRoot: project.projectRoot) }
+            Task { await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot)) }
 
             CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
                 project.handlePaletteResult(result, selection: sel, hub: hub)
