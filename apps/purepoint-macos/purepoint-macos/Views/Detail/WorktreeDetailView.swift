@@ -27,9 +27,6 @@ struct WorktreeDetailView: View {
                 )
             } second: {
                 VStack(spacing: 0) {
-                    if let file = editorState.currentFile, !editorState.showChanges {
-                        fileBreadcrumb(file)
-                    }
                     Divider()
                     editorContent
                 }
@@ -83,6 +80,23 @@ struct WorktreeDetailView: View {
                 .background(Color.secondary.opacity(0.1))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 
+            if let file = editorState.currentFile, !editorState.showChanges {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Image(systemName: file.language.icon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text(file.name)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                if file.isDirty {
+                    Circle()
+                        .fill(Color.primary.opacity(0.4))
+                        .frame(width: 6, height: 6)
+                }
+            }
+
             Spacer()
 
             Button {
@@ -107,28 +121,6 @@ struct WorktreeDetailView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-
-    // MARK: - File Breadcrumb
-
-    private func fileBreadcrumb(_ file: EditorTab) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: file.language.icon)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            Text(file.name)
-                .font(.system(size: 11))
-                .lineLimit(1)
-            if file.isDirty {
-                Circle()
-                    .fill(Color.primary.opacity(0.4))
-                    .frame(width: 6, height: 6)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(Color(nsColor: Theme.cardHeaderBackground))
     }
 
     // MARK: - Editor Content

@@ -125,5 +125,9 @@ class LineNumberRulerView: NSRulerView {
             )
             numStr.draw(at: drawPoint, withAttributes: attrs)
         }
+
+        // Cover the separator line at the right edge of the ruler
+        textView.backgroundColor.setFill()
+        NSRect(x: bounds.maxX - 1, y: rect.origin.y, width: 1, height: rect.height).fill()
     }
 }
