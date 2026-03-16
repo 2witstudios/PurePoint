@@ -14,6 +14,7 @@ struct EditorTabBar: View {
             }
         }
         .frame(height: 32)
+        .clipped()
         .background(Color(nsColor: Theme.cardHeaderBackground))
     }
 

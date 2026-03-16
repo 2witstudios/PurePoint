@@ -21,7 +21,7 @@ struct DraggableSplit<First: View, Second: View>: View {
 
             if isVertical {
                 HStack(spacing: 0) {
-                    first().frame(width: max(firstSize, 0))
+                    first().frame(width: max(firstSize, 0)).clipped()
                     if !collapsed {
                         dividerHandle(total: total, isVertical: true)
                     }
@@ -29,7 +29,7 @@ struct DraggableSplit<First: View, Second: View>: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    first().frame(height: max(firstSize, 0))
+                    first().frame(height: max(firstSize, 0)).clipped()
                     if !collapsed {
                         dividerHandle(total: total, isVertical: false)
                     }

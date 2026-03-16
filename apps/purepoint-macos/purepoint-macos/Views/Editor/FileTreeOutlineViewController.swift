@@ -167,6 +167,7 @@ class FileTreeOutlineViewController: NSViewController, NSOutlineViewDataSource, 
         let label = NSTextField(labelWithString: node.name)
         label.font = .systemFont(ofSize: 12)
         label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         stack.addArrangedSubview(icon)
         stack.addArrangedSubview(label)
