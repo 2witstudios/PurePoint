@@ -68,7 +68,7 @@ enum EditorLanguage: String, CaseIterable {
         case "hs", "lhs": return .haskell
         case "lua": return .lua
         case "xml", "xsl", "xslt", "svg", "plist": return .xml
-        case "graphql", "gql": return .javascript
+        case "graphql", "gql": return .plaintext
         case "dockerfile": return .shell
         default: return .plaintext
         }
