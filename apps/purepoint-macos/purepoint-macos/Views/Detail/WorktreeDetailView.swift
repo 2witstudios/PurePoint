@@ -27,12 +27,9 @@ struct WorktreeDetailView: View {
                 )
             } second: {
                 VStack(spacing: 0) {
-                    EditorTabBar(
-                        editorState: editorState,
-                        onCloseTab: { id in
-                            editorState.closeTab(id: id)
-                        }
-                    )
+                    if let file = editorState.currentFile, !editorState.showChanges {
+                        fileBreadcrumb(file)
+                    }
                     Divider()
                     editorContent
                 }
@@ -89,6 +86,16 @@ struct WorktreeDetailView: View {
             Spacer()
 
             Button {
+                editorState.showChanges.toggle()
+            } label: {
+                Image(systemName: "doc.badge.plus")
+                    .font(.system(size: 12))
+                    .foregroundStyle(editorState.showChanges ? .primary : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Toggle changes view")
+
+            Button {
                 diffState.refresh()
                 fileTreeState.refresh()
             } label: {
@@ -102,30 +109,53 @@ struct WorktreeDetailView: View {
         .padding(.vertical, 10)
     }
 
+    // MARK: - File Breadcrumb
+
+    private func fileBreadcrumb(_ file: EditorTab) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: file.language.icon)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(file.name)
+                .font(.system(size: 11))
+                .lineLimit(1)
+            if file.isDirty {
+                Circle()
+                    .fill(Color.primary.opacity(0.4))
+                    .frame(width: 6, height: 6)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: Theme.cardHeaderBackground))
+    }
+
     // MARK: - Editor Content
 
     @ViewBuilder
     private var editorContent: some View {
-        if editorState.showChangesTab {
+        if editorState.showChanges {
             changesContent
-        } else if let tab = editorState.activeTab {
-            if tab.isBinary {
-                binaryPlaceholder(tab)
+        } else if let file = editorState.currentFile {
+            if file.isBinary {
+                binaryPlaceholder(file)
             } else {
                 EditorContentRepresentable(
-                    content: tab.content,
+                    content: file.content,
+                    language: file.language,
                     isBinary: false,
                     isEditable: true,
                     onContentChanged: { newContent in
-                        editorState.updateContent(id: tab.id, content: newContent)
+                        editorState.updateContent(content: newContent)
                     },
                     onSave: {
                         Task {
                             do {
-                                try await editorState.saveFile(id: tab.id)
+                                try await editorState.saveFile()
                                 saveError = nil
                             } catch {
-                                saveError = "Failed to save \(tab.name): \(error.localizedDescription)"
+                                saveError = "Failed to save \(file.name): \(error.localizedDescription)"
                             }
                         }
                     }
@@ -178,7 +208,7 @@ struct WorktreeDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if diffState.pullRequests.isEmpty {
                 VStack(spacing: 12) {
-                    Image(systemName: "pull.request")
+                    Image(systemName: "arrow.triangle.pull")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary)
                     Text("No open pull requests for this branch")
@@ -260,16 +290,14 @@ struct WorktreeDetailView: View {
 
     @ViewBuilder
     private var externalChangeBanner: some View {
-        if let changedPath = editorState.externalChangeAlert,
-            let tab = editorState.openTabs.first(where: { $0.id == changedPath })
-        {
+        if editorState.externalChangeAlert != nil, let file = editorState.currentFile {
             bannerView(
                 icon: "exclamationmark.triangle.fill",
                 iconColor: .yellow,
-                message: "\(tab.name) changed on disk."
+                message: "\(file.name) changed on disk."
             ) {
                 Button("Reload") {
-                    editorState.reloadFile(id: changedPath)
+                    editorState.reloadFile()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)

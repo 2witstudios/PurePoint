@@ -7,6 +7,7 @@ class EditorNSView: NSView {
     private let scrollView = NSScrollView()
     private let textView: EditorTextView
     private var lineRuler: LineNumberRulerView?
+    private var highlightManager: SyntaxHighlightManager?
     private var suppressCallbacks = false
 
     var onContentChanged: ((String) -> Void)?
@@ -65,12 +66,19 @@ class EditorNSView: NSView {
         textView.onSave = { [weak self] in
             self?.onSave?()
         }
+
+        highlightManager = SyntaxHighlightManager(textView: textView)
+    }
+
+    func setLanguage(_ language: EditorLanguage) {
+        highlightManager?.setLanguage(language)
     }
 
     func setContent(_ content: String) {
         suppressCallbacks = true
         textView.string = content
         suppressCallbacks = false
+        lineRuler?.rebuildLineStarts()
         lineRuler?.needsDisplay = true
     }
 
@@ -85,6 +93,7 @@ class EditorNSView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         textView.backgroundColor = Theme.cardBackground
+        highlightManager?.invalidate()
     }
 }
 
@@ -92,6 +101,7 @@ class EditorNSView: NSView {
 
 struct EditorContentRepresentable: NSViewRepresentable {
     let content: String
+    let language: EditorLanguage
     let isBinary: Bool
     let isEditable: Bool
     var onContentChanged: ((String) -> Void)?
@@ -103,6 +113,7 @@ struct EditorContentRepresentable: NSViewRepresentable {
         view.onSave = onSave
         view.setEditable(isEditable && !isBinary)
         view.setContent(isBinary ? "" : content)
+        view.setLanguage(language)
         return view
     }
 
@@ -115,5 +126,7 @@ struct EditorContentRepresentable: NSViewRepresentable {
         if !isBinary && nsView.getContent() != content {
             nsView.setContent(content)
         }
+
+        nsView.setLanguage(language)
     }
 }

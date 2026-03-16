@@ -4,24 +4,16 @@ import Observation
 @Observable
 @MainActor
 final class EditorState {
-    var openTabs: [EditorTab] = []
-    var activeTabId: String?
-    var showChangesTab: Bool = true
+    var currentFile: EditorTab?
+    var showChanges: Bool = true
     var externalChangeAlert: String?
 
     private var fileWatcher: FileTreeWatcher?
-    private var watchedFilePaths: Set<String> = []
-
-    var activeTab: EditorTab? {
-        guard let id = activeTabId else { return nil }
-        return openTabs.first { $0.id == id }
-    }
+    private var watchedPath: String?
 
     func openFile(path: String, name: String) {
-        // If already open, just activate
-        if openTabs.contains(where: { $0.id == path }) {
-            activeTabId = path
-            showChangesTab = false
+        if currentFile?.id == path {
+            showChanges = false
             return
         }
 
@@ -31,7 +23,7 @@ final class EditorState {
                 let modDate = FileIOService.fileModificationDate(at: path)
                 let language = EditorLanguage.detect(from: name)
 
-                let tab = EditorTab(
+                currentFile = EditorTab(
                     id: path,
                     name: name,
                     content: result.content,
@@ -40,9 +32,7 @@ final class EditorState {
                     isBinary: result.isBinary,
                     language: language
                 )
-                openTabs.append(tab)
-                activeTabId = path
-                showChangesTab = false
+                showChanges = false
                 watchFile(path: path)
             } catch {
                 // Silently ignore — file may have been deleted
@@ -50,55 +40,27 @@ final class EditorState {
         }
     }
 
-    func closeTab(id: String) {
-        openTabs.removeAll { $0.id == id }
-        unwatchFile(path: id)
-
-        if activeTabId == id {
-            activeTabId = openTabs.last?.id
-            if activeTabId == nil {
-                showChangesTab = true
-            }
-        }
+    func updateContent(content: String) {
+        currentFile?.content = content
+        currentFile?.isDirty = true
     }
 
-    func setActiveTab(id: String) {
-        activeTabId = id
-        showChangesTab = false
+    func saveFile() async throws {
+        guard let file = currentFile else { return }
+        try await FileIOService.writeFile(content: file.content, to: file.id)
+        currentFile?.isDirty = false
+        currentFile?.lastModified = FileIOService.fileModificationDate(at: file.id)
     }
 
-    func activateChangesTab() {
-        activeTabId = nil
-        showChangesTab = true
-    }
-
-    func markDirty(id: String) {
-        guard let idx = openTabs.firstIndex(where: { $0.id == id }) else { return }
-        openTabs[idx].isDirty = true
-    }
-
-    func updateContent(id: String, content: String) {
-        guard let idx = openTabs.firstIndex(where: { $0.id == id }) else { return }
-        openTabs[idx].content = content
-        openTabs[idx].isDirty = true
-    }
-
-    func saveFile(id: String) async throws {
-        guard let idx = openTabs.firstIndex(where: { $0.id == id }) else { return }
-        try await FileIOService.writeFile(content: openTabs[idx].content, to: id)
-        openTabs[idx].isDirty = false
-        openTabs[idx].lastModified = FileIOService.fileModificationDate(at: id)
-    }
-
-    func reloadFile(id: String) {
-        guard openTabs.contains(where: { $0.id == id }) else { return }
+    func reloadFile() {
+        guard let file = currentFile else { return }
+        let path = file.id
         Task {
             do {
-                let result = try await FileIOService.readFile(at: id)
-                guard let idx = openTabs.firstIndex(where: { $0.id == id }) else { return }
-                openTabs[idx].content = result.content
-                openTabs[idx].isDirty = false
-                openTabs[idx].lastModified = FileIOService.fileModificationDate(at: id)
+                let result = try await FileIOService.readFile(at: path)
+                currentFile?.content = result.content
+                currentFile?.isDirty = false
+                currentFile?.lastModified = FileIOService.fileModificationDate(at: path)
             } catch {}
         }
         externalChangeAlert = nil
@@ -111,7 +73,7 @@ final class EditorState {
     func stopWatching() {
         fileWatcher?.stopAll()
         fileWatcher = nil
-        watchedFilePaths.removeAll()
+        watchedPath = nil
     }
 
     // MARK: - File Watching
@@ -127,45 +89,34 @@ final class EditorState {
     }
 
     private func watchFile(path: String) {
-        ensureWatcher()
         let dir = (path as NSString).deletingLastPathComponent
-        if !watchedFilePaths.contains(dir) {
-            watchedFilePaths.insert(dir)
+        if watchedPath != dir {
+            if let old = watchedPath {
+                fileWatcher?.unwatchDirectory(path: old)
+            }
+            ensureWatcher()
+            watchedPath = dir
             fileWatcher?.watchDirectory(path: dir)
         }
     }
 
-    private func unwatchFile(path: String) {
-        let dir = (path as NSString).deletingLastPathComponent
-        let hasOtherFilesInDir = openTabs.contains { tab in
-            tab.id != path && (tab.id as NSString).deletingLastPathComponent == dir
-        }
-        if !hasOtherFilesInDir {
-            watchedFilePaths.remove(dir)
-            fileWatcher?.unwatchDirectory(path: dir)
-        }
-    }
-
     private func checkForExternalChanges() {
-        for tab in openTabs {
-            guard let lastMod = tab.lastModified,
-                let currentMod = FileIOService.fileModificationDate(at: tab.id),
-                currentMod > lastMod
-            else { continue }
+        guard let file = currentFile,
+            let lastMod = file.lastModified,
+            let currentMod = FileIOService.fileModificationDate(at: file.id),
+            currentMod > lastMod
+        else { return }
 
-            if tab.isDirty {
-                externalChangeAlert = tab.id
-            } else {
-                let tabId = tab.id
-                Task {
-                    do {
-                        let result = try await FileIOService.readFile(at: tabId)
-                        guard let idx = openTabs.firstIndex(where: { $0.id == tabId })
-                        else { return }
-                        openTabs[idx].content = result.content
-                        openTabs[idx].lastModified = currentMod
-                    } catch {}
-                }
+        if file.isDirty {
+            externalChangeAlert = file.id
+        } else {
+            let filePath = file.id
+            Task {
+                do {
+                    let result = try await FileIOService.readFile(at: filePath)
+                    currentFile?.content = result.content
+                    currentFile?.lastModified = currentMod
+                } catch {}
             }
         }
     }

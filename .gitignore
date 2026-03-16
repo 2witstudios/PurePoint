@@ -49,5 +49,8 @@ build/
 .ppg/swarms/
 .ppg/conductor-context.md
 
+# Tree-sitter local overrides (cloned per-developer, not project source)
+apps/purepoint-macos/LocalPackages/
+
 # PurePoint runtime
 .pu/
