@@ -23,8 +23,13 @@ struct SettingsPointGuardView: View {
 
                 Divider()
 
-                Toggle("Skip permissions (--dangerously-skip-permissions)", isOn: $settings.pointGuardSkipPermissions)
-                    .padding(.vertical, 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Auto-approve all actions", isOn: $settings.pointGuardSkipPermissions)
+                    Text("Skip permission prompts so the agent runs without interruptions")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.vertical, 8)
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
         }

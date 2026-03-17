@@ -16,6 +16,17 @@ enum ClaudePermissionMode: String, CaseIterable {
         }
     }
 
+    var description: String {
+        switch self {
+        case .default: "Ask before each action"
+        case .acceptEdits: "Auto-approve file edits, ask for other actions"
+        case .plan: "Read-only mode, no file changes allowed"
+        case .bypassPermissions: "Auto-approve everything (fastest, no interruptions)"
+        case .dontAsk: "Auto-approve everything (alternative mode)"
+        case .auto: "Let Claude decide when to ask"
+        }
+    }
+
     var cliValue: String { rawValue }
 }
 
@@ -82,6 +93,7 @@ struct ClaudeConfig {
     var effort: ClaudeEffort? = nil
     var systemPrompt: String = ""
     var verbose: Bool = false
+    var remoteControl: Bool = false
 }
 
 struct CodexConfig {
@@ -130,6 +142,8 @@ func parseClaudeLaunchArgs(_ args: [String]) -> ClaudeConfig {
             }
         case "--verbose":
             config.verbose = true
+        case "--remote-control", "--rc":
+            config.remoteControl = true
         default:
             break
         }
@@ -158,6 +172,9 @@ func composeClaudeLaunchArgs(_ config: ClaudeConfig) -> [String] {
     }
     if config.verbose {
         args.append("--verbose")
+    }
+    if config.remoteControl {
+        args.append("--remote-control")
     }
     return args
 }
@@ -326,90 +343,142 @@ struct ClaudeAgentGroupBox: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle("Use Defaults", isOn: $useDefaults)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .onChange(of: useDefaults) {
-                        if useDefaults {
-                            Task {
-                                await state.updateLaunchArgs(
-                                    projectRoot: projectRoot, agentName: "claude", launchArgs: nil)
+                Toggle(
+                    "Customize Launch Settings",
+                    isOn: Binding(
+                        get: { !useDefaults },
+                        set: { useDefaults = !$0 }
+                    )
+                )
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .onChange(of: useDefaults) {
+                    if useDefaults {
+                        Task {
+                            await state.updateLaunchArgs(
+                                projectRoot: projectRoot, agentName: "claude", launchArgs: nil)
+                        }
+                    } else {
+                        commitChanges()
+                    }
+                }
+
+                if useDefaults {
+                    Text("Using recommended settings: auto-approve everything, no interruptions")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle("Remote Control", isOn: $config.remoteControl)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .onChange(of: config.remoteControl) {
+                            if config.remoteControl && useDefaults {
+                                useDefaults = false
                             }
-                        } else {
                             commitChanges()
                         }
-                    }
+                    Text("Continue this session from your phone or browser via claude.ai/code")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
 
                 if useDefaults {
                     resolvedArgsView(payload.resolvedLaunchArgs)
                 } else {
-                    LabeledContent("Permission Mode") {
-                        Picker("", selection: $config.permissionMode) {
-                            ForEach(ClaudePermissionMode.allCases, id: \.self) { mode in
-                                Text(mode.displayName).tag(mode)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 180)
-                        .onChange(of: config.permissionMode) { commitChanges() }
-                    }
-
-                    LabeledContent("Model") {
-                        HStack(spacing: 8) {
-                            Picker(
-                                "",
-                                selection: Binding(
-                                    get: { config.model ?? .sonnet },
-                                    set: {
-                                        config.model = $0; config.customModel = ""
-                                    }
-                                )
-                            ) {
-                                ForEach(ClaudeModel.allCases, id: \.self) { m in
-                                    Text(m.displayName).tag(m)
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent("Permission Mode") {
+                            Picker("", selection: $config.permissionMode) {
+                                ForEach(ClaudePermissionMode.allCases, id: \.self) { mode in
+                                    Text(mode.displayName).tag(mode)
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 100)
-                            .onChange(of: config.model) { commitChanges() }
-
-                            TextField("Custom", text: $config.customModel)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 120)
-                                .onSubmit {
-                                    if !config.customModel.isEmpty { config.model = nil }
-                                    commitChanges()
-                                }
+                            .frame(width: 180)
+                            .onChange(of: config.permissionMode) { commitChanges() }
                         }
+                        Text(config.permissionMode.description)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
                     }
 
-                    LabeledContent("Effort") {
-                        Picker(
-                            "",
-                            selection: Binding(
-                                get: { config.effort ?? .high },
-                                set: { config.effort = $0 }
-                            )
-                        ) {
-                            ForEach(ClaudeEffort.allCases, id: \.self) { e in
-                                Text(e.displayName).tag(e)
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent("Model") {
+                            HStack(spacing: 8) {
+                                Picker(
+                                    "",
+                                    selection: Binding(
+                                        get: { config.model ?? .sonnet },
+                                        set: {
+                                            config.model = $0; config.customModel = ""
+                                        }
+                                    )
+                                ) {
+                                    ForEach(ClaudeModel.allCases, id: \.self) { m in
+                                        Text(m.displayName).tag(m)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 100)
+                                .onChange(of: config.model) { commitChanges() }
+
+                                TextField("Custom", text: $config.customModel)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 120)
+                                    .onSubmit {
+                                        if !config.customModel.isEmpty { config.model = nil }
+                                        commitChanges()
+                                    }
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 200)
-                        .onChange(of: config.effort) { commitChanges() }
+                        Text("Which AI model to use")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
                     }
 
-                    LabeledContent("System Prompt") {
-                        TextField("Optional", text: $config.systemPrompt)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { commitChanges() }
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent("Effort") {
+                            Picker(
+                                "",
+                                selection: Binding(
+                                    get: { config.effort ?? .high },
+                                    set: { config.effort = $0 }
+                                )
+                            ) {
+                                ForEach(ClaudeEffort.allCases, id: \.self) { e in
+                                    Text(e.displayName).tag(e)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 200)
+                            .onChange(of: config.effort) { commitChanges() }
+                        }
+                        Text("How much compute the model uses per response")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
                     }
 
-                    Toggle("Verbose", isOn: $config.verbose)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .onChange(of: config.verbose) { commitChanges() }
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent("System Prompt") {
+                            TextField("Optional", text: $config.systemPrompt)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit { commitChanges() }
+                        }
+                        Text("Additional instructions appended to the agent's system prompt")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Toggle("Verbose", isOn: $config.verbose)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .onChange(of: config.verbose) { commitChanges() }
+                        Text("Show detailed logging output in the terminal")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
 
                     resolvedArgsView(composeClaudeLaunchArgs(config))
                 }
@@ -450,21 +519,30 @@ struct CodexAgentGroupBox: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle("Use Defaults", isOn: $useDefaults)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .onChange(of: useDefaults) {
-                        if useDefaults {
-                            Task {
-                                await state.updateLaunchArgs(
-                                    projectRoot: projectRoot, agentName: "codex", launchArgs: nil)
-                            }
-                        } else {
-                            commitChanges()
+                Toggle(
+                    "Customize Launch Settings",
+                    isOn: Binding(
+                        get: { !useDefaults },
+                        set: { useDefaults = !$0 }
+                    )
+                )
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .onChange(of: useDefaults) {
+                    if useDefaults {
+                        Task {
+                            await state.updateLaunchArgs(
+                                projectRoot: projectRoot, agentName: "codex", launchArgs: nil)
                         }
+                    } else {
+                        commitChanges()
                     }
+                }
 
                 if useDefaults {
+                    Text("Using recommended settings: full-auto mode with workspace sandbox")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
                     resolvedArgsView(payload.resolvedLaunchArgs)
                 } else {
                     LabeledContent("Approval Mode") {
@@ -539,21 +617,30 @@ struct OpenCodeAgentGroupBox: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle("Use Defaults", isOn: $useDefaults)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .onChange(of: useDefaults) {
-                        if useDefaults {
-                            Task {
-                                await state.updateLaunchArgs(
-                                    projectRoot: projectRoot, agentName: "opencode", launchArgs: nil)
-                            }
-                        } else {
-                            commitChanges()
+                Toggle(
+                    "Customize Launch Settings",
+                    isOn: Binding(
+                        get: { !useDefaults },
+                        set: { useDefaults = !$0 }
+                    )
+                )
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .onChange(of: useDefaults) {
+                    if useDefaults {
+                        Task {
+                            await state.updateLaunchArgs(
+                                projectRoot: projectRoot, agentName: "opencode", launchArgs: nil)
                         }
+                    } else {
+                        commitChanges()
                     }
+                }
 
                 if useDefaults {
+                    Text("Using recommended settings: default configuration")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
                     resolvedArgsView(payload.resolvedLaunchArgs)
                 } else {
                     LabeledContent("Model") {
