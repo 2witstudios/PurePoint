@@ -99,7 +99,7 @@ final class FileTreeState {
 
         var nodes: [FileTreeNode] = []
         for name in contents {
-            if Self.hiddenNames.contains(name) || name.hasPrefix(".") { continue }
+            if Self.hiddenNames.contains(name) { continue }
 
             let absPath = (path as NSString).appendingPathComponent(name)
             let relPath = String(absPath.dropFirst(root.count + 1))
