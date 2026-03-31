@@ -13,7 +13,7 @@ pub async fn run(
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = crate::commands::cwd_string()?;
+    let project_root = crate::commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::Diff {

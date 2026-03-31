@@ -142,10 +142,19 @@ actor DaemonAttachSession {
                     lastFullRefreshAtNanos = now
                 }
                 let bytes = [UInt8](data)
+                let termRows = await MainActor.run { tv?.getTerminal().rows ?? 24 }
+                let filtered = Self.filterTerminalOutput(bytes, maxRows: termRows)
                 await MainActor.run {
-                    tv?.feed(byteArray: ArraySlice(bytes))
-                    if shouldForceFullRefresh {
-                        tv?.getTerminal().updateFullScreen()
+                    tv?.feed(byteArray: ArraySlice(filtered))
+                    // DEBUG: Log terminal buffer state to find desync
+                    if let term = tv?.getTerminal() {
+                        let buf = term.buffer
+                        if buf.y == 0 && buf.yDisp > 0 {
+                            // swiftlint:disable:next line_length
+                            print(
+                                "[TermDBG] CURSOR AT TOP: y=\(buf.y) x=\(buf.x) yDisp=\(buf.yDisp) scrollTop=\(buf.scrollTop) scrollBottom=\(buf.scrollBottom) rows=\(term.rows) cols=\(term.cols)"
+                            )
+                        }
                     }
                     tv?.needsDisplay = true
                 }
@@ -158,6 +167,56 @@ actor DaemonAttachSession {
                 break
             }
         }
+    }
+
+    // MARK: - Terminal Output Filter
+
+    /// Filter terminal output to work around SwiftTerm rendering issues:
+    /// 1. Strip DEC 2026 synchronized output sequences (SwiftTerm#203 — sync buffer
+    ///    snapshot mistracking causes cursor/scroll desync).
+    /// 2. Clamp CSI n A (cursor-up) sequences so n never exceeds viewport rows.
+    ///    Ink's eraseLines() emits cursor-up counts that can exceed viewport height,
+    ///    causing the cursor to overshoot row 0 and desync the buffer.
+    private static func filterTerminalOutput(_ bytes: [UInt8], maxRows: Int) -> [UInt8] {
+        let syncBegin: [UInt8] = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]
+        let syncEnd: [UInt8] = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]
+        let maxUp = max(maxRows - 1, 1)
+
+        var result: [UInt8] = []
+        result.reserveCapacity(bytes.count)
+        var i = 0
+        while i < bytes.count {
+            // Strip DEC 2026 begin/end (8 bytes each)
+            if i + 8 <= bytes.count {
+                let slice = Array(bytes[i..<i + 8])
+                if slice == syncBegin || slice == syncEnd {
+                    i += 8
+                    continue
+                }
+            }
+            // Clamp CSI n A (cursor up): \x1b [ <digits> A
+            if bytes[i] == 0x1b, i + 2 < bytes.count, bytes[i + 1] == 0x5b {
+                var j = i + 2
+                var digits = 0
+                var hasDigits = false
+                while j < bytes.count, bytes[j] >= 0x30, bytes[j] <= 0x39 {
+                    digits = digits * 10 + Int(bytes[j] - 0x30)
+                    hasDigits = true
+                    j += 1
+                }
+                if j < bytes.count, bytes[j] == 0x41, hasDigits {
+                    // It's CSI <n> A — clamp n
+                    let clamped = min(digits, maxUp)
+                    let replacement = Array("\u{1b}[\(clamped)A".utf8)
+                    result.append(contentsOf: replacement)
+                    i = j + 1
+                    continue
+                }
+            }
+            result.append(bytes[i])
+            i += 1
+        }
+        return result
     }
 }
 

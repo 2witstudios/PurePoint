@@ -9,7 +9,7 @@ use pu_core::protocol::{Request, SwarmRosterEntryPayload};
 
 pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let resp = client::send_request(socket, &Request::ListSwarmDefs { project_root }).await?;
     let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json)?;
@@ -28,7 +28,7 @@ pub async fn run_create(
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let roster = parse_roster(&roster_args)?;
     let resp = client::send_request(
         socket,
@@ -77,7 +77,7 @@ fn parse_roster(entries: &[String]) -> Result<Vec<SwarmRosterEntryPayload>, CliE
 
 pub async fn run_show(socket: &Path, name: &str, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::GetSwarmDef {
@@ -98,7 +98,7 @@ pub async fn run_delete(
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::DeleteSwarmDef {
@@ -120,7 +120,7 @@ pub async fn run_run(
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let var_map = commands::parse_vars(&vars)?;
     let resp = client::send_request(
         socket,

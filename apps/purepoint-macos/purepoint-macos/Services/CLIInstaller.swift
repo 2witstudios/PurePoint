@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: "com.purepoint.macos", category: "CLIInstaller")
 
 enum CLIInstaller {
     private static let home = FileManager.default.homeDirectoryForCurrentUser
@@ -16,7 +19,9 @@ enum CLIInstaller {
         installBinary(from: macosDir)
         let pluginUpdated = installPlugin(from: macosDir)
         if pluginUpdated {
-            registerWithClaudeCode()
+            DispatchQueue.global().async {
+                registerWithClaudeCode()
+            }
         }
     }
 
@@ -39,7 +44,6 @@ enum CLIInstaller {
 
     /// Copy bundled plugin into the local marketplace at ~/.pu/marketplace/plugins/pu/
     /// and write the marketplace manifest. Returns true if files were updated.
-    @discardableResult
     private static func installPlugin(from macosDir: URL) -> Bool {
         let bundledPlugin =
             macosDir
@@ -113,14 +117,21 @@ enum CLIInstaller {
 
     /// Register the local marketplace and install the plugin via `claude` CLI.
     private static func registerWithClaudeCode() {
-        guard let claudePath = findClaude() else { return }
+        guard let claudePath = findClaude() else {
+            logger.warning("Claude Code CLI not found — skipping plugin registration")
+            return
+        }
         let mktPath = marketplaceDir.path
 
         // Add marketplace (idempotent — re-adding an existing one is fine)
-        run(claudePath, "plugins", "marketplace", "add", mktPath)
+        if !run(claudePath, "plugins", "marketplace", "add", mktPath) {
+            logger.error("Failed to add marketplace at \(mktPath)")
+        }
 
         // Install the plugin (idempotent — installing an already-installed plugin is fine)
-        run(claudePath, "plugins", "install", "pu@purepoint")
+        if !run(claudePath, "plugins", "install", "pu@purepoint") {
+            logger.error("Failed to install pu@purepoint plugin")
+        }
     }
 
     private static func findClaude() -> String? {

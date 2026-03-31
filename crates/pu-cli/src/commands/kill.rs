@@ -45,7 +45,7 @@ pub async fn run(
 
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = crate::commands::cwd_string()?;
+    let project_root = crate::commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::Kill {

@@ -30,15 +30,15 @@ pub async fn run(
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let cwd = std::env::current_dir()?;
-    let project_root = cwd.to_string_lossy().to_string();
+    let project_root = commands::project_root_string()?;
+    let project_root_path = std::path::PathBuf::from(&project_root);
 
     // Parse --var KEY=VALUE pairs
     let var_map = commands::parse_vars(&vars)?;
 
     // Resolve prompt + agent override + command override from template/file/inline
     let (resolved_prompt, agent_override, command_override) =
-        resolve_prompt(prompt, template_name, file, &var_map, &cwd)?;
+        resolve_prompt(prompt, template_name, file, &var_map, &project_root_path)?;
 
     let agent = agent.or(agent_override).unwrap_or_else(|| "claude".into());
 

@@ -300,6 +300,7 @@ impl Engine {
         // Spawn PTY process
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.clone()));
+        env.push(("PU_PROJECT_ROOT".into(), project_root.to_string()));
         let spawn_config = SpawnConfig {
             command,
             args,

@@ -1,5 +1,5 @@
 use crate::client;
-use crate::commands::cwd_string;
+use crate::commands::project_root_string;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use chrono::Utc;
@@ -42,7 +42,7 @@ pub async fn run(socket: &Path, interval: Option<u64>) -> Result<(), CliError> {
     let refresh = std::time::Duration::from_millis(refresh_ms);
     let mut tick: usize = 0;
     let mut stdout = std::io::stdout();
-    let project_root = cwd_string()?;
+    let project_root = project_root_string()?;
 
     let _guard = TermGuard::enter();
 

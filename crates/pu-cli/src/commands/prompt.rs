@@ -12,7 +12,7 @@ use pu_core::template;
 pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
     // Try daemon first
     if daemon_ctrl::check_daemon_health(socket).await {
-        let project_root = commands::cwd_string()?;
+        let project_root = commands::project_root_string()?;
         let resp = client::send_request(socket, &Request::ListTemplates { project_root }).await?;
         let resp = output::check_response(resp, json)?;
         output::print_response(&resp, json)?;
@@ -25,8 +25,8 @@ pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
 
 /// Local-only template listing (no daemon required).
 fn run_list_local(json: bool) -> Result<(), CliError> {
-    let cwd = std::env::current_dir()?;
-    let templates = template::list_templates(&cwd);
+    let root = std::path::PathBuf::from(commands::project_root_string()?);
+    let templates = template::list_templates(&root);
 
     if json {
         println!("{}", serde_json::to_string_pretty(&templates)?);
@@ -60,7 +60,7 @@ fn run_list_local(json: bool) -> Result<(), CliError> {
 
 pub async fn run_show(socket: &Path, name: &str, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::GetTemplate {
@@ -84,7 +84,7 @@ pub async fn run_create(
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::SaveTemplate {
@@ -110,7 +110,7 @@ pub async fn run_delete(
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::cwd_string()?;
+    let project_root = commands::project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::DeleteTemplate {

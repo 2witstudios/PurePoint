@@ -1,5 +1,5 @@
 use crate::client;
-use crate::commands::cwd_string;
+use crate::commands::project_root_string;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
@@ -9,7 +9,7 @@ use std::path::Path;
 pub async fn run(socket: &Path, agent: Option<String>, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = cwd_string()?;
+    let project_root = project_root_string()?;
     let resp = client::send_request(
         socket,
         &Request::Status {

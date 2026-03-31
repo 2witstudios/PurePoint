@@ -27,6 +27,18 @@ pub fn cwd_string() -> Result<String, CliError> {
     Ok(std::env::current_dir()?.to_string_lossy().to_string())
 }
 
+/// Resolve the project root directory.
+/// Checks `PU_PROJECT_ROOT` env var first (set by the engine for worktree agents),
+/// falls back to the current working directory.
+pub fn project_root_string() -> Result<String, CliError> {
+    if let Ok(root) = std::env::var("PU_PROJECT_ROOT") {
+        if !root.is_empty() {
+            return Ok(root);
+        }
+    }
+    cwd_string()
+}
+
 /// Parse --var KEY=VALUE pairs into a HashMap.
 pub fn parse_vars(vars: &[String]) -> Result<HashMap<String, String>, CliError> {
     let mut map = HashMap::new();

@@ -8,7 +8,7 @@ use std::path::Path;
 pub async fn run(socket: &Path, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = crate::commands::cwd_string()?;
+    let project_root = crate::commands::project_root_string()?;
     let resp = client::send_request(socket, &Request::Pulse { project_root }).await?;
     let resp = output::check_response(resp, json)?;
     output::print_response(&resp, json)?;

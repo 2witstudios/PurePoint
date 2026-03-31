@@ -10,7 +10,7 @@ pub async fn run(socket: &Path, event: &str, project_root: Option<String>) -> Re
     daemon_ctrl::ensure_daemon(socket).await?;
     let project_root = match project_root {
         Some(pr) => pr,
-        None => commands::cwd_string()?,
+        None => commands::project_root_string()?,
     };
 
     // Git hooks run inside the worktree directory (cwd), while project_root points to
