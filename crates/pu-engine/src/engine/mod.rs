@@ -211,6 +211,48 @@ impl Engine {
             .unwrap_or_default()
     }
 
+    /// Drain every active session and kill its process group (SIGTERM, brief wait, SIGKILL).
+    /// Used by the managed-mode parent-died path so a force-quit of the macOS app reaps
+    /// agents and their grandchildren (vitest/node workers, dev servers) before the
+    /// daemon exits — `process::exit(0)` skips `Drop`, so this must run explicitly.
+    pub async fn kill_all_sessions(&self, grace: Duration) {
+        let handles: Vec<AgentHandle> = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.drain().map(|(_, h)| h).collect()
+        };
+        if handles.is_empty() {
+            return;
+        }
+
+        for handle in &handles {
+            if let Ok(pid) = i32::try_from(handle.pid) {
+                unsafe {
+                    libc::killpg(pid, libc::SIGTERM);
+                }
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + grace;
+        loop {
+            let all_done = handles.iter().all(|h| h.exit_rx.borrow().is_some());
+            if all_done || tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        for handle in &handles {
+            if handle.exit_rx.borrow().is_some() {
+                continue;
+            }
+            if let Ok(pid) = i32::try_from(handle.pid) {
+                unsafe {
+                    libc::killpg(pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+
     pub async fn handle_request(&self, request: Request) -> Response {
         // Register project for any project-scoped request
         match &request {
@@ -701,11 +743,12 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        // Kill all child processes so spawn_blocking reader/waitpid tasks can finish.
+        // Kill the whole process group of each child (PID == PGID via setsid at spawn)
+        // so descendants like vitest/node workers don't orphan to launchd.
         if let Ok(sessions) = self.sessions.try_lock() {
             for handle in sessions.values() {
                 unsafe {
-                    libc::kill(handle.pid as i32, libc::SIGKILL);
+                    libc::killpg(handle.pid as i32, libc::SIGKILL);
                 }
             }
         }

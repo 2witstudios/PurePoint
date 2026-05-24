@@ -45,22 +45,6 @@ async fn main() {
 
     tracing::info!(pid = std::process::id(), socket = %socket.display(), managed, "starting pu-engine");
 
-    // In managed mode, exit when the parent process (macOS app) dies.
-    // Without this, the daemon outlives app restarts and stale binaries persist.
-    if managed {
-        let parent_pid = std::os::unix::process::parent_id();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                // On macOS, orphaned processes get reparented to PID 1 (launchd)
-                if std::os::unix::process::parent_id() != parent_pid {
-                    tracing::info!("parent process died, shutting down managed daemon");
-                    std::process::exit(0);
-                }
-            }
-        });
-    }
-
     let engine = Engine::new();
     let server = match IpcServer::bind(&socket, engine) {
         Ok(s) => s,
@@ -75,6 +59,30 @@ async fn main() {
 
     // Start background scheduler for recurring tasks
     server.engine().start_scheduler();
+
+    // In managed mode, exit when the parent process (macOS app) dies.
+    // Without this, the daemon outlives app restarts and stale binaries persist.
+    // process::exit(0) skips Drop, so explicitly kill agent process groups first
+    // — otherwise vitest/node workers and other grandchildren orphan to launchd.
+    if managed {
+        let parent_pid = std::os::unix::process::parent_id();
+        let engine_for_cleanup = server.engine().clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                // On macOS, orphaned processes get reparented to PID 1 (launchd)
+                if std::os::unix::process::parent_id() != parent_pid {
+                    tracing::info!("parent process died, shutting down managed daemon");
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        engine_for_cleanup.kill_all_sessions(std::time::Duration::from_millis(500)),
+                    )
+                    .await;
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
 
     if let Err(e) = server.run().await {
         tracing::error!("server error: {e}");
