@@ -343,10 +343,14 @@ impl NativePtyHost {
 
         // Force kill the whole group.
         signal::killpg(pid, Signal::SIGKILL).ok();
-        // Force kill escaped descendants.
+        // Force kill escaped descendants. Check liveness first (kill(pid, 0))
+        // to avoid SIGKILL hitting a recycled PID that replaced the original
+        // process during the grace period.
         for &desc in &descendants {
             unsafe {
-                libc::kill(desc, libc::SIGKILL);
+                if libc::kill(desc, 0) == 0 {
+                    libc::kill(desc, libc::SIGKILL);
+                }
             }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

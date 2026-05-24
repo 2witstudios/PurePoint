@@ -268,7 +268,9 @@ impl Engine {
         }
         for &desc in &all_descendants {
             unsafe {
-                libc::kill(desc, libc::SIGKILL);
+                if libc::kill(desc, 0) == 0 {
+                    libc::kill(desc, libc::SIGKILL);
+                }
             }
         }
     }
