@@ -2,7 +2,11 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+  # serde_yml is unsound (RUSTSEC-2025-0068) and unmaintained, but no safe
+  # upgrade exists. Tracked for replacement in a dedicated follow-up.
+  "RUSTSEC-2025-0068",
+]
 
 [licenses]
 allow = [

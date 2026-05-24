@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
@@ -10,6 +11,65 @@ use nix::unistd::{self, ForkResult, Pid};
 use tokio::sync::watch;
 
 use crate::output_buffer::OutputBuffer;
+
+/// Snapshot the system process tree as a parent→children map by running
+/// `ps -ax -o pid,ppid`. Returns an empty map on failure (graceful
+/// degradation — callers fall back to killpg-only behaviour).
+///
+/// Separating the snapshot from the walk allows multiple callers (e.g.
+/// kill_all_sessions with N handles) to share a single `ps` invocation.
+pub(crate) async fn snapshot_process_tree() -> HashMap<i32, Vec<i32>> {
+    let output = tokio::process::Command::new("ps")
+        .args(["-ax", "-o", "pid,ppid"])
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return HashMap::new();
+    };
+    let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
+        return HashMap::new();
+    };
+    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+    for line in stdout.lines().skip(1) {
+        let mut parts = line.split_whitespace();
+        let pid = parts.next().and_then(|p| p.parse::<i32>().ok());
+        let ppid = parts.next().and_then(|p| p.parse::<i32>().ok());
+        if let (Some(pid), Some(ppid)) = (pid, ppid) {
+            if pid > 0 {
+                children.entry(ppid).or_default().push(pid);
+            }
+        }
+    }
+    children
+}
+
+/// Walk `tree` (parent→children map) from `root_pid` and return all
+/// descendant PIDs, excluding `root_pid` itself.
+///
+/// `killpg` only reaches processes whose PGID matches the session leader —
+/// any process that called `setsid()` or `setpgid()` (e.g. an npm dev
+/// server spawned with `detached: true`) creates its own process group and
+/// escapes it. Traversing by PPID finds those processes so they can be
+/// killed by PID directly.
+pub(crate) fn descendants_from_tree(tree: &HashMap<i32, Vec<i32>>, root_pid: i32) -> Vec<i32> {
+    let mut result = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(root_pid);
+    while let Some(pid) = queue.pop_front() {
+        if let Some(kids) = tree.get(&pid) {
+            for &kid in kids {
+                result.push(kid);
+                queue.push_back(kid);
+            }
+        }
+    }
+    result
+}
+
+async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
+    let tree = snapshot_process_tree().await;
+    descendants_from_tree(&tree, root_pid)
+}
 
 /// Fallback fd upper bound when sysconf(_SC_OPEN_MAX) fails or overflows i32.
 const FD_CLOSE_UPPER_BOUND: i32 = 10240;
@@ -252,8 +312,22 @@ impl NativePtyHost {
         })?;
         let pid = Pid::from_raw(raw_pid);
 
-        // Send SIGTERM first (graceful shutdown)
-        signal::kill(pid, Signal::SIGTERM).ok();
+        // Snapshot the full descendant tree before signalling. Any process that
+        // called setsid()/setpgid() (e.g. an npm dev server) has a different PGID
+        // and would escape killpg — we'll kill those by PID directly below.
+        let descendants = collect_process_descendants(raw_pid).await;
+
+        // Send SIGTERM to the entire process group (graceful shutdown).
+        // The child setsid()'d at spawn, so its PID is also its PGID. Targeting the
+        // group reaps grandchildren (e.g. vitest worker forks under a user shell)
+        // that would otherwise be reparented to launchd and leak.
+        signal::killpg(pid, Signal::SIGTERM).ok();
+        // SIGTERM any escaped descendants (separate process groups).
+        for &desc in &descendants {
+            unsafe {
+                libc::kill(desc, libc::SIGTERM);
+            }
+        }
 
         // Poll for exit
         let deadline = tokio::time::Instant::now() + grace_period;
@@ -267,8 +341,18 @@ impl NativePtyHost {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
-        // Force kill
-        signal::kill(pid, Signal::SIGKILL).ok();
+        // Force kill the whole group.
+        signal::killpg(pid, Signal::SIGKILL).ok();
+        // Force kill escaped descendants. Check liveness first (kill(pid, 0))
+        // to avoid SIGKILL hitting a recycled PID that replaced the original
+        // process during the grace period.
+        for &desc in &descendants {
+            unsafe {
+                if libc::kill(desc, 0) == 0 {
+                    libc::kill(desc, libc::SIGKILL);
+                }
+            }
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
         self.check(handle).await
     }
@@ -626,5 +710,118 @@ mod tests {
         );
 
         host.kill(&handle, Duration::from_secs(1)).await.ok();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_killed_agent_should_reap_grandchildren() {
+        let host = NativePtyHost::new();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_string_lossy().into_owned();
+
+        // Shell that backgrounds a long sleep, records its PID, then waits.
+        // The sleep is a grandchild of the kill target — under the old single-PID
+        // kill it would orphan to launchd; under killpg it should be reaped.
+        let handle = host
+            .spawn(SpawnConfig {
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), format!("sleep 300 & echo $! > {path}; wait")],
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+
+        let mut grandchild_pid: i32 = 0;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && let Ok(pid) = s.trim().parse::<i32>()
+                && pid > 0
+            {
+                grandchild_pid = pid;
+                break;
+            }
+        }
+        assert!(grandchild_pid > 0, "grandchild PID was not recorded");
+
+        let alive_before = unsafe { libc::kill(grandchild_pid, 0) };
+        assert_eq!(alive_before, 0, "grandchild should be alive before kill");
+
+        host.kill(&handle, Duration::from_secs(2)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let alive_after = unsafe { libc::kill(grandchild_pid, 0) };
+        assert_ne!(
+            alive_after, 0,
+            "grandchild PID {grandchild_pid} should be dead after group kill"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_killed_agent_should_reap_setsid_escaped_descendants() {
+        // Simulates an npm dev server: a descendant that called setsid() and is
+        // therefore in its own process group, escaping killpg. The tree-walk kill
+        // should still find and terminate it by PID.
+        let host = NativePtyHost::new();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_string_lossy().into_owned();
+
+        // Shell that backgrounds a perl process which immediately calls setsid()
+        // (escaping the agent's process group), records its PID, then sleeps.
+        // The shell stays alive via `wait` so perl remains its child in the ppid
+        // tree long enough for collect_process_descendants to find it.
+        let handle = host
+            .spawn(SpawnConfig {
+                command: "/bin/sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!(
+                        r#"perl -MPOSIX -e 'POSIX::setsid(); open my $f, q(>), q({path}); print $f $$; close $f; sleep 300' & wait"#,
+                        path = path
+                    ),
+                ],
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+
+        let mut escaped_pid: i32 = 0;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && let Ok(pid) = s.trim().parse::<i32>()
+                && pid > 0
+            {
+                escaped_pid = pid;
+                break;
+            }
+        }
+        assert!(escaped_pid > 0, "escaped child PID was not recorded");
+
+        // Confirm it escaped to its own process group.
+        let escaped_pgid = unsafe { libc::getpgid(escaped_pid) };
+        assert_ne!(
+            escaped_pgid, handle.pid as libc::pid_t,
+            "escaped child should be in a different process group than the agent"
+        );
+
+        let alive_before = unsafe { libc::kill(escaped_pid, 0) };
+        assert_eq!(alive_before, 0, "escaped child should be alive before kill");
+
+        host.kill(&handle, Duration::from_secs(2)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let alive_after = unsafe { libc::kill(escaped_pid, 0) };
+        assert_ne!(
+            alive_after, 0,
+            "escaped child PID {escaped_pid} should be dead after tree-walk kill"
+        );
     }
 }
