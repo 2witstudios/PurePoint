@@ -12,28 +12,23 @@ use tokio::sync::watch;
 
 use crate::output_buffer::OutputBuffer;
 
-/// Walk the process tree rooted at `root_pid` and return all descendant PIDs
-/// (excluding `root_pid` itself).
+/// Snapshot the system process tree as a parent→children map by running
+/// `ps -ax -o pid,ppid`. Returns an empty map on failure (graceful
+/// degradation — callers fall back to killpg-only behaviour).
 ///
-/// `killpg` only reaches processes whose PGID matches the session leader — any
-/// process that called `setsid()` or `setpgid()` (e.g. an npm dev server
-/// launched with `detached: true`) creates a new process group and escapes it.
-/// This function traverses by PPID instead, so those escaped processes are
-/// still found and can be killed by PID directly.
-async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
-    // `ps -ax -o pid,ppid` lists every process on the system with its parent PID.
+/// Separating the snapshot from the walk allows multiple callers (e.g.
+/// kill_all_sessions with N handles) to share a single `ps` invocation.
+pub(crate) async fn snapshot_process_tree() -> HashMap<i32, Vec<i32>> {
     let output = tokio::process::Command::new("ps")
         .args(["-ax", "-o", "pid,ppid"])
         .output()
         .await;
     let Ok(output) = output else {
-        return vec![];
+        return HashMap::new();
     };
     let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
-        return vec![];
+        return HashMap::new();
     };
-
-    // Build parent → children map (skip the header line).
     let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
     for line in stdout.lines().skip(1) {
         let mut parts = line.split_whitespace();
@@ -45,13 +40,23 @@ async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
             }
         }
     }
+    children
+}
 
-    // BFS from root_pid, collecting all descendants.
+/// Walk `tree` (parent→children map) from `root_pid` and return all
+/// descendant PIDs, excluding `root_pid` itself.
+///
+/// `killpg` only reaches processes whose PGID matches the session leader —
+/// any process that called `setsid()` or `setpgid()` (e.g. an npm dev
+/// server spawned with `detached: true`) creates its own process group and
+/// escapes it. Traversing by PPID finds those processes so they can be
+/// killed by PID directly.
+pub(crate) fn descendants_from_tree(tree: &HashMap<i32, Vec<i32>>, root_pid: i32) -> Vec<i32> {
     let mut result = Vec::new();
     let mut queue = VecDeque::new();
     queue.push_back(root_pid);
     while let Some(pid) = queue.pop_front() {
-        if let Some(kids) = children.get(&pid) {
+        if let Some(kids) = tree.get(&pid) {
             for &kid in kids {
                 result.push(kid);
                 queue.push_back(kid);
@@ -59,6 +64,11 @@ async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
         }
     }
     result
+}
+
+async fn collect_process_descendants(root_pid: i32) -> Vec<i32> {
+    let tree = snapshot_process_tree().await;
+    descendants_from_tree(&tree, root_pid)
 }
 
 /// Fallback fd upper bound when sysconf(_SC_OPEN_MAX) fails or overflows i32.

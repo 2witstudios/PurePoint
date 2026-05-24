@@ -27,7 +27,9 @@ use pu_core::protocol::{AgentConfigInfo, GridCommand, PROTOCOL_VERSION, Request,
 use pu_core::types::Manifest;
 use tokio::sync::OnceCell;
 
-use crate::pty_manager::{AgentHandle, NativePtyHost};
+use crate::pty_manager::{
+    AgentHandle, NativePtyHost, descendants_from_tree, snapshot_process_tree,
+};
 
 /// Parameters for spawning an agent, extracted to avoid too many positional args.
 pub(super) struct SpawnParams {
@@ -224,11 +226,24 @@ impl Engine {
             return;
         }
 
+        // One `ps` snapshot for all handles — cheaper than one per agent.
+        let tree = snapshot_process_tree().await;
+        let all_descendants: Vec<i32> = handles
+            .iter()
+            .filter_map(|h| i32::try_from(h.pid).ok())
+            .flat_map(|pid| descendants_from_tree(&tree, pid))
+            .collect();
+
         for handle in &handles {
             if let Ok(pid) = i32::try_from(handle.pid) {
                 unsafe {
                     libc::killpg(pid, libc::SIGTERM);
                 }
+            }
+        }
+        for &desc in &all_descendants {
+            unsafe {
+                libc::kill(desc, libc::SIGTERM);
             }
         }
 
@@ -249,6 +264,11 @@ impl Engine {
                 unsafe {
                     libc::killpg(pid, libc::SIGKILL);
                 }
+            }
+        }
+        for &desc in &all_descendants {
+            unsafe {
+                libc::kill(desc, libc::SIGKILL);
             }
         }
     }
