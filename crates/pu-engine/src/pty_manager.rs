@@ -710,10 +710,7 @@ mod tests {
         let handle = host
             .spawn(SpawnConfig {
                 command: "/bin/sh".into(),
-                args: vec![
-                    "-c".into(),
-                    format!("sleep 300 & echo $! > {path}; wait"),
-                ],
+                args: vec!["-c".into(), format!("sleep 300 & echo $! > {path}; wait")],
                 cwd: "/tmp".into(),
                 env: vec![],
                 env_remove: vec![],
@@ -797,8 +794,7 @@ mod tests {
         // Confirm it escaped to its own process group.
         let escaped_pgid = unsafe { libc::getpgid(escaped_pid) };
         assert_ne!(
-            escaped_pgid,
-            handle.pid as libc::pid_t,
+            escaped_pgid, handle.pid as libc::pid_t,
             "escaped child should be in a different process group than the agent"
         );
 
