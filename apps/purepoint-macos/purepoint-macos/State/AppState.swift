@@ -16,6 +16,8 @@ final class AppState {
     var pendingSelectWorktreeId: String?
     var pendingFocusAgentId: String?
 
+    var pointGuardShellId: String?
+
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
     var scheduleState = ScheduleState()

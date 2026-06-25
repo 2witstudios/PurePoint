@@ -33,8 +33,12 @@ struct PointGuardView: View {
             }
 
             ZStack {
-                PointGuardTerminalView(agentId: shellAgentId)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                PointGuardTerminalView(agentId: shellAgentId, onAgentGone: {
+                    appState.pointGuardShellId = nil
+                    shellAgentId = nil
+                    Task { await spawnShell() }
+                })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if shellAgentId == nil {
                     VStack(spacing: 12) {
                         if let shellError {
@@ -72,7 +76,6 @@ struct PointGuardView: View {
         }
         .task {
             await spawnShell()
-            await sessionList.refreshSessions()
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
             showSidebar.toggle()
@@ -108,6 +111,11 @@ struct PointGuardView: View {
     }
 
     private func spawnShell() async {
+        if let existingId = appState.pointGuardShellId {
+            shellAgentId = existingId
+            await sessionList.refreshSessions()
+            return
+        }
         await respawnShell(cwd: NSHomeDirectory(), then: launchCommand)
     }
 
@@ -118,6 +126,7 @@ struct PointGuardView: View {
         // Tell existing shell to exit: Ctrl-C anything running, then `exit`
         if let oldId = shellAgentId {
             shellAgentId = nil
+            appState.pointGuardShellId = nil
             let client = DaemonClient()
             _ = try? await client.send(.input(agentId: oldId, data: Data([0x03])))  // Ctrl-C
             try? await Task.sleep(for: .milliseconds(50))
@@ -130,6 +139,7 @@ struct PointGuardView: View {
             let response = try await client.send(.spawnShell(cwd: cwd))
             if case .spawnResult(_, let agentId, _) = response {
                 shellAgentId = agentId
+                appState.pointGuardShellId = agentId
                 if let command {
                     // Brief delay for shell to initialize before sending command
                     try await Task.sleep(for: .milliseconds(300))
@@ -147,12 +157,14 @@ struct PointGuardView: View {
 /// NSViewRepresentable that hosts a ScrollableTerminal connected to a shell agent.
 struct PointGuardTerminalView: NSViewRepresentable {
     let agentId: String?
+    var onAgentGone: (() -> Void)?
 
     func makeNSView(context: Context) -> PointGuardTerminalNSView {
         PointGuardTerminalNSView()
     }
 
     func updateNSView(_ nsView: PointGuardTerminalNSView, context: Context) {
+        nsView.onAgentGone = onAgentGone
         if let agentId, nsView.currentAgentId != agentId {
             nsView.attach(agentId: agentId)
         }
@@ -167,6 +179,7 @@ class PointGuardTerminalNSView: NSView {
     private(set) var currentAgentId: String?
     private var terminal: ScrollableTerminal?
     private var attachTask: Task<Void, Never>?
+    var onAgentGone: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -219,8 +232,11 @@ class PointGuardTerminalNSView: NSView {
         let session = DaemonAttachSession(agentId: agentId, terminalView: tv.terminalView)
         tv.attachSession = session
 
-        attachTask = Task {
+        attachTask = Task { [weak self] in
             await session.start()
+            if session.isAgentGone {
+                await MainActor.run { self?.onAgentGone?() }
+            }
         }
 
         // Focus the terminal
