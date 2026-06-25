@@ -666,8 +666,13 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         textField.isEditable = true
         textField.isSelectable = true
         textField.delegate = self
-        view.window?.makeFirstResponder(textField)
-        textField.selectText(nil)
+
+        // Defer so the context menu's focus-restoration teardown completes first.
+        DispatchQueue.main.async { [weak self] in
+            guard self != nil else { return }
+            self?.view.window?.makeFirstResponder(textField)
+            textField.selectText(nil)
+        }
     }
 
     /// Find the name label text field in a cell view (the non-dot, non-icon label).
