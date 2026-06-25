@@ -31,7 +31,7 @@ impl<'de> Deserialize<'de> for AgentStatus {
             "broken" => Ok(AgentStatus::Broken),
             // Backward compat: map old status values
             "streaming" | "waiting" | "spawning" | "idle" | "suspended" => Ok(AgentStatus::Running),
-            "completed" | "failed" | "killed" | "lost" => Ok(AgentStatus::Broken),
+            "completed" | "failed" | "killed" | "lost" | "stopped" => Ok(AgentStatus::Broken),
             other => Err(serde::de::Error::unknown_variant(
                 other,
                 &["running", "broken"],
