@@ -72,6 +72,10 @@ build-app:
         CODE_SIGNING_REQUIRED=NO \
         DEVELOPMENT_TEAM=""
 
+# Run a dev build of the app in a sandboxed $HOME (safe next to production)
+run-app-sandbox *ARGS:
+    scripts/dev-app-sandbox.sh {{ARGS}}
+
 # Run macOS tests
 test-app:
     xcodebuild test \
