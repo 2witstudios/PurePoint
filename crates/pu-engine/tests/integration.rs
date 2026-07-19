@@ -433,7 +433,10 @@ async fn given_undeletable_worktree_directory_should_mark_failed_and_keep_manife
             remote_deleted,
             ..
         } => {
-            assert!(!directory_removed, "directory should not be reported removed");
+            assert!(
+                !directory_removed,
+                "directory should not be reported removed"
+            );
             assert!(error.is_some(), "expected an error message");
             assert!(!branch_deleted, "branch should be kept for retry");
             assert!(!remote_deleted);

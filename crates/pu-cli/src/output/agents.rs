@@ -187,8 +187,6 @@ pub(crate) fn print_delete_worktree_result(
     );
     if let Some(err) = error {
         println!("  {} {err}", "warning:".yellow().bold());
-        println!(
-            "  worktree marked as failed — retry with `pu clean --worktree {worktree_id}`"
-        );
+        println!("  worktree marked as failed — retry with `pu clean --worktree {worktree_id}`");
     }
 }
