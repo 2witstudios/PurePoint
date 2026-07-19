@@ -145,18 +145,40 @@ actor DaemonAttachSession {
                 let termRows = await MainActor.run { tv?.getTerminal().rows ?? 24 }
                 let filtered = Self.filterTerminalOutput(bytes, maxRows: termRows)
                 await MainActor.run {
-                    tv?.feed(byteArray: ArraySlice(filtered))
-                    // DEBUG: Log terminal buffer state to find desync
-                    if let term = tv?.getTerminal() {
-                        let buf = term.buffer
-                        if buf.y == 0 && buf.yDisp > 0 {
-                            // swiftlint:disable:next line_length
-                            print(
-                                "[TermDBG] CURSOR AT TOP: y=\(buf.y) x=\(buf.x) yDisp=\(buf.yDisp) scrollTop=\(buf.scrollTop) scrollBottom=\(buf.scrollBottom) rows=\(term.rows) cols=\(term.cols)"
-                            )
+                    guard let tv else { return }
+                    let term = tv.getTerminal()
+
+                    // SwiftTerm's own "stay put while the user has scrolled up" logic
+                    // (Terminal.scroll(), gated on an internal userScrolling flag) is never
+                    // engaged by mouse-wheel scrolling, so every feed() re-pins yDisp to the
+                    // live tail. Snapshot/restore it here via the public scroll API so
+                    // continuous output doesn't yank the viewport (and any selection in it)
+                    // out from under the user. Never write term.buffer.yDisp directly — its
+                    // setter skips the refresh/dirty-row/scroller bookkeeping that
+                    // scrollUp/scrollDown perform.
+                    let priorYDisp = term.buffer.yDisp
+                    let wasScrolledAway = !term.isCurrentBufferAlternate && priorYDisp > 0
+
+                    tv.feed(byteArray: ArraySlice(filtered))
+
+                    if wasScrolledAway {
+                        let delta = term.buffer.yDisp - priorYDisp
+                        if delta > 0 {
+                            tv.scrollUp(lines: delta)
+                        } else if delta < 0 {
+                            tv.scrollDown(lines: -delta)
                         }
                     }
-                    tv?.needsDisplay = true
+
+                    // DEBUG: Log terminal buffer state to find desync
+                    let buf = term.buffer
+                    if buf.y == 0 && buf.yDisp > 0 {
+                        // swiftlint:disable:next line_length
+                        print(
+                            "[TermDBG] CURSOR AT TOP: y=\(buf.y) x=\(buf.x) yDisp=\(buf.yDisp) scrollTop=\(buf.scrollTop) scrollBottom=\(buf.scrollBottom) rows=\(term.rows) cols=\(term.cols)"
+                        )
+                    }
+                    tv.needsDisplay = true
                 }
             case .error(let code, let message):
                 if code == "AGENT_NOT_FOUND" {

@@ -186,6 +186,14 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             return event
         }
 
+        // Don't hijack scroll into synthetic PTY clicks while the user has an active
+        // text selection — that would repaint the TUI's content under a selection that
+        // stays anchored to now-stale rows, making it look "stuck" mid-drag.
+        guard !terminalView.selectionActive else {
+            cancelPendingScrollFlush()
+            return event
+        }
+
         let delta = event.scrollingDeltaY
         guard abs(delta) > 0.5 else { return nil }
 
@@ -213,22 +221,25 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         scrollFlushTimer = timer
     }
 
+    private func cancelPendingScrollFlush() {
+        scrollFlushTimer?.cancel()
+        scrollFlushTimer = nil
+        accumulatedDelta = 0
+        lastScrollDirection = nil
+    }
+
     private func flushScrollDelta() {
         let delta = accumulatedDelta
         guard abs(delta) > 0.5 else {
-            scrollFlushTimer?.cancel()
-            scrollFlushTimer = nil
-            lastScrollDirection = nil
+            cancelPendingScrollFlush()
             return
         }
 
         accumulatedDelta = 0
 
         let term = terminalView.getTerminal()
-        guard term.mouseMode != .off, term.isCurrentBufferAlternate else {
-            scrollFlushTimer?.cancel()
-            scrollFlushTimer = nil
-            lastScrollDirection = nil
+        guard term.mouseMode != .off, term.isCurrentBufferAlternate, !terminalView.selectionActive else {
+            cancelPendingScrollFlush()
             return
         }
 
