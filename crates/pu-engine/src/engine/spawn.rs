@@ -479,6 +479,7 @@ impl Engine {
                         agents: IndexMap::new(),
                         created_at: chrono::Utc::now(),
                         merged_at: None,
+                        error: None,
                     });
                 wt_entry.agents.insert(agent_id_clone, agent_entry);
             } else {

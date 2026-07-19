@@ -164,6 +164,7 @@ mod tests {
                 agents,
                 created_at: chrono::Utc::now(),
                 merged_at: None,
+                error: None,
             },
         );
         assert!(matches!(
@@ -214,6 +215,7 @@ mod tests {
                 agents: wt_agents,
                 created_at: now,
                 merged_at: None,
+                error: None,
             },
         );
         let all = m.all_agents();

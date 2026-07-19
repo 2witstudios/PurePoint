@@ -358,6 +358,113 @@ async fn given_delete_nonexistent_worktree_should_return_error() {
     h.shutdown().await;
 }
 
+/// Minimal git repo setup, mirroring the private helper in `src/git.rs`'s test module
+/// (not reusable here since this is a separate test binary).
+fn init_git_repo(dir: &std::path::Path) {
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    let output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git init commit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_undeletable_worktree_directory_should_mark_failed_and_keep_manifest_entry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let h = TestHarness::new().await;
+    let project_path = std::path::PathBuf::from(h.project_root());
+    init_git_repo(&project_path);
+
+    let resp = h
+        .send(&Request::CreateWorktree {
+            project_root: h.project_root(),
+            name: Some("stale-test".into()),
+            base: None,
+        })
+        .await;
+    let wt_id = match resp {
+        Response::CreateWorktreeResult { worktree_id } => worktree_id,
+        other => panic!("expected CreateWorktreeResult, got {other:?}"),
+    };
+
+    let wt_path = pu_core::paths::worktree_path(&project_path, &wt_id);
+    assert!(wt_path.exists());
+
+    // Strip write permission so neither `git worktree remove` nor the fallback
+    // `remove_dir_all` can unlink the directory's contents — simulating the
+    // permission-error/lingering-file-handle failure mode from issue #161.
+    std::fs::set_permissions(&wt_path, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let resp = h
+        .send(&Request::DeleteWorktree {
+            project_root: h.project_root(),
+            worktree_id: wt_id.clone(),
+        })
+        .await;
+
+    // Restore permissions immediately so the TempDir can clean itself up afterward.
+    std::fs::set_permissions(&wt_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    match resp {
+        Response::DeleteWorktreeResult {
+            directory_removed,
+            error,
+            branch_deleted,
+            remote_deleted,
+            ..
+        } => {
+            assert!(!directory_removed, "directory should not be reported removed");
+            assert!(error.is_some(), "expected an error message");
+            assert!(!branch_deleted, "branch should be kept for retry");
+            assert!(!remote_deleted);
+        }
+        other => panic!("expected DeleteWorktreeResult, got {other:?}"),
+    }
+    assert!(wt_path.exists(), "directory should still be on disk");
+
+    // The manifest must still list the worktree (marked Failed) so `pu status`/
+    // `pu clean --all` can see and retry it, instead of orphaning it silently.
+    let resp = h
+        .send(&Request::Status {
+            project_root: h.project_root(),
+            agent_id: None,
+        })
+        .await;
+    match resp {
+        Response::StatusReport { worktrees, .. } => {
+            let wt = worktrees
+                .iter()
+                .find(|w| w.id == wt_id)
+                .expect("worktree should still be listed after failed cleanup");
+            assert_eq!(wt.status, pu_core::types::WorktreeStatus::Failed);
+            assert!(wt.error.is_some());
+        }
+        other => panic!("expected StatusReport, got {other:?}"),
+    }
+
+    h.shutdown().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn given_uninitialised_project_kill_should_return_error() {
     let h = TestHarness::new_bare().await;

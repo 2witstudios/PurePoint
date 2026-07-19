@@ -389,6 +389,9 @@ pub enum Response {
         killed_agents: Vec<String>,
         branch_deleted: bool,
         remote_deleted: bool,
+        directory_removed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     TemplateList {
         templates: Vec<TemplateInfo>,

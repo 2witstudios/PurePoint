@@ -828,6 +828,8 @@ fn given_delete_worktree_result_should_round_trip() {
         killed_agents: vec!["ag-1".into(), "ag-2".into()],
         branch_deleted: true,
         remote_deleted: false,
+        directory_removed: true,
+        error: None,
     };
     let json = serde_json::to_string(&resp).unwrap();
     let parsed: Response = serde_json::from_str(&json).unwrap();
@@ -837,11 +839,40 @@ fn given_delete_worktree_result_should_round_trip() {
             killed_agents,
             branch_deleted,
             remote_deleted,
+            directory_removed,
+            error,
         } => {
             assert_eq!(worktree_id, "wt-abc");
             assert_eq!(killed_agents, vec!["ag-1", "ag-2"]);
             assert!(branch_deleted);
             assert!(!remote_deleted);
+            assert!(directory_removed);
+            assert!(error.is_none());
+        }
+        _ => panic!("expected DeleteWorktreeResult"),
+    }
+}
+
+#[test]
+fn given_delete_worktree_result_with_directory_failure_should_round_trip() {
+    let resp = Response::DeleteWorktreeResult {
+        worktree_id: "wt-abc".into(),
+        killed_agents: vec![],
+        branch_deleted: false,
+        remote_deleted: false,
+        directory_removed: false,
+        error: Some("permission denied".into()),
+    };
+    let json = serde_json::to_string(&resp).unwrap();
+    let parsed: Response = serde_json::from_str(&json).unwrap();
+    match parsed {
+        Response::DeleteWorktreeResult {
+            directory_removed,
+            error,
+            ..
+        } => {
+            assert!(!directory_removed);
+            assert_eq!(error.as_deref(), Some("permission denied"));
         }
         _ => panic!("expected DeleteWorktreeResult"),
     }

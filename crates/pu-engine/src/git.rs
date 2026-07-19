@@ -84,6 +84,14 @@ pub async fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<(
     Ok(())
 }
 
+/// Prune stale git worktree admin metadata (`.git/worktrees/<id>`) whose working
+/// directory no longer exists. Used after a manual `remove_dir_all` fallback so a
+/// later `git worktree add` doesn't trip over a dangling registration.
+pub async fn prune_worktrees(repo_root: &Path) -> Result<(), std::io::Error> {
+    run_git(&["worktree", "prune"], repo_root).await?;
+    Ok(())
+}
+
 /// Resolve a symbolic ref (like "HEAD") to a branch name (like "main").
 /// Falls back to a commit SHA if HEAD is detached.
 pub async fn resolve_base_ref(repo_root: &Path, refspec: &str) -> Result<String, std::io::Error> {

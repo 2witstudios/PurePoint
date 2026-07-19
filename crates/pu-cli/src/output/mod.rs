@@ -101,12 +101,16 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
             killed_agents,
             branch_deleted,
             remote_deleted,
+            directory_removed,
+            error,
         } => {
             agents::print_delete_worktree_result(
                 worktree_id,
                 killed_agents,
                 *branch_deleted,
                 *remote_deleted,
+                *directory_removed,
+                error.as_deref(),
             );
         }
         Response::LogsResult { agent_id, data } => {

@@ -229,6 +229,21 @@ fn given_delete_worktree_result_should_not_panic() {
         killed_agents: vec!["ag-1".into()],
         branch_deleted: true,
         remote_deleted: false,
+        directory_removed: true,
+        error: None,
+    };
+    print_response(&resp, false).unwrap();
+}
+
+#[test]
+fn given_delete_worktree_result_with_directory_failure_should_not_panic() {
+    let resp = Response::DeleteWorktreeResult {
+        worktree_id: "wt-1".into(),
+        killed_agents: vec![],
+        branch_deleted: false,
+        remote_deleted: false,
+        directory_removed: false,
+        error: Some("permission denied".into()),
     };
     print_response(&resp, false).unwrap();
 }

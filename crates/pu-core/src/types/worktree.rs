@@ -27,6 +27,8 @@ pub struct WorktreeEntry {
     pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[cfg(test)]
@@ -90,11 +92,36 @@ mod tests {
             agents,
             created_at: chrono::Utc::now(),
             merged_at: None,
+            error: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: WorktreeEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, "wt-abc");
         assert_eq!(parsed.branch, "pu/fix-auth");
         assert!(parsed.agents.contains_key("ag-1"));
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn given_worktree_entry_with_error_should_round_trip_json() {
+        let entry = WorktreeEntry {
+            id: "wt-failed".into(),
+            name: "stuck".into(),
+            path: "/tmp/wt-failed".into(),
+            branch: "pu/stuck".into(),
+            base_branch: Some("main".into()),
+            status: WorktreeStatus::Failed,
+            agents: IndexMap::new(),
+            created_at: chrono::Utc::now(),
+            merged_at: None,
+            error: Some("git worktree remove failed: permission denied".into()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: WorktreeEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.status, WorktreeStatus::Failed);
+        assert_eq!(
+            parsed.error.as_deref(),
+            Some("git worktree remove failed: permission denied")
+        );
     }
 }

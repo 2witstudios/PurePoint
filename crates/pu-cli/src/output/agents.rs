@@ -1,6 +1,6 @@
 use owo_colors::OwoColorize;
 use pu_core::protocol::AgentStatusReport;
-use pu_core::types::{AgentStatus, WorktreeEntry};
+use pu_core::types::{AgentStatus, WorktreeEntry, WorktreeStatus};
 
 use super::formatters::{status_colored, status_colored_with_suspended, trigger_progress};
 
@@ -49,6 +49,11 @@ pub(crate) fn print_status_report(worktrees: &[WorktreeEntry], agents: &[AgentSt
             wt.branch,
             wt.status,
         );
+        if wt.status == WorktreeStatus::Failed {
+            if let Some(err) = &wt.error {
+                println!("  {} {err}", "error:".red().bold());
+            }
+        }
         if !wt.agents.is_empty() {
             println!(
                 "  {:<14} {:<16} {}",
@@ -145,8 +150,14 @@ pub(crate) fn print_delete_worktree_result(
     killed_agents: &[String],
     branch_deleted: bool,
     remote_deleted: bool,
+    directory_removed: bool,
+    error: Option<&str>,
 ) {
-    println!("Deleted worktree {}", worktree_id.bold());
+    if directory_removed {
+        println!("Deleted worktree {}", worktree_id.bold());
+    } else {
+        println!("Failed to fully clean worktree {}", worktree_id.bold());
+    }
     if !killed_agents.is_empty() {
         println!("  Killed {} agent(s)", killed_agents.len());
     }
@@ -166,4 +177,18 @@ pub(crate) fn print_delete_worktree_result(
             "no".dimmed().to_string()
         }
     );
+    println!(
+        "  Directory removed: {}",
+        if directory_removed {
+            "yes".green().to_string()
+        } else {
+            "no".red().to_string()
+        }
+    );
+    if let Some(err) = error {
+        println!("  {} {err}", "warning:".yellow().bold());
+        println!(
+            "  worktree marked as failed — retry with `pu clean --worktree {worktree_id}`"
+        );
+    }
 }

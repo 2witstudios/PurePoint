@@ -104,6 +104,7 @@ impl Engine {
                     agents: IndexMap::new(),
                     created_at: chrono::Utc::now(),
                     merged_at: None,
+                    error: None,
                 });
             m
         });
@@ -150,7 +151,59 @@ impl Engine {
         // 2. Remove git worktree directory
         let root_path = Path::new(project_root);
         let wt_path = paths::worktree_path(root_path, worktree_id);
-        git::remove_worktree(root_path, &wt_path).await.ok();
+        let mut directory_error: Option<String> = None;
+
+        if let Err(e) = git::remove_worktree(root_path, &wt_path).await {
+            tracing::warn!(worktree_id, "git worktree remove failed: {e}");
+            if wt_path.exists() {
+                // Fallback: force-remove the directory directly, then prune git's
+                // stale admin metadata so the worktree slot can be reused.
+                if let Err(fs_err) = tokio::fs::remove_dir_all(&wt_path).await {
+                    tracing::error!(
+                        worktree_id,
+                        "worktree directory still present after fallback removal: {fs_err}"
+                    );
+                    directory_error = Some(format!(
+                        "git worktree remove failed ({e}); fallback removal also failed: {fs_err}"
+                    ));
+                } else {
+                    git::prune_worktrees(root_path).await.ok();
+                }
+            }
+            // else: directory is actually gone — transient git warning, not a real problem.
+        }
+
+        // If the directory is still on disk, don't delete the branch or the manifest
+        // entry — keep it visible and retryable via `pu status`/`pu clean` instead of
+        // orphaning it with no way to find it again.
+        if let Some(err) = directory_error {
+            let wt_id = worktree_id.to_string();
+            let pr = project_root.to_string();
+            let err_for_manifest = err.clone();
+            tokio::task::spawn_blocking(move || {
+                manifest::update_manifest(Path::new(&pr), move |mut m| {
+                    if let Some(entry) = m.worktrees.get_mut(&wt_id) {
+                        entry.status = WorktreeStatus::Failed;
+                        entry.error = Some(err_for_manifest);
+                    }
+                    m
+                })
+                .ok();
+            })
+            .await
+            .ok();
+
+            self.notify_status_change(project_root).await;
+
+            return Response::DeleteWorktreeResult {
+                worktree_id: worktree_id.to_string(),
+                killed_agents: agent_ids,
+                branch_deleted: false,
+                remote_deleted: false,
+                directory_removed: false,
+                error: Some(err),
+            };
+        }
 
         // 3. Delete local branch (soft-fail)
         let branch = wt.branch.clone();
@@ -180,6 +233,8 @@ impl Engine {
             killed_agents,
             branch_deleted,
             remote_deleted,
+            directory_removed: true,
+            error: None,
         }
     }
 
@@ -191,7 +246,9 @@ impl Engine {
     ) {
         if let Some(wt_id) = worktree_id {
             let wt_path = paths::worktree_path(root_path, wt_id);
-            git::remove_worktree(root_path, &wt_path).await.ok();
+            if let Err(e) = git::remove_worktree(root_path, &wt_path).await {
+                tracing::warn!("rollback: failed to remove worktree directory: {e}");
+            }
         }
         if let Some(b) = branch {
             git::delete_local_branch(root_path, b).await.ok();
