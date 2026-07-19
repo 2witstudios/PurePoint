@@ -169,7 +169,11 @@ final class AppState {
             for root in projectRoots {
                 _ = try? await client.send(.suspend(projectRoot: root, target: .all))
             }
-            _ = try? await client.send(.shutdown)
+            // Only shut down a daemon this instance launched — a second app
+            // instance attached to a shared daemon must not kill it on quit.
+            if await DaemonLifecycle.didLaunchDaemon() {
+                _ = try? await client.send(.shutdown)
+            }
             semaphore.signal()
         }
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive

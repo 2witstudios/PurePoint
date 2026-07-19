@@ -13,6 +13,13 @@ nonisolated enum DaemonLifecycle {
         try await launcher.restartDaemon()
     }
 
+    /// True if this app instance launched the daemon it is talking to.
+    /// Used to avoid shutting down a daemon we merely attached to (e.g. a
+    /// second app instance quitting must not kill the shared daemon).
+    static func didLaunchDaemon() async -> Bool {
+        await launcher.didLaunchDaemon
+    }
+
     static func findBinary() -> String? {
         // 1. Check app bundle (production path)
         if let bundlePath = Bundle.main.executableURL?
@@ -48,6 +55,7 @@ private actor DaemonLauncher {
         .appendingPathComponent(".pu")
     private var pidPath: String { puDir.appendingPathComponent("daemon.pid").path }
     private var socketPath: String { puDir.appendingPathComponent("daemon.sock").path }
+    private(set) var didLaunchDaemon = false
 
     func ensureDaemon() async throws {
         let client = DaemonClient()
@@ -147,7 +155,10 @@ private actor DaemonLauncher {
         for attempt in 0..<5 {
             let delay = UInt64(100_000_000 * (1 << attempt))
             try await Task.sleep(nanoseconds: delay)
-            if await isHealthy(client: client) { return }
+            if await isHealthy(client: client) {
+                didLaunchDaemon = true
+                return
+            }
         }
 
         throw DaemonLifecycleError.startupTimeout
