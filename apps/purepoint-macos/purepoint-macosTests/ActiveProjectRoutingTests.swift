@@ -33,6 +33,10 @@ private struct StubWorkspaceService: WorkspaceService {
     return project
 }
 
+/// `AppState.registry` is weak, so a registry assigned straight from `makeRegistry` would be
+/// freed immediately. Tests are short-lived; keeping every registry alive is simplest.
+@MainActor private var retainedRegistries: [WorkspaceRegistry] = []
+
 /// Build a registry holding one single-pane workspace per agent, mirroring what
 /// reconcile produces for a project whose agents have never been grouped.
 @MainActor private func makeRegistry(_ projects: [ProjectState]) -> WorkspaceRegistry {
@@ -44,6 +48,7 @@ private struct StubWorkspaceService: WorkspaceService {
             worktrees: project.worktrees
         )
     }
+    retainedRegistries.append(registry)
     return registry
 }
 
