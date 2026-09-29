@@ -360,25 +360,32 @@ struct GridLayoutPersistenceTests {
 
     @Test func fromLayoutNodeDegradedSplitFallsBackToLeaf() {
         // A split node with missing axis/ratio/children should degrade to a single leaf
-        let degraded = GridLayoutNode(type: .split, agentId: nil, axis: nil, ratio: nil, first: nil, second: nil)
+        let degraded = GridLayoutNode(type: .split, leafId: nil, agentId: nil, axis: nil, ratio: nil, first: nil, second: nil)
         var nextId = 0
         let result = PaneSplitNode.fromLayoutNode(degraded, nextId: &nextId)
         #expect(result.leafCount == 1)
         #expect(nextId == 1)
     }
 
-    @Test func roundTripPersistedGridLayout() throws {
+    @Test func roundTripPersistedWorkspace() throws {
         let tree = PaneSplitNode.split(
             axis: .horizontal, ratio: 0.5,
             first: .leaf(id: 0, agentId: "owner"),
             second: .leaf(id: 1, agentId: "worker")
         )
-        let persisted = PersistedGridLayout(ownerAgentId: "owner", tree: tree.toLayoutNode())
+        let persisted = PersistedWorkspaceDocument(
+            version: PersistedWorkspaceDocument.currentVersion,
+            workspaces: [
+                PersistedWorkspace(
+                    id: "ws-owner", worktreeId: nil, focusedLeafId: 1, nextLeafId: 2, tree: tree.toLayoutNode())
+            ])
         let data = try JSONEncoder().encode(persisted)
-        let decoded = try JSONDecoder().decode(PersistedGridLayout.self, from: data)
-        #expect(decoded.ownerAgentId == "owner")
+        let decoded = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
+        let workspace = try #require(decoded.workspaces.first)
+        #expect(workspace.id == "ws-owner")
+        #expect(workspace.focusedLeafId == 1)
         var nextId = 0
-        let restored = PaneSplitNode.fromLayoutNode(decoded.tree, nextId: &nextId)
+        let restored = PaneSplitNode.fromLayoutNode(workspace.tree, nextId: &nextId)
         #expect(restored.leafCount == 2)
         #expect(restored.containsAgent("owner"))
         #expect(restored.containsAgent("worker"))
