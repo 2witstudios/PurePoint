@@ -195,20 +195,29 @@ final class AppState {
         UserDefaults.standard.set(registry?.activeWorkspaceId, forKey: Self.activeWorkspaceKey)
     }
 
-    /// Restore the workspace that was on screen. Reconcile has already run by this point,
-    /// so a saved ID either names a workspace that still exists or names nothing.
+    /// Remember the workspace that was on screen so the UI can select it once it exists.
+    /// Reconcile may not have run for every project yet, so existence is not checked here.
     @discardableResult
     func restoreActiveWorkspace() -> String? {
-        guard let savedId = UserDefaults.standard.string(forKey: Self.activeWorkspaceKey),
-            let registry, registry.workspace(id: savedId) != nil
-        else { return nil }
-
-        registry.activate(workspaceId: savedId)
+        guard let savedId = UserDefaults.standard.string(forKey: Self.activeWorkspaceKey) else { return nil }
         pendingSelectWorkspaceId = savedId
-        if let root = registry.projectRoot(forWorkspace: savedId) {
-            activeProjectRoot = root
-        }
         return savedId
+    }
+
+    /// The pending workspace to select, once the registry has it. The pending ID is cleared
+    /// when it resolves, or when every open project has reconciled and it still names nothing.
+    func resolvePendingWorkspaceSelection() -> String? {
+        guard let pendingId = pendingSelectWorkspaceId, let registry else { return nil }
+
+        if let root = registry.projectRoot(forWorkspace: pendingId) {
+            pendingSelectWorkspaceId = nil
+            activeProjectRoot = root
+            return pendingId
+        }
+        if projects.allSatisfy({ registry.workspacesByProject[$0.projectRoot] != nil }) {
+            pendingSelectWorkspaceId = nil
+        }
+        return nil
     }
 
     // MARK: - Private

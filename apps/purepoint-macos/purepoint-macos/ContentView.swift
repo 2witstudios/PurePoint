@@ -62,11 +62,11 @@ struct ContentView: View {
         .onChange(of: registry.workspacesByProject) { _, _ in
             // A spawn's workspace only exists once the manifest lands and reconcile runs.
             selectPendingAgentIfReady()
+            selectPendingWorkspaceIfReady()
         }
         .onChange(of: appState.pendingSelectWorkspaceId) { _, workspaceId in
-            guard let workspaceId else { return }
-            appState.pendingSelectWorkspaceId = nil
-            selection = .workspace(workspaceId)
+            guard workspaceId != nil else { return }
+            selectPendingWorkspaceIfReady()
         }
         .onChange(of: appState.pendingSelectWorktreeId) { _, worktreeId in
             guard let worktreeId else { return }
@@ -84,6 +84,12 @@ struct ContentView: View {
             }
             registry.activate(workspaceId: workspaceId)
         }
+    }
+
+    /// Restore the last session's workspace as soon as reconcile has produced it.
+    private func selectPendingWorkspaceIfReady() {
+        guard let workspaceId = appState.resolvePendingWorkspaceSelection() else { return }
+        selection = .workspace(workspaceId)
     }
 
     /// Resolve a just-spawned agent to the workspace that now holds it.

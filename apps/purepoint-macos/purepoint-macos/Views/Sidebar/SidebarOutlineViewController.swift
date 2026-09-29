@@ -164,7 +164,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     private func renderState(for workspace: Workspace, in project: ProjectState) -> WorkspaceRenderState {
         let agents = workspace.agentIds.compactMap { project.agent(byId: $0) }
         let title = agents.first?.displayName ?? workspace.primaryAgentId ?? workspace.id
-        let status: AgentStatus = agents.contains { !$0.status.isAlive } ? .broken : .running
+        let status: AgentStatus =
+            agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
         return WorkspaceRenderState(
             id: workspace.id, title: title, paneCount: workspace.paneCount, status: status)
     }

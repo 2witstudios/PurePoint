@@ -36,6 +36,9 @@ final class WorkspaceRegistry {
     @ObservationIgnored var onCloseAgent: ((String, String) -> Void)?
 
     @ObservationIgnored private var reservationsByProject: [String: [PaneReservation]] = [:]
+    /// The latest live-agent list each project's manifest produced, kept so a pane binding
+    /// can reconcile immediately instead of waiting for the next manifest change.
+    @ObservationIgnored private var liveByProject: [String: [LiveAgent]] = [:]
     @ObservationIgnored private var loadedProjects = Set<String>()
     @ObservationIgnored private var saveWorkItems: [String: DispatchWorkItem] = [:]
 
@@ -84,10 +87,14 @@ final class WorkspaceRegistry {
         }
 
         let live = WorkspaceReconciler.liveAgents(rootAgents: rootAgents, worktrees: worktrees)
-        var stored = workspacesByProject[projectRoot] ?? []
-        stored = fulfillReservations(projectRoot: projectRoot, stored: stored, live: live)
+        liveByProject[projectRoot] = live
+        publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
+    }
 
-        let reconciled = WorkspaceReconciler.reconcile(stored: stored, live: live)
+    /// Reconcile `stored` against `live` and publish the result if it changed.
+    private func publish(projectRoot: String, stored: [Workspace], live: [LiveAgent]) {
+        let reconciled = WorkspaceReconciler.reconcile(
+            stored: stored, live: deferringReservedAgents(projectRoot: projectRoot, stored: stored, live: live))
         guard reconciled != workspacesByProject[projectRoot] else { return }
 
         workspacesByProject[projectRoot] = reconciled
@@ -95,29 +102,17 @@ final class WorkspaceRegistry {
         scheduleSave(projectRoot: projectRoot)
     }
 
-    /// Place newly-arrived agents into the panes that reserved them, before the reconciler
-    /// gets a chance to adopt them into workspaces of their own.
-    private func fulfillReservations(
+    /// Hold back agents that no pane has claimed while a pane in their container is waiting
+    /// for its spawn response. Which of them belongs to the reservation is only known once the
+    /// response binds an ID, so adopting any of them now could hand the pane to an unrelated
+    /// agent or surface the real one as a workspace of its own.
+    private func deferringReservedAgents(
         projectRoot: String, stored: [Workspace], live: [LiveAgent]
-    ) -> [Workspace] {
-        guard var reservations = reservationsByProject[projectRoot], !reservations.isEmpty else { return stored }
-
-        let alreadyPlaced = Set(stored.flatMap(\.agentIds))
-        var workspaces = stored
-
-        for agent in live where !alreadyPlaced.contains(agent.id) {
-            guard
-                let index = reservations.firstIndex(where: { $0.container == agent.container }),
-                let target = workspaces.firstIndex(where: { $0.id == reservations[index].workspaceId })
-            else { continue }
-
-            let reservation = reservations.remove(at: index)
-            guard workspaces[target].root.allLeafIds.contains(reservation.leafId) else { continue }
-            workspaces[target].setAgent(agent.id, forLeafId: reservation.leafId)
-        }
-
-        reservationsByProject[projectRoot] = reservations.isEmpty ? nil : reservations
-        return workspaces
+    ) -> [LiveAgent] {
+        guard let reservations = reservationsByProject[projectRoot], !reservations.isEmpty else { return live }
+        let reservedContainers = Set(reservations.map(\.container))
+        let placed = Set(stored.flatMap(\.agentIds))
+        return live.filter { placed.contains($0.id) || !reservedContainers.contains($0.container) }
     }
 
     /// Drop the active selection if its workspace no longer exists.
@@ -139,12 +134,20 @@ final class WorkspaceRegistry {
 
     /// The spawn response arrived first — bind the agent to its pane immediately.
     func fulfillReservation(projectRoot: String, workspaceId: String, leafId: Int, agentId: String) {
-        releaseReservation(projectRoot: projectRoot, workspaceId: workspaceId, leafId: leafId)
+        dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, leafId: leafId)
         setAgent(agentId, workspaceId: workspaceId, leafId: leafId)
     }
 
-    /// The spawn failed or completed — stop holding the pane.
+    /// The spawn failed or completed — stop holding the pane, and let any agents that were
+    /// held back behind the reservation surface.
     func releaseReservation(projectRoot: String, workspaceId: String, leafId: Int) {
+        dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, leafId: leafId)
+        if let live = liveByProject[projectRoot] {
+            publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
+        }
+    }
+
+    private func dropReservation(projectRoot: String, workspaceId: String, leafId: Int) {
         guard var reservations = reservationsByProject[projectRoot] else { return }
         if let index = reservations.firstIndex(where: { $0.workspaceId == workspaceId && $0.leafId == leafId }) {
             reservations.remove(at: index)
@@ -177,7 +180,7 @@ final class WorkspaceRegistry {
         }
 
         workspacesByProject[projectRoot] = list
-        releaseReservation(projectRoot: projectRoot, workspaceId: workspaceId, leafId: leafId)
+        dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, leafId: leafId)
         scheduleSave(projectRoot: projectRoot)
 
         if let occupant {
@@ -185,8 +188,40 @@ final class WorkspaceRegistry {
         }
     }
 
+    /// Bind an agent to a pane. The binding wins over any other pane still claiming the
+    /// same agent, and the project is reconciled straight away so selection and persistence
+    /// see one consistent result.
     func setAgent(_ agentId: String?, workspaceId: String, leafId: Int) {
-        mutate(workspaceId) { $0.setAgent(agentId, forLeafId: leafId) }
+        guard let agentId else {
+            mutate(workspaceId) { $0.setAgent(nil, forLeafId: leafId) }
+            return
+        }
+        guard let projectRoot = projectRoot(forWorkspace: workspaceId),
+            let list = workspacesByProject[projectRoot],
+            let target = list.first(where: { $0.id == workspaceId }),
+            target.root.allLeafIds.contains(leafId)
+        else { return }
+
+        var stored: [Workspace] = []
+        for var workspace in list {
+            if workspace.id == workspaceId {
+                workspace.setAgent(agentId, forLeafId: leafId)
+            } else if workspace.contains(agentId: agentId) {
+                let claimed = Set(workspace.root.leaves.filter { $0.agentId == agentId }.map(\.id))
+                guard let pruned = workspace.root.removingLeaves(ids: claimed) else { continue }
+                workspace.root = pruned
+            }
+            workspace.normalize()
+            stored.append(workspace)
+        }
+
+        // The spawn response can beat the manifest; the agent is real even if the retained
+        // list has not seen it yet, so it must not be pruned as dead.
+        var live = liveByProject[projectRoot] ?? []
+        if !live.contains(where: { $0.id == agentId }) {
+            live.append(LiveAgent(id: agentId, container: target.container))
+        }
+        publish(projectRoot: projectRoot, stored: stored, live: live)
     }
 
     func setRatio(_ ratio: CGFloat, workspaceId: String, forSplitIdentifiedByFirstLeaf leafId: Int) {
@@ -241,9 +276,12 @@ final class WorkspaceRegistry {
         switch command {
         case .split(let leafId, let axisStr):
             let target = leafId ?? current.focusedLeafId
+            guard current.root.allLeafIds.contains(target) else { return }
             split(workspaceId: workspaceId, leafId: target, axis: axisStr == "h" ? .horizontal : .vertical)
         case .close(let leafId):
-            closePane(workspaceId: workspaceId, leafId: leafId ?? current.focusedLeafId)
+            let target = leafId ?? current.focusedLeafId
+            guard current.root.allLeafIds.contains(target) else { return }
+            closePane(workspaceId: workspaceId, leafId: target)
         case .focus(let leafId, let directionStr):
             if let leafId {
                 setFocus(workspaceId: workspaceId, leafId: leafId)
@@ -290,6 +328,7 @@ final class WorkspaceRegistry {
         saveWorkItems[projectRoot] = nil
         workspacesByProject[projectRoot] = nil
         reservationsByProject[projectRoot] = nil
+        liveByProject[projectRoot] = nil
         loadedProjects.remove(projectRoot)
         pruneActiveSelection()
     }

@@ -37,12 +37,12 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 |---|---|
 | AgentConfigState.swift | Per-agent configuration loading, launch args management via daemon |
 | AgentsHubState.swift | Templates, agent defs, swarm defs, selection state |
-| AppState.swift | @Observable @MainActor — multi-project container with projects array, selectedAgentId, activeProjectRoot, sidebar selection, daemon error |
+| AppState.swift | @Observable @MainActor — multi-project container with projects array, pendingSelectAgentId/pendingSelectWorkspaceId/pendingSelectWorktreeId, activeProjectRoot, sidebar selection, daemon error |
 | ChatState.swift | Chat UI: messages, sessions, streaming, input text, search query, conversation loading (secondary to SessionListState for Point Guard) |
 | DiffState.swift | Diff viewing state |
 | WorkspaceRegistry.swift | @Observable — the canonical workspace list per project. Reconciles the manifest against the stored layout so every agent occupies exactly one pane of exactly one workspace; the sidebar renders these and nothing else |
 | KeyBindingState.swift | Hotkey-to-key mappings, delegates to HotkeyMonitor |
-| ProjectState.swift | @Observable @MainActor — per-project: rootAgents, worktrees, manifest watcher, weak refs to gridState/appState |
+| ProjectState.swift | @Observable @MainActor — per-project: rootAgents, worktrees, manifest watcher, weak refs to registry/appState |
 | ScheduleState.swift | Schedule events, loading/error state |
 | SessionListState.swift | Session list management for Point Guard conversation sidebar |
 | SettingsState.swift | User preferences: appearance, font sizes, pointGuardLaunchCommand, pointGuardSkipPermissions |

@@ -246,7 +246,15 @@ final class ProjectState: Identifiable {
 
     func killAgent(_ agentId: String) {
         killedAgentIds.insert(agentId)
-        sendDaemonCommand(.kill(projectRoot: projectRoot, target: .agent(agentId)))
+        // The agent stays hidden while the request is pending; if the daemon refuses, it is
+        // still alive and must come back.
+        sendDaemonRequest(
+            .kill(projectRoot: projectRoot, target: .agent(agentId)),
+            onFailure: { [weak self] in
+                self?.killedAgentIds.remove(agentId)
+                self?.refresh()
+            }
+        ) { _ in }
     }
 
     func renameAgent(_ agentId: String, to name: String) {
