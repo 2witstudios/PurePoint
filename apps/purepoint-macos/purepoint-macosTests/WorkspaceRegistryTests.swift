@@ -113,6 +113,7 @@ struct WorkspaceRegistryTests {
 
         #expect(appState.resolvePendingWorkspaceSelection() == "ws-ag-a")
         #expect(appState.pendingSelectWorkspaceId == nil)
+        withExtendedLifetime(registry) {}  // AppState.registry is weak
     }
 
     @Test func pendingWorkspaceClearsOnceAllProjectsReconciledWithoutIt() {
@@ -127,5 +128,6 @@ struct WorkspaceRegistryTests {
 
         #expect(appState.resolvePendingWorkspaceSelection() == nil)
         #expect(appState.pendingSelectWorkspaceId == nil)
+        withExtendedLifetime(registry) {}  // AppState.registry is weak
     }
 }
