@@ -186,12 +186,18 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             return event
         }
 
-        // Don't hijack scroll into synthetic PTY clicks while the user has an active
-        // text selection — that would repaint the TUI's content under a selection that
-        // stays anchored to now-stale rows, making it look "stuck" mid-drag.
-        guard !terminalView.selectionActive else {
-            cancelPendingScrollFlush()
-            return event
+        if terminalView.selectionActive {
+            // Mid-drag: don't hijack scroll into synthetic PTY clicks, that would repaint
+            // the TUI's content under a selection that stays anchored to now-stale rows.
+            if NSEvent.pressedMouseButtons & 1 != 0 {
+                cancelPendingScrollFlush()
+                return event
+            }
+            // Selection is finished. SwiftTerm drops wheel events on the alternate buffer,
+            // so passing the event through would make scrolling impossible until the user
+            // clicks elsewhere. Scrolling repaints the TUI under the selection anyway, so
+            // drop it and scroll.
+            terminalView.selectNone()
         }
 
         let delta = event.scrollingDeltaY
