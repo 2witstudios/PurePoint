@@ -7,13 +7,15 @@ import Observation
 @MainActor
 final class AppState {
     var projects: [ProjectState] = []
-    var selectedAgentId: String?
     var activeProjectRoot: String?
     var activeSidebarSelection: SidebarSelection?
     var daemonError: String?
     var showSettings = false
+    /// Agent ID a spawn just returned. Resolved to its workspace once the manifest lands.
     var pendingSelectAgentId: String?
     var pendingSelectWorktreeId: String?
+    /// Workspace to select once the sidebar has it — used to restore the last session.
+    var pendingSelectWorkspaceId: String?
     var pendingFocusAgentId: String?
 
     var pointGuardShellId: String?
@@ -23,7 +25,10 @@ final class AppState {
     var scheduleState = ScheduleState()
     var triggersState = TriggersState()
 
-    weak var gridState: GridState?
+    weak var registry: WorkspaceRegistry?
+
+    /// The agent in the focused pane of the on-screen workspace, or nil.
+    var focusedAgentId: String? { registry?.activeWorkspace?.focusedAgentId }
 
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
@@ -41,7 +46,7 @@ final class AppState {
     func openProject(_ root: String) {
         guard !projects.contains(where: { $0.projectRoot == root }) else { return }
 
-        let project = ProjectState(projectRoot: root, service: service, gridState: gridState)
+        let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
         projects.append(project)
         project.startWatching()
@@ -61,6 +66,7 @@ final class AppState {
         guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return }
         projects[index].stopWatching()
         projects.remove(at: index)
+        registry?.forgetProject(root)
         persistOpenProjects()
     }
 
@@ -70,8 +76,8 @@ final class AppState {
             guard FileManager.default.fileExists(atPath: path) else { continue }
             openProject(path)
         }
-        // Grid layout is restored on-demand when user clicks the owner agent
-        // (via ContentView.onChange → gridState.restoreIfOwner)
+        // Workspace layouts load lazily in WorkspaceRegistry.reconcile, on the first
+        // manifest read for each project.
     }
 
     // MARK: - Active Project Routing
@@ -83,8 +89,8 @@ final class AppState {
         activeSidebarSelection = selection
 
         switch selection {
-        case .agent(let id), .terminal(let id):
-            if let root = projectState(forAgentId: id)?.projectRoot {
+        case .workspace(let id):
+            if let root = registry?.projectRoot(forWorkspace: id) {
                 activeProjectRoot = root
             }
         case .worktree(let id):
@@ -154,6 +160,7 @@ final class AppState {
     /// Must complete before the process exits — uses DispatchSemaphore to block.
     func shutdownWithSuspend() {
         persistSelectedAgent()
+        registry?.saveAll()
 
         for project in projects {
             project.stopWatching()
@@ -182,22 +189,26 @@ final class AppState {
 
     // MARK: - Selection Persistence
 
-    private static let selectedAgentKey = "PurePointSelectedAgentId"
+    private static let activeWorkspaceKey = "PurePointActiveWorkspaceId"
 
     private func persistSelectedAgent() {
-        UserDefaults.standard.set(selectedAgentId, forKey: Self.selectedAgentKey)
+        UserDefaults.standard.set(registry?.activeWorkspaceId, forKey: Self.activeWorkspaceKey)
     }
 
-    func restoreSelectedAgent() {
-        if let savedId = UserDefaults.standard.string(forKey: Self.selectedAgentKey),
-            agent(byId: savedId) != nil
-        {
-            selectedAgentId = savedId
-            // Ensure Cmd+N targets the restored agent's project
-            if let root = projectState(forAgentId: savedId)?.projectRoot {
-                activeProjectRoot = root
-            }
+    /// Restore the workspace that was on screen. Reconcile has already run by this point,
+    /// so a saved ID either names a workspace that still exists or names nothing.
+    @discardableResult
+    func restoreActiveWorkspace() -> String? {
+        guard let savedId = UserDefaults.standard.string(forKey: Self.activeWorkspaceKey),
+            let registry, registry.workspace(id: savedId) != nil
+        else { return nil }
+
+        registry.activate(workspaceId: savedId)
+        pendingSelectWorkspaceId = savedId
+        if let root = registry.projectRoot(forWorkspace: savedId) {
+            activeProjectRoot = root
         }
+        return savedId
     }
 
     // MARK: - Private

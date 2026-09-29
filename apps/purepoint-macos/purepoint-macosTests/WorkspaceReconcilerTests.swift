@@ -1,0 +1,198 @@
+import Foundation
+import Testing
+
+@testable import PurePoint
+
+private func makeAgent(_ id: String) -> AgentModel {
+    AgentModel(id: id, name: id, agentType: "claude", status: .running, prompt: "", startedAt: "")
+}
+
+private func makeWorktree(_ id: String, agents: [String]) -> WorktreeModel {
+    WorktreeModel(
+        id: id, name: id, path: "/tmp/\(id)", branch: "pu/\(id)", status: "active",
+        agents: agents.map(makeAgent))
+}
+
+private func live(root: [String] = [], worktrees: [(String, [String])] = []) -> [LiveAgent] {
+    WorkspaceReconciler.liveAgents(
+        rootAgents: root.map(makeAgent),
+        worktrees: worktrees.map { makeWorktree($0.0, agents: $0.1) }
+    )
+}
+
+/// A three-pane workspace: ag-a split right into ag-b, then that split down into ag-c.
+private func makeGroupedWorkspace() -> Workspace {
+    var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+    workspace.split(leafId: 0, axis: .vertical, agentId: "ag-b")
+    workspace.split(leafId: workspace.focusedLeafId, axis: .horizontal, agentId: "ag-c")
+    return workspace
+}
+
+private func withTempProject(_ body: (String) throws -> Void) rethrows {
+    let root = NSTemporaryDirectory() + "pp-workspace-tests-" + UUID().uuidString
+    try? FileManager.default.createDirectory(
+        atPath: root + "/.pu", withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try body(root)
+}
+
+@Suite
+struct WorkspaceReconcilerTests {
+
+    // MARK: - The invariant
+
+    /// The property the whole workspace model exists to guarantee. Every test below leans
+    /// on this: if it holds, a pane cannot also be a loose sidebar row, because rows are
+    /// generated from workspaces and each agent lives in exactly one.
+    private func expectInvariant(_ result: [Workspace], _ agents: [LiveAgent]) {
+        let placed = result.flatMap(\.agentIds)
+        #expect(Set(placed) == Set(agents.map(\.id)))
+        #expect(placed.count == agents.count, "an agent appears in more than one pane")
+        #expect(result.allSatisfy { !$0.agentIds.isEmpty }, "a workspace holds no agents")
+        #expect(Set(result.map(\.id)).count == result.count, "duplicate workspace ids")
+    }
+
+    @Test func givenNoStoredLayoutEachAgentBecomesItsOwnWorkspace() {
+        let agents = live(root: ["ag-a", "ag-b"], worktrees: [("wt-1", ["ag-c"])])
+        let result = WorkspaceReconciler.reconcile(stored: [], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.count == 3)
+        #expect(result.allSatisfy { $0.paneCount == 1 })
+    }
+
+    @Test func givenWorktreeAgentShouldRecordItsWorktreeContainer() {
+        let agents = live(root: ["ag-a"], worktrees: [("wt-1", ["ag-c"])])
+        let result = WorkspaceReconciler.reconcile(stored: [], live: agents)
+
+        #expect(result.first { $0.agentIds == ["ag-c"] }?.container == .worktree("wt-1"))
+        #expect(result.first { $0.agentIds == ["ag-a"] }?.container == .projectRoot)
+    }
+
+    // MARK: - Restart
+
+    /// The regression this model was built for: a multi-pane workspace used to dissolve
+    /// into one sidebar row per pane on relaunch, because the saved layout was never read.
+    @Test func givenSavedMultiPaneWorkspaceShouldStayOneRowAcrossRestart() {
+        withTempProject { root in
+            let original = makeGroupedWorkspace()
+            WorkspacePersistence.save([original], projectRoot: root)
+
+            let agents = live(root: ["ag-a", "ag-b", "ag-c"])
+            let restored = WorkspaceReconciler.reconcile(
+                stored: WorkspacePersistence.load(projectRoot: root), live: agents)
+
+            expectInvariant(restored, agents)
+            #expect(restored.count == 1)
+            #expect(restored.first?.paneCount == 3)
+        }
+    }
+
+    @Test func givenSavedLayoutShouldPreservePaneIdsAcrossRestart() {
+        withTempProject { root in
+            let original = makeGroupedWorkspace()
+            WorkspacePersistence.save([original], projectRoot: root)
+
+            let restored = WorkspacePersistence.load(projectRoot: root)
+
+            #expect(Set(restored.first?.root.allLeafIds ?? []) == Set(original.root.allLeafIds))
+            #expect(restored.first?.focusedLeafId == original.focusedLeafId)
+        }
+    }
+
+    @Test func givenSameInputsReconcileShouldBeDeterministicAndIdempotent() {
+        let agents = live(root: ["ag-a", "ag-b", "ag-c"])
+        let once = WorkspaceReconciler.reconcile(stored: [makeGroupedWorkspace()], live: agents)
+        let again = WorkspaceReconciler.reconcile(stored: [makeGroupedWorkspace()], live: agents)
+
+        #expect(once == again)
+        #expect(WorkspaceReconciler.reconcile(stored: once, live: agents) == once)
+    }
+
+    // MARK: - Agents coming and going
+
+    @Test func givenDeadAgentShouldCollapseItsPaneAndKeepTheWorkspace() {
+        let agents = live(root: ["ag-a", "ag-c"])
+        let result = WorkspaceReconciler.reconcile(stored: [makeGroupedWorkspace()], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.count == 1)
+        #expect(result.first?.paneCount == 2)
+    }
+
+    @Test func givenAllAgentsDeadShouldDropTheWorkspaceEntirely() {
+        #expect(WorkspaceReconciler.reconcile(stored: [makeGroupedWorkspace()], live: []).isEmpty)
+    }
+
+    @Test func givenUnknownAgentShouldAdoptItWithoutDisturbingExistingGroups() {
+        let agents = live(root: ["ag-a", "ag-b", "ag-c", "ag-new"])
+        let result = WorkspaceReconciler.reconcile(stored: [makeGroupedWorkspace()], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.count == 2)
+        #expect(result[0].paneCount == 3)
+        #expect(result[1].agentIds == ["ag-new"])
+    }
+
+    @Test func givenAgentClaimedByTwoWorkspacesShouldKeepOnlyTheFirst() {
+        let duplicate = Workspace(
+            id: "ws-duplicate", container: .projectRoot,
+            root: .leaf(id: 0, agentId: "ag-a"), focusedLeafId: 0, nextLeafId: 1)
+        let agents = live(root: ["ag-a"])
+
+        let result = WorkspaceReconciler.reconcile(
+            stored: [.adopting(agentId: "ag-a", container: .projectRoot), duplicate], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.count == 1)
+    }
+
+    @Test func givenDeliberatelyEmptyPaneShouldSurviveAlongsideAnAgent() {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        workspace.split(leafId: 0, axis: .vertical)  // empty pane awaiting a spawn
+        let agents = live(root: ["ag-a"])
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.first?.paneCount == 2)
+    }
+
+    @Test func givenFocusOnARemovedPaneShouldRefocusASurvivingOne() {
+        var workspace = makeGroupedWorkspace()
+        workspace.focusedLeafId = workspace.root.leafId(forAgentId: "ag-b")!
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: live(root: ["ag-a", "ag-c"]))
+
+        let survivor = try? #require(result.first)
+        #expect(survivor?.root.allLeafIds.contains(survivor!.focusedLeafId) == true)
+    }
+
+    // MARK: - Migration
+
+    @Test func givenLegacyGridLayoutShouldMigrateIntoOneWorkspaceAndRetireTheFile() {
+        withTempProject { root in
+            let legacyPath = root + "/.pu/grid-layout.json"
+            let legacy = """
+                {"ownerAgentId":"ag-a","tree":{"type":"split","axis":"vertical","ratio":0.5,\
+                "first":{"type":"leaf","agentId":"ag-a"},"second":{"type":"leaf","agentId":"ag-b"}}}
+                """
+            try? legacy.write(toFile: legacyPath, atomically: true, encoding: .utf8)
+
+            let agents = live(root: ["ag-a", "ag-b"])
+            let result = WorkspaceReconciler.reconcile(
+                stored: WorkspacePersistence.load(projectRoot: root), live: agents)
+
+            expectInvariant(result, agents)
+            #expect(result.count == 1)
+            #expect(result.first?.paneCount == 2)
+            #expect(!FileManager.default.fileExists(atPath: legacyPath))
+        }
+    }
+
+    @Test func givenMissingLayoutFileShouldLoadEmptyRatherThanFail() {
+        withTempProject { root in
+            #expect(WorkspacePersistence.load(projectRoot: root).isEmpty)
+        }
+    }
+}

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppState.self) private var appState
-    @Environment(GridState.self) private var gridState
+    @Environment(WorkspaceRegistry.self) private var registry
     @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -56,13 +56,17 @@ struct ContentView: View {
             handleHotkeyAction(action)
         }
         .onChange(of: appState.pendingSelectAgentId) { _, agentId in
-            guard let agentId else { return }
-            appState.pendingSelectAgentId = nil
-            appState.pendingFocusAgentId = agentId
-            selection = .agent(agentId)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                appState.pendingFocusAgentId = nil
-            }
+            guard agentId != nil else { return }
+            selectPendingAgentIfReady()
+        }
+        .onChange(of: registry.workspacesByProject) { _, _ in
+            // A spawn's workspace only exists once the manifest lands and reconcile runs.
+            selectPendingAgentIfReady()
+        }
+        .onChange(of: appState.pendingSelectWorkspaceId) { _, workspaceId in
+            guard let workspaceId else { return }
+            appState.pendingSelectWorkspaceId = nil
+            selection = .workspace(workspaceId)
         }
         .onChange(of: appState.pendingSelectWorktreeId) { _, worktreeId in
             guard let worktreeId else { return }
@@ -72,30 +76,27 @@ struct ContentView: View {
         .onChange(of: selection) { _, newValue in
             appState.updateActiveProject(for: newValue)
 
-            guard case .agent(let agentId) = newValue else {
-                // Non-agent selection (nav items, worktrees): deactivate grid
-                if gridState.isActive { gridState.deactivate() }
-                appState.selectedAgentId = nil
+            // Selecting a workspace shows its grid and focuses a pane. A single-pane
+            // workspace is a grid of one, so one click lands the user in the terminal.
+            guard case .workspace(let workspaceId) = newValue else {
+                registry.activeWorkspaceId = nil
                 return
             }
+            registry.activate(workspaceId: workspaceId)
+        }
+    }
 
-            // Clicking the grid owner while grid active → already showing it
-            if gridState.isActive, agentId == gridState.ownerAgentId {
-                appState.selectedAgentId = agentId
-                return
-            }
+    /// Resolve a just-spawned agent to the workspace that now holds it.
+    private func selectPendingAgentIfReady() {
+        guard let agentId = appState.pendingSelectAgentId,
+            let workspaceId = registry.workspaceId(forAgent: agentId)
+        else { return }
 
-            // Clicking the grid owner while suspended → restore grid
-            if gridState.restoreIfOwner(agentId) {
-                appState.selectedAgentId = agentId
-                return
-            }
-
-            // Clicking any other agent → deactivate grid
-            if gridState.isActive {
-                gridState.deactivate()
-            }
-            appState.selectedAgentId = agentId
+        appState.pendingSelectAgentId = nil
+        appState.pendingFocusAgentId = agentId
+        selection = .workspace(workspaceId)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            appState.pendingFocusAgentId = nil
         }
     }
 
@@ -133,12 +134,13 @@ struct ContentView: View {
             selection = .nav(.schedule)
 
         case .closeAgent:
-            if gridState.isActive {
-                gridState.closeFocused()
-            } else if let agentId = appState.selectedAgentId {
+            guard let workspace = registry.activeWorkspace else { break }
+            if let agentId = workspace.focusedAgentId {
                 viewCache.remove(agentId: agentId)
-                let projectRoot = appState.projectState(forAgentId: agentId)?.projectRoot ?? ""
-                appState.projectState(forRoot: projectRoot)?.removeAndKillAgent(agentId)
+            }
+            let wasLastPane = workspace.paneCount <= 1
+            registry.closePane(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
+            if wasLastPane {
                 selection = .nav(.dashboard)
             }
 

@@ -20,7 +20,7 @@ PurePoint ships with four built-in agent types:
 | Type | CLI tool | Default auto-mode | Description |
 |---|---|---|---|
 | `claude` | Claude Code | `--dangerously-skip-permissions` | Claude Code CLI |
-| `codex` | Codex | `--full-auto` | OpenAI Codex CLI |
+| `codex` | Codex | `--sandbox workspace-write --ask-for-approval on-request` | OpenAI Codex CLI |
 | `opencode` | OpenCode | (none) | OpenCode CLI |
 | `terminal` | `shell` (resolves to `$SHELL`) | (none) | Plain terminal |
 

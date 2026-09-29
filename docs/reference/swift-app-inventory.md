@@ -25,10 +25,11 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | ManifestModel.swift | Manifest JSON decoding (mirrors pu-core Rust types) |
 | PRModel.swift | Pull request data |
 | ScheduleEvent.swift | Calendar event structure |
-| SidebarItem.swift | SidebarNavItem enum (.dashboard, .agents, .schedule), SidebarSelection enum, SidebarNode class (NSOutlineView wrapper) |
+| SidebarItem.swift | SidebarNavItem enum (.dashboard, .agents, .schedule), SidebarSelection enum (nav/workspace/worktree/project — deliberately no agent case), SidebarNode class (NSOutlineView wrapper) |
 | StreamEvent.swift | Daemon stream events (assistant, contentBlockDelta, toolResult, result, error) |
 | TriggerItem.swift | TriggerEvent enum (agentIdle, preCommit, prePush), TriggerItem struct |
-| WorkspaceModel.swift | Workspace/agent view models (WorkspaceModel, AgentModel) |
+| Workspace.swift | Workspace value type (one sidebar row = one pane layout), WorkspaceContainer, and WorkspaceReconciler — the pure, total function mapping (stored layout, manifest) to the canonical workspace list |
+| WorkspaceModel.swift | Worktree/agent view models (WorktreeModel, AgentModel) |
 
 ## State
 
@@ -39,7 +40,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | AppState.swift | @Observable @MainActor — multi-project container with projects array, selectedAgentId, activeProjectRoot, sidebar selection, daemon error |
 | ChatState.swift | Chat UI: messages, sessions, streaming, input text, search query, conversation loading (secondary to SessionListState for Point Guard) |
 | DiffState.swift | Diff viewing state |
-| GridState.swift | @Observable — pane grid layout: root node, focusedLeafId, ownerAgentId, pendingPaletteLeafId, onCloseAgent callback |
+| WorkspaceRegistry.swift | @Observable — the canonical workspace list per project. Reconciles the manifest against the stored layout so every agent occupies exactly one pane of exactly one workspace; the sidebar renders these and nothing else |
 | KeyBindingState.swift | Hotkey-to-key mappings, delegates to HotkeyMonitor |
 | ProjectState.swift | @Observable @MainActor — per-project: rootAgents, worktrees, manifest watcher, weak refs to gridState/appState |
 | ScheduleState.swift | Schedule events, loading/error state |
@@ -90,7 +91,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | File | Purpose |
 |---|---|
 | DraggableSplit.swift | Draggable split handle for pane resizing |
-| GridLayoutPersistence.swift | Grid layout save/restore |
+| WorkspacePersistence.swift | Workspace layout save/load (`.pu/workspaces.json`), including migration from the legacy `grid-layout.json` |
 | PaneCellView.swift | Individual pane cell in grid |
 | PaneGridView.swift | Pane grid system (split layout) |
 | PaneSplitNode.swift | Recursive binary split node (indirect enum) |

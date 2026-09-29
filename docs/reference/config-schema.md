@@ -44,7 +44,7 @@ These defaults apply when an agent type is not defined in `config.yaml`:
 | Agent | Command | Default `launchArgs` |
 |---|---|---|
 | `claude` | `claude` | `["--dangerously-skip-permissions"]` |
-| `codex` | `codex` | `["--full-auto"]` |
+| `codex` | `codex` | `["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]` |
 | `opencode` | `opencode` | `[]` |
 | `terminal` | `shell` (resolved to `$SHELL`) | `[]` |
 
@@ -110,9 +110,10 @@ The default config written by `pu init` includes commented-out examples of usefu
 ### Codex
 
 ```
---full-auto                       # No approval required
+-s <mode>                         # Sandbox: read-only, workspace-write, danger-full-access
 -a <mode>                         # Approval: untrusted, on-request, never
 --model <model>                   # Model to use
+--search                          # Enable live web search
 ```
 
 ### OpenCode

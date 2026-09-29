@@ -39,7 +39,7 @@ pub enum Request {
         worktree: Option<String>,
         #[serde(default)]
         command: Option<String>,
-        /// Skip auto-mode launch args (--dangerously-skip-permissions, --full-auto, etc.)
+        /// Skip auto-mode launch args (--dangerously-skip-permissions, --sandbox, etc.)
         #[serde(default)]
         no_auto: bool,
         /// Additional CLI args appended after launch args (from --agent-args)

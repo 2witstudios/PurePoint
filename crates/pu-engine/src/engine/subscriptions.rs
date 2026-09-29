@@ -13,13 +13,15 @@ impl Engine {
     }
 
     pub async fn handle_grid_command(&self, project_root: &str, command: GridCommand) -> Response {
-        // For GetLayout, read the grid-layout.json directly
+        // For GetLayout, read the workspace layout file directly. `grid-layout.json` is
+        // the pre-workspace format; the macOS app migrates it away on first load, so it is
+        // only still here for a project that app has not opened since the change.
         if matches!(command, GridCommand::GetLayout) {
             let root = project_root.to_string();
             return match tokio::task::spawn_blocking(move || {
-                let path =
-                    pu_core::paths::pu_dir(std::path::Path::new(&root)).join("grid-layout.json");
-                std::fs::read_to_string(path)
+                let pu_dir = pu_core::paths::pu_dir(std::path::Path::new(&root));
+                std::fs::read_to_string(pu_dir.join("workspaces.json"))
+                    .or_else(|_| std::fs::read_to_string(pu_dir.join("grid-layout.json")))
             })
             .await
             {

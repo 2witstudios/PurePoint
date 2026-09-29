@@ -113,8 +113,12 @@ envFiles:
 #   codex:
 #     name: codex
 #     command: codex
-#     launchArgs:                  # Default: ["--full-auto"]
-#       - "--full-auto"
+#     launchArgs:                  # Default: ["--sandbox", "workspace-write",
+#       - "--sandbox"              #           "--ask-for-approval", "on-request"]
+#       - "workspace-write"
+#       - "--ask-for-approval"
+#       - "on-request"
+#       # -s <read-only|workspace-write|danger-full-access>  (sandbox mode)
 #       # -a <untrusted|on-request|never>  (approval mode)
 #       # --model <model>
 #   opencode:
@@ -216,7 +220,7 @@ envFiles: [".env"]
         );
         // Comments should document key flags for discoverability
         assert!(content.contains("--dangerously-skip-permissions"));
-        assert!(content.contains("--full-auto"));
+        assert!(content.contains("--ask-for-approval"));
         assert!(content.contains("--permission-mode"));
         assert!(content.contains("--model"));
     }
@@ -397,7 +401,7 @@ agents:
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
-        let yaml = "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n  codex:\n    name: codex\n    command: codex\n    launchArgs:\n      - '--full-auto'\n";
+        let yaml = "defaultAgent: claude\nagents:\n  claude:\n    name: claude\n    command: claude\n  codex:\n    name: codex\n    command: codex\n    launchArgs:\n      - '--search'\n";
         std::fs::write(crate::paths::config_path(root), yaml).unwrap();
 
         let config =
@@ -411,7 +415,7 @@ agents:
         // Codex should be preserved
         assert_eq!(
             config.agents["codex"].launch_args,
-            Some(vec!["--full-auto".to_string()])
+            Some(vec!["--search".to_string()])
         );
     }
 

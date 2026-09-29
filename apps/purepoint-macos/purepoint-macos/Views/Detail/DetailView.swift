@@ -3,19 +3,16 @@ import SwiftUI
 struct DetailView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
-    @Environment(GridState.self) private var gridState
+    @Environment(WorkspaceRegistry.self) private var registry
 
     var body: some View {
         Group {
-            if gridState.isActive {
-                PaneGridView()
-            } else if let selection {
+            if let selection {
                 selectedContent(selection)
             } else {
                 placeholderContent
             }
         }
-        .animation(nil, value: gridState.isActive)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -33,11 +30,13 @@ struct DetailView: View {
     @ViewBuilder
     private func selectedContent(_ selection: SidebarSelection) -> some View {
         switch selection {
-        case .agent(let id):
-            if let agent = appState.agent(byId: id) {
-                AgentTerminalPane(agent: agent, agentId: id)
+        // Every workspace renders as a grid. A one-pane workspace is a grid of one, which
+        // is why selecting its row drops the user straight into the terminal.
+        case .workspace(let id):
+            if registry.workspace(id: id) != nil {
+                PaneGridView(workspaceId: id)
             } else {
-                placeholderView(icon: "cpu", title: "Agent not found")
+                placeholderView(icon: "rectangle.split.2x2", title: "Workspace not found")
             }
 
         case .nav(let item):
@@ -57,9 +56,6 @@ struct DetailView: View {
                 placeholderView(icon: "arrow.triangle.branch", title: "Worktree not found")
             }
 
-        case .terminal(let id):
-            placeholderView(icon: "terminal", title: id)
-
         case .project(let root):
             if let project = appState.projectState(forRoot: root) {
                 ProjectDetailView(project: project)
@@ -78,50 +74,5 @@ struct DetailView: View {
                 .font(.title3)
                 .foregroundStyle(.primary)
         }
-    }
-}
-
-/// Terminal + split overlay for single-pane agent view.
-/// Hover detection lives on the outer ZStack (backed by the opaque terminal),
-/// so the overlay never intercepts clicks meant for the terminal.
-private struct AgentTerminalPane: View {
-    let agent: AgentModel
-    let agentId: String
-    @State private var isHovered = false
-    @Environment(AppState.self) private var appState
-    @Environment(GridState.self) private var gridState
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            TerminalContainerView(agent: agent, isFocused: appState.pendingFocusAgentId == agentId)
-
-            if isHovered {
-                HStack(spacing: 4) {
-                    OverlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
-                        enterGrid(axis: .vertical)
-                    }
-                    OverlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
-                        enterGrid(axis: .horizontal)
-                    }
-                }
-                .padding(6)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
-                .padding(8)
-                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
-            }
-        }
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2).delay(hovering ? 0 : 0.3)) {
-                isHovered = hovering
-            }
-        }
-    }
-
-    private func enterGrid(axis: PaneSplitNode.Axis) {
-        if let project = appState.projectState(forAgentId: agentId) {
-            gridState.projectRoot = project.projectRoot
-        }
-        gridState.enterGridMode(agentId: agentId, axis: axis)
-        gridState.pendingPaletteLeafId = gridState.focusedLeafId
     }
 }

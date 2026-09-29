@@ -53,16 +53,43 @@ pub fn default_agents() -> IndexMap<String, AgentConfig> {
     .collect()
 }
 
+/// Codex's auto-mode flags. Codex removed the `--full-auto` shortcut; these are the
+/// long-form equivalents (workspace-writable sandbox, model decides when to ask).
+pub const CODEX_AUTO_ARGS: [&str; 4] = [
+    "--sandbox",
+    "workspace-write",
+    "--ask-for-approval",
+    "on-request",
+];
+
+/// Rewrite launch args that reference flags the underlying CLI no longer accepts.
+/// Configs written before Codex dropped `--full-auto` would otherwise fail to launch.
+fn migrate_legacy_args(agent_type: &str, args: &[String]) -> Vec<String> {
+    if agent_type != "codex" {
+        return args.to_vec();
+    }
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        // `--full-auto` and the even older `--approval-mode=full-auto` spelling.
+        if arg == "--full-auto" || arg == "--approval-mode=full-auto" {
+            out.extend(CODEX_AUTO_ARGS.iter().map(|s| s.to_string()));
+        } else {
+            out.push(arg.clone());
+        }
+    }
+    out
+}
+
 /// Resolve launch args for an agent type.
 /// - `None` → use built-in defaults per agent type
 /// - `Some([])` → no launch args (user explicitly disabled auto-mode)
-/// - `Some([...])` → use exactly these args
+/// - `Some([...])` → use exactly these args (with removed flags migrated forward)
 pub fn resolved_launch_args(agent_type: &str, launch_args: Option<&[String]>) -> Vec<String> {
     match launch_args {
-        Some(args) => args.to_vec(),
+        Some(args) => migrate_legacy_args(agent_type, args),
         None => match agent_type {
             "claude" => vec!["--dangerously-skip-permissions".into()],
-            "codex" => vec!["--full-auto".into()],
+            "codex" => CODEX_AUTO_ARGS.iter().map(|s| s.to_string()).collect(),
             _ => vec![],
         },
     }
@@ -187,6 +214,67 @@ launchArgs:
     #[test]
     fn given_codex_agent_type_should_resolve_default_launch_args() {
         let args = resolved_launch_args("codex", None);
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request"
+            ]
+        );
+    }
+
+    #[test]
+    fn given_legacy_codex_full_auto_should_migrate_to_long_form() {
+        // Codex removed --full-auto; stored configs must not launch a flag it rejects.
+        let args = resolved_launch_args("codex", Some(&["--full-auto".to_string()]));
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request"
+            ]
+        );
+    }
+
+    #[test]
+    fn given_legacy_codex_approval_mode_full_auto_should_migrate_to_long_form() {
+        let args = resolved_launch_args("codex", Some(&["--approval-mode=full-auto".to_string()]));
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request"
+            ]
+        );
+    }
+
+    #[test]
+    fn given_legacy_codex_full_auto_with_other_args_should_preserve_them() {
+        let args = resolved_launch_args(
+            "codex",
+            Some(&["--full-auto".to_string(), "--search".to_string()]),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request",
+                "--search"
+            ]
+        );
+    }
+
+    #[test]
+    fn given_full_auto_for_non_codex_agent_should_not_migrate() {
+        let args = resolved_launch_args("opencode", Some(&["--full-auto".to_string()]));
         assert_eq!(args, vec!["--full-auto"]);
     }
 

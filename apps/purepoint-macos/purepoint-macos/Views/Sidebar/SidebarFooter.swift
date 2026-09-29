@@ -55,8 +55,8 @@ struct SidebarFooter: View {
 
     private var activeProject: ProjectState? {
         switch selection {
-        case .agent(let id):
-            return appState.projectState(forAgentId: id)
+        case .workspace(let id):
+            return appState.registry?.projectRoot(forWorkspace: id).flatMap { appState.projectState(forRoot: $0) }
         case .worktree(let id):
             return appState.projectState(forWorktreeId: id)
         case .project(let root):

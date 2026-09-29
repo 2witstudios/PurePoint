@@ -1,17 +1,17 @@
 import Foundation
 import Network
 
-/// Subscribes to grid command events from the daemon and dispatches them to GridState.
+/// Subscribes to grid command events from the daemon and dispatches them to WorkspaceRegistry.
 /// Modeled after DaemonAttachSession — actor isolation serializes writes.
 actor DaemonGridSubscription {
     let projectRoot: String
-    private weak var gridState: GridState?
+    private weak var registry: WorkspaceRegistry?
     private var connection: NWConnection?
     private var stopped = false
 
-    init(projectRoot: String, gridState: GridState) {
+    init(projectRoot: String, registry: WorkspaceRegistry) {
         self.projectRoot = projectRoot
-        self.gridState = gridState
+        self.registry = registry
     }
 
     /// Start the subscription loop with reconnection.
@@ -61,7 +61,7 @@ actor DaemonGridSubscription {
     // MARK: - Private
 
     private func runSubscriptionLoop() async throws {
-        let gs = self.gridState
+        let reg = self.registry
 
         let client = DaemonClient()
         let (conn, reader) = try await client.connect()
@@ -88,8 +88,9 @@ actor DaemonGridSubscription {
 
             switch response {
             case .gridEvent(_, let command):
+                let root = self.projectRoot
                 await MainActor.run {
-                    gs?.handleRemoteCommand(command)
+                    reg?.handleRemoteCommand(command, from: root)
                 }
             case .error(_, let message):
                 throw DaemonGridError.subscribeFailed(message)
