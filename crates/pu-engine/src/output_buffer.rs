@@ -53,13 +53,21 @@ impl OutputBuffer {
 
     pub fn write(&self, bytes: &[u8]) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        inner.data.extend(bytes);
         inner.total_written += bytes.len();
-        // Trim from front if over capacity — O(excess) with VecDeque
-        if inner.data.len() > inner.capacity {
-            let excess = inner.data.len() - inner.capacity;
-            inner.data.drain(..excess);
+        // Trim before extending so the deque never grows past capacity. Extending
+        // first would let VecDeque double its allocation (4MB -> 8MB) and keep it.
+        let capacity = inner.capacity;
+        let kept = &bytes[bytes.len().saturating_sub(capacity)..];
+        let excess = (inner.data.len() + kept.len()).saturating_sub(capacity);
+        inner.data.drain(..excess);
+        // Grow geometrically but cap the allocation at `capacity`.
+        let needed = inner.data.len() + kept.len();
+        if needed > inner.data.capacity() {
+            let target = (inner.data.capacity() * 2).max(needed).min(capacity);
+            let additional = target - inner.data.len();
+            inner.data.reserve_exact(additional);
         }
+        inner.data.extend(kept);
         let total = inner.total_written;
         let now = Instant::now();
         inner.last_write = now;
@@ -288,6 +296,31 @@ mod tests {
         buf.write(b"hello ");
         buf.write(b"world");
         assert_eq!(buf.read_all(), b"hello world");
+    }
+
+    #[test]
+    fn given_writes_past_capacity_should_not_grow_allocation_past_capacity() {
+        let cap = 1024;
+        let buf = OutputBuffer::with_capacity(cap);
+        for _ in 0..100 {
+            buf.write(&[b'x'; 100]);
+        }
+        let inner = buf.inner.read().unwrap();
+        assert_eq!(inner.data.len(), cap);
+        assert!(
+            inner.data.capacity() <= cap,
+            "allocation grew to {}",
+            inner.data.capacity()
+        );
+    }
+
+    #[test]
+    fn given_single_write_larger_than_capacity_should_keep_tail() {
+        let buf = OutputBuffer::with_capacity(4);
+        buf.write(b"ab");
+        buf.write(b"cdefgh");
+        assert_eq!(buf.read_all(), b"efgh");
+        assert_eq!(buf.inner.read().unwrap().total_written, 8);
     }
 
     #[test]

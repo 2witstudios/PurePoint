@@ -392,6 +392,7 @@ impl Engine {
         // Store handle in session map BEFORE writing manifest.
         // ManifestWatcher in Swift fires on manifest write and immediately
         // tries to attach — the session must already be in the map.
+        self.notify_status_on_exit(&project_root, handle.exit_rx.clone());
         self.sessions.lock().await.insert(agent_id.clone(), handle);
 
         // Bind trigger if explicitly specified via --trigger <name>

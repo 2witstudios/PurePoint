@@ -25,10 +25,15 @@ struct TerminalPaneView: NSViewRepresentable {
 class TerminalPaneNSView: NSView {
     let agent: AgentModel
     var onMouseDown: (() -> Void)?
+    /// Live status lookup. `agent` is a snapshot from creation, so its status
+    /// is stale; set by `TerminalViewCache`.
+    var isAgentAlive: () -> Bool = { true }
     private(set) var terminal: ScrollableTerminal?
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
     private var isAttachDone = false
+    /// The daemon closed the last stream because the agent exited.
+    private var didStreamEnd = false
     private(set) var isAgentGone = false
     private var heartbeatTimer: Timer?
     private var spinner: NSProgressIndicator?
@@ -101,7 +106,7 @@ class TerminalPaneNSView: NSView {
                     guard let self else { return }
                     self.window?.makeFirstResponder(tv.terminalView)
                 }
-            } else if let task = attachTask, task.isCancelled || isAttachDone {
+            } else if let task = attachTask, task.isCancelled || isAttachDone, canReattach {
                 // Session died — restart
                 startDaemonAttach()
             }
@@ -119,9 +124,13 @@ class TerminalPaneNSView: NSView {
         }
 
         isAttachDone = false
+        didStreamEnd = false
         let session = DaemonAttachSession(
             agentId: agent.id,
             terminalView: tv.terminalView,
+            // Every attach replays the daemon's whole buffer; only the first
+            // one lands in an empty terminal.
+            resetBeforeReplay: oldSession != nil,
             onFirstOutput: { [weak self] in self?.removeSpinner() }
         )
         tv.attachSession = session
@@ -129,8 +138,10 @@ class TerminalPaneNSView: NSView {
         attachTask = Task { [weak self] in
             await session.start()
             let agentGone = await session.isAgentGone
+            let streamEnded = await session.didStreamEnd
             await MainActor.run {
                 self?.isAttachDone = true
+                self?.didStreamEnd = streamEnded
                 if agentGone {
                     self?.isAgentGone = true
                     self?.heartbeatTimer?.invalidate()
@@ -143,8 +154,14 @@ class TerminalPaneNSView: NSView {
     /// Restart the attach session if it has died and the view has a valid frame.
     func reconnectIfNeeded() {
         guard !isAgentGone else { return }
-        guard isAttachDone, let tv = terminal, tv.bounds.width > 1 else { return }
+        guard isAttachDone, canReattach, let tv = terminal, tv.bounds.width > 1 else { return }
         startDaemonAttach()
+    }
+
+    /// After the agent exits, the terminal already holds all of its output.
+    /// Reattach only if it is running again (e.g. resumed).
+    private var canReattach: Bool {
+        !didStreamEnd || isAgentAlive()
     }
 
     override var acceptsFirstResponder: Bool { true }

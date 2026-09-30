@@ -10,6 +10,10 @@ struct TerminalContainerView: NSViewRepresentable {
     class Coordinator {
         var onFocus: (() -> Void)?
         weak var container: NSView?
+        /// Last `isFocused` seen, so focus is only taken when it changes to true.
+        /// Re-taking it on every update stole focus from the sidebar and search
+        /// fields whenever any agent's status changed.
+        var wasFocused = false
         private var monitor: Any?
 
         func stopMonitor() {
@@ -65,11 +69,13 @@ struct TerminalContainerView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         let termView = viewCache.terminalView(for: agent)
         context.coordinator.onFocus = onFocus
+        let becameFocused = isFocused && !context.coordinator.wasFocused
+        context.coordinator.wasFocused = isFocused
 
-        // Already showing the correct agent — just ensure focus
+        // Already showing the correct agent — just take focus if it just moved here
         if termView.superview === nsView && !termView.isHidden {
-            if isFocused {
-                makeTerminalFirstResponder(in: nsView)
+            if becameFocused {
+                makeTerminalFirstResponder(termView, in: nsView)
             }
             return
         }
@@ -88,11 +94,10 @@ struct TerminalContainerView: NSViewRepresentable {
         viewCache.show(agentId: agent.id)
 
         // Always focus terminal when switching to a new agent
-        makeTerminalFirstResponder(in: nsView)
+        makeTerminalFirstResponder(termView, in: nsView)
     }
 
-    private func makeTerminalFirstResponder(in container: NSView) {
-        let paneView = viewCache.terminalView(for: agent)
+    private func makeTerminalFirstResponder(_ paneView: TerminalPaneNSView, in container: NSView) {
         DispatchQueue.main.async {
             guard paneView.superview === container, !paneView.isHidden else { return }
             paneView.focusTerminal()
