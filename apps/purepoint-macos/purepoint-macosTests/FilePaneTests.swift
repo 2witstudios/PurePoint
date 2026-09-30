@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import purepoint_macos
+@testable import PurePoint
 
 @Suite struct FilePaneTests {
     private func twoPaneWorkspace() -> Workspace {
