@@ -384,7 +384,7 @@ impl Engine {
             rows: 40,
         };
 
-        let handle = match self.pty_host.spawn(spawn_config).await {
+        let mut handle = match self.pty_host.spawn(spawn_config).await {
             Ok(h) => h,
             Err(e) => {
                 return Response::Error {
@@ -394,6 +394,7 @@ impl Engine {
             }
         };
 
+        handle.screen_aware = agent_entry.agent_type == "claude";
         let pid = handle.pid;
 
         // Store handle in session map BEFORE writing manifest.

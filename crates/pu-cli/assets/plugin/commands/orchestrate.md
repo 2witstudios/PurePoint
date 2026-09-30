@@ -90,7 +90,7 @@ After spawning, check `pu logs <agent_id>` periodically. Compare what the agent 
 
 ### Step 4: Course-correct with specificity
 
-When you see drift, intervene via `pu send <agent_id> "..."` with spec-grounded corrections:
+When you see drift, intervene via `pu send <agent_id> "..."` (delivery is confirmed; a non-zero exit means it failed, and an empty follow-up send is never needed) with spec-grounded corrections:
 
 **BAD**: "You're not done yet, keep going"
 

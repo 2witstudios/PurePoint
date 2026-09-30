@@ -67,6 +67,8 @@ pub struct Engine {
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
     pending_initial_inputs: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    /// Per-agent locks so concurrent sends/triggers never interleave keystrokes.
+    delivery_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     login_env: Arc<OnceCell<Vec<(String, String)>>>,
     reaped_projects: Arc<std::sync::Mutex<HashSet<String>>>,
     /// Per-project broadcast channels for grid commands.
@@ -114,6 +116,7 @@ impl Engine {
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             pending_initial_inputs: Arc::new(Mutex::new(HashMap::new())),
+            delivery_locks: Arc::new(Mutex::new(HashMap::new())),
             login_env: Arc::new(OnceCell::new()),
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),

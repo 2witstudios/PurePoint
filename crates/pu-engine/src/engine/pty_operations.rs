@@ -4,6 +4,7 @@ use std::sync::Arc;
 use pu_core::paths;
 use pu_core::protocol::Response;
 
+use crate::delivery::{DeliveryError, DeliveryOptions, deliver_prompt};
 use crate::output_buffer::OutputBuffer;
 
 use super::Engine;
@@ -42,6 +43,21 @@ impl Engine {
     }
 
     pub(super) async fn handle_input(&self, agent_id: &str, data: &[u8], submit: bool) -> Response {
+        if submit {
+            let text = String::from_utf8_lossy(data);
+            return match self.deliver_text(agent_id, &text).await {
+                Ok(true) => Response::Ok,
+                Ok(false) => Self::agent_not_found(agent_id),
+                Err(DeliveryError::Io(e)) => Response::Error {
+                    code: "IO_ERROR".into(),
+                    message: format!("write failed: {e}"),
+                },
+                Err(e) => Response::Error {
+                    code: "DELIVERY_FAILED".into(),
+                    message: format!("text was not delivered to {agent_id}: {e}"),
+                },
+            };
+        }
         // Clone the fd Arc under the lock, then drop the lock before the blocking write
         let master_fd = {
             let sessions = self.sessions.lock().await;
@@ -50,18 +66,55 @@ impl Engine {
                 None => return Self::agent_not_found(agent_id),
             }
         };
-        let result = if submit {
-            self.pty_host.write_chunked_submit(&master_fd, data).await
-        } else {
-            self.pty_host.write_to_fd(&master_fd, data).await
-        };
-        match result {
+        match self.pty_host.write_to_fd(&master_fd, data).await {
             Ok(()) => Response::Ok,
             Err(e) => Response::Error {
                 code: "IO_ERROR".into(),
                 message: format!("write failed: {e}"),
             },
         }
+    }
+
+    /// Type `text` into an agent and submit it as one turn. Every text
+    /// injection (`pu send`, spawn prompts, triggers) goes through here.
+    ///
+    /// Agents with a readable input box (Claude) get screen-confirmed delivery
+    /// and a loud error if it fails; others get the plain chunked write.
+    /// Returns `Ok(false)` if the agent has no session.
+    pub(super) async fn deliver_text(
+        &self,
+        agent_id: &str,
+        text: &str,
+    ) -> Result<bool, DeliveryError> {
+        // Serialize per agent so two senders can't interleave keystrokes.
+        let lock = {
+            let mut locks = self.delivery_locks.lock().await;
+            locks.entry(agent_id.to_string()).or_default().clone()
+        };
+        let _guard = lock.lock().await;
+
+        let (master_fd, output, screen_aware) = {
+            let sessions = self.sessions.lock().await;
+            match sessions.get(agent_id) {
+                Some(h) => (h.master_fd(), h.output_buffer.clone(), h.screen_aware),
+                None => return Ok(false),
+            }
+        };
+        if screen_aware {
+            deliver_prompt(
+                &self.pty_host,
+                &master_fd,
+                &output,
+                text,
+                &DeliveryOptions::default(),
+            )
+            .await?;
+        } else {
+            self.pty_host
+                .write_chunked_submit(&master_fd, text.as_bytes())
+                .await?;
+        }
+        Ok(true)
     }
 
     pub(super) async fn handle_resize(&self, agent_id: &str, cols: u16, rows: u16) -> Response {

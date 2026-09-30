@@ -319,7 +319,7 @@ impl Engine {
             None
         };
 
-        let handle = match self.pty_host.spawn(spawn_config).await {
+        let mut handle = match self.pty_host.spawn(spawn_config).await {
             Ok(h) => h,
             Err(e) => {
                 if created_worktree {
@@ -337,7 +337,18 @@ impl Engine {
             }
         };
 
-        if inject_prompt_via_stdin {
+        // Claude draws a readable input box: its prompt is delivered with
+        // screen confirmation before spawn returns (see below). Other stdin
+        // agents (terminal) keep the background quiet-period injection.
+        let confirmed_prompt = inject_prompt_via_stdin && agent_type == "claude";
+        handle.screen_aware = agent_type == "claude";
+
+        if confirmed_prompt {
+            self.pending_initial_inputs
+                .lock()
+                .await
+                .insert(agent_id.clone(), prompt.as_bytes().to_vec());
+        } else if inject_prompt_via_stdin {
             let prompt_bytes = prompt.as_bytes().to_vec();
             let pending = self.pending_initial_inputs.clone();
             pending
@@ -511,6 +522,28 @@ impl Engine {
         }
 
         self.notify_status_change(&project_root).await;
+
+        if confirmed_prompt {
+            let delivered = self.deliver_text(&agent_id, prompt).await;
+            self.pending_initial_inputs.lock().await.remove(&agent_id);
+            match delivered {
+                Ok(true) => tracing::debug!(agent_id = %agent_id, "prompt delivered at spawn time"),
+                Ok(false) => {
+                    return Response::Error {
+                        code: "PROMPT_DELIVERY_FAILED".into(),
+                        message: format!("agent {agent_id} exited before its prompt was delivered"),
+                    };
+                }
+                Err(e) => {
+                    return Response::Error {
+                        code: "PROMPT_DELIVERY_FAILED".into(),
+                        message: format!(
+                            "agent {agent_id} was spawned but its prompt was not delivered: {e}"
+                        ),
+                    };
+                }
+            }
+        }
 
         Response::SpawnResult {
             worktree_id,

@@ -86,9 +86,10 @@ pub enum Request {
         agent_id: String,
         #[serde(with = "encoding")]
         data: Vec<u8>,
-        /// When true, the engine sends data as chunked typed input then submits
-        /// with Enter (\r). This avoids a race where a single atomic write of
-        /// text+Enter causes the TUI to swallow the Enter keypress.
+        /// When true, the engine types data and submits it with Enter (\r).
+        /// For agents with a readable input box (Claude) delivery is confirmed
+        /// against the screen and failure returns `DELIVERY_FAILED`; other
+        /// agents get chunked typing plus a delayed Enter.
         #[serde(default)]
         submit: bool,
     },
