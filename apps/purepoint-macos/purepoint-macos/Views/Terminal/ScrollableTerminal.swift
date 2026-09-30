@@ -12,6 +12,9 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     var attachSession: DaemonAttachSession?
 
     private var scrollMonitor: Any?
+    private var mouseMonitor: Any?
+    private var dragAutoscrollTimer: DispatchSourceTimer?
+    private var lastDragEvent: NSEvent?
     private var lastKnownTerminalViewSize: CGSize = .zero
     private var accumulatedDelta: CGFloat = 0
     private var lastScrollDirection: Bool?
@@ -42,6 +45,14 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             return self.handleScrollEvent(event)
         }
 
+        // Decide per gesture who owns click/drag selection (see handleMouseEvent)
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            self?.handleMouseEvent(event)
+            return event
+        }
+
         // Accept file drops
         registerForDraggedTypes([.fileURL])
     }
@@ -66,6 +77,11 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         tornDown = true
         scrollFlushTimer?.cancel()
         scrollFlushTimer = nil
+        stopDragAutoscroll()
+        if let mouseMonitor {
+            NSEvent.removeMonitor(mouseMonitor)
+            self.mouseMonitor = nil
+        }
         if let scrollMonitor {
             NSEvent.removeMonitor(scrollMonitor)
             self.scrollMonitor = nil
@@ -170,6 +186,76 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         let inputData = Data(escaped.utf8)
         Task { await session?.sendInput(inputData) }
         return true
+    }
+
+    // MARK: - Selection Ownership
+
+    /// Decides who owns selection for each click gesture.
+    ///
+    /// On the alternate screen with mouse tracking on (Claude Code fullscreen, OpenCode,
+    /// Codex) there is no scrollback, so native selection can only cover the visible
+    /// screen. Forward the mouse to the app instead: it selects across its own scrollback,
+    /// autoscrolls at the edges and copies via OSC 52 (see `clipboardCopy`). Holding Option
+    /// forces native selection. Everywhere else, native selection is used and we supply the
+    /// drag-past-the-edge autoscroll that SwiftTerm doesn't schedule.
+    private func handleMouseEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            guard let window = event.window,
+                let hit = window.contentView?.hitTest(event.locationInWindow),
+                hit === terminalView || hit.isDescendant(of: terminalView)
+            else { return }
+            let term = terminalView.getTerminal()
+            let appOwnsSelection =
+                term.isCurrentBufferAlternate && term.mouseMode != .off
+                && !event.modifierFlags.contains(.option)
+            terminalView.allowMouseReporting = appOwnsSelection
+        case .leftMouseDragged:
+            guard !terminalView.allowMouseReporting, terminalView.window === event.window else { return }
+            updateDragAutoscroll(for: event)
+        case .leftMouseUp:
+            stopDragAutoscroll()
+        default:
+            break
+        }
+    }
+
+    private func updateDragAutoscroll(for event: NSEvent) {
+        let point = terminalView.convert(event.locationInWindow, from: nil)
+        let outside = point.y < 0 || point.y > terminalView.bounds.height
+        guard outside, !terminalView.getTerminal().isCurrentBufferAlternate else {
+            stopDragAutoscroll()
+            return
+        }
+        lastDragEvent = event
+        guard dragAutoscrollTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in self?.autoscrollTick() }
+        timer.resume()
+        dragAutoscrollTimer = timer
+    }
+
+    private func autoscrollTick() {
+        guard let event = lastDragEvent else { return }
+        // The view isn't flipped: y < 0 is below the view (scroll toward newer output).
+        let point = terminalView.convert(event.locationInWindow, from: nil)
+        let overshoot = point.y < 0 ? -point.y : point.y - terminalView.bounds.height
+        let rowHeight = terminalView.bounds.height / CGFloat(terminalView.getTerminal().rows)
+        let lines = max(1, min(Int(overshoot / rowHeight) + 1, 10))
+        if point.y < 0 {
+            terminalView.scrollDown(lines: lines)
+        } else {
+            terminalView.scrollUp(lines: lines)
+        }
+        // Re-extend the selection to the pointer's row now that the content has moved.
+        terminalView.mouseDragged(with: event)
+    }
+
+    private func stopDragAutoscroll() {
+        dragAutoscrollTimer?.cancel()
+        dragAutoscrollTimer = nil
+        lastDragEvent = nil
     }
 
     // MARK: - Scroll Interception
