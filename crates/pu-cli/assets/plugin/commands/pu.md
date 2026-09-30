@@ -56,7 +56,7 @@ pu logs <agent_id> --json          # { "agent_id": "...", "data": "..." }
 
 ### Send input to agents
 ```bash
-pu send <agent_id> "fix the auth bug too"   # sends text + Enter
+pu send <agent_id> "fix the auth bug too"   # sends text + Enter; fails loudly if not delivered (never nudge with an empty send)
 pu send <agent_id> "text" --no-enter        # sends text without Enter
 pu send <agent_id> --keys "C-c"             # send Ctrl+C
 ```

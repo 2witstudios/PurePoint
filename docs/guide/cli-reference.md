@@ -154,6 +154,8 @@ pu send <agent_id> [text] [--no-enter] [--keys <sequence>] [--json]
 | `--no-enter` | Don't append Enter after text |
 | `--keys <seq>` | Send control key sequence (e.g., `C-c`, `C-d`) |
 
+For Claude agents, delivery is confirmed against the agent's screen: `pu send` (and the prompt given to `pu spawn`) returns success only once the complete text was submitted as one turn. If the input box never appears, the text does not fully arrive, or it is not submitted, the command fails with a non-zero exit and a `DELIVERY_FAILED` / `PROMPT_DELIVERY_FAILED` error. No follow-up "nudge" (an empty `pu send`) is needed; sending one can submit a duplicate.
+
 ## health
 
 Check daemon health.

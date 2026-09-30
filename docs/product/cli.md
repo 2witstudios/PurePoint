@@ -41,7 +41,7 @@ Key behaviors:
 | `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive), `--include-root` (requires `--all`), `--json` | Kill agent(s) |
 | `pu attach <agent_id>` | — | Interactive PTY attach to agent |
 | `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Tail agent output buffer |
-| `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal |
+| `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal. Claude agents get screen-confirmed delivery (full text submitted as one turn, or non-zero exit); no nudge needed |
 | `pu health` | `--json` | Check daemon health |
 | `pu pulse` | `--json` | Workspace overview (agents, runtimes, git stats) |
 | `pu diff` | `--worktree <id>`, `--stat`, `--json` | Show git diffs across worktrees |

@@ -237,19 +237,12 @@ impl Engine {
         agent_id: &str,
         text: &str,
     ) -> Result<bool, std::io::Error> {
-        let fd = {
-            let sessions = self.sessions.lock().await;
-            sessions.get(agent_id).map(|handle| handle.master_fd())
-        };
-        match fd {
-            Some(fd) => {
-                self.pty_host
-                    .write_chunked_submit(&fd, text.as_bytes())
-                    .await?;
-                Ok(true)
-            }
-            None => Ok(false),
-        }
+        self.deliver_text(agent_id, text)
+            .await
+            .map_err(|e| match e {
+                crate::delivery::DeliveryError::Io(e) => e,
+                e => std::io::Error::other(e.to_string()),
+            })
     }
 
     pub(super) async fn update_trigger_state(

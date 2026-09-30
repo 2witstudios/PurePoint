@@ -52,6 +52,8 @@ If the agent is genuinely idle, send it more work:
 pu send ag-{id} "continue working on the task"
 ```
 
+`pu send` confirms delivery for Claude agents and exits non-zero if the text did not arrive intact, so do not follow it with an empty `pu send` to nudge the agent.
+
 ## Agent shows "broken"
 
 The agent process has exited. Check the exit code and logs:

@@ -96,6 +96,9 @@ pub struct AgentHandle {
     pub pid: u32,
     pub output_buffer: Arc<OutputBuffer>,
     pub exit_rx: watch::Receiver<Option<i32>>,
+    /// The agent draws a Claude-style input box, so text sent to it goes
+    /// through screen-confirmed delivery (`crate::delivery`).
+    pub screen_aware: bool,
     master_fd: Arc<OwnedFd>,
 }
 
@@ -291,6 +294,7 @@ impl NativePtyHost {
                     output_buffer: buffer,
                     master_fd,
                     exit_rx,
+                    screen_aware: false,
                 })
             }
             Err(e) => Err(std::io::Error::other(e)),
@@ -395,21 +399,29 @@ impl NativePtyHost {
         .map_err(std::io::Error::other)?
     }
 
-    /// Write data to a PTY fd in small chunks (simulating typing) then submit
-    /// with Enter (`\r`).  The chunking plus a delay before Enter avoids a race
-    /// where TUI applications (e.g. Claude Code) swallow the Enter keypress
-    /// when text and Enter arrive in a single atomic write.
+    /// Write data to a PTY fd in small chunks (simulating typing), without
+    /// pressing Enter. Chunking avoids triggering TUI paste-mode detection.
+    pub async fn write_chunked(
+        &self,
+        fd_holder: &Arc<OwnedFd>,
+        data: &[u8],
+    ) -> Result<(), std::io::Error> {
+        for chunk in data.chunks(CHUNK_SIZE) {
+            self.write_to_fd(fd_holder, chunk).await?;
+            tokio::time::sleep(Duration::from_millis(CHUNK_DELAY_MS)).await;
+        }
+        Ok(())
+    }
+
+    /// Write data in small chunks then submit with Enter (`\r`) after a fixed
+    /// delay. Unconfirmed: it never checks what the TUI did with the bytes, so
+    /// agents with a readable input box use `crate::delivery::deliver_prompt`.
     pub async fn write_chunked_submit(
         &self,
         fd_holder: &Arc<OwnedFd>,
         data: &[u8],
     ) -> Result<(), std::io::Error> {
-        // Write text in 8-byte chunks with short delays to mimic typing and
-        // avoid triggering TUI paste-mode detection.
-        for chunk in data.chunks(CHUNK_SIZE) {
-            self.write_to_fd(fd_holder, chunk).await?;
-            tokio::time::sleep(Duration::from_millis(CHUNK_DELAY_MS)).await;
-        }
+        self.write_chunked(fd_holder, data).await?;
         // Give the input widget time to process buffered bytes before submit.
         tokio::time::sleep(Duration::from_millis(PRE_SUBMIT_DELAY_MS)).await;
         self.write_to_fd(fd_holder, b"\r").await

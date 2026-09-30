@@ -50,6 +50,6 @@ Use `/pu` for the full CLI reference. Key commands:
 
 - `pu status` — see all agents and worktrees
 - `pu logs <agent_id>` — read agent output
-- `pu send <agent_id> "message"` — send input to an agent
+- `pu send <agent_id> "message"` — send input to an agent (confirmed delivery for Claude; non-zero exit on failure; no nudge needed)
 - `pu spawn "prompt" --name <name>` — spawn a new agent
 - `pu kill --agent <agent_id>` — stop an agent
