@@ -14,7 +14,7 @@ final class ProjectState: Identifiable {
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
 
-    @ObservationIgnored weak var gridState: GridState?
+    @ObservationIgnored weak var registry: WorkspaceRegistry?
     @ObservationIgnored weak var appState: AppState?
 
     @ObservationIgnored private let service: any WorkspaceService
@@ -26,10 +26,15 @@ final class ProjectState: Identifiable {
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var gridSubscriptionTask: Task<Void, Never>?
 
-    init(projectRoot: String, service: any WorkspaceService, gridState: GridState?) {
+    /// Agents killed locally whose removal the daemon has not written to the manifest yet.
+    /// Without this, a refresh landing in that window would re-adopt the dead agent into a
+    /// brand-new workspace — a row appearing for a pane the user just closed.
+    @ObservationIgnored private var killedAgentIds = Set<String>()
+
+    init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?) {
         self.projectRoot = projectRoot
         self.service = service
-        self.gridState = gridState
+        self.registry = registry
     }
 
     // MARK: - Lifecycle
@@ -110,9 +115,7 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard let self, !Task.isCancelled else { return }
 
-                self.assignPendingSpawnsToGrid(snapshot.rootAgents, incomingWorktrees: snapshot.worktrees)
-                self.mergeWorktrees(snapshot.worktrees)
-                self.mergeRootAgents(snapshot.rootAgents)
+                self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
             } catch is CancellationError {
                 // Task was cancelled (new refresh started) — ignore
             } catch {
@@ -151,7 +154,7 @@ final class ProjectState: Identifiable {
         let target = SpawnTargetResolver.resolve(
             isWorktree: isWorktree,
             selection: selection,
-            worktreeIdForAgent: { self.worktreeId(forAgentId: $0) }
+            worktreeIdForWorkspace: { self.registry?.workspace(id: $0)?.container.worktreeId }
         )
 
         sendDaemonRequest(
@@ -170,28 +173,32 @@ final class ProjectState: Identifiable {
         }
     }
 
-    func spawnAgentForPane(agent: String, prompt: String, leafId: Int, gridState: GridState) {
+    /// Spawn an agent into a specific pane.
+    ///
+    /// The pane is reserved before the request goes out, so whichever arrives first — the
+    /// manifest write or the spawn response — the agent lands in this pane and never
+    /// surfaces as a workspace of its own.
+    func spawnAgentForPane(agent: String, prompt: String, workspaceId: String, leafId: Int) {
+        guard let registry, let workspace = registry.workspace(id: workspaceId) else { return }
         let root = projectRoot
-        let spawnWorktree: String?
-        if let ownerId = gridState.ownerAgentId,
-            let wtId = worktreeId(forAgentId: ownerId)
-        {
-            spawnWorktree = wtId
-        } else {
-            spawnWorktree = nil
-        }
+        let spawnWorktree = workspace.container.worktreeId
 
-        gridState.pendingSpawnLeafIds.insert(leafId)
+        registry.reservePane(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
 
         sendDaemonRequest(
             .spawn(
                 projectRoot: root, prompt: prompt, agent: agent,
                 root: spawnWorktree == nil, worktree: spawnWorktree
             ),
-            onComplete: { gridState.pendingSpawnLeafIds.remove(leafId) }
-        ) { response in
+            onFailure: { [weak registry] in
+                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+            }
+        ) { [weak registry] response in
             if case .spawnResult(_, let agentId, _) = response {
-                gridState.setAgent(agentId, forLeafId: leafId)
+                registry?.fulfillReservation(
+                    projectRoot: root, workspaceId: workspaceId, leafId: leafId, agentId: agentId)
+            } else {
+                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
             }
         }
     }
@@ -228,15 +235,26 @@ final class ProjectState: Identifiable {
     /// Eagerly remove an agent from the local model, then async kill via daemon.
     /// Used by pane-close to prevent sidebar flash.
     func removeAndKillAgent(_ agentId: String) {
+        killedAgentIds.insert(agentId)
         rootAgents.removeAll { $0.id == agentId }
         for i in worktrees.indices {
             worktrees[i].agents.removeAll { $0.id == agentId }
         }
+        registry?.reconcile(projectRoot: projectRoot, rootAgents: rootAgents, worktrees: worktrees)
         killAgent(agentId)
     }
 
     func killAgent(_ agentId: String) {
-        sendDaemonCommand(.kill(projectRoot: projectRoot, target: .agent(agentId)))
+        killedAgentIds.insert(agentId)
+        // The agent stays hidden while the request is pending; if the daemon refuses, it is
+        // still alive and must come back.
+        sendDaemonRequest(
+            .kill(projectRoot: projectRoot, target: .agent(agentId)),
+            onFailure: { [weak self] in
+                self?.killedAgentIds.remove(agentId)
+                self?.refresh()
+            }
+        ) { _ in }
     }
 
     func renameAgent(_ agentId: String, to name: String) {
@@ -268,6 +286,32 @@ final class ProjectState: Identifiable {
                 }
             }
         }
+    }
+
+    /// The one place manifest data enters this project's state.
+    ///
+    /// Reconciling on the same edge that delivers the agents is what keeps panes and rows
+    /// in step: there is no window in which an agent exists but its workspace does not.
+    private func apply(rootAgents incoming: [AgentModel], worktrees incomingWorktrees: [WorktreeModel]) {
+        var filteredRoot = incoming
+        var filteredWorktrees = incomingWorktrees
+
+        if !killedAgentIds.isEmpty {
+            // A kill the manifest has caught up on can stop being suppressed.
+            let stillPresent = Set((incoming + incomingWorktrees.flatMap(\.agents)).map(\.id))
+            killedAgentIds.formIntersection(stillPresent)
+
+            filteredRoot = incoming.filter { !killedAgentIds.contains($0.id) }
+            filteredWorktrees = incomingWorktrees.map { worktree in
+                var copy = worktree
+                copy.agents = worktree.agents.filter { !killedAgentIds.contains($0.id) }
+                return copy
+            }
+        }
+
+        mergeWorktrees(filteredWorktrees)
+        mergeRootAgents(filteredRoot)
+        registry?.reconcile(projectRoot: projectRoot, rootAgents: rootAgents, worktrees: worktrees)
     }
 
     // MARK: - Selective Merge
@@ -309,39 +353,23 @@ final class ProjectState: Identifiable {
     /// Daemon request with response routing and standard error handling.
     private func sendDaemonRequest(
         _ request: DaemonRequest,
-        onComplete: (() -> Void)? = nil,
+        onFailure: (() -> Void)? = nil,
         onSuccess: @escaping (DaemonResponse) -> Void
     ) {
         Task {
-            defer { onComplete?() }
             do {
                 let client = DaemonClient()
                 let response = try await client.send(request)
                 if case .error(_, let message) = response {
                     self.appState?.daemonError = message
+                    onFailure?()
                 } else {
                     onSuccess(response)
                 }
             } catch {
                 self.appState?.daemonError = error.localizedDescription
+                onFailure?()
             }
-        }
-    }
-
-    /// Eagerly assign newly-appeared agents to pending grid leaves before merging,
-    /// so they appear in childAgentIds immediately (sidebar leak prevention).
-    private func assignPendingSpawnsToGrid(_ incomingRootAgents: [AgentModel], incomingWorktrees: [WorktreeModel] = [])
-    {
-        guard let gs = gridState, gs.projectRoot == projectRoot else { return }
-        var pending = gs.pendingSpawnLeafIds
-        guard !pending.isEmpty else { return }
-        let currentIds = Set(rootAgents.map(\.id) + worktrees.flatMap(\.agents).map(\.id))
-        let allIncoming = incomingRootAgents + incomingWorktrees.flatMap(\.agents)
-        for agent in allIncoming where !currentIds.contains(agent.id) {
-            guard let leafId = pending.first else { break }
-            pending.remove(leafId)
-            gs.pendingSpawnLeafIds.remove(leafId)
-            gs.setAgent(agent.id, forLeafId: leafId)
         }
     }
 
@@ -353,9 +381,7 @@ final class ProjectState: Identifiable {
         statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in
             await sub.start { worktrees, agents in
-                self?.assignPendingSpawnsToGrid(agents, incomingWorktrees: worktrees)
-                self?.mergeWorktrees(worktrees)
-                self?.mergeRootAgents(agents)
+                self?.apply(rootAgents: agents, worktrees: worktrees)
             }
         }
     }
@@ -363,8 +389,8 @@ final class ProjectState: Identifiable {
     private func startGridSubscription() {
         gridSubscriptionTask?.cancel()
         Task { await gridSubscription?.stop() }
-        guard let gs = gridState else { return }
-        let sub = DaemonGridSubscription(projectRoot: projectRoot, gridState: gs)
+        guard let registry else { return }
+        let sub = DaemonGridSubscription(projectRoot: projectRoot, registry: registry)
         gridSubscription = sub
         gridSubscriptionTask = Task { await sub.start() }
     }

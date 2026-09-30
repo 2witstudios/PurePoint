@@ -6,7 +6,7 @@ struct purepoint_macosApp: App {
     @State private var appState = AppState()
     @State private var settingsState = SettingsState()
     @State private var viewCache = TerminalViewCache()
-    @State private var gridState = GridState()
+    @State private var registry = WorkspaceRegistry()
     @State private var keyBindingState = KeyBindingState()
     @State private var hotkeyMonitor = HotkeyMonitor()
     @StateObject private var updaterViewModel = CheckForUpdatesViewModel()
@@ -17,7 +17,7 @@ struct purepoint_macosApp: App {
                 .environment(appState)
                 .environment(settingsState)
                 .environment(viewCache)
-                .environment(gridState)
+                .environment(registry)
                 .environment(keyBindingState)
                 .environmentObject(updaterViewModel)
                 .preferredColorScheme(settingsState.appearance.colorScheme)
@@ -26,10 +26,10 @@ struct purepoint_macosApp: App {
                     minHeight: PurePointTheme.windowMinHeight
                 )
                 .onAppear {
-                    appState.gridState = gridState
-                    gridState.onCloseAgent = { [viewCache] agentId in
+                    appState.registry = registry
+                    registry.onCloseAgent = { [viewCache] projectRoot, agentId in
                         viewCache.remove(agentId: agentId)
-                        appState.projectState(forRoot: gridState.projectRoot ?? "")?.removeAndKillAgent(agentId)
+                        appState.projectState(forRoot: projectRoot)?.removeAndKillAgent(agentId)
                     }
                     hotkeyMonitor.keyBindingState = keyBindingState
                     hotkeyMonitor.start()
@@ -142,12 +142,12 @@ struct purepoint_macosApp: App {
                     keyBindingState.keyEquivalent(for: .closeAgent),
                     modifiers: keyBindingState.eventModifiers(for: .closeAgent)
                 )
-                .disabled(appState.selectedAgentId == nil && !gridState.isActive)
+                .disabled(registry.activeWorkspace == nil)
             }
 
             CommandMenu("Panes") {
                 Button("Split Below") {
-                    splitOrEnterGrid(axis: .horizontal)
+                    splitFocusedPane(axis: .horizontal)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .splitBelow),
@@ -156,7 +156,7 @@ struct purepoint_macosApp: App {
                 .disabled(!canSplitBelow)
 
                 Button("Split Right") {
-                    splitOrEnterGrid(axis: .vertical)
+                    splitFocusedPane(axis: .vertical)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .splitRight),
@@ -165,51 +165,51 @@ struct purepoint_macosApp: App {
                 .disabled(!canSplitRight)
 
                 Button("Close Pane") {
-                    gridState.closeFocused()
+                    closeFocusedPane()
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .closePane),
                     modifiers: keyBindingState.eventModifiers(for: .closePane)
                 )
-                .disabled(!gridState.isActive || gridState.leafCount <= 1)
+                .disabled((registry.activeWorkspace?.paneCount ?? 0) <= 1)
 
                 Divider()
 
                 Button("Focus Up") {
-                    gridState.moveFocus(direction: .up)
+                    moveFocus(.up)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .focusUp),
                     modifiers: keyBindingState.eventModifiers(for: .focusUp)
                 )
-                .disabled(!gridState.isActive)
+                .disabled((registry.activeWorkspace?.paneCount ?? 0) <= 1)
 
                 Button("Focus Down") {
-                    gridState.moveFocus(direction: .down)
+                    moveFocus(.down)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .focusDown),
                     modifiers: keyBindingState.eventModifiers(for: .focusDown)
                 )
-                .disabled(!gridState.isActive)
+                .disabled((registry.activeWorkspace?.paneCount ?? 0) <= 1)
 
                 Button("Focus Left") {
-                    gridState.moveFocus(direction: .left)
+                    moveFocus(.left)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .focusLeft),
                     modifiers: keyBindingState.eventModifiers(for: .focusLeft)
                 )
-                .disabled(!gridState.isActive)
+                .disabled((registry.activeWorkspace?.paneCount ?? 0) <= 1)
 
                 Button("Focus Right") {
-                    gridState.moveFocus(direction: .right)
+                    moveFocus(.right)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .focusRight),
                     modifiers: keyBindingState.eventModifiers(for: .focusRight)
                 )
-                .disabled(!gridState.isActive)
+                .disabled((registry.activeWorkspace?.paneCount ?? 0) <= 1)
             }
         }
     }
@@ -228,10 +228,10 @@ struct purepoint_macosApp: App {
         // Restore saved projects from UserDefaults
         appState.restoreProjects()
 
-        // Restore selected agent after projects have loaded
+        // Restore the workspace that was on screen, once reconcile has run for each project.
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            appState.restoreSelectedAgent()
+            appState.restoreActiveWorkspace()
         }
     }
 
@@ -262,29 +262,29 @@ struct purepoint_macosApp: App {
 
     // MARK: - Split Helpers
 
-    /// Can split below: either grid is active and can split, or we're in single-pane with an agent.
-    private var canSplitBelow: Bool {
-        if gridState.isActive { return gridState.canSplit(axis: .horizontal) }
-        return appState.selectedAgentId != nil
+    /// Splitting no longer has an "enter grid mode" step — a workspace is always a grid,
+    /// so the only question is whether the on-screen one has room for another pane.
+    private var canSplitBelow: Bool { registry.activeWorkspace?.root.canSplit(axis: .horizontal) ?? false }
+
+    private var canSplitRight: Bool { registry.activeWorkspace?.root.canSplit(axis: .vertical) ?? false }
+
+    private func splitFocusedPane(axis: PaneSplitNode.Axis) {
+        guard let workspace = registry.activeWorkspace else { return }
+        registry.split(workspaceId: workspace.id, leafId: workspace.focusedLeafId, axis: axis)
+        registry.pendingPaletteLeafId = registry.workspace(id: workspace.id)?.focusedLeafId
     }
 
-    /// Can split right: either grid is active and can split, or we're in single-pane with an agent.
-    private var canSplitRight: Bool {
-        if gridState.isActive { return gridState.canSplit(axis: .vertical) }
-        return appState.selectedAgentId != nil
-    }
-
-    /// Split the focused pane (if grid active) or enter grid mode from single-pane.
-    private func splitOrEnterGrid(axis: PaneSplitNode.Axis) {
-        if gridState.isActive {
-            gridState.splitFocused(axis: axis)
-        } else if let agentId = appState.selectedAgentId {
-            if let project = appState.projectState(forAgentId: agentId) {
-                gridState.projectRoot = project.projectRoot
-            }
-            gridState.enterGridMode(agentId: agentId, axis: axis)
+    private func closeFocusedPane() {
+        guard let workspace = registry.activeWorkspace else { return }
+        if let agentId = workspace.focusedAgentId {
+            viewCache.remove(agentId: agentId)
         }
-        gridState.pendingPaletteLeafId = gridState.focusedLeafId
+        registry.closePane(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
+    }
+
+    private func moveFocus(_ direction: FocusDirection) {
+        guard let workspace = registry.activeWorkspace else { return }
+        registry.moveFocus(workspaceId: workspace.id, direction: direction)
     }
 
     private func postHotkeyAction(_ action: HotkeyAction) {

@@ -17,7 +17,7 @@ An agent is a process running in a PTY (pseudo-terminal) inside a worktree. Agen
 | Type | Command | Default behavior | Description |
 |---|---|---|---|
 | `claude` | `claude` | `--dangerously-skip-permissions` | Claude Code CLI |
-| `codex` | `codex` | `--full-auto` | OpenAI Codex CLI |
+| `codex` | `codex` | `--sandbox workspace-write --ask-for-approval on-request` | OpenAI Codex CLI |
 | `opencode` | `opencode` | (none) | OpenCode CLI |
 | `terminal` | `$SHELL` | (none) | Plain terminal, no AI |
 

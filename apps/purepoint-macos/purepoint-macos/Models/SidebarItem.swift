@@ -20,10 +20,14 @@ enum SidebarNavItem: String, CaseIterable, Identifiable {
     }
 }
 
+/// What the sidebar can have selected.
+///
+/// Note there is no `.agent` case. Agents are not addressable from the sidebar — they live
+/// in panes, and panes live in workspaces. Removing the case is what makes it impossible for
+/// a pane to reappear as its own row: there is no representation for such a row.
 enum SidebarSelection: Hashable {
     case nav(SidebarNavItem)
-    case agent(String)
-    case terminal(String)
+    case workspace(String)
     case worktree(String)
     case project(String)  // projectRoot path
 }
@@ -34,7 +38,7 @@ class SidebarNode {
     enum Kind {
         case project(ProjectState)
         case worktree(WorktreeModel)
-        case agent(AgentModel)
+        case workspace(Workspace)
     }
 
     let kind: Kind
@@ -49,7 +53,7 @@ class SidebarNode {
         switch kind {
         case .project(let p): return p.projectRoot
         case .worktree(let w): return w.id
-        case .agent(let a): return a.id
+        case .workspace(let w): return w.id
         }
     }
 }

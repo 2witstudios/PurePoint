@@ -471,7 +471,7 @@ impl Engine {
                 Ok(("claude".into(), args, Some(sid.to_string())))
             }
             "codex" => {
-                // Top-level flags (e.g. --full-auto) must precede the subcommand
+                // Top-level flags (e.g. --sandbox) must precede the subcommand
                 let mut args = launch_args;
                 args.push("resume".into());
                 args.push("--last".into());

@@ -20,13 +20,13 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Callback for creating a terminal in a worktree.
     var onAddTerminal: ((ProjectState, WorktreeModel) -> Void)?
 
-    /// Callback for killing an agent.
-    var onKillAgent: ((ProjectState, String) -> Void)?
+    /// Callback for killing every agent in a workspace: (project, workspaceId).
+    var onKillWorkspace: ((ProjectState, String) -> Void)?
 
     /// Callback for killing all agents in a worktree.
     var onKillWorktreeAgents: ((ProjectState, String) -> Void)?
 
-    /// Callback for renaming an agent: (project, agentId, newName).
+    /// Callback for renaming a workspace's primary agent: (project, agentId, newName).
     var onRenameAgent: ((ProjectState, String, String) -> Void)?
 
     /// Callback for deleting a worktree (full cleanup).
@@ -38,14 +38,12 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Callback for removing a project from the sidebar.
     var onRemoveProject: ((ProjectState) -> Void)?
 
-    /// Agent currently shown in the grid.
-    var gridOwnerAgentId: String?
+    /// Canonical workspaces per project root. The sidebar renders these and nothing else —
+    /// there is no agent list to filter, so a pane cannot leak out as its own row.
+    var workspacesByProject: [String: [Workspace]] = [:]
 
-    /// Agent IDs hidden from the sidebar (grid children).
-    var hiddenAgentIds: Set<String> = []
-
-    /// Project root for grid filtering.
-    var gridProjectRoot: String?
+    /// The workspace whose grid is on screen, for the active-row marker.
+    var activeWorkspaceId: String?
 
     /// Prevents feedback loops during programmatic selection changes.
     private var suppressSelectionCallback = false
@@ -56,30 +54,30 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Inline rename state.
     private var editingTextField: NSTextField?
     private var editingOriginalName: String?
-    private var editingAgentId: String?
+    private var editingWorkspaceId: String?
 
     private struct SidebarRenderState: Equatable {
-        let gridOwnerAgentId: String?
+        let activeWorkspaceId: String?
         let projects: [ProjectRenderState]
     }
 
     private struct ProjectRenderState: Equatable {
         let projectRoot: String
-        let rootAgents: [AgentRenderState]
+        let rootWorkspaces: [WorkspaceRenderState]
         let worktrees: [WorktreeRenderState]
     }
 
     private struct WorktreeRenderState: Equatable {
         let id: String
         let branch: String
-        let agents: [AgentRenderState]
+        let workspaces: [WorkspaceRenderState]
     }
 
-    private struct AgentRenderState: Equatable {
+    private struct WorkspaceRenderState: Equatable {
         let id: String
-        let displayName: String
+        let title: String
+        let paneCount: Int
         let status: AgentStatus
-        let suspended: Bool
     }
 
     // MARK: - Lifecycle
@@ -145,63 +143,59 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     }
 
     private func buildProjectNode(from project: ProjectState) -> SidebarNode {
-        let isGridProject = project.projectRoot == gridProjectRoot
+        let workspaces = workspacesByProject[project.projectRoot] ?? []
 
-        var projectChildren: [SidebarNode] = filterAgents(project.rootAgents, isGridProject: isGridProject).map {
-            SidebarNode(kind: .agent($0))
-        }
+        var projectChildren: [SidebarNode] = workspaces
+            .filter { $0.container == .projectRoot }
+            .map { SidebarNode(kind: .workspace($0)) }
 
         for worktree in project.worktrees {
-            let agents = filterAgents(worktree.agents, isGridProject: isGridProject)
-            let agentNodes = agents.map { SidebarNode(kind: .agent($0)) }
-            projectChildren.append(SidebarNode(kind: .worktree(worktree), children: agentNodes))
+            let children = workspaces
+                .filter { $0.container == .worktree(worktree.id) }
+                .map { SidebarNode(kind: .workspace($0)) }
+            projectChildren.append(SidebarNode(kind: .worktree(worktree), children: children))
         }
 
         return SidebarNode(kind: .project(project), children: projectChildren)
     }
 
-    private func filterAgents(_ agents: [AgentModel], isGridProject: Bool) -> [AgentModel] {
-        isGridProject ? agents.filter { !hiddenAgentIds.contains($0.id) } : agents
+    /// How a workspace presents itself as one row: named after its first pane's agent,
+    /// with the pane count when it holds more than one.
+    private func renderState(for workspace: Workspace, in project: ProjectState) -> WorkspaceRenderState {
+        let agents = workspace.agentIds.compactMap { project.agent(byId: $0) }
+        let title = agents.first?.displayName ?? workspace.primaryAgentId ?? workspace.id
+        let status: AgentStatus =
+            agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
+        return WorkspaceRenderState(
+            id: workspace.id, title: title, paneCount: workspace.paneCount, status: status)
     }
 
     private func makeRenderState(projects: [ProjectState]) -> SidebarRenderState {
         let projectStates = projects.map { project in
-            let isGridProject = project.projectRoot == gridProjectRoot
+            let workspaces = workspacesByProject[project.projectRoot] ?? []
 
-            let rootAgents = filterAgents(project.rootAgents, isGridProject: isGridProject).map {
-                AgentRenderState(
-                    id: $0.id,
-                    displayName: $0.displayName,
-                    status: $0.status,
-                    suspended: $0.suspended
-                )
-            }
+            let rootWorkspaces = workspaces
+                .filter { $0.container == .projectRoot }
+                .map { renderState(for: $0, in: project) }
 
             let worktrees = project.worktrees.map { worktree in
-                let agents = filterAgents(worktree.agents, isGridProject: isGridProject).map {
-                    AgentRenderState(
-                        id: $0.id,
-                        displayName: $0.displayName,
-                        status: $0.status,
-                        suspended: $0.suspended
-                    )
-                }
-
-                return WorktreeRenderState(
+                WorktreeRenderState(
                     id: worktree.id,
                     branch: worktree.branch,
-                    agents: agents
+                    workspaces: workspaces
+                        .filter { $0.container == .worktree(worktree.id) }
+                        .map { renderState(for: $0, in: project) }
                 )
             }
 
             return ProjectRenderState(
                 projectRoot: project.projectRoot,
-                rootAgents: rootAgents,
+                rootWorkspaces: rootWorkspaces,
                 worktrees: worktrees
             )
         }
 
-        return SidebarRenderState(gridOwnerAgentId: gridOwnerAgentId, projects: projectStates)
+        return SidebarRenderState(activeWorkspaceId: activeWorkspaceId, projects: projectStates)
     }
 
     private func restoreExpansionState() {
@@ -229,17 +223,16 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             return
         }
 
-        let targetId: String?
+        let targetId: String
         switch selection {
-        case .agent(let id): targetId = id
+        case .workspace(let id): targetId = id
         case .worktree(let id): targetId = id
         case .project(let root): targetId = root
-        case .nav, .terminal:
+        case .nav:
             deselectAll()
             return
         }
 
-        guard let targetId else { return }
         selectNode(withId: targetId)
     }
 
@@ -282,7 +275,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         guard let node = item as? SidebarNode else { return false }
         switch node.kind {
         case .project, .worktree: return true
-        case .agent: return false
+        case .workspace: return false
         }
     }
 
@@ -293,7 +286,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         switch node.kind {
         case .project(let project): return makeProjectCell(project)
         case .worktree(let worktree): return makeWorktreeCell(worktree, node: node)
-        case .agent(let agent): return makeAgentCell(agent)
+        case .workspace(let workspace): return makeWorkspaceCell(workspace, node: node)
         }
     }
 
@@ -314,7 +307,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         switch node.kind {
         case .project(let p): selection = .project(p.projectRoot)
         case .worktree(let w): selection = .worktree(w.id)
-        case .agent(let a): selection = .agent(a.id)
+        case .workspace(let w): selection = .workspace(w.id)
         }
         onSelectionChanged?(selection)
     }
@@ -361,21 +354,28 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return cell
     }
 
-    private func makeAgentCell(_ agent: AgentModel) -> NSView {
+    /// One row per workspace. A multi-pane workspace shows a pane count instead of
+    /// expanding into child rows — its panes are only ever reachable inside its grid.
+    private func makeWorkspaceCell(_ workspace: Workspace, node: SidebarNode) -> NSView {
         let (cell, stack) = makeCellWithStack(spacing: 5)
 
-        stack.addArrangedSubview(makeStatusDot(color: agent.status.nsColor))
+        guard let project = findProject(forWorkspaceId: workspace.id) else { return cell }
+        let state = renderState(for: workspace, in: project)
 
-        let label = NSTextField(labelWithString: agent.displayName)
+        stack.addArrangedSubview(makeStatusDot(color: state.status.nsColor))
+
+        let label = NSTextField(labelWithString: state.title)
         label.font = .systemFont(ofSize: 11)
         label.lineBreakMode = .byTruncatingTail
         stack.addArrangedSubview(label)
 
-        if agent.id == gridOwnerAgentId {
-            stack.addArrangedSubview(makeGridOwnerIcon())
+        if state.paneCount > 1 {
+            stack.addArrangedSubview(spacerView())
+            stack.addArrangedSubview(makePaneCountIcon(state.paneCount))
         }
 
-        cell.setAccessibilityLabel("\(agent.displayName), \(agent.status.rawValue)")
+        let paneNote = state.paneCount > 1 ? ", \(state.paneCount) panes" : ""
+        cell.setAccessibilityLabel("\(state.title), \(state.status.rawValue)\(paneNote)")
         return cell
     }
 
@@ -431,13 +431,26 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return badge
     }
 
-    private func makeGridOwnerIcon() -> NSImageView {
+    private func makePaneCountIcon(_ count: Int) -> NSStackView {
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.spacing = 2
+
         let icon = NSImageView(
-            image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Grid owner")!)
+            image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Panes")!)
         icon.contentTintColor = .tertiaryLabelColor
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
         icon.setContentHuggingPriority(.required, for: .horizontal)
-        return icon
+
+        let label = NSTextField(labelWithString: "\(count)")
+        label.font = .systemFont(ofSize: 10)
+        label.textColor = .tertiaryLabelColor
+        label.setContentHuggingPriority(.required, for: .horizontal)
+
+        stack.addArrangedSubview(icon)
+        stack.addArrangedSubview(label)
+        stack.setContentHuggingPriority(.required, for: .horizontal)
+        return stack
     }
 
     // MARK: - Helpers
@@ -534,12 +547,30 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return nil
     }
 
+    private func findProject(forWorkspaceId workspaceId: String) -> ProjectState? {
+        for node in projectNodes {
+            if case .project(let p) = node.kind,
+                workspacesByProject[p.projectRoot]?.contains(where: { $0.id == workspaceId }) == true
+            {
+                return p
+            }
+        }
+        return nil
+    }
+
+    private func findWorkspace(id workspaceId: String) -> Workspace? {
+        for (_, list) in workspacesByProject {
+            if let match = list.first(where: { $0.id == workspaceId }) { return match }
+        }
+        return nil
+    }
+
     // MARK: - Inline Rename State
 
     private func cleanupEditingState() {
         editingTextField = nil
         editingOriginalName = nil
-        editingAgentId = nil
+        editingWorkspaceId = nil
     }
 }
 
@@ -554,16 +585,18 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         contextClickedNode = node
 
         switch node.kind {
-        case .agent: buildAgentContextMenu(menu)
+        case .workspace(let workspace): buildWorkspaceContextMenu(menu, workspace: workspace)
         case .worktree(let worktree): buildWorktreeContextMenu(menu, worktree: worktree)
         case .project(let project): buildProjectContextMenu(menu, project: project)
         }
     }
 
-    private func buildAgentContextMenu(_ menu: NSMenu) {
+    private func buildWorkspaceContextMenu(_ menu: NSMenu, workspace: Workspace) {
         menu.addItem(makeMenuItem(title: "Rename\u{2026}", action: #selector(contextRenameAgent(_:))))
         menu.addItem(.separator())
-        menu.addItem(makeMenuItem(title: "Kill Agent", action: #selector(contextKillAgent(_:))))
+        let paneCount = workspace.agentIds.count
+        let title = paneCount > 1 ? "Close Workspace (\(paneCount) agents)" : "Kill Agent"
+        menu.addItem(makeMenuItem(title: title, action: #selector(contextKillWorkspace(_:))))
     }
 
     private func buildWorktreeContextMenu(_ menu: NSMenu, worktree: WorktreeModel) {
@@ -592,10 +625,22 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         menu.addItem(makeMenuItem(title: "Remove Project\u{2026}", action: #selector(contextRemoveProject(_:))))
     }
 
-    @objc private func contextKillAgent(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .agent(let agent) = node.kind else { return }
-        guard let project = findProject(forAgentId: agent.id) else { return }
-        onKillAgent?(project, agent.id)
+    @objc private func contextKillWorkspace(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode, case .workspace(let workspace) = node.kind else { return }
+        guard let project = findProject(forWorkspaceId: workspace.id) else { return }
+
+        let agentCount = workspace.agentIds.count
+        guard agentCount > 1 else {
+            onKillWorkspace?(project, workspace.id)
+            return
+        }
+        showConfirmation(
+            title: "Close this workspace?",
+            message: "This will kill \(agentCount) agents across its panes.",
+            confirmTitle: "Close"
+        ) {
+            self.onKillWorkspace?(project, workspace.id)
+        }
     }
 
     @objc private func contextKillWorktreeAgents(_ sender: NSMenuItem) {
@@ -652,14 +697,14 @@ extension SidebarOutlineViewController: NSMenuDelegate {
     }
 
     @objc private func contextRenameAgent(_ sender: NSMenuItem) {
-        guard let node = contextClickedNode, case .agent(let agent) = node.kind else { return }
+        guard let node = contextClickedNode, case .workspace(let workspace) = node.kind else { return }
         let clickedRow = outlineView.row(forItem: node)
         guard clickedRow >= 0,
             let cellView = outlineView.view(atColumn: 0, row: clickedRow, makeIfNecessary: false),
             let textField = findNameTextField(in: cellView)
         else { return }
 
-        editingAgentId = agent.id
+        editingWorkspaceId = workspace.id
         editingOriginalName = textField.stringValue
         editingTextField = textField
 
@@ -738,13 +783,17 @@ extension SidebarOutlineViewController: NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        guard let tf = editingTextField, let agentId = editingAgentId else { return }
+        guard let tf = editingTextField, let workspaceId = editingWorkspaceId else { return }
         let newName = tf.stringValue.trimmingCharacters(in: .whitespaces)
 
         tf.isEditable = false
         tf.isSelectable = false
 
-        if !newName.isEmpty, newName != editingOriginalName, let project = findProject(forAgentId: agentId) {
+        // Renaming a workspace renames the agent it is named after.
+        if !newName.isEmpty, newName != editingOriginalName,
+            let agentId = findWorkspace(id: workspaceId)?.primaryAgentId,
+            let project = findProject(forWorkspaceId: workspaceId)
+        {
             onRenameAgent?(project, agentId, newName)
         } else if let original = editingOriginalName {
             tf.stringValue = original

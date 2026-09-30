@@ -21,7 +21,7 @@ private struct StubWorkspaceService: WorkspaceService {
     worktreeId: String? = nil,
     worktreeAgentIds: [String] = []
 ) -> ProjectState {
-    let project = ProjectState(projectRoot: root, service: StubWorkspaceService(), gridState: nil)
+    let project = ProjectState(projectRoot: root, service: StubWorkspaceService(), registry: nil)
     project.rootAgents = agentIds.map { makeAgent(id: $0) }
     if let wtId = worktreeId {
         let wt = WorktreeModel(
@@ -33,32 +33,44 @@ private struct StubWorkspaceService: WorkspaceService {
     return project
 }
 
+/// `AppState.registry` is weak, so a registry assigned straight from `makeRegistry` would be
+/// freed immediately. Tests are short-lived; keeping every registry alive is simplest.
+@MainActor private var retainedRegistries: [WorkspaceRegistry] = []
+
+/// Build a registry holding one single-pane workspace per agent, mirroring what
+/// reconcile produces for a project whose agents have never been grouped.
+@MainActor private func makeRegistry(_ projects: [ProjectState]) -> WorkspaceRegistry {
+    let registry = WorkspaceRegistry()
+    for project in projects {
+        registry.reconcile(
+            projectRoot: project.projectRoot,
+            rootAgents: project.rootAgents,
+            worktrees: project.worktrees
+        )
+    }
+    retainedRegistries.append(registry)
+    return registry
+}
+
+@MainActor private func workspaceId(_ registry: WorkspaceRegistry, forAgent agentId: String) -> String {
+    registry.workspaceId(forAgent: agentId) ?? ""
+}
+
 // MARK: - updateActiveProject routing
 
 @Suite(.serialized)
 @MainActor
 struct ActiveProjectRoutingTests {
 
-    @Test func agentSelectionSetsActiveProjectRoot() {
+    @Test func workspaceSelectionSetsActiveProjectRoot() {
         let state = AppState(service: StubWorkspaceService())
         state.projects = [
             makeProject(root: "/a", agentIds: ["a1"]),
             makeProject(root: "/b", agentIds: ["b1"]),
         ]
+        state.registry = makeRegistry(state.projects)
 
-        state.updateActiveProject(for: .agent("b1"))
-
-        #expect(state.activeProjectRoot == "/b")
-    }
-
-    @Test func terminalSelectionSetsActiveProjectRoot() {
-        let state = AppState(service: StubWorkspaceService())
-        state.projects = [
-            makeProject(root: "/a", agentIds: ["a1"]),
-            makeProject(root: "/b", agentIds: ["b1"]),
-        ]
-
-        state.updateActiveProject(for: .terminal("b1"))
+        state.updateActiveProject(for: .workspace(workspaceId(state.registry!, forAgent: "b1")))
 
         #expect(state.activeProjectRoot == "/b")
     }
@@ -105,10 +117,12 @@ struct ActiveProjectRoutingTests {
     @Test func updateAlsoSetsActiveSidebarSelection() {
         let state = AppState(service: StubWorkspaceService())
         state.projects = [makeProject(root: "/a", agentIds: ["a1"])]
+        state.registry = makeRegistry(state.projects)
+        let wsId = workspaceId(state.registry!, forAgent: "a1")
 
-        state.updateActiveProject(for: .agent("a1"))
+        state.updateActiveProject(for: .workspace(wsId))
 
-        #expect(state.activeSidebarSelection == .agent("a1"))
+        #expect(state.activeSidebarSelection == .workspace(wsId))
     }
 
     @Test func unknownWorktreeIdPreservesActiveProjectRoot() {
@@ -121,24 +135,26 @@ struct ActiveProjectRoutingTests {
         #expect(state.activeProjectRoot == "/a")
     }
 
-    @Test func unknownAgentIdPreservesActiveProjectRoot() {
+    @Test func unknownWorkspaceIdPreservesActiveProjectRoot() {
         let state = AppState(service: StubWorkspaceService())
         state.projects = [makeProject(root: "/a"), makeProject(root: "/b")]
+        state.registry = makeRegistry(state.projects)
         state.activeProjectRoot = "/a"
 
-        state.updateActiveProject(for: .agent("nonexistent"))
+        state.updateActiveProject(for: .workspace("ws-nonexistent"))
 
         #expect(state.activeProjectRoot == "/a")
     }
 
-    @Test func worktreeAgentTerminalRoutesThroughWorktree() {
+    @Test func worktreeAgentWorkspaceRoutesThroughItsProject() {
         let state = AppState(service: StubWorkspaceService())
         state.projects = [
             makeProject(root: "/a"),
             makeProject(root: "/b", worktreeId: "wt-1", worktreeAgentIds: ["wt-agent"]),
         ]
+        state.registry = makeRegistry(state.projects)
 
-        state.updateActiveProject(for: .terminal("wt-agent"))
+        state.updateActiveProject(for: .workspace(workspaceId(state.registry!, forAgent: "wt-agent")))
 
         #expect(state.activeProjectRoot == "/b")
     }

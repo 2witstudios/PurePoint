@@ -11,7 +11,7 @@ Created by `pu init` in your project root.
 ├── manifest.json          # Workspace state (source of truth)
 ├── config.yaml            # Project configuration
 ├── agent-context.md       # Context for non-Claude agents (codex, opencode)
-├── grid-layout.json       # Pane grid layout persistence (macOS app)
+├── workspaces.json        # Workspace + pane layout persistence (macOS app)
 ├── worktrees/             # Git worktree directories
 │   └── wt-{id}/          # Individual worktree checkout
 ├── prompts/               # Per-agent prompt files
@@ -35,7 +35,7 @@ Created by `pu init` in your project root.
 | `manifest.json` | JSON | Daemon | No (daemon-managed) |
 | `config.yaml` | YAML | User / `pu init` | Yes |
 | `agent-context.md` | Markdown | `pu init` | Yes |
-| `grid-layout.json` | JSON | macOS app | No (app-managed) |
+| `workspaces.json` | JSON | macOS app | No (app-managed) |
 
 ### Definition directories
 

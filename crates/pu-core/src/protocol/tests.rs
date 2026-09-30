@@ -1865,7 +1865,7 @@ fn given_config_report_response_should_round_trip() {
                 name: "codex".into(),
                 command: "codex".into(),
                 launch_args: None,
-                resolved_launch_args: vec!["--full-auto".into()],
+                resolved_launch_args: vec!["--sandbox".into(), "workspace-write".into()],
                 interactive: true,
             },
         ],
@@ -1883,7 +1883,10 @@ fn given_config_report_response_should_round_trip() {
             assert_eq!(agents[0].launch_args, Some(vec!["--verbose".to_string()]));
             assert_eq!(agents[1].name, "codex");
             assert!(agents[1].launch_args.is_none());
-            assert_eq!(agents[1].resolved_launch_args, vec!["--full-auto"]);
+            assert_eq!(
+                agents[1].resolved_launch_args,
+                vec!["--sandbox", "workspace-write"]
+            );
         }
         _ => panic!("expected ConfigReport"),
     }

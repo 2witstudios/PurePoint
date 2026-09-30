@@ -3,7 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
-    @Environment(GridState.self) private var gridState
+    @Environment(WorkspaceRegistry.self) private var registry
     @Environment(TerminalViewCache.self) private var viewCache
     var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
@@ -57,7 +57,7 @@ struct SidebarView: View {
                 SidebarOutlineView(
                     selection: $selection,
                     appState: appState,
-                    gridState: gridState,
+                    registry: registry,
                     viewCache: viewCache,
                     onOutlineViewReady: onOutlineViewReady
                 )

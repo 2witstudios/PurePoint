@@ -962,7 +962,7 @@ mod tests {
             command: "codex".into(),
             prompt_flag: None,
             interactive: true,
-            launch_args: Some(vec!["--approval-mode=full-auto".into()]),
+            launch_args: Some(vec!["--search".into()]),
         };
 
         // when
@@ -972,11 +972,11 @@ mod tests {
 
         // then — top-level flags must precede the subcommand
         assert_eq!(cmd, "codex");
-        assert_eq!(args, vec!["--approval-mode=full-auto", "resume", "--last"]);
+        assert_eq!(args, vec!["--search", "resume", "--last"]);
     }
 
     #[test]
-    fn given_codex_build_resume_with_defaults_should_place_full_auto_before_subcommand() {
+    fn given_codex_build_resume_with_defaults_should_place_auto_args_before_subcommand() {
         // given
         let engine = Engine::new();
         let agent_cfg = pu_core::types::AgentConfig {
@@ -992,9 +992,19 @@ mod tests {
             .build_resume_command("codex", &agent_cfg, None)
             .unwrap();
 
-        // then — --full-auto is a top-level flag, must come before `resume`
+        // then — the auto-mode flags are top-level, they must come before `resume`
         assert_eq!(cmd, "codex");
-        assert_eq!(args, vec!["--full-auto", "resume", "--last"]);
+        assert_eq!(
+            args,
+            vec![
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request",
+                "resume",
+                "--last"
+            ]
+        );
     }
 
     /// Test the no_auto + launch_args interaction logic used in handle_spawn.
@@ -1156,12 +1166,15 @@ mod tests {
     }
 
     #[test]
-    fn given_codex_resume_should_use_full_auto() {
+    fn given_codex_resume_should_use_auto_mode_args() {
         let engine = Engine::new();
         let cfg = dummy_agent_cfg("codex");
         let (cmd, args, _) = engine.build_resume_command("codex", &cfg, None).unwrap();
         assert_eq!(cmd, "codex");
-        assert!(args.contains(&"--full-auto".to_string()));
+        assert!(args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&"workspace-write".to_string()));
+        assert!(args.contains(&"--ask-for-approval".to_string()));
+        assert!(args.contains(&"on-request".to_string()));
         assert!(args.contains(&"resume".to_string()));
         assert!(args.contains(&"--last".to_string()));
     }

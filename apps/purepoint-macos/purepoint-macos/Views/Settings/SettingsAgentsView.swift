@@ -182,14 +182,14 @@ func composeClaudeLaunchArgs(_ config: ClaudeConfig) -> [String] {
 func parseCodexLaunchArgs(_ args: [String]) -> CodexConfig {
     var config = CodexConfig()
     var i = 0
-    // Check for --full-auto shortcut first
-    if args.contains("--full-auto") {
+    // Legacy: Codex removed the --full-auto shortcut, but stored configs may still have it.
+    if args.contains("--full-auto") || args.contains("--approval-mode=full-auto") {
         config.approvalMode = .onRequest
         config.sandboxMode = .workspaceWrite
     }
     while i < args.count {
         switch args[i] {
-        case "--full-auto":
+        case "--full-auto", "--approval-mode=full-auto":
             break  // handled above
         case "-a", "--ask-for-approval":
             if i + 1 < args.count {
@@ -218,12 +218,8 @@ func parseCodexLaunchArgs(_ args: [String]) -> CodexConfig {
 
 func composeCodexLaunchArgs(_ config: CodexConfig) -> [String] {
     var args: [String] = []
-    // Use --full-auto shortcut when matching the defaults
-    if config.approvalMode == .onRequest && config.sandboxMode == .workspaceWrite {
-        args.append("--full-auto")
-    } else {
-        args += ["-a", config.approvalMode.cliValue, "-s", config.sandboxMode.cliValue]
-    }
+    // Always emit long-form flags — Codex no longer accepts the --full-auto shortcut.
+    args += ["-s", config.sandboxMode.cliValue, "-a", config.approvalMode.cliValue]
     if !config.model.isEmpty {
         args += ["-m", config.model]
     }
@@ -540,7 +536,7 @@ struct CodexAgentGroupBox: View {
                 }
 
                 if useDefaults {
-                    Text("Using recommended settings: full-auto mode with workspace sandbox")
+                    Text("Using recommended settings: workspace-write sandbox, approval on request")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                     resolvedArgsView(payload.resolvedLaunchArgs)

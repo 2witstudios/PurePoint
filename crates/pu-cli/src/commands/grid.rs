@@ -102,32 +102,48 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Render the grid layout as an ASCII table.
+/// Render the workspace layout as ASCII boxes — one box per workspace, since a workspace
+/// is the unit that owns a pane tree.
 fn print_ascii_grid(layout: &serde_json::Value) {
     if layout.is_null() {
         println!("No grid layout");
         return;
     }
 
-    // Collect all leaves from the layout JSON
-    let mut leaves = Vec::new();
-    collect_leaves(layout, &mut leaves);
+    let workspaces = match layout.get("workspaces").and_then(|w| w.as_array()) {
+        Some(list) => list.clone(),
+        // Pre-workspace `grid-layout.json`: the whole document is one tree.
+        None => vec![layout.clone()],
+    };
 
-    if leaves.is_empty() {
-        println!("Empty grid");
+    if workspaces.is_empty() {
+        println!("No workspaces");
         return;
     }
 
-    // Simple rendering: show leaves in a box
-    let max_width = 28;
-    let border_h = "─".repeat(max_width);
-    println!("┌{border_h}┐");
-    for leaf in &leaves {
-        let agent = leaf.as_deref().unwrap_or("(empty)");
-        let padded = format!("{agent:^max_width$}");
-        println!("│{padded}│");
+    for workspace in &workspaces {
+        let tree = workspace.get("tree").unwrap_or(workspace);
+        let mut leaves = Vec::new();
+        collect_leaves(tree, &mut leaves);
+
+        let label = workspace
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or("workspace");
+
+        let max_width = 28;
+        let border_h = "─".repeat(max_width);
+        println!("{label}");
+        println!("┌{border_h}┐");
+        if leaves.is_empty() {
+            println!("│{:^max_width$}│", "(empty)");
+        }
+        for leaf in &leaves {
+            let agent = leaf.as_deref().unwrap_or("(empty)");
+            println!("│{agent:^max_width$}│");
+        }
+        println!("└{border_h}┘");
     }
-    println!("└{border_h}┘");
 }
 
 fn collect_leaves(node: &serde_json::Value, out: &mut Vec<Option<String>>) {

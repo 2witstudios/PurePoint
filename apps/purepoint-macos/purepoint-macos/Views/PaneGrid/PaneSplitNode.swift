@@ -2,11 +2,11 @@ import Foundation
 
 /// Recursive binary split tree model for the pane grid.
 /// Each node is either a leaf (single pane) or a split (two children with ratio).
-indirect enum PaneSplitNode: Equatable {
+nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
     case leaf(id: Int, agentId: String?)
     case split(axis: Axis, ratio: CGFloat, first: PaneSplitNode, second: PaneSplitNode)
 
-    enum Axis: String, Codable, Equatable {
+    enum Axis: String, Codable, Equatable, Sendable {
         case horizontal  // top/bottom
         case vertical  // left/right
     }
@@ -17,6 +17,14 @@ indirect enum PaneSplitNode: Equatable {
         switch self {
         case .leaf(let id, _): return [id]
         case .split(_, _, let first, let second): return first.allLeafIds + second.allLeafIds
+        }
+    }
+
+    /// Every pane in layout order, with the agent it holds (nil for a deliberate empty pane).
+    var leaves: [(id: Int, agentId: String?)] {
+        switch self {
+        case .leaf(let id, let agentId): return [(id: id, agentId: agentId)]
+        case .split(_, _, let first, let second): return first.leaves + second.leaves
         }
     }
 
@@ -127,6 +135,22 @@ indirect enum PaneSplitNode: Equatable {
         }
     }
 
+    /// Remove several leaves at once and collapse the tree.
+    /// Returns nil when nothing is left.
+    func removingLeaves(ids targetIds: Set<Int>) -> PaneSplitNode? {
+        switch self {
+        case .leaf(let id, _):
+            return targetIds.contains(id) ? nil : self
+        case .split(let axis, let ratio, let first, let second):
+            switch (first.removingLeaves(ids: targetIds), second.removingLeaves(ids: targetIds)) {
+            case (nil, nil): return nil
+            case (nil, let remaining?): return remaining
+            case (let remaining?, nil): return remaining
+            case (let f?, let s?): return .split(axis: axis, ratio: ratio, first: f, second: s)
+            }
+        }
+    }
+
     /// Update the ratio for a split identified by its first child's first leaf ID.
     func settingRatio(_ newRatio: CGFloat, forSplitIdentifiedByFirstLeaf targetLeafId: Int) -> PaneSplitNode {
         switch self {
@@ -223,29 +247,35 @@ indirect enum PaneSplitNode: Equatable {
 
     // MARK: - Codable Persistence
 
+    /// Leaf IDs are written to disk. They are the handles the daemon's grid protocol
+    /// addresses panes by, so a restart that renumbered them would silently retarget
+    /// every in-flight `pu grid` command.
     func toLayoutNode() -> GridLayoutNode {
         switch self {
-        case .leaf(_, let agentId):
-            return GridLayoutNode(type: .leaf, agentId: agentId, axis: nil, ratio: nil, first: nil, second: nil)
+        case .leaf(let id, let agentId):
+            return GridLayoutNode(
+                type: .leaf, leafId: id, agentId: agentId, axis: nil, ratio: nil, first: nil, second: nil)
         case .split(let axis, let ratio, let first, let second):
             return GridLayoutNode(
-                type: .split, agentId: nil, axis: axis, ratio: ratio, first: first.toLayoutNode(),
+                type: .split, leafId: nil, agentId: nil, axis: axis, ratio: ratio, first: first.toLayoutNode(),
                 second: second.toLayoutNode())
         }
     }
 
+    /// Rebuild a tree from disk. Persisted leaf IDs are reused; `nextId` only supplies
+    /// IDs for legacy files written before leaf IDs were stored.
     static func fromLayoutNode(_ node: GridLayoutNode, nextId: inout Int) -> PaneSplitNode {
         switch node.type {
         case .leaf:
-            let id = nextId
-            nextId += 1
+            let id = node.leafId ?? nextId
+            nextId = max(nextId, id + 1)
             return .leaf(id: id, agentId: node.agentId)
         case .split:
             guard let axis = node.axis, let ratio = node.ratio,
                 let first = node.first, let second = node.second
             else {
-                let id = nextId
-                nextId += 1
+                let id = node.leafId ?? nextId
+                nextId = max(nextId, id + 1)
                 return .leaf(id: id, agentId: nil)
             }
             return .split(

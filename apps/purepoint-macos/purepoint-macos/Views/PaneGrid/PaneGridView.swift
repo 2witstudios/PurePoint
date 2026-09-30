@@ -1,19 +1,24 @@
 import SwiftUI
 
-/// Recursively renders a PaneSplitNode tree as nested draggable split views.
+/// Recursively renders a workspace's PaneSplitNode tree as nested draggable split views.
 struct PaneGridView: View {
-    @Environment(GridState.self) private var gridState
+    let workspaceId: String
+    @Environment(WorkspaceRegistry.self) private var registry
 
     var body: some View {
-        rootView(gridState.root)
+        if let workspace = registry.workspace(id: workspaceId) {
+            rootView(workspace)
+        } else {
+            Color.clear
+        }
     }
 
     /// Always returns AnyView(DraggableSplit<AnyView, AnyView>) so the
     /// wrapped type never changes when root transitions between .split
     /// and .leaf (e.g. 2->1 pane close), preventing SwiftUI from destroying
     /// and recreating the entire view hierarchy.
-    private func rootView(_ node: PaneSplitNode) -> AnyView {
-        switch node {
+    private func rootView(_ workspace: Workspace) -> AnyView {
+        switch workspace.root {
         case .leaf(let id, let agentId):
             return AnyView(
                 DraggableSplit(
@@ -23,9 +28,10 @@ struct PaneGridView: View {
                 ) {
                     AnyView(
                         PaneCellView(
+                            workspaceId: workspaceId,
                             leafId: id,
                             agentId: agentId,
-                            isFocused: id == gridState.focusedLeafId
+                            isFocused: id == workspace.focusedLeafId
                         )
                     )
                 } second: {
@@ -33,19 +39,20 @@ struct PaneGridView: View {
                 }
             )
         case .split:
-            return nodeView(node)
+            return nodeView(workspace.root, focusedLeafId: workspace.focusedLeafId)
         }
     }
 
     /// Uses AnyView to break the recursive opaque return type inference.
-    private func nodeView(_ node: PaneSplitNode) -> AnyView {
+    private func nodeView(_ node: PaneSplitNode, focusedLeafId: Int) -> AnyView {
         switch node {
         case .leaf(let id, let agentId):
             return AnyView(
                 PaneCellView(
+                    workspaceId: workspaceId,
                     leafId: id,
                     agentId: agentId,
-                    isFocused: id == gridState.focusedLeafId
+                    isFocused: id == focusedLeafId
                 )
             )
 
@@ -55,12 +62,13 @@ struct PaneGridView: View {
                 DraggableSplit(
                     axis: axis, ratio: ratio,
                     onRatioChanged: { newRatio in
-                        gridState.updateRatio(newRatio, forSplitIdentifiedByFirstLeaf: splitId)
+                        registry.setRatio(
+                            newRatio, workspaceId: workspaceId, forSplitIdentifiedByFirstLeaf: splitId)
                     }
                 ) {
-                    nodeView(first)
+                    nodeView(first, focusedLeafId: focusedLeafId)
                 } second: {
-                    nodeView(second)
+                    nodeView(second, focusedLeafId: focusedLeafId)
                 }
             )
         }

@@ -53,7 +53,7 @@ enum Commands {
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
-        /// Skip auto-mode flags (--dangerously-skip-permissions, --full-auto, etc.)
+        /// Skip auto-mode flags (--dangerously-skip-permissions, --sandbox, etc.)
         #[arg(long)]
         no_auto: bool,
         /// Extra CLI flags passed directly to the agent (space-separated)

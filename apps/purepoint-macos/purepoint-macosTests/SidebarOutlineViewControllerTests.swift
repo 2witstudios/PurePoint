@@ -19,7 +19,7 @@ private func makeSidebarAgent(id: String) -> AgentModel {
 
 @MainActor
 private func makeSidebarProject(root: String, worktreeCount: Int) -> ProjectState {
-    let project = ProjectState(projectRoot: root, service: SidebarTestWorkspaceService(), gridState: nil)
+    let project = ProjectState(projectRoot: root, service: SidebarTestWorkspaceService(), registry: nil)
     project.worktrees = (0..<worktreeCount).map { index in
         WorktreeModel(
             id: "wt-\(index)",

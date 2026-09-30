@@ -1,11 +1,11 @@
 import SwiftUI
 
 /// NSViewControllerRepresentable wrapping SidebarOutlineViewController.
-/// Bridges SwiftUI state (selection, appState, gridState) to the AppKit outline view.
+/// Bridges SwiftUI state (selection, appState, workspace registry) to the AppKit outline view.
 struct SidebarOutlineView: NSViewControllerRepresentable {
     @Binding var selection: SidebarSelection?
     var appState: AppState
-    var gridState: GridState
+    var registry: WorkspaceRegistry
     var viewCache: TerminalViewCache
     var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
@@ -36,9 +36,12 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             project.createAgent(agent: "terminal", prompt: "", selection: .worktree(worktree.id))
         }
 
-        vc.onKillAgent = { [viewCache] project, agentId in
-            viewCache.remove(agentId: agentId)
-            project.killAgent(agentId)
+        vc.onKillWorkspace = { [viewCache, registry] project, workspaceId in
+            guard let workspace = registry.workspace(id: workspaceId) else { return }
+            for agentId in workspace.agentIds {
+                viewCache.remove(agentId: agentId)
+                project.killAgent(agentId)
+            }
         }
 
         vc.onKillWorktreeAgents = { [viewCache] project, worktreeId in
@@ -90,10 +93,9 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
     }
 
     func updateNSViewController(_ vc: SidebarOutlineViewController, context: Context) {
-        // Update grid state
-        vc.gridOwnerAgentId = gridState.ownerAgentId
-        vc.hiddenAgentIds = gridState.childAgentIds
-        vc.gridProjectRoot = gridState.projectRoot
+        // The canonical workspace list is the sidebar's only input.
+        vc.workspacesByProject = registry.workspacesByProject
+        vc.activeWorkspaceId = registry.activeWorkspaceId
 
         // Rebuild tree when data changes
         vc.rebuildNodes(projects: appState.projects)

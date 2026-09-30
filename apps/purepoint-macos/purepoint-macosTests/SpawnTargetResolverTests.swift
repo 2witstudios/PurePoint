@@ -14,7 +14,7 @@ struct SpawnTargetResolverTests {
         SpawnTargetResolver.resolve(
             isWorktree: isWorktree,
             selection: selection,
-            worktreeIdForAgent: { knownWorktrees[$0] }
+            worktreeIdForWorkspace: { knownWorktrees[$0] }
         )
     }
 
@@ -36,32 +36,17 @@ struct SpawnTargetResolverTests {
         #expect(target.worktree == "wt1")
     }
 
-    @Test func agentSelectionWithKnownWorktreeReturnsWorktreeId() {
+    @Test func workspaceSelectionInWorktreeSpawnsIntoThatWorktree() {
         let target = resolve(
-            selection: .agent("a1"),
-            knownWorktrees: ["a1": "wt-matched"]
+            selection: .workspace("ws-1"),
+            knownWorktrees: ["ws-1": "wt-matched"]
         )
         #expect(target.root == false)
         #expect(target.worktree == "wt-matched")
     }
 
-    @Test func agentSelectionWithNoWorktreeReturnsRoot() {
-        let target = resolve(selection: .agent("a1"))
-        #expect(target.root == true)
-        #expect(target.worktree == nil)
-    }
-
-    @Test func terminalSelectionWithKnownWorktreeReturnsWorktreeId() {
-        let target = resolve(
-            selection: .terminal("a1"),
-            knownWorktrees: ["a1": "wt-matched"]
-        )
-        #expect(target.root == false)
-        #expect(target.worktree == "wt-matched")
-    }
-
-    @Test func terminalSelectionWithNoWorktreeReturnsRoot() {
-        let target = resolve(selection: .terminal("a1"))
+    @Test func workspaceSelectionInProjectRootSpawnsAtRoot() {
+        let target = resolve(selection: .workspace("ws-1"))
         #expect(target.root == true)
         #expect(target.worktree == nil)
     }

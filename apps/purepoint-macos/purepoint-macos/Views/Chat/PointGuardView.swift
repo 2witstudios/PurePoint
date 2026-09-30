@@ -102,7 +102,7 @@ struct PointGuardView: View {
                 cmd = "claude --resume \(session.sessionId)"
             }
         case .codex:
-            cmd = "codex --full-auto resume \(session.sessionId)"
+            cmd = "codex -s workspace-write -a on-request resume \(session.sessionId)"
         case .opencode:
             cmd = "opencode --session \(session.sessionId)"
         }

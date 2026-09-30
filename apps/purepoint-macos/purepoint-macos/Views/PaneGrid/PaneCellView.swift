@@ -4,12 +4,16 @@ import SwiftUI
 /// Hover detection lives on the outer ZStack (backed by the opaque terminal),
 /// so the overlay never intercepts clicks meant for the terminal.
 struct PaneCellView: View {
+    let workspaceId: String
     let leafId: Int
     let agentId: String?
     let isFocused: Bool
     @State private var isHovered = false
     @Environment(AppState.self) private var appState
-    @Environment(GridState.self) private var gridState
+    @Environment(WorkspaceRegistry.self) private var registry
+    @Environment(TerminalViewCache.self) private var viewCache
+
+    private var workspace: Workspace? { registry.workspace(id: workspaceId) }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -17,17 +21,17 @@ struct PaneCellView: View {
                 TerminalContainerView(
                     agent: agent,
                     isFocused: isFocused,
-                    onFocus: { gridState.focusedLeafId = leafId }
+                    onFocus: { registry.setFocus(workspaceId: workspaceId, leafId: leafId) }
                 )
             } else {
-                PanePlaceholderView(leafId: leafId)
+                PanePlaceholderView(workspaceId: workspaceId, leafId: leafId)
                     .onTapGesture {
-                        gridState.focusedLeafId = leafId
+                        registry.setFocus(workspaceId: workspaceId, leafId: leafId)
                     }
             }
 
-            // Focus indicator bar
-            if isFocused {
+            // Focus indicator bar — only meaningful once the workspace has more than one pane.
+            if isFocused, (workspace?.paneCount ?? 1) > 1 {
                 VStack {
                     Rectangle()
                         .fill(Color.accentColor)
@@ -38,26 +42,21 @@ struct PaneCellView: View {
             }
 
             // Hover buttons (split/close)
-            if isHovered {
+            if isHovered, let workspace {
                 HStack(spacing: 4) {
-                    if gridState.canSplit(axis: .vertical) {
+                    if workspace.root.canSplit(axis: .vertical) {
                         OverlayButton(icon: "rectangle.split.2x1", tooltip: "Split Right") {
-                            gridState.focusedLeafId = leafId
-                            gridState.splitFocused(axis: .vertical)
-                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
+                            split(axis: .vertical)
                         }
                     }
-                    if gridState.canSplit(axis: .horizontal) {
+                    if workspace.root.canSplit(axis: .horizontal) {
                         OverlayButton(icon: "rectangle.split.1x2", tooltip: "Split Below") {
-                            gridState.focusedLeafId = leafId
-                            gridState.splitFocused(axis: .horizontal)
-                            gridState.pendingPaletteLeafId = gridState.focusedLeafId
+                            split(axis: .horizontal)
                         }
                     }
-                    if gridState.leafCount > 1 {
+                    if workspace.paneCount > 1 {
                         OverlayButton(icon: "xmark", tooltip: "Close Pane") {
-                            gridState.focusedLeafId = leafId
-                            gridState.closeFocused()
+                            closePane()
                         }
                     }
                 }
@@ -73,13 +72,27 @@ struct PaneCellView: View {
             }
         }
     }
+
+    private func split(axis: PaneSplitNode.Axis) {
+        registry.setFocus(workspaceId: workspaceId, leafId: leafId)
+        registry.split(workspaceId: workspaceId, leafId: leafId, axis: axis)
+        registry.pendingPaletteLeafId = registry.workspace(id: workspaceId)?.focusedLeafId
+    }
+
+    private func closePane() {
+        if let agentId {
+            viewCache.remove(agentId: agentId)
+        }
+        registry.closePane(workspaceId: workspaceId, leafId: leafId)
+    }
 }
 
 /// Placeholder shown in empty panes — opens command palette to spawn a new agent.
 private struct PanePlaceholderView: View {
+    let workspaceId: String
     let leafId: Int
     @Environment(AppState.self) private var appState
-    @Environment(GridState.self) private var gridState
+    @Environment(WorkspaceRegistry.self) private var registry
 
     var body: some View {
         VStack(spacing: 12) {
@@ -99,8 +112,8 @@ private struct PanePlaceholderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            if gridState.pendingPaletteLeafId == leafId {
-                gridState.pendingPaletteLeafId = nil
+            if registry.pendingPaletteLeafId == leafId {
+                registry.pendingPaletteLeafId = nil
                 // Defer so the view is laid out before the panel appears
                 DispatchQueue.main.async {
                     openCommandPalette()
@@ -111,7 +124,8 @@ private struct PanePlaceholderView: View {
 
     private func openCommandPalette() {
         let state = appState
-        let gs = gridState
+        let reg = registry
+        let wsId = workspaceId
         let lid = leafId
         let hub = state.agentsHubState
         let items = CommandPaletteItem.buildItems(
@@ -122,16 +136,19 @@ private struct PanePlaceholderView: View {
         Task { await hub.loadAll(projectRoots: state.projects.map(\.projectRoot)) }
 
         CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
-            let project = state.projectState(forRoot: gs.projectRoot ?? "")
+            guard let projectRoot = reg.projectRoot(forWorkspace: wsId),
+                let project = state.projectState(forRoot: projectRoot)
+            else { return }
+
             switch result {
             case .spawnBuiltIn(let variant, let prompt, _):
-                project?.spawnAgentForPane(agent: variant.id, prompt: prompt ?? "", leafId: lid, gridState: gs)
+                project.spawnAgentForPane(
+                    agent: variant.id, prompt: prompt ?? "", workspaceId: wsId, leafId: lid)
             case .spawnAgentDef(let def, let prompt):
-                project?.spawnAgentForPane(
-                    agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "", leafId: lid, gridState: gs)
-            case .runSwarm:
-                break
-            case .createWorktree:
+                project.spawnAgentForPane(
+                    agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "",
+                    workspaceId: wsId, leafId: lid)
+            case .runSwarm, .createWorktree:
                 break
             }
         }
