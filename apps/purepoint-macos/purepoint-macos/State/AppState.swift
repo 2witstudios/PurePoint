@@ -240,3 +240,16 @@ final class AppState {
         }
     }
 }
+
+extension AppState {
+    /// The directory a workspace's file panes are rooted at: its worktree, else the project root.
+    func fileRoot(forWorkspace workspaceId: String, registry: WorkspaceRegistry) -> String? {
+        guard let projectRoot = registry.projectRoot(forWorkspace: workspaceId) else { return nil }
+        if let worktreeId = registry.workspace(id: workspaceId)?.container.worktreeId,
+            let path = projectState(forRoot: projectRoot)?.worktrees.first(where: { $0.id == worktreeId })?.path
+        {
+            return path
+        }
+        return projectRoot
+    }
+}

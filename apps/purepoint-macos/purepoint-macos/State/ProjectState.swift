@@ -229,6 +229,8 @@ final class ProjectState: Identifiable {
             Task { await hub.runSwarm(projectRoot: root, name: def.name) }
         case .createWorktree(let name):
             createWorktree(name: name)
+        case .openFilePane:
+            break  // Only offered by pane-targeted palettes, which handle it themselves.
         }
     }
 

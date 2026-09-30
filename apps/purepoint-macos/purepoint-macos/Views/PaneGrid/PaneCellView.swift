@@ -15,12 +15,20 @@ struct PaneCellView: View {
 
     private var workspace: Workspace? { registry.workspace(id: workspaceId) }
 
+    private var fileRootPath: String? { appState.fileRoot(forWorkspace: workspaceId, registry: registry) }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             if let agentId, let agent = appState.agent(byId: agentId) {
                 TerminalContainerView(
                     agent: agent,
                     isFocused: isFocused,
+                    onFocus: { registry.setFocus(workspaceId: workspaceId, leafId: leafId) }
+                )
+            } else if let config = workspace?.filePanes[leafId], let rootPath = fileRootPath {
+                FilePaneView(
+                    workspaceId: workspaceId, leafId: leafId, rootPath: rootPath,
+                    initialPath: config.openPath,
                     onFocus: { registry.setFocus(workspaceId: workspaceId, leafId: leafId) }
                 )
             } else {
@@ -102,7 +110,7 @@ private struct PanePlaceholderView: View {
             Text("Empty Pane")
                 .font(.title3)
                 .foregroundStyle(.tertiary)
-            Text("Spawn a new agent")
+            Text("Spawn a new agent, or open files")
                 .font(.caption)
                 .foregroundStyle(.quaternary)
             Button("New Agent\u{2026}") {
@@ -128,13 +136,24 @@ private struct PanePlaceholderView: View {
         let wsId = workspaceId
         let lid = leafId
         let hub = state.agentsHubState
-        let items = CommandPaletteItem.buildItems(
-            builtInVariants: AgentVariant.allVariants,
-            agents: hub.agents,
-            swarms: []
-        )
+        let rootPath = state.fileRoot(forWorkspace: wsId, registry: reg)
         Task { await hub.loadAll(projectRoots: state.projects.map(\.projectRoot)) }
+        Task {
+            let files = await Task.detached { rootPath.map { FileIndex.list(root: $0) } ?? [] }.value
+            let items = CommandPaletteItem.buildItems(
+                builtInVariants: AgentVariant.allVariants,
+                agents: hub.agents,
+                swarms: [],
+                includeFiles: true,
+                files: files
+            )
+            showPalette(items: items, state: state, reg: reg, wsId: wsId, lid: lid)
+        }
+    }
 
+    private func showPalette(
+        items: [CommandPaletteItem], state: AppState, reg: WorkspaceRegistry, wsId: String, lid: Int
+    ) {
         CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
             guard let projectRoot = reg.projectRoot(forWorkspace: wsId),
                 let project = state.projectState(forRoot: projectRoot)
@@ -150,6 +169,8 @@ private struct PanePlaceholderView: View {
                     workspaceId: wsId, leafId: lid)
             case .runSwarm, .createWorktree:
                 break
+            case .openFilePane(let path):
+                reg.openFilePane(workspaceId: wsId, leafId: lid, path: path)
             }
         }
     }

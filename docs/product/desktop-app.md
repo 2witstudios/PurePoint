@@ -44,3 +44,4 @@ Desktop App
 ! [APP-007] Triggers: Event-driven automation via TriggersState. Supports agent_idle, pre_commit, pre_push events. Each trigger defines a sequence of actions (inject prompts, run gates). Managed via daemon IPC.
 
 ! [APP-006] NSOutlineView sidebar: Replaced SwiftUI List with AppKit NSOutlineView for compact 24pt rows. SidebarOutlineViewController manages outline data source.
+! [APP-008] Files pane: a pane can show a file navigator + editor instead of a terminal. Offered in the pane palette as "Files", and as per-file items once a query is typed. Rooted at the workspace worktree (else project root). Markdown files toggle Code/Preview (WKWebView, JS disabled, `MarkdownHTMLRenderer`). Stored in `Workspace.filePanes` (leaf id → open path) beside the agent-only split tree; persisted as optional `filePanes` in `.pu/workspaces.json`.

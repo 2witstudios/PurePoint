@@ -39,6 +39,14 @@ nonisolated struct PersistedWorkspace: Codable, Sendable {
     let focusedLeafId: Int
     let nextLeafId: Int
     let tree: GridLayoutNode
+    /// Optional so documents written before file panes existed still decode.
+    let filePanes: [PersistedFilePane]?
+}
+
+/// A file pane's leaf and the file it had open.
+nonisolated struct PersistedFilePane: Codable, Sendable, Equatable {
+    let leafId: Int
+    let path: String?
 }
 
 /// The whole per-project layout document. This file is the only place pane grouping
@@ -82,7 +90,10 @@ nonisolated enum WorkspacePersistence {
                     worktreeId: workspace.container.worktreeId,
                     focusedLeafId: workspace.focusedLeafId,
                     nextLeafId: workspace.nextLeafId,
-                    tree: workspace.root.toLayoutNode()
+                    tree: workspace.root.toLayoutNode(),
+                    filePanes: workspace.filePanes.keys.sorted().map {
+                        PersistedFilePane(leafId: $0, path: workspace.filePanes[$0]?.openPath)
+                    }
                 )
             }
         )
@@ -117,7 +128,10 @@ nonisolated enum WorkspacePersistence {
             container: persisted.worktreeId.map { .worktree($0) } ?? .projectRoot,
             root: root,
             focusedLeafId: persisted.focusedLeafId,
-            nextLeafId: nextId
+            nextLeafId: nextId,
+            filePanes: Dictionary(
+                (persisted.filePanes ?? []).map { ($0.leafId, FilePaneConfig(openPath: $0.path)) },
+                uniquingKeysWith: { first, _ in first })
         )
         workspace.normalize()
         return workspace

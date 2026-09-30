@@ -17,7 +17,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | AgentVariant.swift | Struct with Kind enum (.agent, .terminal, .worktree) — static properties for built-in variants (Claude, Codex, etc.) with icon/subtitle |
 | AgentsHubModels.swift | SavedPrompt, AgentDefinition, SwarmDefinition — hub library types |
 | ChatMessage.swift | ChatMessage, ContentBlock, ToolUseStatus, PulseEvent, PulseSummary |
-| CommandPaletteItem.swift | Enum: .builtIn(AgentVariant), .agentDef(AgentDefinition), .swarm(SwarmDefinition) — palette items with displayName/icon |
+| CommandPaletteItem.swift | Enum: .builtIn(AgentVariant), .agentDef(AgentDefinition), .swarm(SwarmDefinition), .files, .file(PaletteFileEntry) — palette items with displayName/icon |
 | ContentBlockSplitter.swift | Parse streamed content into code blocks, text, tool calls |
 | Conversation.swift | Multi-agent session metadata (sessionId, AgentSource, title, projectPath, gitBranch, timestamps) — supports Claude, Codex, OpenCode |
 | DiffModel.swift | Git diff representation |
@@ -92,7 +92,9 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 |---|---|
 | DraggableSplit.swift | Draggable split handle for pane resizing |
 | WorkspacePersistence.swift | Workspace layout save/load (`.pu/workspaces.json`), including migration from the legacy `grid-layout.json` |
-| PaneCellView.swift | Individual pane cell in grid |
+| PaneCellView.swift | Individual pane cell in grid (terminal, file pane, or placeholder) |
+| FilePaneView.swift | File navigator + editor pane; Code/Preview toggle for markdown |
+| MarkdownPreviewView.swift | WKWebView rendered markdown preview (JS disabled) |
 | PaneGridView.swift | Pane grid system (split layout) |
 | PaneSplitNode.swift | Recursive binary split node (indirect enum) |
 
@@ -196,3 +198,10 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | WorktreeNameNormalizer.swift | Normalize worktree names for safe display |
 
 ## Total: 121 Swift files
+
+## Services — Files pane
+
+| File | Purpose |
+|---|---|
+| FileIndex.swift | Bounded flat file listing for palette file search |
+| MarkdownHTMLRenderer.swift | Dependency-free markdown → HTML (escapes all input) |
