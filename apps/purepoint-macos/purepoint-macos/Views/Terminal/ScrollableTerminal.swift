@@ -15,6 +15,9 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     private var mouseMonitor: Any?
     private var dragAutoscrollTimer: DispatchSourceTimer?
     private var lastDragEvent: NSEvent?
+    /// True only between a mouse-down that hit this terminal and the matching mouse-up,
+    /// when SwiftTerm (not the app) owns the drag.
+    private var nativeDragActive = false
     private var lastKnownTerminalViewSize: CGSize = .zero
     private var accumulatedDelta: CGFloat = 0
     private var lastScrollDirection: Bool?
@@ -77,6 +80,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         tornDown = true
         scrollFlushTimer?.cancel()
         scrollFlushTimer = nil
+        nativeDragActive = false
         stopDragAutoscroll()
         if let mouseMonitor {
             NSEvent.removeMonitor(mouseMonitor)
@@ -201,6 +205,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     private func handleMouseEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:
+            nativeDragActive = false
             guard let window = event.window,
                 let hit = window.contentView?.hitTest(event.locationInWindow),
                 hit === terminalView || hit.isDescendant(of: terminalView)
@@ -210,10 +215,12 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
                 term.isCurrentBufferAlternate && term.mouseMode != .off
                 && !event.modifierFlags.contains(.option)
             terminalView.allowMouseReporting = appOwnsSelection
+            nativeDragActive = !appOwnsSelection
         case .leftMouseDragged:
-            guard !terminalView.allowMouseReporting, terminalView.window === event.window else { return }
+            guard nativeDragActive else { return }
             updateDragAutoscroll(for: event)
         case .leftMouseUp:
+            nativeDragActive = false
             stopDragAutoscroll()
         default:
             break
