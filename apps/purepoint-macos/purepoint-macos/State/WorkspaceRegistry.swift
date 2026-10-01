@@ -262,8 +262,12 @@ final class WorkspaceRegistry {
             let index = list.firstIndex(where: { $0.id == workspaceId })
         else { return }
 
+        let before = list[index]
         body(&list[index])
         list[index].normalize()
+        // Writing observed state invalidates every view that reads it, so skip no-ops
+        // (e.g. focusing the pane that is already focused).
+        guard list[index] != before else { return }
         workspacesByProject[projectRoot] = list
         scheduleSave(projectRoot: projectRoot)
     }

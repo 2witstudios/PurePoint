@@ -99,6 +99,29 @@ impl Engine {
         }
     }
 
+    /// Push a status update when an agent's process exits on its own. Without
+    /// this, subscribers keep showing the agent as running and clients keep
+    /// trying to reattach to it.
+    pub(super) fn notify_status_on_exit(
+        &self,
+        project_root: &str,
+        mut exit_rx: tokio::sync::watch::Receiver<Option<i32>>,
+    ) {
+        let status_channels = self.status_channels.clone();
+        let project_root = project_root.to_string();
+        tokio::spawn(async move {
+            // A dropped sender also means the process is gone.
+            while exit_rx.borrow_and_update().is_none() {
+                if exit_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+            if let Some(tx) = status_channels.lock().await.get(&project_root) {
+                let _ = tx.send(());
+            }
+        });
+    }
+
     /// Compute a full status report for a project (used by status push and handle_status).
     pub async fn compute_full_status(
         &self,

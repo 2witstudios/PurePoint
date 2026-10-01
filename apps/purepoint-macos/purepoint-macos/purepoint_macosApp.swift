@@ -27,6 +27,9 @@ struct purepoint_macosApp: App {
                 )
                 .onAppear {
                     appState.registry = registry
+                    viewCache.agentStatus = { [weak appState] agentId in
+                        appState?.agent(byId: agentId)?.status
+                    }
                     registry.onCloseAgent = { [viewCache] projectRoot, agentId in
                         viewCache.remove(agentId: agentId)
                         appState.projectState(forRoot: projectRoot)?.removeAndKillAgent(agentId)

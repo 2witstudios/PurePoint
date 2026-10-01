@@ -10,8 +10,13 @@ struct DraggableSplit<First: View, Second: View>: View {
     @ViewBuilder let second: () -> Second
 
     private let dividerThickness: CGFloat = 4
+    /// Live ratio while dragging. Committed through `onRatioChanged` only when
+    /// the drag ends: each commit rewrites the workspace registry, which every
+    /// pane, the sidebar and the menus observe.
+    @State private var dragRatio: CGFloat?
 
     var body: some View {
+        let ratio = dragRatio ?? self.ratio
         GeometryReader { geo in
             let isVertical = axis == .vertical
             let total = isVertical ? geo.size.width : geo.size.height
@@ -62,8 +67,13 @@ struct DraggableSplit<First: View, Second: View>: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         let position = isVertical ? value.location.x : value.location.y
-                        let clamped = max(0.1, min(0.9, position / total))
-                        onRatioChanged(clamped)
+                        dragRatio = max(0.1, min(0.9, position / total))
+                    }
+                    .onEnded { _ in
+                        if let dragRatio {
+                            onRatioChanged(dragRatio)
+                        }
+                        dragRatio = nil
                     }
             )
     }

@@ -12,13 +12,27 @@ actor DaemonAttachSession {
     private var connection: NWConnection?
     private var stopped = false
     private(set) var isAgentGone = false
+    /// True once the daemon closed an attached stream on its own, which it does
+    /// when the agent's process exits. Callers must not blindly reattach: each
+    /// attach replays the agent's whole output buffer.
+    private(set) var didStreamEnd = false
     private var onFirstOutput: (() -> Void)?
-    private var lastFullRefreshAtNanos: UInt64 = 0
-    private static let fullRefreshIntervalNanos: UInt64 = 200_000_000  // 200ms
+    /// The daemon replays its whole buffer on every attach, so a terminal that
+    /// already shows output must be reset first or the scrollback duplicates.
+    private var resetBeforeReplay: Bool
+    /// Mirrors the terminal's row count so the output filter doesn't need a
+    /// main-thread hop per chunk. Updated on every resize.
+    private var termRows = 24
 
-    init(agentId: String, terminalView: TerminalView, onFirstOutput: (() -> Void)? = nil) {
+    init(
+        agentId: String,
+        terminalView: TerminalView,
+        resetBeforeReplay: Bool = false,
+        onFirstOutput: (() -> Void)? = nil
+    ) {
         self.agentId = agentId
         self.terminalView = terminalView
+        self.resetBeforeReplay = resetBeforeReplay
         self.onFirstOutput = onFirstOutput
     }
 
@@ -38,6 +52,11 @@ actor DaemonAttachSession {
                 // Normal exit (agent completed) — don't reconnect
                 break
             } catch is CancellationError {
+                break
+            } catch DaemonAttachError.streamEnded {
+                // Daemon closed the stream after the agent exited — everything
+                // has been delivered. Reattaching would only replay it.
+                didStreamEnd = true
                 break
             } catch DaemonAttachError.agentGone {
                 print("[DaemonAttach \(agentId.prefix(8))] agent gone — stopping retries")
@@ -66,6 +85,7 @@ actor DaemonAttachSession {
 
     /// Send resize notification to the daemon. Awaiting ensures actor serializes writes.
     func sendResize(cols: Int, rows: Int) async {
+        if rows > 0 { termRows = rows }
         guard let conn = connection else { return }
         try? await DaemonClient.write(.resize(agentId: agentId, cols: cols, rows: rows), to: conn)
     }
@@ -116,6 +136,7 @@ actor DaemonAttachSession {
             let term = tv.getTerminal()
             return (term.cols, term.rows)
         }
+        if initialRows > 0 { termRows = initialRows }
         if initialCols > 0 && initialRows > 0 {
             try await DaemonClient.write(
                 .resize(agentId: agentId, cols: initialCols, rows: initialRows),
@@ -124,29 +145,38 @@ actor DaemonAttachSession {
         }
 
         // Stream loop
+        var isFirstChunk = true
         while !stopped {
-            let line = try await reader.readLine()
+            let line: Data
+            do {
+                line = try await reader.readLine()
+            } catch DaemonClientError.eof {
+                throw DaemonAttachError.streamEnded
+            }
             let response = DaemonClient.parse(line)
 
             switch response {
             case .output(_, let data):
                 guard !data.isEmpty else { continue }
-                let now = DispatchTime.now().uptimeNanoseconds
                 if let cb = onFirstOutput {
                     onFirstOutput = nil
                     print("[DaemonAttach \(agentId.prefix(8))] first output: \(data.count) bytes")
                     await MainActor.run { cb() }
                 }
-                let shouldForceFullRefresh = now &- lastFullRefreshAtNanos >= Self.fullRefreshIntervalNanos
-                if shouldForceFullRefresh {
-                    lastFullRefreshAtNanos = now
+                let filtered = Self.filterTerminalOutput([UInt8](data), maxRows: termRows)
+                let reset = isFirstChunk && resetBeforeReplay
+                if isFirstChunk {
+                    isFirstChunk = false
+                    // A retry within this session replays from the start again.
+                    resetBeforeReplay = true
                 }
-                let bytes = [UInt8](data)
-                let termRows = await MainActor.run { tv?.getTerminal().rows ?? 24 }
-                let filtered = Self.filterTerminalOutput(bytes, maxRows: termRows)
                 await MainActor.run {
                     guard let tv else { return }
                     let term = tv.getTerminal()
+                    if reset {
+                        // RIS: full reset, clears the screen and scrollback before the replay.
+                        tv.feed(byteArray: [0x1b, 0x63])
+                    }
 
                     // SwiftTerm's own "stay put while the user has scrolled up" logic
                     // (Terminal.scroll(), gated on an internal userScrolling flag) is never
@@ -157,9 +187,11 @@ actor DaemonAttachSession {
                     // setter skips the refresh/dirty-row/scroller bookkeeping that
                     // scrollUp/scrollDown perform.
                     let priorYDisp = term.buffer.yDisp
-                    let wasScrolledAway = !term.isCurrentBufferAlternate && priorYDisp > 0
+                    // scrollPosition is 1 at the live tail (yBase is internal to SwiftTerm).
+                    let wasScrolledAway =
+                        !term.isCurrentBufferAlternate && tv.canScroll && tv.scrollPosition < 1
 
-                    tv.feed(byteArray: ArraySlice(filtered))
+                    tv.feed(byteArray: filtered[...])
 
                     if wasScrolledAway {
                         let delta = term.buffer.yDisp - priorYDisp
@@ -169,16 +201,8 @@ actor DaemonAttachSession {
                             tv.scrollDown(lines: -delta)
                         }
                     }
-
-                    // DEBUG: Log terminal buffer state to find desync
-                    let buf = term.buffer
-                    if buf.y == 0 && buf.yDisp > 0 {
-                        // swiftlint:disable:next line_length
-                        print(
-                            "[TermDBG] CURSOR AT TOP: y=\(buf.y) x=\(buf.x) yDisp=\(buf.yDisp) scrollTop=\(buf.scrollTop) scrollBottom=\(buf.scrollBottom) rows=\(term.rows) cols=\(term.cols)"
-                        )
-                    }
-                    tv.needsDisplay = true
+                    // No needsDisplay here: SwiftTerm already invalidates just the
+                    // dirty rows. Marking the whole view forced a full redraw per chunk.
                 }
             case .error(let code, let message):
                 if code == "AGENT_NOT_FOUND" {
@@ -199,25 +223,33 @@ actor DaemonAttachSession {
     /// 2. Clamp CSI n A (cursor-up) sequences so n never exceeds viewport rows.
     ///    Ink's eraseLines() emits cursor-up counts that can exceed viewport height,
     ///    causing the cursor to overshoot row 0 and desync the buffer.
-    private static func filterTerminalOutput(_ bytes: [UInt8], maxRows: Int) -> [UInt8] {
-        let syncBegin: [UInt8] = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]
-        let syncEnd: [UInt8] = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]
+    static func filterTerminalOutput(_ bytes: [UInt8], maxRows: Int) -> [UInt8] {
+        // Both rewrites start with ESC; most chunks of plain text contain none.
+        guard bytes.contains(0x1b) else { return bytes }
+
+        // "\e[?2026" followed by h (begin) or l (end)
+        let syncPrefix: [UInt8] = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36]
         let maxUp = max(maxRows - 1, 1)
 
         var result: [UInt8] = []
         result.reserveCapacity(bytes.count)
         var i = 0
         while i < bytes.count {
+            guard bytes[i] == 0x1b else {
+                result.append(bytes[i])
+                i += 1
+                continue
+            }
             // Strip DEC 2026 begin/end (8 bytes each)
-            if i + 8 <= bytes.count {
-                let slice = Array(bytes[i..<i + 8])
-                if slice == syncBegin || slice == syncEnd {
-                    i += 8
-                    continue
-                }
+            if i + 8 <= bytes.count,
+                bytes[i..<i + 7].elementsEqual(syncPrefix),
+                bytes[i + 7] == 0x68 || bytes[i + 7] == 0x6c
+            {
+                i += 8
+                continue
             }
             // Clamp CSI n A (cursor up): \x1b [ <digits> A
-            if bytes[i] == 0x1b, i + 2 < bytes.count, bytes[i + 1] == 0x5b {
+            if i + 2 < bytes.count, bytes[i + 1] == 0x5b {
                 var j = i + 2
                 var digits = 0
                 var hasDigits = false
@@ -246,12 +278,14 @@ enum DaemonAttachError: Error, LocalizedError {
     case attachFailed(String)
     case unexpectedResponse
     case agentGone
+    case streamEnded
 
     var errorDescription: String? {
         switch self {
         case .attachFailed(let msg): "Attach failed: \(msg)"
         case .unexpectedResponse: "Unexpected response during attach"
         case .agentGone: "Agent no longer exists"
+        case .streamEnded: "Daemon ended the output stream"
         }
     }
 }

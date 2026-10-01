@@ -197,8 +197,8 @@ impl IpcServer {
 }
 
 async fn write_response(writer: &mut IpcWriter, response: &Response) -> std::io::Result<()> {
-    let json = serde_json::to_string(response)
+    let mut json = serde_json::to_vec(response)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    writer.write_all(json.as_bytes()).await?;
-    writer.write_all(b"\n").await
+    json.push(b'\n');
+    writer.write_all(&json).await
 }
