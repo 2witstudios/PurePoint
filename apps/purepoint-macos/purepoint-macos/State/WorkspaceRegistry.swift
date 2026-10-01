@@ -224,6 +224,11 @@ final class WorkspaceRegistry {
         publish(projectRoot: projectRoot, stored: stored, live: live)
     }
 
+    /// Show the file navigator in a pane (optionally opened on a file). No daemon involved.
+    func openFilePane(workspaceId: String, leafId: Int, path: String?) {
+        mutate(workspaceId) { $0.setFilePane(leafId: leafId, path: path) }
+    }
+
     func setRatio(_ ratio: CGFloat, workspaceId: String, forSplitIdentifiedByFirstLeaf leafId: Int) {
         mutate(workspaceId) { $0.setRatio(ratio, forSplitIdentifiedByFirstLeaf: leafId) }
     }

@@ -12,6 +12,12 @@ nonisolated enum WorkspaceContainer: Equatable, Hashable, Sendable {
     }
 }
 
+/// A leaf that shows the file navigator/editor instead of a terminal.
+/// `openPath` is the absolute path of the file to show; `nil` opens the navigator alone.
+nonisolated struct FilePaneConfig: Equatable, Sendable {
+    var openPath: String?
+}
+
 /// A workspace is the single unit of the UI: **one sidebar row, one pane layout.**
 ///
 /// This type is the reason panes can no longer decompose into loose sidebar items.
@@ -28,13 +34,20 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     var root: PaneSplitNode
     var focusedLeafId: Int
     var nextLeafId: Int
+    /// Leaves showing files rather than an agent, keyed by leaf ID. Kept beside the tree so
+    /// the tree's leaf shape (and every operation on it) stays agent-only.
+    var filePanes: [Int: FilePaneConfig]
 
-    init(id: String, container: WorkspaceContainer, root: PaneSplitNode, focusedLeafId: Int, nextLeafId: Int) {
+    init(
+        id: String, container: WorkspaceContainer, root: PaneSplitNode, focusedLeafId: Int, nextLeafId: Int,
+        filePanes: [Int: FilePaneConfig] = [:]
+    ) {
         self.id = id
         self.container = container
         self.root = root
         self.focusedLeafId = focusedLeafId
         self.nextLeafId = nextLeafId
+        self.filePanes = filePanes
     }
 
     /// A brand-new single-pane workspace holding one agent.
@@ -64,6 +77,8 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
 
     func contains(agentId: String) -> Bool { root.containsAgent(agentId) }
 
+    func isFilePane(leafId: Int) -> Bool { filePanes[leafId] != nil }
+
     // MARK: - Mutations
 
     mutating func split(leafId: Int, axis: PaneSplitNode.Axis, agentId: String? = nil) {
@@ -81,6 +96,7 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     /// panes cannot exist, so the caller drops the workspace instead.
     mutating func closePane(leafId: Int) -> String? {
         let occupant = root.agentId(forLeafId: leafId)
+        filePanes[leafId] = nil
         let sibling = root.siblingLeafId(of: leafId)
         guard let newRoot = root.removingLeaf(id: leafId) else { return occupant }
         root = newRoot
@@ -91,7 +107,15 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     }
 
     mutating func setAgent(_ agentId: String?, forLeafId leafId: Int) {
+        if agentId != nil { filePanes[leafId] = nil }
         root = root.settingAgent(agentId, forLeafId: leafId)
+    }
+
+    /// Turn a pane into a file pane. Refuses panes that hold an agent, so a file can never
+    /// silently displace a running terminal.
+    mutating func setFilePane(leafId: Int, path: String?) {
+        guard root.allLeafIds.contains(leafId), root.agentId(forLeafId: leafId) == nil else { return }
+        filePanes[leafId] = FilePaneConfig(openPath: path)
     }
 
     mutating func setRatio(_ ratio: CGFloat, forSplitIdentifiedByFirstLeaf leafId: Int) {
@@ -112,6 +136,8 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
             focusedLeafId = ids.first ?? 0
         }
         nextLeafId = max(nextLeafId, (ids.max() ?? -1) + 1)
+        let live = Set(ids)
+        filePanes = filePanes.filter { live.contains($0.key) && root.agentId(forLeafId: $0.key) == nil }
     }
 }
 

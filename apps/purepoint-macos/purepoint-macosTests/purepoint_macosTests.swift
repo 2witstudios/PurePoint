@@ -377,7 +377,8 @@ struct GridLayoutPersistenceTests {
             version: PersistedWorkspaceDocument.currentVersion,
             workspaces: [
                 PersistedWorkspace(
-                    id: "ws-owner", worktreeId: nil, focusedLeafId: 1, nextLeafId: 2, tree: tree.toLayoutNode())
+                    id: "ws-owner", worktreeId: nil, focusedLeafId: 1, nextLeafId: 2, tree: tree.toLayoutNode(),
+                    filePanes: nil)
             ])
         let data = try JSONEncoder().encode(persisted)
         let decoded = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
