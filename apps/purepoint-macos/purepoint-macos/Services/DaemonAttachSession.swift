@@ -147,7 +147,7 @@ actor DaemonAttachSession {
         // Stream loop
         var isFirstChunk = true
         while !stopped {
-            let line: String
+            let line: Data
             do {
                 line = try await reader.readLine()
             } catch DaemonClientError.eof {
@@ -187,7 +187,9 @@ actor DaemonAttachSession {
                     // setter skips the refresh/dirty-row/scroller bookkeeping that
                     // scrollUp/scrollDown perform.
                     let priorYDisp = term.buffer.yDisp
-                    let wasScrolledAway = !term.isCurrentBufferAlternate && priorYDisp < term.buffer.yBase
+                    // scrollPosition is 1 at the live tail (yBase is internal to SwiftTerm).
+                    let wasScrolledAway =
+                        !term.isCurrentBufferAlternate && tv.canScroll && tv.scrollPosition < 1
 
                     tv.feed(byteArray: filtered[...])
 
