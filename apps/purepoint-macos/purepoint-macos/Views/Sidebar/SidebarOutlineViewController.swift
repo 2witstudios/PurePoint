@@ -370,6 +370,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let label = NSTextField(labelWithString: state.title)
         label.font = .systemFont(ofSize: 11)
         label.lineBreakMode = .byTruncatingTail
+        label.identifier = Self.workspaceNameLabelId
         stack.addArrangedSubview(label)
 
         if state.paneCount > 1 {
@@ -700,6 +701,8 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         }
     }
 
+    private static let workspaceNameLabelId = NSUserInterfaceItemIdentifier("workspaceNameLabel")
+
     @objc private func contextRenameAgent(_ sender: NSMenuItem) {
         guard let node = contextClickedNode, case .workspace(let workspace) = node.kind else { return }
         let clickedRow = outlineView.row(forItem: node)
@@ -715,13 +718,27 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
         textField.isEditable = true
         textField.isSelectable = true
+        textField.isBezeled = false
+        textField.usesSingleLineMode = true
+        textField.focusRingType = .none
         textField.delegate = self
 
         // Defer so the context menu's focus-restoration teardown completes first.
         DispatchQueue.main.async { [weak self] in
-            guard self != nil else { return }
-            self?.view.window?.makeFirstResponder(textField)
-            textField.selectText(nil)
+            self?.beginFieldEditing(textField, retriesLeft: 2)
+        }
+    }
+
+    /// Make the field first responder and confirm a field editor is actually attached;
+    /// if something stole focus in the meantime, try again on the next tick.
+    private func beginFieldEditing(_ textField: NSTextField, retriesLeft: Int) {
+        guard editingTextField === textField, let window = view.window else { return }
+        window.makeFirstResponder(textField)
+        textField.selectText(nil)
+        if textField.currentEditor() == nil, retriesLeft > 0 {
+            DispatchQueue.main.async { [weak self] in
+                self?.beginFieldEditing(textField, retriesLeft: retriesLeft - 1)
+            }
         }
     }
 
@@ -730,11 +747,7 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         for subview in cellView.subviews {
             if let stack = subview as? NSStackView {
                 for arranged in stack.arrangedSubviews {
-                    if let tf = arranged as? NSTextField,
-                        tf.isKind(of: NSTextField.self),
-                        !tf.stringValue.isEmpty,
-                        tf.font?.pointSize == 11
-                    {
+                    if let tf = arranged as? NSTextField, tf.identifier == Self.workspaceNameLabelId {
                         return tf
                     }
                 }
