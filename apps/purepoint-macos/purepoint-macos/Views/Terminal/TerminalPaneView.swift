@@ -103,7 +103,7 @@ class TerminalPaneNSView: NSView {
                 startHeartbeat()
                 // New panes should be immediately interactive.
                 DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
+                    guard let self, !InlineRenameFocus.isActive else { return }
                     self.window?.makeFirstResponder(tv.terminalView)
                 }
             } else if let task = attachTask, task.isCancelled || isAttachDone, canReattach {
@@ -167,7 +167,7 @@ class TerminalPaneNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     func focusTerminal() {
-        guard let tv = terminal?.terminalView else { return }
+        guard !InlineRenameFocus.isActive, let tv = terminal?.terminalView else { return }
         window?.makeFirstResponder(tv)
     }
 

@@ -123,6 +123,9 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Rebuild the node tree from AppState projects.
     func rebuildNodes(projects: [ProjectState]) {
+        // Reloading mid-rename discards the cell holding the field editor, leaving it dead.
+        // `lastRenderState` is untouched, so the next update after the edit rebuilds.
+        guard editingTextField == nil else { return }
         let nextRenderState = makeRenderState(projects: projects)
         guard nextRenderState != lastRenderState else { return }
 
@@ -568,6 +571,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     // MARK: - Inline Rename State
 
     private func cleanupEditingState() {
+        InlineRenameFocus.isActive = false
         editingTextField = nil
         editingOriginalName = nil
         editingWorkspaceId = nil
@@ -704,6 +708,7 @@ extension SidebarOutlineViewController: NSMenuDelegate {
             let textField = findNameTextField(in: cellView)
         else { return }
 
+        InlineRenameFocus.isActive = true
         editingWorkspaceId = workspace.id
         editingOriginalName = textField.stringValue
         editingTextField = textField
@@ -801,6 +806,12 @@ extension SidebarOutlineViewController: NSTextFieldDelegate {
 
         cleanupEditingState()
     }
+}
+
+/// Set while a sidebar row is being renamed so terminals don't take first responder
+/// away from the field editor when the selection switches content.
+enum InlineRenameFocus {
+    static var isActive = false
 }
 
 // MARK: - WorktreeMenuContext
