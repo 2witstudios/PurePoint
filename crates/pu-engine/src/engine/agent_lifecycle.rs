@@ -287,6 +287,10 @@ impl Engine {
                         agent.suspended = true;
                         agent.pid = None;
                         agent.suspended_at = Some(now);
+                        // The kill above may have let the natural-exit watcher
+                        // record an exit first; a suspended agent hasn't exited.
+                        agent.exit_code = None;
+                        agent.completed_at = None;
                     }
                 }
                 m
@@ -399,7 +403,7 @@ impl Engine {
         // Store handle in session map BEFORE writing manifest.
         // ManifestWatcher in Swift fires on manifest write and immediately
         // tries to attach — the session must already be in the map.
-        self.notify_status_on_exit(project_root, handle.exit_rx.clone());
+        self.watch_natural_exit(project_root, agent_id, handle.pid, handle.exit_rx.clone());
         self.sessions
             .lock()
             .await
