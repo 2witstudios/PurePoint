@@ -39,8 +39,11 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.94.0
+        # Pin the toolchain through the input, not the ref: the ref looks like an
+        # action version, and Dependabot bumped it to a Rust that doesn't exist.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.94.0"
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Cache Rust

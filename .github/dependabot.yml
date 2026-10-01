@@ -17,7 +17,3 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
-    ignore:
-      # The ref is the Rust version to install, not the action's version;
-      # Dependabot bumped it to a nonexistent toolchain (1.120.0).
-      - dependency-name: dtolnay/rust-toolchain
