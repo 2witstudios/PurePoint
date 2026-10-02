@@ -13,7 +13,7 @@ chrono = { workspace = true }
 rand = "0.10"
 uuid = { workspace = true }
 indexmap = { workspace = true }
-fs4 = "0.13"
+fs4 = "1.1"
 
 [dev-dependencies]
 tempfile = "3"
