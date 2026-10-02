@@ -175,6 +175,7 @@ struct ContentView: View {
         guard let contentView = window.contentView,
             let tv = findTerminalView(in: contentView)
         else { return }
+        guard !InlineRenameFocus.isActive else { return }
         window.makeFirstResponder(tv)
     }
 }

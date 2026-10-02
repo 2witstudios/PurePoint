@@ -241,7 +241,7 @@ class PointGuardTerminalNSView: NSView {
 
         // Focus the terminal
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, !InlineRenameFocus.isActive else { return }
             self.window?.makeFirstResponder(tv.terminalView)
         }
     }
@@ -249,7 +249,7 @@ class PointGuardTerminalNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        if let tv = terminal?.terminalView {
+        if !InlineRenameFocus.isActive, let tv = terminal?.terminalView {
             window?.makeFirstResponder(tv)
         }
         super.mouseDown(with: event)
