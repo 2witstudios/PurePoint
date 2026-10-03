@@ -571,7 +571,18 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     // MARK: - Inline Rename State
 
+    private var debugKeyMonitor: Any?
+
+    private func debugRename(_ tag: String, _ tf: NSTextField, _ window: NSWindow) {
+        NSLog("[RenameDebug] %@ firstResponder=%@ currentEditor=%@ editable=%@ selectable=%@ inWindow=%@ keyWindow=%@ appActive=%@ delegateIsVC=%@ editorDelegateIsTF=%@",
+              tag, String(describing: window.firstResponder), String(describing: tf.currentEditor()),
+              String(tf.isEditable), String(tf.isSelectable), String(tf.window != nil),
+              String(window.isKeyWindow), String(NSApp.isActive), String(tf.delegate === self),
+              String((tf.currentEditor() as? NSTextView)?.delegate === tf))
+    }
+
     private func cleanupEditingState() {
+        if let m = debugKeyMonitor { NSEvent.removeMonitor(m); debugKeyMonitor = nil }
         InlineRenameFocus.isActive = false
         editingTextField = nil
         editingOriginalName = nil
@@ -735,6 +746,20 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         guard editingTextField === textField, let window = view.window else { return }
         window.makeFirstResponder(textField)
         textField.selectText(nil)
+        debugRename("begin retries=\(retriesLeft)", textField, window)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak textField, weak window] in
+            guard let textField, let window else { return }
+            self?.debugRename("+300ms", textField, window)
+        }
+        if debugKeyMonitor == nil {
+            debugKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                let w = event.window
+                NSLog("[RenameDebug] keyDown chars=%@ keyCode=%d eventWindowKey=%@ firstResponder=%@ editing=%@",
+                      event.characters ?? "nil", event.keyCode, String(describing: w?.isKeyWindow),
+                      String(describing: w?.firstResponder), String(describing: self?.editingTextField != nil))
+                return event
+            }
+        }
         if textField.currentEditor() == nil, retriesLeft > 0 {
             DispatchQueue.main.async { [weak self] in
                 self?.beginFieldEditing(textField, retriesLeft: retriesLeft - 1)
@@ -801,6 +826,7 @@ extension SidebarOutlineViewController: NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
+        NSLog("[RenameDebug] didEndEditing firstResponder=%@ info=%@", String(describing: view.window?.firstResponder), String(describing: obj.userInfo))
         guard let tf = editingTextField, let workspaceId = editingWorkspaceId else { return }
         let newName = tf.stringValue.trimmingCharacters(in: .whitespaces)
 
