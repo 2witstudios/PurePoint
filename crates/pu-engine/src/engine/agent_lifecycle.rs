@@ -306,6 +306,22 @@ impl Engine {
     }
 
     pub(super) async fn handle_resume(&self, project_root: &str, agent_id: &str) -> Response {
+        // One resume per agent at a time, and never for an agent this daemon is
+        // already running: either would put a second `--resume` process on the
+        // same transcript and orphan the first.
+        let Some(_resuming) = ResumeGuard::claim(&self.resuming, agent_id) else {
+            return Response::Error {
+                code: "INVALID_STATE".into(),
+                message: format!("agent {agent_id} is already being resumed"),
+            };
+        };
+        if self.sessions.lock().await.contains_key(agent_id) {
+            return Response::Error {
+                code: "INVALID_STATE".into(),
+                message: format!("agent {agent_id} is already running"),
+            };
+        }
+
         let root_path = Path::new(project_root);
 
         // 1. Read manifest, find the suspended agent
@@ -378,6 +394,7 @@ impl Engine {
         // 5. Spawn PTY process
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.to_string()));
+        env.push(("PU_PROJECT_ROOT".into(), project_root.to_string()));
         let spawn_config = SpawnConfig {
             command,
             args,
@@ -518,5 +535,33 @@ impl Engine {
             }
         }
         handles
+    }
+}
+
+/// Marks an agent as being resumed for as long as the guard lives.
+struct ResumeGuard {
+    set: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    agent_id: String,
+}
+
+impl ResumeGuard {
+    fn claim(
+        set: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+        agent_id: &str,
+    ) -> Option<Self> {
+        let mut ids = set.lock().unwrap_or_else(|e| e.into_inner());
+        ids.insert(agent_id.to_string()).then(|| Self {
+            set: set.clone(),
+            agent_id: agent_id.to_string(),
+        })
+    }
+}
+
+impl Drop for ResumeGuard {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.agent_id);
     }
 }

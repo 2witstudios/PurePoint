@@ -17,8 +17,16 @@ pub async fn check_daemon_health(socket: &Path) -> bool {
 }
 
 pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
-    if check_daemon_health(socket).await {
-        return Ok(());
+    // Retry before concluding there is no daemon: a busy or restarting daemon
+    // can miss one check. (A daemon started needlessly exits on its own, since
+    // pu-engine holds a single-instance lock, but the retry avoids the churn.)
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        if check_daemon_health(socket).await {
+            return Ok(());
+        }
     }
 
     let binary = find_daemon_binary().ok_or(CliError::Other(

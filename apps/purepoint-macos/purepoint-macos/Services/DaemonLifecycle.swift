@@ -50,74 +50,86 @@ nonisolated enum DaemonLifecycle {
 }
 
 /// Serializes daemon lifecycle operations so concurrent callers don't race.
+///
+/// Actor isolation alone is not enough: the actor is reentrant at every `await`,
+/// so N projects opening at launch would each see "no daemon yet" while the first
+/// launch is still polling health, and each start its own pu-engine. Every
+/// operation therefore runs as the single in-flight `Task`, and concurrent callers
+/// await that task instead of starting another.
 private actor DaemonLauncher {
     private let puDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".pu")
     private var pidPath: String { puDir.appendingPathComponent("daemon.pid").path }
-    private var socketPath: String { puDir.appendingPathComponent("daemon.sock").path }
     private(set) var didLaunchDaemon = false
+    private var inFlight: Task<Void, Error>?
 
     func ensureDaemon() async throws {
-        let client = DaemonClient()
-        let binaryPath = DaemonLifecycle.findBinary()
-
-        // Check if already healthy
-        let healthy = await isHealthy(client: client)
-        let restart = shouldRestart(binaryPath: binaryPath)
-        print("[Daemon] healthy=\(healthy), shouldRestart=\(restart)")
-        if healthy {
-            if restart {
-                killExistingDaemon()
-            } else {
-                return
-            }
-        } else {
-            killExistingDaemon()
-        }
-
-        try await launchDaemon(binaryPath: binaryPath)
+        try await serialized(coalesce: true) { try await $0.ensureDaemonNow() }
     }
 
     func restartDaemon() async throws {
-        killExistingDaemon()
+        try await serialized(coalesce: false) { try await $0.restartDaemonNow() }
+    }
+
+    /// Run `operation` as the only lifecycle operation in flight. With `coalesce`,
+    /// a caller arriving while another operation runs just awaits that one.
+    private func serialized(
+        coalesce: Bool,
+        _ operation: @escaping @Sendable (DaemonLauncher) async throws -> Void
+    ) async throws {
+        while let running = inFlight {
+            let outcome = await running.result
+            if coalesce { return try outcome.get() }
+        }
+        let task = Task { try await operation(self) }
+        inFlight = task
+        defer { if inFlight == task { inFlight = nil } }
+        try await task.value
+    }
+
+    private func ensureDaemonNow() async throws {
+        let binaryPath = DaemonLifecycle.findBinary()
+
+        let healthy = await isHealthy(attempts: 3)
+        let restart = healthy && shouldRestart(binaryPath: binaryPath)
+        print("[Daemon] healthy=\(healthy), shouldRestart=\(restart)")
+        if healthy && !restart { return }
+
+        await killExistingDaemon()
+        try await launchDaemon(binaryPath: binaryPath)
+    }
+
+    private func restartDaemonNow() async throws {
+        await killExistingDaemon()
         try await launchDaemon(binaryPath: DaemonLifecycle.findBinary())
     }
 
     // MARK: - Private
 
-    private func killExistingDaemon() {
-        // Read PID from file
+    /// Stop the daemon named by the PID file. The socket is left alone: only the
+    /// daemon holding `daemon.lock` may unlink or rebind it, so deleting it here
+    /// could strand a live daemon that is merely slow to answer.
+    private func killExistingDaemon() async {
         guard let content = try? String(contentsOfFile: pidPath, encoding: .utf8),
             let pid = pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines)),
             pid > 0,
             kill(pid, 0) == 0
         else {
-            // No running process — just clean up stale files
-            cleanupFiles()
+            try? FileManager.default.removeItem(atPath: pidPath)
             return
         }
 
         // SIGTERM (IPC shutdown removed — fire-and-forget raced with the signal)
         kill(pid, SIGTERM)
 
-        // Poll for death (up to 2s, 100ms intervals)
-        for _ in 0..<20 {
-            Thread.sleep(forTimeInterval: 0.1)
-            if kill(pid, 0) != 0 { break }
+        // Poll for death (up to 3s, 100ms intervals)
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if kill(pid, 0) != 0 { return }
         }
 
-        // Force kill if still alive
-        if kill(pid, 0) == 0 {
-            kill(pid, SIGKILL)
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-
-        cleanupFiles()
-    }
-
-    private func cleanupFiles() {
-        try? FileManager.default.removeItem(atPath: pidPath)
-        try? FileManager.default.removeItem(atPath: socketPath)
+        kill(pid, SIGKILL)
+        try? await Task.sleep(nanoseconds: 200_000_000)
     }
 
     private func launchDaemon(binaryPath: String?) async throws {
@@ -150,12 +162,13 @@ private actor DaemonLauncher {
             try? stderrHandle.close()
         }
 
-        // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s)
-        let client = DaemonClient()
+        // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s).
+        // If another pu-engine already holds the daemon lock, ours exits at once
+        // and this attaches to the running one.
         for attempt in 0..<5 {
             let delay = UInt64(100_000_000 * (1 << attempt))
             try await Task.sleep(nanoseconds: delay)
-            if await isHealthy(client: client) {
+            if await isHealthy(attempts: 1) {
                 didLaunchDaemon = true
                 return
             }
@@ -184,13 +197,30 @@ private actor DaemonLauncher {
         try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
     }
 
-    private func isHealthy(client: DaemonClient) async -> Bool {
-        do {
-            let response = try await client.send(.health)
-            if case .healthReport = response { return true }
-            return false
-        } catch {
-            return false
+    /// Health-check the daemon, retrying a failed check so one slow answer from
+    /// a busy daemon is not mistaken for a dead one (which would kill its agents).
+    private func isHealthy(attempts: Int) async -> Bool {
+        for attempt in 0..<attempts {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 250_000_000) }
+            if await healthCheck(timeout: 2.0) { return true }
+        }
+        return false
+    }
+
+    private func healthCheck(timeout: TimeInterval) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                guard let response = try? await DaemonClient().send(.health) else { return false }
+                if case .healthReport = response { return true }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
         }
     }
 }

@@ -78,12 +78,14 @@ nonisolated enum DaemonClientError: Error, LocalizedError {
     case eof
     case cancelled
     case notRunning
+    case connectTimeout
 
     var errorDescription: String? {
         switch self {
         case .eof: "Connection to daemon closed"
         case .cancelled: "Connection cancelled"
         case .notRunning: "Daemon is not running"
+        case .connectTimeout: "Timed out connecting to daemon"
         }
     }
 }

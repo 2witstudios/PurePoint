@@ -6,7 +6,10 @@ use tokio::net::UnixListener;
 use tokio::sync::{Notify, Semaphore};
 
 const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
-const MAX_CONNECTIONS: usize = 64;
+/// The app holds a status and a grid stream per open project plus one attach
+/// stream per terminal pane, all for as long as they are open, so this must sit
+/// well above what a busy session uses.
+const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
 
 use crate::engine::Engine;
@@ -78,15 +81,26 @@ impl IpcServer {
         loop {
             tokio::select! {
                 accept = self.listener.accept() => {
-                    let (stream, _addr) = accept?;
+                    // A failed accept (e.g. EMFILE) is transient: never let it end
+                    // the server and strand every running agent.
+                    let stream = match accept {
+                        Ok((stream, _addr)) => stream,
+                        Err(e) => {
+                            tracing::warn!("accept failed: {e}");
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            continue;
+                        }
+                    };
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
-                    let permit = match self.conn_limit.clone().acquire_owned().await {
-                        Ok(p) => p,
-                        Err(_) => continue, // semaphore closed
-                    };
+                    let conn_limit = self.conn_limit.clone();
+                    // The permit is awaited inside the task: awaiting it here would
+                    // stop this loop from accepting, and from seeing shutdown and
+                    // signals, whenever the limit is reached.
                     tokio::spawn(async move {
-                        let _permit = permit;
+                        let Ok(_permit) = conn_limit.acquire_owned().await else {
+                            return; // semaphore closed
+                        };
                         Self::handle_connection(stream, engine, shutdown).await;
                     });
                 }

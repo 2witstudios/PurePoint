@@ -77,6 +77,12 @@ pub struct Engine {
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
     /// Projects that have been initialized or used — scheduler scans these.
     registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Agents with a resume in progress, so two resumes of one agent can never
+    /// both spawn `claude --resume` on the same transcript.
+    resuming: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Set once the daemon starts tearing down. Agents killed by shutdown must
+    /// stay resumable, so their exits are not recorded as Broken.
+    shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for Engine {
@@ -122,6 +128,8 @@ impl Engine {
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
             registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -177,14 +185,16 @@ impl Engine {
 
     async fn resolve_login_env() -> Vec<(String, String)> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        match tokio::process::Command::new(&shell)
+        // Every spawn and resume waits on this one probe (it fills a OnceCell),
+        // so a login shell that hangs on a prompt must not hang them all.
+        let probe = tokio::process::Command::new(&shell)
             .args(["-li", "-c", "env -0"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output()
-            .await
-        {
-            Ok(output) if output.status.success() => output
+            .kill_on_drop(true)
+            .output();
+        match tokio::time::timeout(Duration::from_secs(10), probe).await {
+            Ok(Ok(output)) if output.status.success() => output
                 .stdout
                 .split(|&b| b == 0)
                 .filter_map(|entry| {
@@ -220,7 +230,15 @@ impl Engine {
     /// Used by the managed-mode parent-died path so a force-quit of the macOS app reaps
     /// agents and their grandchildren (vitest/node workers, dev servers) before the
     /// daemon exits — `process::exit(0)` skips `Drop`, so this must run explicitly.
+    /// Mark the daemon as shutting down: agent exits from here on are the
+    /// daemon's doing, not the agent's, and must leave the agent resumable.
+    pub fn begin_shutdown(&self) {
+        self.shutting_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub async fn kill_all_sessions(&self, grace: Duration) {
+        self.begin_shutdown();
         let handles: Vec<AgentHandle> = {
             let mut sessions = self.sessions.lock().await;
             sessions.drain().map(|(_, h)| h).collect()
@@ -651,6 +669,9 @@ impl Engine {
 
     async fn handle_init(&self, project_root: &str) -> Response {
         let project_root = project_root.to_string();
+        // Agents this daemon is running right now. Init runs on every project
+        // open and every `pu init`, so reconcile must never touch these.
+        let live: HashSet<String> = self.sessions.lock().await.keys().cloned().collect();
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&project_root);
             let pu_dir = paths::pu_dir(root);
@@ -671,7 +692,7 @@ impl Engine {
             {
                 Ok(f) => f,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    Self::reconcile_agents_on_init(&project_root);
+                    Self::reconcile_agents_on_init(&project_root, &live);
                     return Response::InitResult { created: false };
                 }
                 Err(e) => {

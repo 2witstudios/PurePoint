@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use pu_core::error::PuError;
@@ -56,25 +57,44 @@ impl Engine {
         }
     }
 
-    /// On daemon restart, reconcile agents that appear alive in the manifest but have no
-    /// live process. Resumable agents (claude, codex, opencode) with a session_id get marked
-    /// suspended so the Swift side can auto-resume them. Others get marked Broken.
+    /// Reconcile agents that the manifest says are running but this daemon is not
+    /// running (`live` holds the agents it is). Resumable agents (claude, codex,
+    /// opencode) with a session_id get marked suspended so the Swift side can
+    /// auto-resume them. Others get marked Broken.
+    ///
+    /// A resumable agent whose process outlived its daemon is still writing its
+    /// transcript; it is stopped first, because resuming next to it would put two
+    /// writers on one conversation.
     /// Called synchronously inside handle_init so state is correct before the first status read.
-    pub(super) fn reconcile_agents_on_init(project_root: &str) {
+    pub(super) fn reconcile_agents_on_init(project_root: &str, live: &HashSet<String>) {
         let root = Path::new(project_root);
         let Ok(m) = manifest::read_manifest(root) else {
             return;
         };
-        let is_stale = |a: &AgentEntry| !a.suspended && matches!(a.status, AgentStatus::Running);
-        let has_stale = m
+        let is_stale = |a: &AgentEntry| {
+            !a.suspended && matches!(a.status, AgentStatus::Running) && !live.contains(&a.id)
+        };
+        let is_resumable = |a: &AgentEntry| {
+            a.session_id.is_some()
+                && matches!(a.agent_type.as_str(), "claude" | "codex" | "opencode")
+        };
+        let stale: Vec<&AgentEntry> = m
             .agents
             .values()
             .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
-            .any(is_stale);
-        if !has_stale {
+            .filter(|a| is_stale(a))
+            .collect();
+        if stale.is_empty() {
             return;
         }
-        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
+        for a in stale.iter().filter(|a| is_resumable(a)) {
+            if let (Some(pid), Some(sid)) = (a.pid, a.session_id.as_deref())
+                && Self::is_orphaned_session(pid, sid)
+            {
+                tracing::warn!(agent_id = %a.id, pid, "stopping orphaned agent before resume");
+                Self::stop_process_group(pid);
+            }
+        }
         let now = chrono::Utc::now();
         manifest::update_manifest(root, move |mut m| {
             for agent in m.agents.values_mut().chain(
@@ -82,21 +102,54 @@ impl Engine {
                     .values_mut()
                     .flat_map(|wt| wt.agents.values_mut()),
             ) {
-                if !agent.suspended && matches!(agent.status, AgentStatus::Running) {
-                    if agent.session_id.is_some() && is_resumable(&agent.agent_type) {
-                        agent.status = AgentStatus::Running;
-                        agent.suspended = true;
-                        agent.pid = None;
-                        agent.suspended_at = Some(now);
-                    } else {
-                        agent.status = AgentStatus::Broken;
-                        agent.completed_at = Some(now);
-                    }
+                if !is_stale(agent) {
+                    continue;
+                }
+                if is_resumable(agent) {
+                    agent.suspended = true;
+                    agent.pid = None;
+                    agent.suspended_at = Some(now);
+                } else {
+                    agent.status = AgentStatus::Broken;
+                    agent.completed_at = Some(now);
                 }
             }
             m
         })
         .ok();
+    }
+
+    /// True if `pid` is alive and is still the agent process for `session_id`
+    /// (not an unrelated process that reused the pid).
+    fn is_orphaned_session(pid: u32, session_id: &str) -> bool {
+        if !daemon_lifecycle::is_process_alive(pid) {
+            return false;
+        }
+        std::process::Command::new("ps")
+            .args(["-o", "command=", "-p", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(session_id))
+    }
+
+    /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
+    /// wait up to 3s, then SIGKILL.
+    fn stop_process_group(pid: u32) {
+        let Ok(pgid) = i32::try_from(pid) else {
+            return;
+        };
+        unsafe {
+            libc::killpg(pgid, libc::SIGTERM);
+        }
+        for _ in 0..30 {
+            if !daemon_lifecycle::is_process_alive(pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
     }
 
     /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
@@ -183,5 +236,90 @@ impl Engine {
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn agent(id: &str, agent_type: &str, session_id: Option<&str>) -> AgentEntry {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": id,
+            "agentType": agent_type,
+            "status": "running",
+            "startedAt": "2026-01-01T00:00:00Z",
+            "pid": 999_999_999u32,
+            "sessionId": session_id,
+            "suspended": false,
+        }))
+        .unwrap()
+    }
+
+    fn project_with(entries: Vec<AgentEntry>) -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let manifest_path = pu_core::paths::manifest_path(tmp.path());
+        std::fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+        let mut m = Manifest::new(tmp.path().to_string_lossy().into_owned());
+        for e in entries {
+            m.agents.insert(e.id.clone(), e);
+        }
+        manifest::write_manifest(tmp.path(), &m).unwrap();
+        tmp
+    }
+
+    fn read(tmp: &TempDir, id: &str) -> AgentEntry {
+        manifest::read_manifest(tmp.path()).unwrap().agents[id].clone()
+    }
+
+    fn root(tmp: &TempDir) -> String {
+        tmp.path().to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn given_agent_live_in_this_daemon_should_leave_it_running() {
+        let tmp = project_with(vec![agent("ag-1", "claude", Some("sid-1"))]);
+        let live = HashSet::from(["ag-1".to_string()]);
+
+        Engine::reconcile_agents_on_init(&root(&tmp), &live);
+
+        let a = read(&tmp, "ag-1");
+        assert!(!a.suspended);
+        assert_eq!(a.pid, Some(999_999_999));
+        assert_eq!(a.status, AgentStatus::Running);
+    }
+
+    #[test]
+    fn given_dead_resumable_agent_should_mark_suspended() {
+        let tmp = project_with(vec![agent("ag-1", "claude", Some("sid-1"))]);
+
+        Engine::reconcile_agents_on_init(&root(&tmp), &HashSet::new());
+
+        let a = read(&tmp, "ag-1");
+        assert!(a.suspended);
+        assert_eq!(a.pid, None);
+        assert_eq!(a.status, AgentStatus::Running);
+    }
+
+    #[test]
+    fn given_dead_agent_without_session_should_mark_broken() {
+        let tmp = project_with(vec![agent("ag-1", "terminal", None)]);
+
+        Engine::reconcile_agents_on_init(&root(&tmp), &HashSet::new());
+
+        let a = read(&tmp, "ag-1");
+        assert!(!a.suspended);
+        assert_eq!(a.status, AgentStatus::Broken);
+    }
+
+    #[test]
+    fn given_pid_reused_by_unrelated_process_should_not_be_orphan() {
+        // Our own pid is alive but its command line has no session id.
+        assert!(!Engine::is_orphaned_session(
+            std::process::id(),
+            "not-a-session-id-xyz"
+        ));
     }
 }

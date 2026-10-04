@@ -5,6 +5,7 @@ import Network
 
 nonisolated final class DaemonClient: @unchecked Sendable {
     static let connectionQueue = DispatchQueue(label: "purepoint.daemon.connection")
+    static let connectTimeout: TimeInterval = 5
     private let socketPath: String
 
     init(socketPath: String? = nil) {
@@ -56,6 +57,14 @@ nonisolated final class DaemonClient: @unchecked Sendable {
                 }
             }
             connection.start(queue: DaemonClient.connectionQueue)
+            // A daemon that has stopped accepting leaves the connection pending
+            // forever; give up so callers see an error instead of hanging.
+            DaemonClient.connectionQueue.asyncAfter(deadline: .now() + Self.connectTimeout) {
+                guard !resumed else { return }
+                resumed = true
+                connection.cancel()
+                cont.resume(throwing: DaemonClientError.connectTimeout)
+            }
         }
 
         let reader = DaemonLineReader(connection: connection)
