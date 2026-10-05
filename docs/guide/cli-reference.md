@@ -258,7 +258,11 @@ pu grid tab move <tab_id> --to <leaf> [--index <n>]
 pu grid tab break [--tab <id>] [--axis v|h]
 ```
 
-Each pane holds an ordered stack of tabs (an agent, a file, or empty). `--leaf` defaults to the focused pane; `assign` sets the content of that pane's active tab. Tab positions (`select <n>`, `--index`) are 1-based; `--tab` takes the stable tab id. `tab select` needs exactly one of `<n>`, `--next`, `--prev`. `grid show` lists each pane's tabs, marking the focused pane with `▸` and the active tab with `*`, and shows each tab's id as `#<id>`.
+Every command except `show` also takes `--workspace <id>`.
+
+Each pane holds an ordered stack of tabs (an agent, a file, or empty). `--leaf` defaults to the focused pane; `assign` sets the content of that pane's active tab. Tab positions (`select <n>`, `--index`) are 1-based; `--tab` takes the stable tab id. `tab select` needs exactly one of `<n>`, `--next`, `--prev`. `grid show` lists each pane's tabs, marking the focused pane with `▸` and the active tab with `*`, and shows each tab's id as `#<id>`. It marks the workspace on screen in the app as `(active)`.
+
+Leaf and tab ids are only unique within a workspace. Without `--workspace`, a command acts on the workspace on screen. When you copy ids from `grid show`, pass that workspace's id with `--workspace`, so they can't land in a different one.
 
 ## schedule
 

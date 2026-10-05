@@ -338,7 +338,7 @@ GridCommand variants:
 | `move_tab` | `tab_id`, `to_leaf`, `index`? | Move a tab to another pane at 1-based `index` (default: append) |
 | `break_tab` | `tab_id`?, `axis` | Move a tab into a new pane split off its pane (default: focused pane's active tab, axis `"v"`) |
 
-`?` marks optional fields. An omitted `leaf_id` targets the focused pane; `tab_id` is the stable surface id within the workspace (not its position). `set_agent.leaf_id` became optional in protocol v6. The daemon does not model layout: mutation commands return `ok` and are rebroadcast unchanged as `grid_event` to `subscribe_grid` streams, where the macOS app applies them.
+`?` marks optional fields. Every command except `get_layout` also takes an optional `workspace_id`; when it is omitted, the command applies to the workspace on screen. An omitted `leaf_id` targets the focused pane; `tab_id` is the stable surface id within the workspace (not its position). `set_agent.leaf_id` became optional in protocol v6. The daemon does not model layout: mutation commands return `ok` and are rebroadcast unchanged as `grid_event` to `subscribe_grid` streams, where the macOS app applies them.
 
 ## Worktree management
 

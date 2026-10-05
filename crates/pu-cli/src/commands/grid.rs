@@ -8,13 +8,17 @@ use crate::error::CliError;
 use crate::output;
 use crate::{GridAction, TabAction};
 
-pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
+pub async fn run(
+    socket: &Path,
+    workspace: Option<String>,
+    action: GridAction,
+) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
     let project_root = crate::commands::project_root_string()?;
 
-    match action {
-        GridAction::Show { json } => {
+    let (command, confirmation) = match grid_command(action, workspace) {
+        GridRequest::Show { json } => {
             let resp = client::send_request(
                 socket,
                 &Request::GridCommand {
@@ -37,81 +41,14 @@ pub async fn run(socket: &Path, action: GridAction) -> Result<(), CliError> {
                     println!("No grid layout");
                 }
             }
+            return Ok(());
         }
+        GridRequest::Mutate {
+            command,
+            confirmation,
+        } => (command, confirmation),
+    };
 
-        GridAction::Split { axis, leaf } => {
-            let resp = client::send_request(
-                socket,
-                &Request::GridCommand {
-                    project_root,
-                    command: GridCommand::Split {
-                        leaf_id: leaf,
-                        axis,
-                    },
-                },
-            )
-            .await?;
-            output::check_response(resp, false)?;
-            println!("Split pane");
-        }
-
-        GridAction::Close { leaf } => {
-            let resp = client::send_request(
-                socket,
-                &Request::GridCommand {
-                    project_root,
-                    command: GridCommand::Close { leaf_id: leaf },
-                },
-            )
-            .await?;
-            output::check_response(resp, false)?;
-            println!("Closed pane");
-        }
-
-        GridAction::Focus { direction, leaf } => {
-            let resp = client::send_request(
-                socket,
-                &Request::GridCommand {
-                    project_root,
-                    command: GridCommand::Focus {
-                        leaf_id: leaf,
-                        direction,
-                    },
-                },
-            )
-            .await?;
-            output::check_response(resp, false)?;
-            println!("Focus moved");
-        }
-
-        GridAction::Assign { agent_id, leaf } => {
-            send_command(
-                socket,
-                project_root,
-                GridCommand::SetAgent {
-                    leaf_id: leaf,
-                    agent_id,
-                },
-            )
-            .await?;
-            println!("Agent assigned");
-        }
-
-        GridAction::Tab { action } => {
-            let (command, confirmation) = tab_command(action);
-            send_command(socket, project_root, command).await?;
-            println!("{confirmation}");
-        }
-    }
-
-    Ok(())
-}
-
-async fn send_command(
-    socket: &Path,
-    project_root: String,
-    command: GridCommand,
-) -> Result<(), CliError> {
     let resp = client::send_request(
         socket,
         &Request::GridCommand {
@@ -121,14 +58,69 @@ async fn send_command(
     )
     .await?;
     output::check_response(resp, false)?;
+    println!("{confirmation}");
     Ok(())
 }
 
-/// Map a `pu grid tab` subcommand to its wire command and a short confirmation.
-fn tab_command(action: TabAction) -> (GridCommand, &'static str) {
+enum GridRequest {
+    Show {
+        json: bool,
+    },
+    Mutate {
+        command: GridCommand,
+        confirmation: &'static str,
+    },
+}
+
+/// Map a `pu grid` subcommand to its wire command and a short confirmation.
+/// `workspace_id` rides on every mutating command; `None` means the workspace on screen.
+fn grid_command(action: GridAction, workspace_id: Option<String>) -> GridRequest {
+    let (command, confirmation) = match action {
+        GridAction::Show { json } => return GridRequest::Show { json },
+        GridAction::Split { axis, leaf } => (
+            GridCommand::Split {
+                workspace_id,
+                leaf_id: leaf,
+                axis,
+            },
+            "Split pane",
+        ),
+        GridAction::Close { leaf } => (
+            GridCommand::Close {
+                workspace_id,
+                leaf_id: leaf,
+            },
+            "Closed pane",
+        ),
+        GridAction::Focus { direction, leaf } => (
+            GridCommand::Focus {
+                workspace_id,
+                leaf_id: leaf,
+                direction,
+            },
+            "Focus moved",
+        ),
+        GridAction::Assign { agent_id, leaf } => (
+            GridCommand::SetAgent {
+                workspace_id,
+                leaf_id: leaf,
+                agent_id,
+            },
+            "Agent assigned",
+        ),
+        GridAction::Tab { action } => tab_command(action, workspace_id),
+    };
+    GridRequest::Mutate {
+        command,
+        confirmation,
+    }
+}
+
+fn tab_command(action: TabAction, workspace_id: Option<String>) -> (GridCommand, &'static str) {
     match action {
         TabAction::New { leaf, agent } => (
             GridCommand::NewTab {
+                workspace_id,
                 leaf_id: leaf,
                 agent_id: agent,
             },
@@ -147,6 +139,7 @@ fn tab_command(action: TabAction) -> (GridCommand, &'static str) {
             };
             (
                 GridCommand::SelectTab {
+                    workspace_id,
                     leaf_id: leaf,
                     index,
                     direction,
@@ -156,6 +149,7 @@ fn tab_command(action: TabAction) -> (GridCommand, &'static str) {
         }
         TabAction::Close { leaf, tab } => (
             GridCommand::CloseTab {
+                workspace_id,
                 leaf_id: leaf,
                 tab_id: tab,
             },
@@ -163,6 +157,7 @@ fn tab_command(action: TabAction) -> (GridCommand, &'static str) {
         ),
         TabAction::Move { tab_id, to, index } => (
             GridCommand::MoveTab {
+                workspace_id,
                 tab_id,
                 to_leaf: to,
                 index,
@@ -170,7 +165,11 @@ fn tab_command(action: TabAction) -> (GridCommand, &'static str) {
             "Moved tab",
         ),
         TabAction::Break { tab, axis } => (
-            GridCommand::BreakTab { tab_id: tab, axis },
+            GridCommand::BreakTab {
+                workspace_id,
+                tab_id: tab,
+                axis,
+            },
             "Broke tab into new pane",
         ),
     }
@@ -181,7 +180,8 @@ fn print_ascii_grid(layout: &serde_json::Value) {
 }
 
 /// Render the workspace layout as text: per workspace, one line per pane in tree order,
-/// listing its tabs by 1-based position and tab ID. `▸` marks the focused pane, `*` the active tab.
+/// listing its tabs by 1-based position and tab ID. `▸` marks the focused pane, `*` the active
+/// tab, and `(active)` the workspace on screen — the target of commands without `--workspace`.
 ///
 /// Handles the v3 document (tabs per leaf), v2 (one `agentId` per leaf, shown as a single
 /// tab) and the pre-workspace `grid-layout.json` (the whole document is one tree).
@@ -199,6 +199,9 @@ fn render_grid(layout: &serde_json::Value) -> String {
         return "No workspaces\n".to_string();
     }
 
+    // The app records which workspace is on screen: commands without --workspace go there.
+    let active = layout.get("activeWorkspaceId").and_then(|a| a.as_str());
+
     let mut out = String::new();
     for workspace in &workspaces {
         let label = workspace
@@ -211,6 +214,9 @@ fn render_grid(layout: &serde_json::Value) -> String {
         collect_leaves(tree, &mut leaves);
 
         out.push_str(label);
+        if active == Some(label) {
+            out.push_str("  (active)");
+        }
         out.push('\n');
         if leaves.is_empty() {
             out.push_str("  (empty)\n");
@@ -330,6 +336,20 @@ mod tests {
     }
 
     #[test]
+    fn given_active_workspace_should_mark_it() {
+        let layout = json!({"version":3,"activeWorkspaceId":"ws-b","workspaces":[
+            {"id":"ws-a","focusedLeafId":0,"tree":{"type":"leaf","leafId":0,"activeTabId":0,
+              "tabs":[{"id":0,"kind":"agent","agentId":"ag-a"}]}},
+            {"id":"ws-b","focusedLeafId":0,"tree":{"type":"leaf","leafId":0,"activeTabId":0,
+              "tabs":[{"id":0,"kind":"agent","agentId":"ag-b"}]}}]});
+
+        assert_eq!(
+            render_grid(&layout),
+            "ws-a\n  0 ▸ [1* ag-a #0]\nws-b  (active)\n  0 ▸ [1* ag-b #0]\n"
+        );
+    }
+
+    #[test]
     fn given_v2_layout_should_show_each_leaf_agent_as_a_single_active_tab() {
         // given
         let layout = json!({"version":2,"workspaces":[{"id":"ws-1","focusedLeafId":1,
@@ -373,7 +393,7 @@ mod tests {
         };
 
         // when
-        let (command, _) = tab_command(action);
+        let (command, _) = tab_command(action, None);
 
         // then
         assert_eq!(
@@ -390,10 +410,23 @@ mod tests {
             prev: false,
             leaf: None,
         };
-        let (command, _) = tab_command(action);
+        let (command, _) = tab_command(action, None);
         assert_eq!(
             serde_json::to_string(&command).unwrap(),
             r#"{"action":"select_tab","index":3}"#
+        );
+    }
+
+    #[test]
+    fn given_workspace_should_send_it_with_the_command() {
+        let action = TabAction::Close {
+            leaf: None,
+            tab: Some(4),
+        };
+        let (command, _) = tab_command(action, Some("ws-ag-b".to_string()));
+        assert_eq!(
+            serde_json::to_string(&command).unwrap(),
+            r#"{"action":"close_tab","workspace_id":"ws-ag-b","tab_id":4}"#
         );
     }
 }

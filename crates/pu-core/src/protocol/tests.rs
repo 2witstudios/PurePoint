@@ -493,13 +493,14 @@ fn given_protocol_version_should_be_current() {
 #[test]
 fn given_grid_split_command_should_round_trip() {
     let cmd = GridCommand::Split {
+        workspace_id: None,
         leaf_id: Some(2),
         axis: "v".into(),
     };
     let json = serde_json::to_string(&cmd).unwrap();
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
     match parsed {
-        GridCommand::Split { leaf_id, axis } => {
+        GridCommand::Split { leaf_id, axis, .. } => {
             assert_eq!(leaf_id, Some(2));
             assert_eq!(axis, "v");
         }
@@ -509,22 +510,28 @@ fn given_grid_split_command_should_round_trip() {
 
 #[test]
 fn given_grid_close_command_should_round_trip() {
-    let cmd = GridCommand::Close { leaf_id: None };
+    let cmd = GridCommand::Close {
+        workspace_id: None,
+        leaf_id: None,
+    };
     let json = serde_json::to_string(&cmd).unwrap();
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
-    assert!(matches!(parsed, GridCommand::Close { leaf_id: None }));
+    assert!(matches!(parsed, GridCommand::Close { leaf_id: None, .. }));
 }
 
 #[test]
 fn given_grid_focus_command_should_round_trip() {
     let cmd = GridCommand::Focus {
+        workspace_id: None,
         leaf_id: None,
         direction: Some("right".into()),
     };
     let json = serde_json::to_string(&cmd).unwrap();
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
     match parsed {
-        GridCommand::Focus { leaf_id, direction } => {
+        GridCommand::Focus {
+            leaf_id, direction, ..
+        } => {
             assert!(leaf_id.is_none());
             assert_eq!(direction.unwrap(), "right");
         }
@@ -535,13 +542,16 @@ fn given_grid_focus_command_should_round_trip() {
 #[test]
 fn given_grid_set_agent_command_should_round_trip() {
     let cmd = GridCommand::SetAgent {
+        workspace_id: None,
         leaf_id: Some(3),
         agent_id: "ag-abc".into(),
     };
     let json = serde_json::to_string(&cmd).unwrap();
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
     match parsed {
-        GridCommand::SetAgent { leaf_id, agent_id } => {
+        GridCommand::SetAgent {
+            leaf_id, agent_id, ..
+        } => {
             assert_eq!(leaf_id, Some(3));
             assert_eq!(agent_id, "ag-abc");
         }
@@ -553,6 +563,7 @@ fn given_grid_set_agent_command_should_round_trip() {
 fn given_grid_set_agent_without_leaf_should_target_focused_pane() {
     // given
     let cmd = GridCommand::SetAgent {
+        workspace_id: None,
         leaf_id: None,
         agent_id: "ag-abc".into(),
     };
@@ -564,7 +575,9 @@ fn given_grid_set_agent_without_leaf_should_target_focused_pane() {
     // then
     assert_eq!(json, r#"{"action":"set_agent","agent_id":"ag-abc"}"#);
     match parsed {
-        GridCommand::SetAgent { leaf_id, agent_id } => {
+        GridCommand::SetAgent {
+            leaf_id, agent_id, ..
+        } => {
             assert_eq!(leaf_id, None);
             assert_eq!(agent_id, "ag-abc");
         }
@@ -577,7 +590,9 @@ fn given_legacy_set_agent_payload_with_leaf_should_still_parse() {
     let json = r#"{"action":"set_agent","leaf_id":2,"agent_id":"x"}"#;
     let parsed: GridCommand = serde_json::from_str(json).unwrap();
     match parsed {
-        GridCommand::SetAgent { leaf_id, agent_id } => {
+        GridCommand::SetAgent {
+            leaf_id, agent_id, ..
+        } => {
             assert_eq!(leaf_id, Some(2));
             assert_eq!(agent_id, "x");
         }
@@ -588,6 +603,7 @@ fn given_legacy_set_agent_payload_with_leaf_should_still_parse() {
 #[test]
 fn given_grid_new_tab_command_should_round_trip() {
     let cmd = GridCommand::NewTab {
+        workspace_id: None,
         leaf_id: Some(1),
         agent_id: Some("ag-a".into()),
     };
@@ -598,7 +614,9 @@ fn given_grid_new_tab_command_should_round_trip() {
     );
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
     match parsed {
-        GridCommand::NewTab { leaf_id, agent_id } => {
+        GridCommand::NewTab {
+            leaf_id, agent_id, ..
+        } => {
             assert_eq!(leaf_id, Some(1));
             assert_eq!(agent_id.as_deref(), Some("ag-a"));
         }
@@ -613,7 +631,8 @@ fn given_bare_new_tab_payload_should_open_empty_tab_in_focused_pane() {
         parsed,
         GridCommand::NewTab {
             leaf_id: None,
-            agent_id: None
+            agent_id: None,
+            ..
         }
     ));
     assert_eq!(
@@ -625,6 +644,7 @@ fn given_bare_new_tab_payload_should_open_empty_tab_in_focused_pane() {
 #[test]
 fn given_grid_select_tab_by_index_should_round_trip() {
     let cmd = GridCommand::SelectTab {
+        workspace_id: None,
         leaf_id: Some(2),
         index: Some(3),
         direction: None,
@@ -637,6 +657,7 @@ fn given_grid_select_tab_by_index_should_round_trip() {
             leaf_id,
             index,
             direction,
+            ..
         } => {
             assert_eq!(leaf_id, Some(2));
             assert_eq!(index, Some(3));
@@ -655,6 +676,7 @@ fn given_grid_select_tab_by_direction_should_round_trip() {
             leaf_id,
             index,
             direction,
+            ..
         } => {
             assert_eq!(*leaf_id, None);
             assert_eq!(*index, None);
@@ -668,6 +690,7 @@ fn given_grid_select_tab_by_direction_should_round_trip() {
 #[test]
 fn given_grid_close_tab_command_should_round_trip() {
     let cmd = GridCommand::CloseTab {
+        workspace_id: None,
         leaf_id: None,
         tab_id: Some(7),
     };
@@ -678,7 +701,8 @@ fn given_grid_close_tab_command_should_round_trip() {
         parsed,
         GridCommand::CloseTab {
             leaf_id: None,
-            tab_id: Some(7)
+            tab_id: Some(7),
+            ..
         }
     ));
 }
@@ -686,6 +710,7 @@ fn given_grid_close_tab_command_should_round_trip() {
 #[test]
 fn given_grid_move_tab_command_should_round_trip() {
     let cmd = GridCommand::MoveTab {
+        workspace_id: None,
         tab_id: 4,
         to_leaf: 1,
         index: Some(2),
@@ -701,7 +726,8 @@ fn given_grid_move_tab_command_should_round_trip() {
         GridCommand::MoveTab {
             tab_id: 4,
             to_leaf: 1,
-            index: Some(2)
+            index: Some(2),
+            ..
         }
     ));
 }
@@ -715,7 +741,8 @@ fn given_move_tab_without_index_should_append() {
         GridCommand::MoveTab {
             tab_id: 4,
             to_leaf: 1,
-            index: None
+            index: None,
+            ..
         }
     ));
 }
@@ -729,6 +756,7 @@ fn given_move_tab_without_destination_should_be_rejected() {
 #[test]
 fn given_grid_break_tab_command_should_round_trip() {
     let cmd = GridCommand::BreakTab {
+        workspace_id: None,
         tab_id: Some(5),
         axis: "h".into(),
     };
@@ -736,7 +764,7 @@ fn given_grid_break_tab_command_should_round_trip() {
     assert_eq!(json, r#"{"action":"break_tab","tab_id":5,"axis":"h"}"#);
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
     match parsed {
-        GridCommand::BreakTab { tab_id, axis } => {
+        GridCommand::BreakTab { tab_id, axis, .. } => {
             assert_eq!(tab_id, Some(5));
             assert_eq!(axis, "h");
         }
@@ -748,12 +776,31 @@ fn given_grid_break_tab_command_should_round_trip() {
 fn given_bare_break_tab_payload_should_default_to_vertical_active_tab() {
     let parsed: GridCommand = serde_json::from_str(r#"{"action":"break_tab"}"#).unwrap();
     match parsed {
-        GridCommand::BreakTab { tab_id, axis } => {
+        GridCommand::BreakTab { tab_id, axis, .. } => {
             assert_eq!(tab_id, None);
             assert_eq!(axis, "v");
         }
         _ => panic!("expected BreakTab"),
     }
+}
+
+#[test]
+fn given_workspace_id_should_round_trip_and_be_omitted_when_none() {
+    let cmd = GridCommand::CloseTab {
+        workspace_id: Some("ws-ag-b".into()),
+        leaf_id: None,
+        tab_id: Some(0),
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert_eq!(
+        json,
+        r#"{"action":"close_tab","workspace_id":"ws-ag-b","tab_id":0}"#
+    );
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+    assert!(matches!(
+        parsed,
+        GridCommand::CloseTab { workspace_id: Some(ref ws), tab_id: Some(0), .. } if ws == "ws-ag-b"
+    ));
 }
 
 #[test]
@@ -782,6 +829,7 @@ fn given_grid_command_request_should_round_trip() {
     let req = Request::GridCommand {
         project_root: "/test".into(),
         command: GridCommand::Split {
+            workspace_id: None,
             leaf_id: Some(1),
             axis: "h".into(),
         },
@@ -805,6 +853,7 @@ fn given_grid_event_response_should_round_trip() {
     let resp = Response::GridEvent {
         project_root: "/test".into(),
         command: GridCommand::Focus {
+            workspace_id: None,
             leaf_id: Some(2),
             direction: None,
         },

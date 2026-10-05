@@ -272,6 +272,7 @@ async fn given_grid_split_should_succeed() {
         .send(&Request::GridCommand {
             project_root: h.project_root(),
             command: pu_core::protocol::GridCommand::Split {
+                workspace_id: None,
                 leaf_id: None,
                 axis: "v".into(),
             },
@@ -312,6 +313,7 @@ async fn given_tab_command_should_be_accepted_and_broadcast_to_grid_subscribers(
         .send(&Request::GridCommand {
             project_root: h.project_root(),
             command: GridCommand::NewTab {
+                workspace_id: Some("ws-ag-a".into()),
                 leaf_id: Some(1),
                 agent_id: Some("ag-a".into()),
             },
@@ -332,9 +334,15 @@ async fn given_tab_command_should_be_accepted_and_broadcast_to_grid_subscribers(
     match event {
         Response::GridEvent {
             project_root,
-            command: GridCommand::NewTab { leaf_id, agent_id },
+            command:
+                GridCommand::NewTab {
+                    workspace_id,
+                    leaf_id,
+                    agent_id,
+                },
         } => {
             assert_eq!(project_root, h.project_root());
+            assert_eq!(workspace_id.as_deref(), Some("ws-ag-a"));
             assert_eq!(leaf_id, Some(1));
             assert_eq!(agent_id.as_deref(), Some("ag-a"));
         }

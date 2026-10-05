@@ -177,6 +177,10 @@ enum Commands {
     },
     /// Control the pane grid layout
     Grid {
+        /// Workspace to act on (an id from `pu grid show`; default: the one on screen).
+        /// Leaf and tab ids are only unique within a workspace.
+        #[arg(long, global = true)]
+        workspace: Option<String>,
         #[command(subcommand)]
         action: GridAction,
     },
@@ -820,7 +824,9 @@ async fn main() {
             keys,
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
-        Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Grid { workspace, action } => {
+            commands::grid::run(&socket, workspace, action).await
+        }
         Commands::Trigger { action } => match action {
             TriggerAction::List { json } => commands::trigger::run_list(&socket, json).await,
             TriggerAction::Show { name, json } => {
@@ -937,6 +943,7 @@ mod tests {
         match Cli::try_parse_from(argv)?.command {
             Commands::Grid {
                 action: GridAction::Tab { action },
+                ..
             } => Ok(action),
             _ => panic!("expected grid tab"),
         }
@@ -1005,8 +1012,28 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Grid {
-                action: GridAction::Assign { leaf: None, .. }
+                action: GridAction::Assign { leaf: None, .. },
+                workspace: None,
             }
         ));
+    }
+
+    #[test]
+    fn given_workspace_flag_after_subcommand_should_apply_to_grid() {
+        let cli = Cli::try_parse_from([
+            "pu",
+            "grid",
+            "tab",
+            "close",
+            "--tab",
+            "3",
+            "--workspace",
+            "ws-ag-b",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Grid { workspace, .. } => assert_eq!(workspace.as_deref(), Some("ws-ag-b")),
+            _ => panic!("expected grid"),
+        }
     }
 }

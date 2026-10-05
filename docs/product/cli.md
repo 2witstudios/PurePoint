@@ -76,6 +76,7 @@ Key behaviors:
 | `pu grid tab close` | `--leaf <id>`, `--tab <id>` | Close a tab (default: active tab of focused pane) |
 | `pu grid tab move <tab_id>` | `--to <leaf>`, `--index <n>` | Move a tab to another pane (default: append) |
 | `pu grid tab break` | `--tab <id>`, `--axis <v\|h>` | Move a tab into a new pane split off its pane |
+| `pu grid <any but show>` | `--workspace <id>` | Act on that workspace instead of the one on screen (leaf and tab ids are only unique within a workspace) |
 | `pu trigger list` | `--json` | List trigger definitions |
 | `pu trigger show <name>` | `--json` | Show trigger details |
 | `pu trigger create <name>` | `--on <event>`, `--inject`, `--gate`, `--description`, `--scope`, `--json` | Create trigger definition |
