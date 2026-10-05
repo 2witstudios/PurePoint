@@ -79,6 +79,9 @@ private actor DaemonLauncher {
     ) async throws {
         while let running = inFlight {
             let outcome = await running.result
+            // The owner clears inFlight only once it is back on the actor; clear a
+            // finished task here too so this loop cannot spin on it meanwhile.
+            if inFlight == running { inFlight = nil }
             if coalesce { return try outcome.get() }
         }
         let task = Task { try await operation(self) }
@@ -113,7 +116,8 @@ private actor DaemonLauncher {
         guard let content = try? String(contentsOfFile: pidPath, encoding: .utf8),
             let pid = pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines)),
             pid > 0,
-            kill(pid, 0) == 0
+            kill(pid, 0) == 0,
+            Self.isDaemonProcess(pid)
         else {
             try? FileManager.default.removeItem(atPath: pidPath)
             return
@@ -130,6 +134,14 @@ private actor DaemonLauncher {
 
         kill(pid, SIGKILL)
         try? await Task.sleep(nanoseconds: 200_000_000)
+    }
+
+    /// True if `pid` is a pu-engine. A daemon killed outright leaves its PID file
+    /// behind, and the pid may since have been reused by an unrelated process.
+    private static func isDaemonProcess(_ pid: pid_t) -> Bool {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+        return URL(fileURLWithPath: String(cString: buffer)).lastPathComponent == "pu-engine"
     }
 
     private func launchDaemon(binaryPath: String?) async throws {
@@ -170,9 +182,16 @@ private actor DaemonLauncher {
         for attempt in 0..<5 {
             let delay = UInt64(100_000_000 * (1 << attempt))
             try await Task.sleep(nanoseconds: delay)
-            if let pid = await healthyPid(timeout: 2.0) {
+            switch await probe(timeout: 2.0) {
+            case .healthy(let pid):
                 didLaunchDaemon = pid == Int(process.processIdentifier)
                 return
+            case .busy:
+                // Alive but at its connection limit, so it cannot be ours: ours
+                // would be brand new. Attach without claiming ownership.
+                return
+            case .unreachable:
+                continue
             }
         }
 
@@ -199,33 +218,39 @@ private actor DaemonLauncher {
         try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
     }
 
-    /// Health-check the daemon, retrying a failed check so one slow answer from
+    /// Whether a daemon is alive, retrying a failed check so one slow answer from
     /// a busy daemon is not mistaken for a dead one (which would kill its agents).
+    /// A daemon refusing connections as BUSY is alive.
     private func isHealthy(attempts: Int) async -> Bool {
         for attempt in 0..<attempts {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 250_000_000) }
-            if await healthCheck(timeout: 2.0) { return true }
+            if case .unreachable = await probe(timeout: 2.0) { continue }
+            return true
         }
         return false
     }
 
-    private func healthCheck(timeout: TimeInterval) async -> Bool {
-        await healthyPid(timeout: timeout) != nil
+    private enum Probe {
+        case healthy(pid: Int)
+        /// Answered, but turned the connection away at its connection limit.
+        case busy
+        case unreachable
     }
 
-    /// The pid reported by a healthy daemon, or nil if none answered in time.
-    private func healthyPid(timeout: TimeInterval) async -> Int? {
-        await withTaskGroup(of: Int?.self) { group in
+    private func probe(timeout: TimeInterval) async -> Probe {
+        await withTaskGroup(of: Probe.self) { group in
             group.addTask {
-                guard let response = try? await DaemonClient().send(.health) else { return nil }
-                if case .healthReport(let pid, _, _, _) = response { return pid }
-                return nil
+                switch try? await DaemonClient().send(.health) {
+                case .healthReport(let pid, _, _, _)?: return .healthy(pid: pid)
+                case .error(let code, _)? where code == "BUSY": return .busy
+                default: return .unreachable
+                }
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return nil
+                return .unreachable
             }
-            let first = await group.next() ?? nil
+            let first = await group.next() ?? .unreachable
             group.cancelAll()
             return first
         }

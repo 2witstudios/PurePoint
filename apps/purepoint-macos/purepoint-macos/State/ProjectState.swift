@@ -390,7 +390,11 @@ final class ProjectState: Identifiable {
 
     private func startGridSubscription() {
         gridSubscriptionTask?.cancel()
-        Task { await gridSubscription?.stop() }
+        // Capture before reassigning: the Task runs later and would otherwise stop
+        // the new subscription and leak the old one.
+        let previousGrid = gridSubscription
+        gridSubscription = nil
+        Task { await previousGrid?.stop() }
         guard let registry else { return }
         let sub = DaemonGridSubscription(projectRoot: projectRoot, registry: registry)
         gridSubscription = sub

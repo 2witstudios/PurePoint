@@ -231,8 +231,10 @@ final class AppState {
         Task {
             do {
                 try await DaemonLifecycle.restartDaemon()
+                // Re-run the full open sequence, not just a refresh: init marks the
+                // agents the old daemon stopped as suspended, and they get resumed.
                 for project in projects {
-                    project.refresh()
+                    project.startWatching()
                 }
             } catch {
                 self.daemonError = error.localizedDescription

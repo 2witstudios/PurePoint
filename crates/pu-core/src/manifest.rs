@@ -28,14 +28,21 @@ pub fn write_manifest(project_root: &Path, manifest: &Manifest) -> Result<(), Pu
     static WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp_path = path.with_extension(format!("json.tmp.{}.{seq}", std::process::id()));
-    let file = std::fs::File::create(&tmp_path)?;
-    let mut writer = std::io::BufWriter::new(file);
-    writer.write_all(content.as_bytes())?;
-    let file = writer
-        .into_inner()
-        .map_err(std::io::IntoInnerError::into_error)?;
-    file.sync_all()?;
-    std::fs::rename(&tmp_path, &path)?;
+    let write = || -> std::io::Result<()> {
+        let file = std::fs::File::create(&tmp_path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(content.as_bytes())?;
+        let file = writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp_path, &path)
+    };
+    // The temp name is unique per write, so a failed write must clean up after
+    // itself or every failure leaves another file in .pu/.
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp_path);
+    })?;
     Ok(())
 }
 

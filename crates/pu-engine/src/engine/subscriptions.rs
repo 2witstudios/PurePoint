@@ -316,6 +316,18 @@ mod natural_exit_tests {
             .unwrap()
     }
 
+    /// Poll the manifest until `id` reaches `want`, failing after 5s.
+    async fn wait_for_status(tmp: &TempDir, id: &str, want: AgentStatus) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while read(tmp, id).status != want {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{id} never reached {want:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     async fn wait_for_exit(handle: &AgentHandle) {
         let mut rx = handle.exit_rx.clone();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -334,19 +346,25 @@ mod natural_exit_tests {
         let engine = Engine::new();
         let handle = spawn_process(&engine, "/bin/sleep", &["30"]).await;
         let pid = handle.pid;
+        let exit_rx = handle.exit_rx.clone();
         let tmp = project_with(agent("ag-1", Some(pid), false));
-        engine.watch_natural_exit(
-            &tmp.path().to_string_lossy(),
-            "ag-1",
-            pid,
-            handle.exit_rx.clone(),
-        );
+        // A control agent outside shutdown: once its exit is recorded, the
+        // watchers have run, so ag-1 staying Running is not just a slow watcher.
+        let control = project_with(agent("ag-2", Some(42), false));
+        let (control_tx, control_rx) = tokio::sync::watch::channel(None);
+        engine.watch_natural_exit(&tmp.path().to_string_lossy(), "ag-1", pid, exit_rx.clone());
+        engine.watch_natural_exit(&control.path().to_string_lossy(), "ag-2", 42, control_rx);
         engine.sessions.lock().await.insert("ag-1".into(), handle);
 
         engine
             .kill_all_sessions(std::time::Duration::from_secs(2))
             .await;
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            exit_rx.borrow().is_some(),
+            "shutdown should have stopped ag-1"
+        );
+        control_tx.send(Some(0)).unwrap();
+        wait_for_status(&control, "ag-2", AgentStatus::Broken).await;
 
         let a = read(&tmp, "ag-1");
         assert_eq!(a.status, AgentStatus::Running);
@@ -368,9 +386,8 @@ mod natural_exit_tests {
             .await;
         // The watcher only gets to run after teardown began.
         engine.watch_natural_exit(&tmp.path().to_string_lossy(), "ag-1", pid, exit_rx);
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        assert_eq!(read(&tmp, "ag-1").status, AgentStatus::Broken);
+        wait_for_status(&tmp, "ag-1", AgentStatus::Broken).await;
     }
 
     #[tokio::test]
@@ -381,8 +398,7 @@ mod natural_exit_tests {
         engine.watch_natural_exit(&tmp.path().to_string_lossy(), "ag-1", 42, rx);
 
         tx.send(Some(0)).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        assert_eq!(read(&tmp, "ag-1").status, AgentStatus::Broken);
+        wait_for_status(&tmp, "ag-1", AgentStatus::Broken).await;
     }
 }

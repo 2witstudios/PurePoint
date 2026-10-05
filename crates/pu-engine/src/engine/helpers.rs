@@ -9,6 +9,24 @@ use crate::daemon_lifecycle;
 
 use super::Engine;
 
+/// Agent types that can continue their conversation with a stored session id.
+fn is_resumable(a: &AgentEntry) -> bool {
+    a.session_id.is_some() && matches!(a.agent_type.as_str(), "claude" | "codex" | "opencode")
+}
+
+/// Retire an agent the manifest says is running but no daemon is running: a
+/// resumable agent becomes suspended so it can be resumed, anything else Broken.
+fn retire_stale_agent(agent: &mut AgentEntry, now: chrono::DateTime<chrono::Utc>) {
+    if is_resumable(agent) {
+        agent.suspended = true;
+        agent.pid = None;
+        agent.suspended_at = Some(now);
+    } else {
+        agent.status = AgentStatus::Broken;
+        agent.completed_at = Some(now);
+    }
+}
+
 impl Engine {
     /// Parse an agent config's command string into (program, args), resolving
     /// the "shell" sentinel to the user's login shell.
@@ -76,10 +94,6 @@ impl Engine {
         let is_stale = |a: &AgentEntry| {
             !a.suspended && matches!(a.status, AgentStatus::Running) && !is_live(&a.id)
         };
-        let is_resumable = |a: &AgentEntry| {
-            a.session_id.is_some()
-                && matches!(a.agent_type.as_str(), "claude" | "codex" | "opencode")
-        };
         let stale: Vec<&AgentEntry> = m
             .agents
             .values()
@@ -107,16 +121,8 @@ impl Engine {
                     .values_mut()
                     .flat_map(|wt| wt.agents.values_mut()),
             ) {
-                if !is_stale(agent) {
-                    continue;
-                }
-                if is_resumable(agent) {
-                    agent.suspended = true;
-                    agent.pid = None;
-                    agent.suspended_at = Some(now);
-                } else {
-                    agent.status = AgentStatus::Broken;
-                    agent.completed_at = Some(now);
+                if is_stale(agent) {
+                    retire_stale_agent(agent, now);
                 }
             }
             m
@@ -157,8 +163,11 @@ impl Engine {
         }
     }
 
-    /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
-    /// Called once per project on the first status request after daemon (re)start.
+    /// Scan the manifest for Running agents whose PID is dead and retire them
+    /// (resumable ones become suspended, the rest Broken; see `retire_stale_agent`).
+    /// Called once per project on the first status request after daemon (re)start,
+    /// which can come before any init (e.g. the app restarting the daemon and
+    /// refreshing), so it must leave stopped agents just as resumable as init does.
     /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
     pub(super) fn reap_stale_agents(project_root: &str) {
         let root = Path::new(project_root);
@@ -192,8 +201,7 @@ impl Engine {
                         .pid
                         .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
                 {
-                    agent.status = AgentStatus::Broken;
-                    agent.completed_at = Some(now);
+                    retire_stale_agent(agent, now);
                 }
             }
             m
@@ -342,5 +350,20 @@ mod reconcile_tests {
             std::process::id(),
             "not-a-session-id-xyz"
         ));
+    }
+
+    #[test]
+    fn given_dead_resumable_agent_on_first_status_should_mark_suspended_not_broken() {
+        let tmp = project_with(vec![
+            agent("ag-1", "claude", Some("sid-1")),
+            agent("ag-2", "terminal", None),
+        ]);
+
+        Engine::reap_stale_agents(&root(&tmp));
+
+        let resumable = read(&tmp, "ag-1");
+        assert!(resumable.suspended);
+        assert_eq!(resumable.status, AgentStatus::Running);
+        assert_eq!(read(&tmp, "ag-2").status, AgentStatus::Broken);
     }
 }
