@@ -31,8 +31,8 @@ final class ProjectState: Identifiable {
     /// brand-new workspace — a row appearing for a pane the user just closed.
     @ObservationIgnored private var killedAgentIds = Set<String>()
 
-    /// Daemon start + init attempts before surfacing an error (~20s with backoff).
-    private static let daemonConnectAttempts = 7
+    /// How long to keep retrying daemon start + init before surfacing an error.
+    private static let daemonConnectBudget: Duration = .seconds(20)
 
     init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?) {
         self.projectRoot = projectRoot
@@ -56,12 +56,17 @@ final class ProjectState: Identifiable {
             // daemon can still be draining its agents and holding the daemon
             // lock, so the first start attempt fails. Giving up on it left the
             // app daemonless until the user quit and relaunched.
+            // Bounded by wall-clock time, not attempts: one attempt against a
+            // daemon that never answers can itself take ~20s of health probes.
+            let deadline = ContinuousClock.now + Self.daemonConnectBudget
             var attempt = 0
             while true {
                 do {
                     try await DaemonLifecycle.ensureDaemon()
                     let response = try await DaemonClient().send(.initProject(projectRoot: root))
-                    if case .error(_, let message) = response {
+                    if case .error(let code, let message) = response {
+                        // At its connection limit: transient, so back off and retry.
+                        if code == "BUSY" { throw DaemonClientError.busy }
                         self?.appState?.daemonError = message
                         return
                     }
@@ -70,7 +75,7 @@ final class ProjectState: Identifiable {
                     return
                 } catch {
                     attempt += 1
-                    guard attempt < Self.daemonConnectAttempts else {
+                    guard ContinuousClock.now < deadline else {
                         self?.appState?.daemonError = error.localizedDescription
                         return
                     }
