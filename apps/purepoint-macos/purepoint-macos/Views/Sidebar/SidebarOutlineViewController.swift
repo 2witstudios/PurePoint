@@ -53,6 +53,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Inline rename state.
     private var editingTextField: NSTextField?
+    private var isStartingRename = false
     private var editingOriginalName: String?
     private var editingWorkspaceId: String?
 
@@ -733,8 +734,12 @@ extension SidebarOutlineViewController: NSMenuDelegate {
     /// if something stole focus in the meantime, try again on the next tick.
     private func beginFieldEditing(_ textField: NSTextField, retriesLeft: Int) {
         guard editingTextField === textField, let window = view.window else { return }
+        // becomeFirstResponder attaches the field editor and selects all text. Don't follow it
+        // with selectText(nil): on a field already editing, that ends editing first, and
+        // controlTextDidEndEditing would then leave the field non-editable (dead input).
+        isStartingRename = true
         window.makeFirstResponder(textField)
-        textField.selectText(nil)
+        isStartingRename = false
         if textField.currentEditor() == nil, retriesLeft > 0 {
             DispatchQueue.main.async { [weak self] in
                 self?.beginFieldEditing(textField, retriesLeft: retriesLeft - 1)
@@ -801,6 +806,7 @@ extension SidebarOutlineViewController: NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
+        guard !isStartingRename else { return }
         guard let tf = editingTextField, let workspaceId = editingWorkspaceId else { return }
         let newName = tf.stringValue.trimmingCharacters(in: .whitespaces)
 
