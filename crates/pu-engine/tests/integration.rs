@@ -1,4 +1,4 @@
-use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
+use pu_core::protocol::{GridCommand, PROTOCOL_VERSION, Request, Response};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -282,6 +282,66 @@ async fn given_grid_split_should_succeed() {
         "expected success for grid split, got {resp:?}"
     );
 
+    h.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_tab_command_should_be_accepted_and_broadcast_to_grid_subscribers() {
+    // given — a subscriber streaming grid events for the project
+    let h = TestHarness::new().await;
+    let stream = UnixStream::connect(&h.sock).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let subscribe = serde_json::to_string(&Request::SubscribeGrid {
+        project_root: h.project_root(),
+    })
+    .unwrap();
+    writer
+        .write_all(format!("{subscribe}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let subscribed: Response = serde_json::from_str(line.trim()).unwrap();
+    assert!(matches!(subscribed, Response::GridSubscribed));
+    // The stream registers its receiver after acknowledging the subscription.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // when — another client sends a tab command
+    let resp = h
+        .send(&Request::GridCommand {
+            project_root: h.project_root(),
+            command: GridCommand::NewTab {
+                leaf_id: Some(1),
+                agent_id: Some("ag-a".into()),
+            },
+        })
+        .await;
+
+    // then — it is accepted and rebroadcast unchanged
+    assert!(matches!(resp, Response::Ok), "expected Ok, got {resp:?}");
+    line.clear();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        reader.read_line(&mut line),
+    )
+    .await
+    .expect("timed out waiting for GridEvent")
+    .unwrap();
+    let event: Response = serde_json::from_str(line.trim()).unwrap();
+    match event {
+        Response::GridEvent {
+            project_root,
+            command: GridCommand::NewTab { leaf_id, agent_id },
+        } => {
+            assert_eq!(project_root, h.project_root());
+            assert_eq!(leaf_id, Some(1));
+            assert_eq!(agent_id.as_deref(), Some("ag-a"));
+        }
+        other => panic!("expected NewTab GridEvent, got {other:?}"),
+    }
+
+    drop(writer);
     h.shutdown().await;
 }
 

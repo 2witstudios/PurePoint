@@ -70,7 +70,12 @@ Key behaviors:
 | `pu grid split` | `--axis <v\|h>`, `--leaf <id>` | Split a pane |
 | `pu grid close` | `--leaf <id>` | Close a pane |
 | `pu grid focus` | `--direction <up\|down\|left\|right>`, `--leaf <id>` | Move focus to another pane |
-| `pu grid assign <agent_id>` | `--leaf <id>` | Assign an agent to a pane |
+| `pu grid assign <agent_id>` | `--leaf <id>` | Show an agent in a pane's active tab (default: focused pane) |
+| `pu grid tab new` | `--leaf <id>`, `--agent <id>` | Open a tab after the active one (empty unless `--agent`) |
+| `pu grid tab select [N]` | `--next`, `--prev`, `--leaf <id>` | Select tab by 1-based position or next/prev (exactly one) |
+| `pu grid tab close` | `--leaf <id>`, `--tab <id>` | Close a tab (default: active tab of focused pane) |
+| `pu grid tab move <tab_id>` | `--to <leaf>`, `--index <n>` | Move a tab to another pane (default: append) |
+| `pu grid tab break` | `--tab <id>`, `--axis <v\|h>` | Move a tab into a new pane split off its pane |
 | `pu trigger list` | `--json` | List trigger definitions |
 | `pu trigger show <name>` | `--json` | Show trigger details |
 | `pu trigger create <name>` | `--on <event>`, `--inject`, `--gate`, `--description`, `--scope`, `--json` | Create trigger definition |

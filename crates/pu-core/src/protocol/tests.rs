@@ -485,7 +485,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
 }
 
 // --- GridCommand round-trips ---
@@ -535,17 +535,224 @@ fn given_grid_focus_command_should_round_trip() {
 #[test]
 fn given_grid_set_agent_command_should_round_trip() {
     let cmd = GridCommand::SetAgent {
-        leaf_id: 3,
+        leaf_id: Some(3),
         agent_id: "ag-abc".into(),
     };
     let json = serde_json::to_string(&cmd).unwrap();
     let parsed: GridCommand = serde_json::from_str(&json).unwrap();
     match parsed {
         GridCommand::SetAgent { leaf_id, agent_id } => {
-            assert_eq!(leaf_id, 3);
+            assert_eq!(leaf_id, Some(3));
             assert_eq!(agent_id, "ag-abc");
         }
         _ => panic!("expected SetAgent"),
+    }
+}
+
+#[test]
+fn given_grid_set_agent_without_leaf_should_target_focused_pane() {
+    // given
+    let cmd = GridCommand::SetAgent {
+        leaf_id: None,
+        agent_id: "ag-abc".into(),
+    };
+
+    // when
+    let json = serde_json::to_string(&cmd).unwrap();
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+
+    // then
+    assert_eq!(json, r#"{"action":"set_agent","agent_id":"ag-abc"}"#);
+    match parsed {
+        GridCommand::SetAgent { leaf_id, agent_id } => {
+            assert_eq!(leaf_id, None);
+            assert_eq!(agent_id, "ag-abc");
+        }
+        _ => panic!("expected SetAgent"),
+    }
+}
+
+#[test]
+fn given_legacy_set_agent_payload_with_leaf_should_still_parse() {
+    let json = r#"{"action":"set_agent","leaf_id":2,"agent_id":"x"}"#;
+    let parsed: GridCommand = serde_json::from_str(json).unwrap();
+    match parsed {
+        GridCommand::SetAgent { leaf_id, agent_id } => {
+            assert_eq!(leaf_id, Some(2));
+            assert_eq!(agent_id, "x");
+        }
+        _ => panic!("expected SetAgent"),
+    }
+}
+
+#[test]
+fn given_grid_new_tab_command_should_round_trip() {
+    let cmd = GridCommand::NewTab {
+        leaf_id: Some(1),
+        agent_id: Some("ag-a".into()),
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert_eq!(
+        json,
+        r#"{"action":"new_tab","leaf_id":1,"agent_id":"ag-a"}"#
+    );
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+    match parsed {
+        GridCommand::NewTab { leaf_id, agent_id } => {
+            assert_eq!(leaf_id, Some(1));
+            assert_eq!(agent_id.as_deref(), Some("ag-a"));
+        }
+        _ => panic!("expected NewTab"),
+    }
+}
+
+#[test]
+fn given_bare_new_tab_payload_should_open_empty_tab_in_focused_pane() {
+    let parsed: GridCommand = serde_json::from_str(r#"{"action":"new_tab"}"#).unwrap();
+    assert!(matches!(
+        parsed,
+        GridCommand::NewTab {
+            leaf_id: None,
+            agent_id: None
+        }
+    ));
+    assert_eq!(
+        serde_json::to_string(&parsed).unwrap(),
+        r#"{"action":"new_tab"}"#
+    );
+}
+
+#[test]
+fn given_grid_select_tab_by_index_should_round_trip() {
+    let cmd = GridCommand::SelectTab {
+        leaf_id: Some(2),
+        index: Some(3),
+        direction: None,
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert_eq!(json, r#"{"action":"select_tab","leaf_id":2,"index":3}"#);
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+    match parsed {
+        GridCommand::SelectTab {
+            leaf_id,
+            index,
+            direction,
+        } => {
+            assert_eq!(leaf_id, Some(2));
+            assert_eq!(index, Some(3));
+            assert_eq!(direction, None);
+        }
+        _ => panic!("expected SelectTab"),
+    }
+}
+
+#[test]
+fn given_grid_select_tab_by_direction_should_round_trip() {
+    let json = r#"{"action":"select_tab","direction":"next"}"#;
+    let parsed: GridCommand = serde_json::from_str(json).unwrap();
+    match &parsed {
+        GridCommand::SelectTab {
+            leaf_id,
+            index,
+            direction,
+        } => {
+            assert_eq!(*leaf_id, None);
+            assert_eq!(*index, None);
+            assert_eq!(direction.as_deref(), Some("next"));
+        }
+        _ => panic!("expected SelectTab"),
+    }
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+}
+
+#[test]
+fn given_grid_close_tab_command_should_round_trip() {
+    let cmd = GridCommand::CloseTab {
+        leaf_id: None,
+        tab_id: Some(7),
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert_eq!(json, r#"{"action":"close_tab","tab_id":7}"#);
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+    assert!(matches!(
+        parsed,
+        GridCommand::CloseTab {
+            leaf_id: None,
+            tab_id: Some(7)
+        }
+    ));
+}
+
+#[test]
+fn given_grid_move_tab_command_should_round_trip() {
+    let cmd = GridCommand::MoveTab {
+        tab_id: 4,
+        to_leaf: 1,
+        index: Some(2),
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert_eq!(
+        json,
+        r#"{"action":"move_tab","tab_id":4,"to_leaf":1,"index":2}"#
+    );
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+    assert!(matches!(
+        parsed,
+        GridCommand::MoveTab {
+            tab_id: 4,
+            to_leaf: 1,
+            index: Some(2)
+        }
+    ));
+}
+
+#[test]
+fn given_move_tab_without_index_should_append() {
+    let parsed: GridCommand =
+        serde_json::from_str(r#"{"action":"move_tab","tab_id":4,"to_leaf":1}"#).unwrap();
+    assert!(matches!(
+        parsed,
+        GridCommand::MoveTab {
+            tab_id: 4,
+            to_leaf: 1,
+            index: None
+        }
+    ));
+}
+
+#[test]
+fn given_move_tab_without_destination_should_be_rejected() {
+    let result = serde_json::from_str::<GridCommand>(r#"{"action":"move_tab","tab_id":4}"#);
+    assert!(result.is_err());
+}
+
+#[test]
+fn given_grid_break_tab_command_should_round_trip() {
+    let cmd = GridCommand::BreakTab {
+        tab_id: Some(5),
+        axis: "h".into(),
+    };
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert_eq!(json, r#"{"action":"break_tab","tab_id":5,"axis":"h"}"#);
+    let parsed: GridCommand = serde_json::from_str(&json).unwrap();
+    match parsed {
+        GridCommand::BreakTab { tab_id, axis } => {
+            assert_eq!(tab_id, Some(5));
+            assert_eq!(axis, "h");
+        }
+        _ => panic!("expected BreakTab"),
+    }
+}
+
+#[test]
+fn given_bare_break_tab_payload_should_default_to_vertical_active_tab() {
+    let parsed: GridCommand = serde_json::from_str(r#"{"action":"break_tab"}"#).unwrap();
+    match parsed {
+        GridCommand::BreakTab { tab_id, axis } => {
+            assert_eq!(tab_id, None);
+            assert_eq!(axis, "v");
+        }
+        _ => panic!("expected BreakTab"),
     }
 }
 

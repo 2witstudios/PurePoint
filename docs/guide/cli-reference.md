@@ -251,7 +251,14 @@ pu grid split [--axis v|h] [--leaf <id>]
 pu grid close [--leaf <id>]
 pu grid focus [--direction up|down|left|right] [--leaf <id>]
 pu grid assign <agent_id> [--leaf <id>]
+pu grid tab new [--leaf <id>] [--agent <id>]
+pu grid tab select [<n>] [--next] [--prev] [--leaf <id>]
+pu grid tab close [--leaf <id>] [--tab <id>]
+pu grid tab move <tab_id> --to <leaf> [--index <n>]
+pu grid tab break [--tab <id>] [--axis v|h]
 ```
+
+Each pane holds an ordered stack of tabs (an agent, a file, or empty). `--leaf` defaults to the focused pane; `assign` sets the content of that pane's active tab. Tab positions (`select <n>`, `--index`) are 1-based; `--tab` takes the stable tab id. `tab select` needs exactly one of `<n>`, `--next`, `--prev`. `grid show` lists each pane's tabs, marking the focused pane with `▸` and the active tab with `*`, and shows each tab's id as `#<id>`.
 
 ## schedule
 
