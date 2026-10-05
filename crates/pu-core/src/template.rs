@@ -204,7 +204,9 @@ pub fn save_template_with_command(
         command,
     })
     .map_err(std::io::Error::other)?;
-    let content = format!("---\n{fm}---\n{body}");
+    // serde_yml >= 0.0.13 omits the trailing newline; normalize so the closing fence is on its own line.
+    let fm = fm.trim_end_matches('\n');
+    let content = format!("---\n{fm}\n---\n{body}");
     std::fs::write(dir.join(format!("{name}.md")), content)
 }
 
