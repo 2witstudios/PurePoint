@@ -392,9 +392,17 @@ final class ProjectState: Identifiable {
         let sub = DaemonStatusSubscription(projectRoot: projectRoot)
         statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in
-            await sub.start { worktrees, agents in
-                self?.apply(rootAgents: agents, worktrees: worktrees)
-            }
+            await sub.start(
+                onEvent: { worktrees, agents in
+                    self?.apply(rootAgents: agents, worktrees: worktrees)
+                },
+                // The daemon is gone (crashed, or exited with the app instance
+                // that launched it). startWatching ensures a daemon, then inits and
+                // resumes, so this project's agents come back on the new one.
+                onDaemonLost: {
+                    self?.startWatching()
+                }
+            )
         }
     }
 

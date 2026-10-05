@@ -7,13 +7,23 @@ actor DaemonStatusSubscription {
     let projectRoot: String
     private var connection: NWConnection?
     private var stopped = false
+    /// Consecutive failures (about 3.5 s of backoff) before the daemon is
+    /// treated as gone rather than briefly busy or restarting.
+    private static let retriesBeforeDaemonLost = 4
 
     init(projectRoot: String) {
         self.projectRoot = projectRoot
     }
 
     /// Start the subscription loop with reconnection on failure.
-    func start(onEvent: @escaping @MainActor ([WorktreeModel], [AgentModel]) -> Void) async {
+    ///
+    /// If the daemon stays unreachable for a few attempts (it died, or exited
+    /// with the app instance that launched it), `onDaemonLost` is called once and
+    /// the loop ends: retrying the socket alone would never bring a daemon back.
+    func start(
+        onEvent: @escaping @MainActor ([WorktreeModel], [AgentModel]) -> Void,
+        onDaemonLost: (@MainActor () -> Void)? = nil
+    ) async {
         guard !stopped else { return }
 
         var backoff: UInt64 = 500_000_000  // 0.5s
@@ -32,6 +42,10 @@ actor DaemonStatusSubscription {
             } catch {
                 retries += 1
                 guard !stopped, retries <= maxRetries else { break }
+                if retries == Self.retriesBeforeDaemonLost, let onDaemonLost {
+                    await onDaemonLost()
+                    break
+                }
                 do {
                     try await Task.sleep(nanoseconds: backoff)
                 } catch {

@@ -68,21 +68,22 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         .spawn()
         .map_err(CliError::Io)?;
 
-    // Poll for socket with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms
-    let mut delay_ms = 10u64;
-    let mut total_ms = 0u64;
-    while total_ms < 3000 {
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        total_ms += delay_ms;
-        if check_daemon_health(socket).await {
-            return Ok(());
+    // Poll health with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms.
+    // The 3s budget is wall-clock and includes the probes themselves, which can
+    // each take up to HEALTH_PROBE_TIMEOUT against a daemon that never answers.
+    let poll = async {
+        let mut delay_ms = 10u64;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            if check_daemon_health(socket).await {
+                return;
+            }
+            delay_ms = (delay_ms * 2).min(640);
         }
-        delay_ms = (delay_ms * 2).min(640);
-    }
-
-    Err(CliError::Other(
-        "daemon did not start within 3 seconds".into(),
-    ))
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(3), poll)
+        .await
+        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))
 }
 
 #[cfg(test)]
