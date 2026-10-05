@@ -16,7 +16,7 @@ fn load_config_result(project_root: &Path) -> Result<Config, PuError> {
     let path = paths::config_path(project_root);
     match std::fs::read_to_string(&path) {
         Ok(content) => {
-            let mut config: Config = serde_yml::from_str(&content)?;
+            let mut config: Config = serde_yaml_ng::from_str(&content)?;
             // Fill in any agents missing from file with code defaults
             for (name, agent) in crate::types::default_agents() {
                 config.agents.entry(name).or_insert(agent);
@@ -61,7 +61,7 @@ pub fn update_agent_config(
 
     // Load raw config from file (without merging code defaults)
     let mut raw_config: Config = match std::fs::read_to_string(&path) {
-        Ok(content) => serde_yml::from_str(&content)?,
+        Ok(content) => serde_yaml_ng::from_str(&content)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config {
             default_agent: "claude".into(),
             agents: indexmap::IndexMap::new(),
@@ -90,7 +90,7 @@ pub fn update_agent_config(
     // Write back to YAML atomically: temp file, fsync, rename. A plain truncating
     // write can leave a torn file (e.g. a duplicated `envFiles:` tail) that fails
     // every later load.
-    let yaml = serde_yml::to_string(&raw_config)?;
+    let yaml = serde_yaml_ng::to_string(&raw_config)?;
     let tmp_path = path.with_extension("yaml.tmp");
     let mut tmp = std::fs::File::create(&tmp_path)?;
     std::io::Write::write_all(&mut tmp, yaml.as_bytes())?;
@@ -164,7 +164,7 @@ agents:
     interactive: true
 envFiles: [".env"]
 "#;
-        let config: crate::types::Config = serde_yml::from_str(yaml).unwrap();
+        let config: crate::types::Config = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(config.default_agent, "codex");
         assert!(config.agents.contains_key("codex"));
         let codex = &config.agents["codex"];

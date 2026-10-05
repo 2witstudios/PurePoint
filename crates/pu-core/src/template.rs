@@ -50,7 +50,7 @@ pub fn parse_template(content: &str, file_name: &str) -> Template {
                 command: Option<String>,
             }
 
-            if let Ok(fm) = serde_yml::from_str::<FrontMatter>(yaml) {
+            if let Ok(fm) = serde_yaml_ng::from_str::<FrontMatter>(yaml) {
                 return Template {
                     name: fm.name.unwrap_or_else(|| stem.to_string()),
                     description: fm.description.unwrap_or_default(),
@@ -197,7 +197,7 @@ pub fn save_template_with_command(
         #[serde(skip_serializing_if = "Option::is_none")]
         command: Option<&'a str>,
     }
-    let fm = serde_yml::to_string(&TemplateFrontmatter {
+    let fm = serde_yaml_ng::to_string(&TemplateFrontmatter {
         name,
         description,
         agent,

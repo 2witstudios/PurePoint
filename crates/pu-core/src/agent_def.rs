@@ -78,7 +78,7 @@ pub fn save_agent_def(dir: &Path, def: &AgentDef) -> Result<(), std::io::Error> 
     crate::validation::validate_name(&def.name)?;
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
-    let yaml = serde_yml::to_string(def).map_err(std::io::Error::other)?;
+    let yaml = serde_yaml_ng::to_string(def).map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 
@@ -103,7 +103,7 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentDef> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                match serde_yml::from_str::<AgentDef>(&content) {
+                match serde_yaml_ng::from_str::<AgentDef>(&content) {
                     Ok(mut def) => {
                         def.scope = scope.to_string();
                         defs.push(def);
@@ -125,7 +125,7 @@ fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<AgentDef> {
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut def) = serde_yml::from_str::<AgentDef>(&content) {
+            if let Ok(mut def) = serde_yaml_ng::from_str::<AgentDef>(&content) {
                 def.scope = scope.to_string();
                 return Some(def);
             }
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn given_agent_def_yaml_should_deserialize() {
         let yaml = "name: reviewer\nagent_type: claude\ntags:\n  - review\n  - code\n";
-        let def: AgentDef = serde_yml::from_str(yaml).unwrap();
+        let def: AgentDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.name, "reviewer");
         assert_eq!(def.agent_type, "claude");
         assert_eq!(def.tags, vec!["review", "code"]);
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn given_minimal_yaml_should_use_defaults() {
         let yaml = "name: basic\n";
-        let def: AgentDef = serde_yml::from_str(yaml).unwrap();
+        let def: AgentDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.agent_type, "claude");
         assert!(def.template.is_none());
         assert!(def.inline_prompt.is_none());
@@ -242,7 +242,7 @@ mod tests {
         assert!(path.is_file());
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let loaded: AgentDef = serde_yml::from_str(&content).unwrap();
+        let loaded: AgentDef = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(loaded.name, "tester");
         assert_eq!(loaded.template, Some("test-template".to_string()));
         assert_eq!(loaded.tags, vec!["test"]);
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn given_agent_def_with_command_should_deserialize() {
         let yaml = "name: dev-server\nagent_type: terminal\ncommand: \"npm run dev\"\n";
-        let def: AgentDef = serde_yml::from_str(yaml).unwrap();
+        let def: AgentDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.name, "dev-server");
         assert_eq!(def.agent_type, "terminal");
         assert_eq!(def.command, Some("npm run dev".to_string()));
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn given_agent_def_without_command_should_default_to_none() {
         let yaml = "name: basic\n";
-        let def: AgentDef = serde_yml::from_str(yaml).unwrap();
+        let def: AgentDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(def.command.is_none());
     }
 
@@ -318,9 +318,9 @@ mod tests {
             icon: None,
             command: Some("cargo test".to_string()),
         };
-        let yaml = serde_yml::to_string(&def).unwrap();
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
         assert!(yaml.contains("command: cargo test"));
-        let loaded: AgentDef = serde_yml::from_str(&yaml).unwrap();
+        let loaded: AgentDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(loaded.command, Some("cargo test".to_string()));
     }
 

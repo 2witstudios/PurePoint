@@ -108,7 +108,7 @@ pub fn save_trigger_def(dir: &Path, def: &TriggerDef) -> Result<(), std::io::Err
     }
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
-    let yaml = serde_yml::to_string(def).map_err(std::io::Error::other)?;
+    let yaml = serde_yaml_ng::to_string(def).map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 
@@ -142,7 +142,7 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<TriggerDef> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                match serde_yml::from_str::<TriggerDef>(&content) {
+                match serde_yaml_ng::from_str::<TriggerDef>(&content) {
                     Ok(mut def) => {
                         def.scope = scope.to_string();
                         defs.push(def);
@@ -162,7 +162,7 @@ fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<TriggerDef> {
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            match serde_yml::from_str::<TriggerDef>(&content) {
+            match serde_yaml_ng::from_str::<TriggerDef>(&content) {
                 Ok(mut def) => {
                     def.scope = scope.to_string();
                     return Some(def);
@@ -209,7 +209,7 @@ sequence:
   - inject: "/review"
   - inject: "/commit-push-pr"
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.name, "post-task");
         assert_eq!(def.on, TriggerEvent::AgentIdle);
         assert_eq!(def.sequence.len(), 3);
@@ -228,7 +228,7 @@ sequence:
   - gate:
       run: "cargo clippy -- -D warnings"
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.on, TriggerEvent::PreCommit);
         assert_eq!(def.sequence.len(), 2);
         assert_eq!(def.sequence[0].gate.as_ref().unwrap().run, "cargo test");
@@ -244,7 +244,7 @@ sequence:
   - gate:
       run: "cargo build --release"
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.on, TriggerEvent::PrePush);
         assert_eq!(def.sequence.len(), 1);
     }
@@ -260,7 +260,7 @@ sequence:
       run: "cargo test"
     max_retries: 5
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         let action = &def.sequence[0];
         assert_eq!(action.inject.as_deref(), Some("/commit-push-pr"));
         assert_eq!(action.gate.as_ref().unwrap().run, "cargo test");
@@ -278,7 +278,7 @@ sequence:
   - gate:
       run: "xcodebuild test -scheme {{SCHEME}} -quiet"
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.variables["SCHEME"], "MyApp");
         assert!(
             def.sequence[0]
@@ -300,7 +300,7 @@ sequence:
       run: "check-something"
       expect_exit: 2
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(def.sequence[0].gate.as_ref().unwrap().expect_exit, Some(2));
     }
 
@@ -312,7 +312,7 @@ on: agent_idle
 sequence:
   - inject: "hello"
 "#;
-        let def: TriggerDef = serde_yml::from_str(yaml).unwrap();
+        let def: TriggerDef = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(def.description.is_none());
         assert!(def.variables.is_empty());
         assert!(def.sequence[0].gate.is_none());
@@ -345,8 +345,8 @@ sequence:
             variables: HashMap::new(),
             scope: String::new(),
         };
-        let yaml = serde_yml::to_string(&def).unwrap();
-        let reparsed: TriggerDef = serde_yml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&def).unwrap();
+        let reparsed: TriggerDef = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(reparsed.name, "devx");
         assert_eq!(reparsed.on, TriggerEvent::AgentIdle);
         assert_eq!(reparsed.sequence.len(), 2);
@@ -363,8 +363,8 @@ sequence:
             TriggerEvent::PreCommit,
             TriggerEvent::PrePush,
         ] {
-            let yaml = serde_yml::to_string(&event).unwrap();
-            let parsed: TriggerEvent = serde_yml::from_str(&yaml).unwrap();
+            let yaml = serde_yaml_ng::to_string(&event).unwrap();
+            let parsed: TriggerEvent = serde_yaml_ng::from_str(&yaml).unwrap();
             assert_eq!(parsed, event);
         }
     }
@@ -407,7 +407,7 @@ sequence:
         assert!(path.is_file());
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let loaded: TriggerDef = serde_yml::from_str(&content).unwrap();
+        let loaded: TriggerDef = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(loaded.name, "devx");
         assert_eq!(loaded.on, TriggerEvent::AgentIdle);
     }

@@ -142,8 +142,8 @@ mod tests {
     #[test]
     fn given_config_should_round_trip_yaml() {
         let config = Config::default();
-        let yaml = serde_yml::to_string(&config).unwrap();
-        let parsed: Config = serde_yml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let parsed: Config = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(parsed.default_agent, "claude");
         assert!(parsed.agents.contains_key("claude"));
     }
@@ -156,7 +156,7 @@ mod tests {
 name: claude
 command: claude
 "#;
-        let config: AgentConfig = serde_yml::from_str(yaml).unwrap();
+        let config: AgentConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(config.launch_args.is_none());
     }
 
@@ -167,7 +167,7 @@ name: claude
 command: claude
 launchArgs: []
 "#;
-        let config: AgentConfig = serde_yml::from_str(yaml).unwrap();
+        let config: AgentConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(config.launch_args, Some(vec![]));
     }
 
@@ -180,7 +180,7 @@ launchArgs:
   - "--dangerously-skip-permissions"
   - "--verbose"
 "#;
-        let config: AgentConfig = serde_yml::from_str(yaml).unwrap();
+        let config: AgentConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(
             config.launch_args,
             Some(vec![
@@ -199,8 +199,8 @@ launchArgs:
             interactive: true,
             launch_args: Some(vec!["--dangerously-skip-permissions".into()]),
         };
-        let yaml = serde_yml::to_string(&config).unwrap();
-        let parsed: AgentConfig = serde_yml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let parsed: AgentConfig = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(parsed.launch_args, config.launch_args);
     }
 
