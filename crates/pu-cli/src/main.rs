@@ -177,6 +177,10 @@ enum Commands {
     },
     /// Control the pane grid layout
     Grid {
+        /// Workspace to act on (an id from `pu grid show`; default: the one on screen).
+        /// Leaf and tab ids are only unique within a workspace.
+        #[arg(long, global = true)]
+        workspace: Option<String>,
         #[command(subcommand)]
         action: GridAction,
     },
@@ -435,13 +439,80 @@ enum GridAction {
         #[arg(long)]
         leaf: Option<u32>,
     },
-    /// Assign an agent to a pane
+    /// Show an agent in a pane's active tab
     Assign {
         /// Agent ID
         agent_id: String,
         /// Leaf ID (default: focused pane)
         #[arg(long)]
         leaf: Option<u32>,
+    },
+    /// Manage the tabs inside a pane
+    Tab {
+        #[command(subcommand)]
+        action: TabAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TabAction {
+    /// Open a tab after the pane's active tab (empty unless --agent is given)
+    New {
+        /// Leaf ID (default: focused pane)
+        #[arg(long)]
+        leaf: Option<u32>,
+        /// Agent ID to show in the new tab
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Select a tab by 1-based position, or the next/previous tab
+    #[command(group(
+        clap::ArgGroup::new("target")
+            .required(true)
+            .args(["index", "next", "prev"])
+    ))]
+    Select {
+        /// 1-based tab position in the pane
+        #[arg(value_parser = clap::value_parser!(u32).range(1..))]
+        index: Option<u32>,
+        /// Select the next tab
+        #[arg(long)]
+        next: bool,
+        /// Select the previous tab
+        #[arg(long)]
+        prev: bool,
+        /// Leaf ID (default: focused pane)
+        #[arg(long)]
+        leaf: Option<u32>,
+    },
+    /// Close a tab (default: the pane's active tab)
+    Close {
+        /// Leaf ID (default: focused pane)
+        #[arg(long)]
+        leaf: Option<u32>,
+        /// Tab ID to close
+        #[arg(long)]
+        tab: Option<u32>,
+    },
+    /// Move a tab to another pane
+    Move {
+        /// Tab ID to move
+        tab_id: u32,
+        /// Destination leaf ID
+        #[arg(long)]
+        to: u32,
+        /// 1-based destination position (default: append)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        index: Option<u32>,
+    },
+    /// Move a tab into a new pane split off its current pane
+    Break {
+        /// Tab ID (default: the focused pane's active tab)
+        #[arg(long)]
+        tab: Option<u32>,
+        /// Axis: v (vertical/left-right) or h (horizontal/top-bottom)
+        #[arg(long, default_value = "v", value_parser = ["v", "h"])]
+        axis: String,
     },
 }
 
@@ -753,7 +824,9 @@ async fn main() {
             keys,
             json,
         } => commands::send::run(&socket, &agent_id, text, no_enter, keys, json).await,
-        Commands::Grid { action } => commands::grid::run(&socket, action).await,
+        Commands::Grid { workspace, action } => {
+            commands::grid::run(&socket, workspace, action).await
+        }
         Commands::Trigger { action } => match action {
             TriggerAction::List { json } => commands::trigger::run_list(&socket, json).await,
             TriggerAction::Show { name, json } => {
@@ -858,5 +931,109 @@ async fn main() {
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_tab(args: &[&str]) -> Result<TabAction, clap::Error> {
+        let argv = ["pu", "grid", "tab"].iter().chain(args).copied();
+        match Cli::try_parse_from(argv)?.command {
+            Commands::Grid {
+                action: GridAction::Tab { action },
+                ..
+            } => Ok(action),
+            _ => panic!("expected grid tab"),
+        }
+    }
+
+    #[test]
+    fn given_select_with_position_should_parse_index() {
+        let action = parse_tab(&["select", "2", "--leaf", "1"]).unwrap();
+        assert!(matches!(
+            action,
+            TabAction::Select {
+                index: Some(2),
+                next: false,
+                prev: false,
+                leaf: Some(1)
+            }
+        ));
+    }
+
+    #[test]
+    fn given_select_without_target_should_be_rejected() {
+        assert!(parse_tab(&["select"]).is_err());
+    }
+
+    #[test]
+    fn given_select_with_two_targets_should_be_rejected() {
+        assert!(parse_tab(&["select", "2", "--next"]).is_err());
+        assert!(parse_tab(&["select", "--next", "--prev"]).is_err());
+    }
+
+    #[test]
+    fn given_select_position_zero_should_be_rejected() {
+        assert!(parse_tab(&["select", "0"]).is_err());
+    }
+
+    #[test]
+    fn given_move_should_require_destination_leaf() {
+        assert!(parse_tab(&["move", "4"]).is_err());
+        let action = parse_tab(&["move", "4", "--to", "1", "--index", "2"]).unwrap();
+        assert!(matches!(
+            action,
+            TabAction::Move {
+                tab_id: 4,
+                to: 1,
+                index: Some(2)
+            }
+        ));
+    }
+
+    #[test]
+    fn given_break_without_axis_should_default_to_vertical() {
+        let action = parse_tab(&["break"]).unwrap();
+        match action {
+            TabAction::Break { tab, axis } => {
+                assert_eq!(tab, None);
+                assert_eq!(axis, "v");
+            }
+            _ => panic!("expected Break"),
+        }
+        assert!(parse_tab(&["break", "--axis", "x"]).is_err());
+    }
+
+    #[test]
+    fn given_assign_without_leaf_should_leave_leaf_unset() {
+        let cli = Cli::try_parse_from(["pu", "grid", "assign", "ag-a"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Grid {
+                action: GridAction::Assign { leaf: None, .. },
+                workspace: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn given_workspace_flag_after_subcommand_should_apply_to_grid() {
+        let cli = Cli::try_parse_from([
+            "pu",
+            "grid",
+            "tab",
+            "close",
+            "--tab",
+            "3",
+            "--workspace",
+            "ws-ag-b",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Grid { workspace, .. } => assert_eq!(workspace.as_deref(), Some("ws-ag-b")),
+            _ => panic!("expected grid"),
+        }
     }
 }

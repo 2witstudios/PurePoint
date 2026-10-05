@@ -65,7 +65,9 @@ impl Engine {
             if path.file_stem().and_then(|s| s.to_str()) == Some(session_id) {
                 continue;
             }
-            // Only repair continuation files (first line has non-null parentUuid)
+            // Only repair continuation files of *this* conversation (first line has
+            // a non-null parentUuid and names the session). Other agents in the same
+            // cwd have their own live transcripts that must never be rewritten.
             let Ok(file) = std::fs::File::open(&path) else {
                 continue;
             };
@@ -77,7 +79,9 @@ impl Engine {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&first_line) else {
                 continue;
             };
-            if value.get("parentUuid").and_then(|v| v.as_str()).is_some() {
+            if value.get("parentUuid").and_then(|v| v.as_str()).is_some()
+                && first_line.contains(session_id)
+            {
                 repair_session_file(&path);
             }
         }
@@ -226,7 +230,12 @@ pub(super) fn repair_session_file(path: &Path) -> bool {
         }
         output.push('\n');
     }
-    let _ = std::fs::write(path, &output);
+    // Temp file + rename, so a reader never sees a half-written transcript.
+    let tmp = path.with_extension("jsonl.repair.tmp");
+    if std::fs::write(&tmp, &output).is_err() || std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
 
     true
 }

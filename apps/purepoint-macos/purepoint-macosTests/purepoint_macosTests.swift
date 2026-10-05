@@ -15,28 +15,22 @@ struct PaneSplitNodeTests {
 
     // MARK: Leaf creation
 
-    @Test func leafNodeStoresIdAndAgent() {
-        let node = PaneSplitNode.leaf(id: 1, agentId: "agent-a")
+    @Test func leafNodeStoresId() {
+        let node = PaneSplitNode.leaf(id: 1)
         #expect(node.allLeafIds == [1])
         #expect(node.leafCount == 1)
-        #expect(node.agentId(forLeafId: 1) == "agent-a")
     }
 
-    @Test func leafNodeWithNilAgent() {
-        let node = PaneSplitNode.leaf(id: 0, agentId: nil)
-        #expect(node.agentId(forLeafId: 0) == nil)
-        #expect(node.leafCount == 1)
-    }
 
     @Test func leafRowCountIsOne() {
-        let node = PaneSplitNode.leaf(id: 5, agentId: nil)
+        let node = PaneSplitNode.leaf(id: 5)
         #expect(node.rowCount == 1)
     }
 
     // MARK: Splitting
 
     @Test func splitHorizontallyCreatesTwo() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: "a1")
+        let leaf = PaneSplitNode.leaf(id: 0)
         var nextId = 1
         let split = leaf.splittingLeaf(id: 0, axis: .horizontal, nextId: &nextId)
         #expect(split.leafCount == 2)
@@ -45,23 +39,22 @@ struct PaneSplitNodeTests {
     }
 
     @Test func splitVerticallyCreatesTwo() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
+        let leaf = PaneSplitNode.leaf(id: 0)
         var nextId = 1
         let split = leaf.splittingLeaf(id: 0, axis: .vertical, nextId: &nextId)
         #expect(split.leafCount == 2)
         #expect(split.allLeafIds == [0, 1])
     }
 
-    @Test func splitPreservesOriginalAgent() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: "original")
+    @Test func splitKeepsOriginalLeafFirst() {
+        let leaf = PaneSplitNode.leaf(id: 0)
         var nextId = 1
         let split = leaf.splittingLeaf(id: 0, axis: .horizontal, nextId: &nextId)
-        #expect(split.agentId(forLeafId: 0) == "original")
-        #expect(split.agentId(forLeafId: 1) == nil)
+        #expect(split == .split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1)))
     }
 
     @Test func splitNonexistentIdIsNoOp() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
+        let leaf = PaneSplitNode.leaf(id: 0)
         var nextId = 1
         let result = leaf.splittingLeaf(id: 99, axis: .horizontal, nextId: &nextId)
         #expect(result == leaf)
@@ -72,8 +65,8 @@ struct PaneSplitNodeTests {
         var nextId = 2
         let tree = PaneSplitNode.split(
             axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         let result = tree.splittingLeaf(id: 1, axis: .vertical, nextId: &nextId)
         #expect(result.leafCount == 3)
@@ -84,18 +77,18 @@ struct PaneSplitNodeTests {
         var nextId = 2
         let tree = PaneSplitNode.split(
             axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         let result = tree.splittingLeaf(id: 1, axis: .vertical, ratio: 0.7, nextId: &nextId)
         // The inner split created for leaf 1 should have ratio 0.7
         let expected = PaneSplitNode.split(
             axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
+            first: .leaf(id: 0),
             second: .split(
                 axis: .vertical, ratio: 0.7,
-                first: .leaf(id: 1, agentId: nil),
-                second: .leaf(id: 2, agentId: nil)
+                first: .leaf(id: 1),
+                second: .leaf(id: 2)
             )
         )
         #expect(result == expected)
@@ -106,8 +99,8 @@ struct PaneSplitNodeTests {
     @Test func horizontalSplitCountsRows() {
         let tree = PaneSplitNode.split(
             axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         #expect(tree.rowCount == 2)
     }
@@ -115,21 +108,21 @@ struct PaneSplitNodeTests {
     @Test func verticalSplitRowCountIsOne() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         #expect(tree.rowCount == 1)
     }
 
     @Test func canSplitUnderSixLeaves() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
+        let leaf = PaneSplitNode.leaf(id: 0)
         #expect(leaf.canSplit(axis: .horizontal) == true)
     }
 
     @Test func canSplitAtFiveLeaves() {
         // Build a tree with 5 leaves — should still allow one more split
         var nextId = 1
-        var tree = PaneSplitNode.leaf(id: 0, agentId: nil)
+        var tree = PaneSplitNode.leaf(id: 0)
         for _ in 0..<4 {
             let target = tree.allLeafIds.last!
             tree = tree.splittingLeaf(id: target, axis: .vertical, nextId: &nextId)
@@ -141,7 +134,7 @@ struct PaneSplitNodeTests {
     @Test func cannotSplitAtSixLeaves() {
         // Build a tree with 6 leaves
         var nextId = 1
-        var tree = PaneSplitNode.leaf(id: 0, agentId: nil)
+        var tree = PaneSplitNode.leaf(id: 0)
         for _ in 0..<5 {
             let target = tree.allLeafIds.last!
             tree = tree.splittingLeaf(id: target, axis: .vertical, nextId: &nextId)
@@ -153,33 +146,33 @@ struct PaneSplitNodeTests {
     // MARK: Removing / closing
 
     @Test func removeSingleLeafReturnsNil() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
+        let leaf = PaneSplitNode.leaf(id: 0)
         #expect(leaf.removingLeaf(id: 0) == nil)
     }
 
     @Test func removeNonexistentLeafIsNoOp() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
+        let leaf = PaneSplitNode.leaf(id: 0)
         #expect(leaf.removingLeaf(id: 99) == leaf)
     }
 
     @Test func removeLeafCollapsesParent() {
         let tree = PaneSplitNode.split(
             axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: "a"),
-            second: .leaf(id: 1, agentId: "b")
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         let result = tree.removingLeaf(id: 0)
-        #expect(result == .leaf(id: 1, agentId: "b"))
+        #expect(result == .leaf(id: 1))
     }
 
     @Test func removeDeeplyNestedLeaf() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
+            first: .leaf(id: 0),
             second: .split(
                 axis: .horizontal, ratio: 0.5,
-                first: .leaf(id: 1, agentId: nil),
-                second: .leaf(id: 2, agentId: nil)
+                first: .leaf(id: 1),
+                second: .leaf(id: 2)
             )
         )
         let result = tree.removingLeaf(id: 1)!
@@ -189,60 +182,26 @@ struct PaneSplitNodeTests {
 
     // MARK: Finding / queries
 
-    @Test func containsAgentFindsIt() {
-        let tree = PaneSplitNode.split(
-            axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: "agent-x"),
-            second: .leaf(id: 1, agentId: "agent-y")
-        )
-        #expect(tree.containsAgent("agent-x") == true)
-        #expect(tree.containsAgent("agent-y") == true)
-        #expect(tree.containsAgent("agent-z") == false)
-    }
 
-    @Test func leafIdForAgentId() {
-        let tree = PaneSplitNode.split(
-            axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: "a1"),
-            second: .leaf(id: 1, agentId: "a2")
-        )
-        #expect(tree.leafId(forAgentId: "a1") == 0)
-        #expect(tree.leafId(forAgentId: "a2") == 1)
-        #expect(tree.leafId(forAgentId: "missing") == nil)
-    }
 
-    @Test func agentIdForMissingLeafReturnsNil() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: "a")
-        #expect(leaf.agentId(forLeafId: 99) == nil)
-    }
 
     // MARK: Setting agent
 
-    @Test func settingAgentOnLeaf() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: nil)
-        let updated = leaf.settingAgent("new-agent", forLeafId: 0)
-        #expect(updated.agentId(forLeafId: 0) == "new-agent")
-    }
 
-    @Test func settingAgentOnWrongLeafIsNoOp() {
-        let leaf = PaneSplitNode.leaf(id: 0, agentId: "original")
-        let updated = leaf.settingAgent("new", forLeafId: 99)
-        #expect(updated == leaf)
-    }
 
     // MARK: Setting ratio
 
     @Test func settingRatioOnSplit() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         let updated = tree.settingRatio(0.7, forSplitIdentifiedByFirstLeaf: 0)
         let expected = PaneSplitNode.split(
             axis: .vertical, ratio: 0.7,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         #expect(updated == expected)
     }
@@ -252,8 +211,8 @@ struct PaneSplitNodeTests {
     @Test func findAdjacentLeafForward() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         #expect(tree.findAdjacentLeaf(from: 0, axis: .vertical, forward: true) == 1)
     }
@@ -261,8 +220,8 @@ struct PaneSplitNodeTests {
     @Test func findAdjacentLeafBackward() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         #expect(tree.findAdjacentLeaf(from: 1, axis: .vertical, forward: false) == 0)
     }
@@ -270,8 +229,8 @@ struct PaneSplitNodeTests {
     @Test func findAdjacentLeafNoNeighbor() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         // No horizontal neighbor exists
         #expect(tree.findAdjacentLeaf(from: 0, axis: .horizontal, forward: true) == nil)
@@ -280,8 +239,8 @@ struct PaneSplitNodeTests {
     @Test func siblingLeafId() {
         let tree = PaneSplitNode.split(
             axis: .vertical, ratio: 0.5,
-            first: .leaf(id: 0, agentId: nil),
-            second: .leaf(id: 1, agentId: nil)
+            first: .leaf(id: 0),
+            second: .leaf(id: 1)
         )
         #expect(tree.siblingLeafId(of: 0) == 1)
         #expect(tree.siblingLeafId(of: 1) == 0)
@@ -290,9 +249,9 @@ struct PaneSplitNodeTests {
     // MARK: Equatable
 
     @Test func equalityForLeaves() {
-        let a = PaneSplitNode.leaf(id: 0, agentId: "x")
-        let b = PaneSplitNode.leaf(id: 0, agentId: "x")
-        let c = PaneSplitNode.leaf(id: 1, agentId: "x")
+        let a = PaneSplitNode.leaf(id: 0)
+        let b = PaneSplitNode.leaf(id: 0)
+        let c = PaneSplitNode.leaf(id: 1)
         #expect(a == b)
         #expect(a != c)
     }
@@ -302,92 +261,88 @@ struct PaneSplitNodeTests {
 
 struct GridLayoutPersistenceTests {
 
-    @Test func roundTripSingleLeaf() throws {
-        let original = PaneSplitNode.leaf(id: 0, agentId: "agent-1")
-        let layoutNode = original.toLayoutNode()
-        let data = try JSONEncoder().encode(layoutNode)
+    private func roundTrip(_ root: PaneSplitNode, panes: [Int: Pane]) throws -> (PaneSplitNode, [Int: Pane], Int) {
+        let data = try JSONEncoder().encode(WorkspacePersistence.layoutNode(root, panes: panes))
         let decoded = try JSONDecoder().decode(GridLayoutNode.self, from: data)
-        var nextId = 0
-        let restored = PaneSplitNode.fromLayoutNode(decoded, nextId: &nextId)
-        // Leaf IDs are reassigned on restore, so check structure and agent
-        #expect(restored.leafCount == 1)
-        #expect(restored.agentId(forLeafId: 0) == "agent-1")
+        var restoredPanes: [Int: Pane] = [:]
+        var nextLeafId = 0
+        var nextSurfaceId = 0
+        let restored = WorkspacePersistence.tree(
+            from: decoded, panes: &restoredPanes, nextLeafId: &nextLeafId, nextSurfaceId: &nextSurfaceId)
+        return (restored, restoredPanes, nextSurfaceId)
     }
 
-    @Test func roundTripSplitTree() throws {
+    private func pane(_ tabs: [(Int, SurfaceContent)], active: Int) -> Pane {
+        Pane(tabs: tabs.map { Surface(id: $0.0, content: $0.1) }, activeTabId: active)
+    }
+
+    @Test func roundTripSingleLeafKeepsTabsAndActiveTab() throws {
+        let panes = [0: pane([(0, .agent("agent-1")), (1, .file(path: "/tmp/a.md")), (2, .empty)], active: 1)]
+        let (restored, restoredPanes, nextSurfaceId) = try roundTrip(.leaf(id: 0), panes: panes)
+        #expect(restored == .leaf(id: 0))
+        #expect(restoredPanes == panes)
+        #expect(nextSurfaceId == 3)
+    }
+
+    @Test func roundTripSplitTreePreservesGeometryAndRatios() throws {
         let original = PaneSplitNode.split(
             axis: .vertical, ratio: 0.6,
-            first: .leaf(id: 0, agentId: "a1"),
-            second: .split(
-                axis: .horizontal, ratio: 0.4,
-                first: .leaf(id: 1, agentId: "a2"),
-                second: .leaf(id: 2, agentId: nil)
-            )
+            first: .leaf(id: 0),
+            second: .split(axis: .horizontal, ratio: 0.4, first: .leaf(id: 1), second: .leaf(id: 2))
         )
-        let layoutNode = original.toLayoutNode()
-        let data = try JSONEncoder().encode(layoutNode)
-        let decoded = try JSONDecoder().decode(GridLayoutNode.self, from: data)
-        var nextId = 0
-        let restored = PaneSplitNode.fromLayoutNode(decoded, nextId: &nextId)
-        #expect(restored.leafCount == 3)
-        #expect(restored.containsAgent("a1"))
-        #expect(restored.containsAgent("a2"))
-        #expect(nextId == 3)
+        let panes = [
+            0: pane([(0, .agent("a1"))], active: 0),
+            1: pane([(1, .agent("a2")), (3, .agent("a3"))], active: 3),
+            2: pane([(2, .empty)], active: 2),
+        ]
+        let (restored, restoredPanes, _) = try roundTrip(original, panes: panes)
+        #expect(restored == original)
+        #expect(restoredPanes == panes)
     }
 
-    @Test func roundTripPreservesRatios() throws {
-        let original = PaneSplitNode.split(
-            axis: .vertical, ratio: 0.6,
-            first: .leaf(id: 0, agentId: "a1"),
-            second: .split(
-                axis: .horizontal, ratio: 0.4,
-                first: .leaf(id: 1, agentId: "a2"),
-                second: .leaf(id: 2, agentId: nil)
-            )
-        )
-        let layoutNode = original.toLayoutNode()
-        let data = try JSONEncoder().encode(layoutNode)
-        let decoded = try JSONDecoder().decode(GridLayoutNode.self, from: data)
-        var nextId = 0
-        let restored = PaneSplitNode.fromLayoutNode(decoded, nextId: &nextId)
-        // Compare layout nodes to verify ratios survive the round trip
-        let restoredLayout = restored.toLayoutNode()
-        let originalLayout = original.toLayoutNode()
-        #expect(restoredLayout.ratio == originalLayout.ratio)
-        #expect(restoredLayout.first?.ratio == originalLayout.first?.ratio)
-        #expect(restoredLayout.second?.ratio == originalLayout.second?.ratio)
-    }
-
-    @Test func fromLayoutNodeDegradedSplitFallsBackToLeaf() {
+    @Test func degradedSplitFallsBackToLeafWithEmptyTab() {
         // A split node with missing axis/ratio/children should degrade to a single leaf
-        let degraded = GridLayoutNode(type: .split, leafId: nil, agentId: nil, axis: nil, ratio: nil, first: nil, second: nil)
-        var nextId = 0
-        let result = PaneSplitNode.fromLayoutNode(degraded, nextId: &nextId)
+        let degraded = GridLayoutNode(type: .split, leafId: nil, axis: nil, ratio: nil, first: nil, second: nil)
+        var panes: [Int: Pane] = [:]
+        var nextLeafId = 0
+        var nextSurfaceId = 0
+        let result = WorkspacePersistence.tree(
+            from: degraded, panes: &panes, nextLeafId: &nextLeafId, nextSurfaceId: &nextSurfaceId)
         #expect(result.leafCount == 1)
-        #expect(nextId == 1)
+        #expect(nextLeafId == 1)
+        #expect(panes[0]?.tabs.map(\.content) == [.empty])
+    }
+
+    @Test func unknownSurfaceKindLoadsAsEmptyTab() throws {
+        let json = """
+            {"type":"leaf","leafId":0,"activeTabId":4,"tabs":[{"id":4,"kind":"browser"}]}
+            """
+        let node = try JSONDecoder().decode(GridLayoutNode.self, from: Data(json.utf8))
+        var panes: [Int: Pane] = [:]
+        var nextLeafId = 0
+        var nextSurfaceId = 0
+        _ = WorkspacePersistence.tree(from: node, panes: &panes, nextLeafId: &nextLeafId, nextSurfaceId: &nextSurfaceId)
+        #expect(panes[0] == Pane(tabs: [Surface(id: 4, content: .empty)], activeTabId: 4))
     }
 
     @Test func roundTripPersistedWorkspace() throws {
-        let tree = PaneSplitNode.split(
-            axis: .horizontal, ratio: 0.5,
-            first: .leaf(id: 0, agentId: "owner"),
-            second: .leaf(id: 1, agentId: "worker")
-        )
+        let tree = PaneSplitNode.split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        let panes = [0: pane([(0, .agent("owner"))], active: 0), 1: pane([(1, .agent("worker"))], active: 1)]
         let persisted = PersistedWorkspaceDocument(
             version: PersistedWorkspaceDocument.currentVersion,
             workspaces: [
                 PersistedWorkspace(
-                    id: "ws-owner", worktreeId: nil, focusedLeafId: 1, nextLeafId: 2, tree: tree.toLayoutNode())
+                    id: "ws-owner", worktreeId: nil, focusedLeafId: 1, nextLeafId: 2, nextSurfaceId: 2,
+                    tree: WorkspacePersistence.layoutNode(tree, panes: panes), filePanes: nil)
             ])
         let data = try JSONEncoder().encode(persisted)
         let decoded = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
         let workspace = try #require(decoded.workspaces.first)
+        #expect(decoded.version == 3)
         #expect(workspace.id == "ws-owner")
         #expect(workspace.focusedLeafId == 1)
-        var nextId = 0
-        let restored = PaneSplitNode.fromLayoutNode(workspace.tree, nextId: &nextId)
-        #expect(restored.leafCount == 2)
-        #expect(restored.containsAgent("owner"))
-        #expect(restored.containsAgent("worker"))
+        #expect(workspace.nextSurfaceId == 2)
+        #expect(workspace.tree.first?.tabs?.first?.agentId == "owner")
+        #expect(workspace.tree.second?.tabs?.first?.agentId == "worker")
     }
 }

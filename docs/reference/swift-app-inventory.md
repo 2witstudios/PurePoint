@@ -17,7 +17,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | AgentVariant.swift | Struct with Kind enum (.agent, .terminal, .worktree) — static properties for built-in variants (Claude, Codex, etc.) with icon/subtitle |
 | AgentsHubModels.swift | SavedPrompt, AgentDefinition, SwarmDefinition — hub library types |
 | ChatMessage.swift | ChatMessage, ContentBlock, ToolUseStatus, PulseEvent, PulseSummary |
-| CommandPaletteItem.swift | Enum: .builtIn(AgentVariant), .agentDef(AgentDefinition), .swarm(SwarmDefinition) — palette items with displayName/icon |
+| CommandPaletteItem.swift | Enum: .builtIn(AgentVariant), .agentDef(AgentDefinition), .swarm(SwarmDefinition), .files, .file(PaletteFileEntry) — palette items with displayName/icon |
 | ContentBlockSplitter.swift | Parse streamed content into code blocks, text, tool calls |
 | Conversation.swift | Multi-agent session metadata (sessionId, AgentSource, title, projectPath, gitBranch, timestamps) — supports Claude, Codex, OpenCode |
 | DiffModel.swift | Git diff representation |
@@ -28,7 +28,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | SidebarItem.swift | SidebarNavItem enum (.dashboard, .agents, .schedule), SidebarSelection enum (nav/workspace/worktree/project — deliberately no agent case), SidebarNode class (NSOutlineView wrapper) |
 | StreamEvent.swift | Daemon stream events (assistant, contentBlockDelta, toolResult, result, error) |
 | TriggerItem.swift | TriggerEvent enum (agentIdle, preCommit, prePush), TriggerItem struct |
-| Workspace.swift | Workspace value type (one sidebar row = one pane layout), WorkspaceContainer, and WorkspaceReconciler — the pure, total function mapping (stored layout, manifest) to the canonical workspace list |
+| Workspace.swift | Workspace value type (one sidebar row = one pane layout: geometry-only split tree + per-pane tab stacks), Pane, Surface/SurfaceContent, WorkspaceContainer, and WorkspaceReconciler — the pure, total function mapping (stored layout, manifest) to the canonical workspace list |
 | WorkspaceModel.swift | Worktree/agent view models (WorktreeModel, AgentModel) |
 
 ## State
@@ -40,7 +40,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | AppState.swift | @Observable @MainActor — multi-project container with projects array, pendingSelectAgentId/pendingSelectWorkspaceId/pendingSelectWorktreeId, activeProjectRoot, sidebar selection, daemon error |
 | ChatState.swift | Chat UI: messages, sessions, streaming, input text, search query, conversation loading (secondary to SessionListState for Point Guard) |
 | DiffState.swift | Diff viewing state |
-| WorkspaceRegistry.swift | @Observable — the canonical workspace list per project. Reconciles the manifest against the stored layout so every agent occupies exactly one pane of exactly one workspace; the sidebar renders these and nothing else |
+| WorkspaceRegistry.swift | @Observable — the canonical workspace list per project. Reconciles the manifest against the stored layout so every agent occupies exactly one tab, of one pane, of exactly one workspace; the sidebar renders these and nothing else |
 | KeyBindingState.swift | Hotkey-to-key mappings, delegates to HotkeyMonitor |
 | ProjectState.swift | @Observable @MainActor — per-project: rootAgents, worktrees, manifest watcher, weak refs to registry/appState |
 | ScheduleState.swift | Schedule events, loading/error state |
@@ -91,8 +91,12 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | File | Purpose |
 |---|---|
 | DraggableSplit.swift | Draggable split handle for pane resizing |
-| WorkspacePersistence.swift | Workspace layout save/load (`.pu/workspaces.json`), including migration from the legacy `grid-layout.json` |
-| PaneCellView.swift | Individual pane cell in grid |
+| WorkspacePersistence.swift | Workspace layout save/load (`.pu/workspaces.json`, version 3 with per-leaf tab stacks), including migration from version 2 and the legacy `grid-layout.json` |
+| PaneCellView.swift | Individual pane cell in grid: tab strip above the active tab's content (terminal, file navigator, or empty-tab placeholder) |
+| FileTabStore.swift (State/) | Per-tab file navigator/editor sessions (`FileTabSession`), kept while a file tab is hidden or moved; pruned by WorkspaceRegistry when tabs close |
+| PaneTabBar.swift | A pane's always-visible tab strip: tabs (status icon, unseen-output dot, close, drag to reorder/move) and pane actions; also the close confirmation (unsaved edits, several running agents) |
+| FilePaneView.swift | File navigator + editor pane; Code/Preview toggle for markdown |
+| MarkdownPreviewView.swift | WKWebView rendered markdown preview (JS disabled) |
 | PaneGridView.swift | Pane grid system (split layout) |
 | PaneSplitNode.swift | Recursive binary split node (indirect enum) |
 
@@ -196,3 +200,10 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | WorktreeNameNormalizer.swift | Normalize worktree names for safe display |
 
 ## Total: 121 Swift files
+
+## Services — Files pane
+
+| File | Purpose |
+|---|---|
+| FileIndex.swift | Bounded flat file listing for palette file search |
+| MarkdownHTMLRenderer.swift | Dependency-free markdown → HTML (escapes all input) |

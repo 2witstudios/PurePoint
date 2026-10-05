@@ -26,7 +26,13 @@ struct purepoint_macosApp: App {
                     minHeight: PurePointTheme.windowMinHeight
                 )
                 .onAppear {
+                    // "Tab" means a pane tab here. macOS window tabs would add a second,
+                    // unrelated tab bar and View-menu items, and compete for ⌘T.
+                    NSWindow.allowsAutomaticWindowTabbing = false
                     appState.registry = registry
+                    viewCache.agentStatus = { [weak appState] agentId in
+                        appState?.agent(byId: agentId)?.status
+                    }
                     registry.onCloseAgent = { [viewCache] projectRoot, agentId in
                         viewCache.remove(agentId: agentId)
                         appState.projectState(forRoot: projectRoot)?.removeAndKillAgent(agentId)
@@ -135,7 +141,7 @@ struct purepoint_macosApp: App {
 
                 Divider()
 
-                Button("Close Agent") {
+                Button("Close Tab") {
                     postHotkeyAction(.closeAgent)
                 }
                 .keyboardShortcut(
@@ -211,6 +217,68 @@ struct purepoint_macosApp: App {
                 )
                 .disabled((registry.activeWorkspace?.paneCount ?? 0) <= 1)
             }
+
+            CommandMenu("Tabs") {
+                Button("New Tab") {
+                    newTabInFocusedPane()
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .newTab),
+                    modifiers: keyBindingState.eventModifiers(for: .newTab)
+                )
+                .disabled(registry.activeWorkspace == nil)
+
+                Divider()
+
+                Button("Next Tab") {
+                    cycleFocusedPaneTab(by: 1)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .nextTab),
+                    modifiers: keyBindingState.eventModifiers(for: .nextTab)
+                )
+                .disabled(!focusedPaneHasTabs)
+
+                Button("Previous Tab") {
+                    cycleFocusedPaneTab(by: -1)
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .previousTab),
+                    modifiers: keyBindingState.eventModifiers(for: .previousTab)
+                )
+                .disabled(!focusedPaneHasTabs)
+
+                ForEach(HotkeyAction.selectTabActions, id: \.self) { action in
+                    Button(action.displayName) {
+                        selectFocusedPaneTab(index: action.tabIndex ?? 0)
+                    }
+                    .keyboardShortcut(
+                        keyBindingState.keyEquivalent(for: action),
+                        modifiers: keyBindingState.eventModifiers(for: action)
+                    )
+                    .disabled(registry.activeWorkspace == nil)
+                }
+
+                Button("Go to Last Tab") {
+                    selectFocusedPaneLastTab()
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .selectLastTab),
+                    modifiers: keyBindingState.eventModifiers(for: .selectLastTab)
+                )
+                .disabled(registry.activeWorkspace == nil)
+
+                Divider()
+
+                Button("Move Tab to New Pane") {
+                    breakFocusedTab()
+                }
+                .keyboardShortcut(
+                    keyBindingState.keyEquivalent(for: .breakTab),
+                    modifiers: keyBindingState.eventModifiers(for: .breakTab)
+                )
+                .disabled(!canBreakFocusedTab)
+            }
         }
     }
 
@@ -271,15 +339,48 @@ struct purepoint_macosApp: App {
     private func splitFocusedPane(axis: PaneSplitNode.Axis) {
         guard let workspace = registry.activeWorkspace else { return }
         registry.split(workspaceId: workspace.id, leafId: workspace.focusedLeafId, axis: axis)
-        registry.pendingPaletteLeafId = registry.workspace(id: workspace.id)?.focusedLeafId
+        registry.pendingPaletteSurfaceId = registry.workspace(id: workspace.id)?.focusedSurface?.id
     }
 
     private func closeFocusedPane() {
-        guard let workspace = registry.activeWorkspace else { return }
-        if let agentId = workspace.focusedAgentId {
-            viewCache.remove(agentId: agentId)
-        }
+        guard let workspace = registry.activeWorkspace, let pane = workspace.focusedPane,
+            TabCloseConfirmation.confirm(closing: pane.tabs, in: workspace.id, appState: appState, registry: registry)
+        else { return }
         registry.closePane(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
+    }
+
+    // MARK: - Tab Helpers
+
+    private var focusedPaneHasTabs: Bool { (registry.activeWorkspace?.focusedPane?.tabs.count ?? 0) > 1 }
+
+    private var canBreakFocusedTab: Bool {
+        guard let workspace = registry.activeWorkspace else { return false }
+        return focusedPaneHasTabs && workspace.root.canSplit(axis: .vertical)
+    }
+
+    private func newTabInFocusedPane() {
+        guard let workspace = registry.activeWorkspace else { return }
+        registry.pendingPaletteSurfaceId = registry.newTab(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
+    }
+
+    private func cycleFocusedPaneTab(by offset: Int) {
+        guard let workspace = registry.activeWorkspace else { return }
+        registry.cycleTab(workspaceId: workspace.id, leafId: workspace.focusedLeafId, by: offset)
+    }
+
+    private func selectFocusedPaneTab(index: Int) {
+        guard let workspace = registry.activeWorkspace else { return }
+        registry.selectTab(workspaceId: workspace.id, leafId: workspace.focusedLeafId, index: index)
+    }
+
+    private func selectFocusedPaneLastTab() {
+        guard let workspace = registry.activeWorkspace else { return }
+        registry.selectLastTab(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
+    }
+
+    private func breakFocusedTab() {
+        guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface else { return }
+        registry.breakTab(workspaceId: workspace.id, surfaceId: surface.id, axis: .vertical)
     }
 
     private func moveFocus(_ direction: FocusDirection) {

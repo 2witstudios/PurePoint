@@ -1,45 +1,70 @@
+use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal;
 use nix::unistd::Pid;
 
-pub fn write_pid_file(path: &Path) -> Result<(), std::io::Error> {
-    let open_exclusive = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-    };
-    let mut file = match open_exclusive() {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Only remove the PID file if we can parse a PID and that process is dead.
-            // If the file is empty, corrupted, or unreadable, treat it as in-use to
-            // avoid racing with a daemon that created the file but hasn't written yet.
-            match read_pid_file(path) {
-                Ok(Some(pid)) if !is_process_alive(pid) => {
-                    let _ = std::fs::remove_file(path);
-                    open_exclusive()?
-                }
-                Ok(Some(pid)) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        format!("daemon already running (pid {pid})"),
-                    ));
-                }
-                _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        "daemon already running (PID file exists)",
-                    ));
-                }
-            }
-        }
-        Err(e) => return Err(e),
-    };
-    writeln!(file, "{}", std::process::id())?;
-    Ok(())
+/// The exclusive lock that makes a pu-engine the one daemon for its socket.
+///
+/// Held for the life of the process. The kernel drops it however the process
+/// dies, so a crashed daemon never leaves a stale lock behind.
+pub struct DaemonLock {
+    _lock: Flock<File>,
+}
+
+/// Lock file guarding `socket_path` (`daemon.sock` -> `daemon.sock.lock`).
+pub fn lock_path_for(socket_path: &Path) -> PathBuf {
+    sibling_path(socket_path, "lock")
+}
+
+/// PID file for the daemon on `socket_path` (`daemon.sock` -> `daemon.sock.pid`).
+pub fn pid_path_for(socket_path: &Path) -> PathBuf {
+    sibling_path(socket_path, "pid")
+}
+
+/// `<socket>.<ext>`: appending to the full path keeps the mapping one-to-one,
+/// so distinct sockets (`pu.sock`, `pu.test`, `daemon`) never share a lock or
+/// PID file.
+fn sibling_path(socket_path: &Path, ext: &str) -> PathBuf {
+    let mut name = socket_path.as_os_str().to_owned();
+    name.push(".");
+    name.push(ext);
+    PathBuf::from(name)
+}
+
+/// Take the daemon lock for `socket_path` without blocking.
+///
+/// Returns `Ok(None)` when another live daemon already holds it. Every daemon
+/// must hold this before touching the socket: binding unlinks the existing
+/// socket file, so a second daemon would otherwise steal the path and orphan
+/// every agent the first one is running.
+pub fn try_acquire_daemon_lock(socket_path: &Path) -> Result<Option<DaemonLock>, std::io::Error> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path_for(socket_path))?;
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(lock) => Ok(Some(DaemonLock { _lock: lock })),
+        Err((_, Errno::EWOULDBLOCK)) => Ok(None),
+        Err((_, e)) => Err(e.into()),
+    }
+}
+
+/// Record this process as the daemon. Only call while holding the
+/// [`DaemonLock`]: any existing PID file is then stale and is replaced.
+pub fn claim_pid_file(path: &Path) -> Result<(), std::io::Error> {
+    let tmp = path.with_extension("pid.tmp");
+    {
+        let mut file = File::create(&tmp)?;
+        writeln!(file, "{}", std::process::id())?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 pub fn read_pid_file(path: &Path) -> Result<Option<u32>, std::io::Error> {
@@ -50,9 +75,30 @@ pub fn read_pid_file(path: &Path) -> Result<Option<u32>, std::io::Error> {
     }
 }
 
+/// Remove the PID file and socket on shutdown, but only if the PID file still
+/// names this process: a successor daemon may already own both paths.
 pub fn cleanup_files(pid_path: &Path, socket_path: &Path) {
+    if !matches!(read_pid_file(pid_path), Ok(Some(pid)) if pid == std::process::id()) {
+        return;
+    }
     let _ = std::fs::remove_file(pid_path);
     let _ = std::fs::remove_file(socket_path);
+}
+
+/// Raise the open-file soft limit as far as the hard limit allows (capped, since
+/// macOS reports RLIM_INFINITY but rejects soft limits above OPEN_MAX).
+pub fn raise_fd_limit() {
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+    const TARGET: u64 = 10_240;
+    let Ok((soft, hard)) = getrlimit(Resource::RLIMIT_NOFILE) else {
+        return;
+    };
+    let want = hard.min(TARGET);
+    if soft < want
+        && let Err(e) = setrlimit(Resource::RLIMIT_NOFILE, want, hard)
+    {
+        tracing::warn!("failed to raise fd limit from {soft} to {want}: {e}");
+    }
 }
 
 pub fn is_process_alive(pid: u32) -> bool {
@@ -68,10 +114,10 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn given_write_pid_file_should_contain_current_pid() {
+    fn given_claim_pid_file_should_contain_current_pid() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("daemon.pid");
-        write_pid_file(&path).unwrap();
+        claim_pid_file(&path).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
         let pid: u32 = content.trim().parse().unwrap();
@@ -97,17 +143,31 @@ mod tests {
     }
 
     #[test]
-    fn given_cleanup_should_remove_pid_and_socket() {
+    fn given_cleanup_should_remove_own_pid_and_socket() {
         let tmp = TempDir::new().unwrap();
         let pid_path = tmp.path().join("daemon.pid");
         let sock_path = tmp.path().join("daemon.sock");
-        std::fs::write(&pid_path, "999").unwrap();
+        claim_pid_file(&pid_path).unwrap();
         std::fs::write(&sock_path, "").unwrap();
 
         cleanup_files(&pid_path, &sock_path);
 
         assert!(!pid_path.exists());
         assert!(!sock_path.exists());
+    }
+
+    #[test]
+    fn given_cleanup_when_successor_owns_pid_file_should_leave_files() {
+        let tmp = TempDir::new().unwrap();
+        let pid_path = tmp.path().join("daemon.pid");
+        let sock_path = tmp.path().join("daemon.sock");
+        std::fs::write(&pid_path, "999999\n").unwrap();
+        std::fs::write(&sock_path, "").unwrap();
+
+        cleanup_files(&pid_path, &sock_path);
+
+        assert!(pid_path.exists());
+        assert!(sock_path.exists());
     }
 
     #[test]
@@ -135,16 +195,56 @@ mod tests {
     }
 
     #[test]
-    fn given_existing_pid_file_should_fail_with_already_exists() {
+    fn given_claim_pid_file_should_replace_stale_pid() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("daemon.pid");
-        write_pid_file(&path).unwrap();
+        std::fs::write(&path, "12345\n").unwrap();
 
-        let result = write_pid_file(&path);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind(),
-            std::io::ErrorKind::AlreadyExists
-        );
+        claim_pid_file(&path).unwrap();
+
+        assert_eq!(read_pid_file(&path).unwrap(), Some(std::process::id()));
+    }
+
+    #[test]
+    fn given_lock_held_should_refuse_second_daemon() {
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("daemon.sock");
+
+        let first = try_acquire_daemon_lock(&sock).unwrap();
+        assert!(first.is_some());
+        assert!(try_acquire_daemon_lock(&sock).unwrap().is_none());
+    }
+
+    #[test]
+    fn given_lock_released_should_allow_next_daemon() {
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("daemon.sock");
+
+        drop(try_acquire_daemon_lock(&sock).unwrap());
+
+        assert!(try_acquire_daemon_lock(&sock).unwrap().is_some());
+    }
+
+    #[test]
+    fn given_socket_path_should_derive_sibling_lock_and_pid_paths() {
+        let sock = Path::new("/x/.pu/daemon.sock");
+        assert_eq!(lock_path_for(sock), Path::new("/x/.pu/daemon.sock.lock"));
+        assert_eq!(pid_path_for(sock), Path::new("/x/.pu/daemon.sock.pid"));
+    }
+
+    #[test]
+    fn given_distinct_custom_sockets_should_not_share_lock_or_pid_paths() {
+        let a = Path::new("/tmp/pu.sock");
+        let b = Path::new("/tmp/pu.test");
+        let c = Path::new("/tmp/pu");
+        let canonical = Path::new("/tmp/daemon.sock");
+        let bare = Path::new("/tmp/daemon");
+        assert_ne!(lock_path_for(canonical), lock_path_for(bare));
+        assert_ne!(pid_path_for(canonical), pid_path_for(bare));
+        assert_eq!(lock_path_for(a), Path::new("/tmp/pu.sock.lock"));
+        assert_eq!(pid_path_for(b), Path::new("/tmp/pu.test.pid"));
+        assert_ne!(lock_path_for(a), lock_path_for(b));
+        assert_ne!(lock_path_for(a), lock_path_for(c));
+        assert_ne!(pid_path_for(b), pid_path_for(c));
     }
 }

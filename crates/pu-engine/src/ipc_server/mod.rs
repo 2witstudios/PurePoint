@@ -6,7 +6,10 @@ use tokio::net::UnixListener;
 use tokio::sync::{Notify, Semaphore};
 
 const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
-const MAX_CONNECTIONS: usize = 64;
+/// The app holds a status and a grid stream per open project plus one attach
+/// stream per terminal pane, all for as long as they are open, so this must sit
+/// well above what a busy session uses.
+const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
 
 use crate::engine::Engine;
@@ -65,6 +68,13 @@ impl IpcServer {
         })
     }
 
+    /// Override the concurrent connection cap (defaults to `MAX_CONNECTIONS`).
+    #[cfg(test)]
+    pub(crate) fn with_connection_limit(mut self, limit: usize) -> Self {
+        self.conn_limit = Arc::new(Semaphore::new(limit));
+        self
+    }
+
     /// Get a reference to the engine for starting background tasks.
     pub fn engine(&self) -> &Arc<Engine> {
         &self.engine
@@ -78,13 +88,26 @@ impl IpcServer {
         loop {
             tokio::select! {
                 accept = self.listener.accept() => {
-                    let (stream, _addr) = accept?;
+                    // A failed accept (e.g. EMFILE) is transient: never let it end
+                    // the server and strand every running agent.
+                    let stream = match accept {
+                        Ok((stream, _addr)) => stream,
+                        Err(e) => {
+                            tracing::warn!("accept failed: {e}");
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            continue;
+                        }
+                    };
+                    // Never wait for a permit: waiting here would stall accepting,
+                    // shutdown and signals, and parking the stream in a task would
+                    // let stalled clients pile up descriptors past the cap.
+                    let Ok(permit) = self.conn_limit.clone().try_acquire_owned() else {
+                        tracing::warn!("connection limit reached; rejecting connection");
+                        reject_busy(&stream);
+                        continue; // dropping the stream closes it
+                    };
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
-                    let permit = match self.conn_limit.clone().acquire_owned().await {
-                        Ok(p) => p,
-                        Err(_) => continue, // semaphore closed
-                    };
                     tokio::spawn(async move {
                         let _permit = permit;
                         Self::handle_connection(stream, engine, shutdown).await;
@@ -196,9 +219,22 @@ impl IpcServer {
     }
 }
 
+/// Best-effort, non-blocking BUSY reply to a connection over the limit; a
+/// partial or failed write is ignored since the stream is closed right after.
+fn reject_busy(stream: &tokio::net::UnixStream) {
+    let resp = Response::Error {
+        code: "BUSY".into(),
+        message: "daemon connection limit reached".into(),
+    };
+    if let Ok(mut json) = serde_json::to_vec(&resp) {
+        json.push(b'\n');
+        let _ = stream.try_write(&json);
+    }
+}
+
 async fn write_response(writer: &mut IpcWriter, response: &Response) -> std::io::Result<()> {
-    let json = serde_json::to_string(response)
+    let mut json = serde_json::to_vec(response)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    writer.write_all(json.as_bytes()).await?;
-    writer.write_all(b"\n").await
+    json.push(b'\n');
+    writer.write_all(&json).await
 }

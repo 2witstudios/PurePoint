@@ -7,10 +7,10 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 | Property | Value |
 |---|---|
 | Socket path | `~/.pu/daemon.sock` |
-| Protocol version | 5 |
+| Protocol version | 6 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes) |
-| Max connections | 64 (semaphore-limited) |
+| Max connections | 1024 (semaphore-limited; further connections get one `BUSY` error line and are closed) |
 | Client timeout | 30 seconds |
 | Binary data | Hex-encoded within JSON |
 
@@ -330,10 +330,15 @@ GridCommand variants:
 | `split` | `leaf_id`, `axis` | Split a pane (axis: `"v"` or `"h"`, default `"v"`) |
 | `close` | `leaf_id` | Close a pane |
 | `focus` | `leaf_id`, `direction` | Move focus (direction: `"up"`, `"down"`, `"left"`, `"right"`) |
-| `set_agent` | `leaf_id`, `agent_id` | Assign an agent to a pane |
-| `get_layout` | (none) | Get current layout |
+| `set_agent` | `leaf_id`?, `agent_id` | Show an agent in the pane's active tab |
+| `get_layout` | (none) | Get current layout (raw `.pu/workspaces.json`) |
+| `new_tab` | `leaf_id`?, `agent_id`? | Open a tab after the active one; shows `agent_id`, else empty |
+| `select_tab` | `leaf_id`?, `index`?, `direction`? | Select by 1-based `index`, or `direction` `"next"`/`"prev"` (send one) |
+| `close_tab` | `leaf_id`?, `tab_id`? | Close a tab (default: the pane's active tab) |
+| `move_tab` | `tab_id`, `to_leaf`, `index`? | Move a tab to another pane at 1-based `index` (default: append) |
+| `break_tab` | `tab_id`?, `axis` | Move a tab into a new pane split off its pane (default: focused pane's active tab, axis `"v"`) |
 
-Note: `leaf_id` and `direction` are optional fields.
+`?` marks optional fields. Every command except `get_layout` also takes an optional `workspace_id`; when it is omitted, the command applies to the workspace on screen. An omitted `leaf_id` targets the focused pane; `tab_id` is the stable surface id within the workspace (not its position). `set_agent.leaf_id` became optional in protocol v6. The daemon does not model layout: mutation commands return `ok` and are rebroadcast unchanged as `grid_event` to `subscribe_grid` streams, where the macOS app applies them.
 
 ## Worktree management
 
@@ -417,6 +422,8 @@ Gate evaluation timeouts: 60 seconds per command, 5 minutes total.
 ## Daemon lifecycle
 
 - **Auto-start**: CLI calls `ensure_daemon()`, finds binary, spawns detached, polls health with exponential backoff (up to 3s)
-- **Standalone mode**: Writes PID file to `~/.pu/daemon.pid`
+- **Single instance**: before touching the socket, every daemon takes an exclusive `flock` on `daemon.sock.lock` beside it; if another live daemon holds it, the new one logs "already running" and exits 0
+- **PID file**: written to `~/.pu/daemon.sock.pid` in both modes; on exit the PID file and socket are removed only if the PID file still names this daemon
 - **Managed mode**: `--managed` flag (for macOS app); exits when parent process dies
+- **Connection limit**: at most 1024 concurrent connections; further connections get one `BUSY` error line and are closed
 - **Signals**: SIGTERM and SIGINT trigger graceful shutdown

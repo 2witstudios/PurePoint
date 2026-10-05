@@ -8,7 +8,7 @@ PurePoint coordinates AI coding agents, worktrees, and project state across mult
 
 ## Decisions
 
-! [DAEMON-001] PID-file with CLI auto-start — simpler than launchd/systemd, cross-platform, no plist maintenance. Daemon writes `~/.pu/daemon.pid` using `create_new(true)` (`O_EXCL`) which fails atomically if another instance is running. CLI auto-starts the daemon via `ensure_daemon()`: spawns `pu-engine` as a detached process (stdin/stdout null, stderr to `~/.pu/daemon.log`), then polls health every 100ms for up to 30 attempts (3s timeout). On timeout, exits with error pointing to `~/.pu/daemon.log`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
+! [DAEMON-001] PID-file with CLI auto-start — simpler than launchd/systemd, cross-platform, no plist maintenance. Single-instance is enforced by an exclusive non-blocking `flock` on `~/.pu/daemon.sock.lock` (beside the socket), held for the daemon's lifetime and released by the kernel however it dies; a daemon that cannot take it exits 0. The PID file `~/.pu/daemon.sock.pid` is then written in both modes (an `O_EXCL` PID file alone was not enough: managed daemons skipped it, so app launches and CLI auto-start raced and each unlinked and rebound the live socket). CLI auto-starts the daemon via `ensure_daemon()`: after three failed health checks 200ms apart, spawns `pu-engine` as a detached process (stdin/stdout null, stderr to `~/.pu/daemon.log`), then polls health with exponential backoff (10, 20, 40, 80, 160, 320, then 640 ms), bounded by a 3 s wall-clock timeout that includes the probes themselves (each capped at 2 s). A `BUSY` reply counts as a live daemon. On timeout, exits with error pointing to `~/.pu/daemon.log`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
 ! [DAEMON-004] Tokio async runtime with `spawn_blocking` for filesystem and process ops — the daemon is I/O-bound (IPC, PTY reads, file writes), making async the natural fit. Blocking operations (PTY `read`/`write`/`ioctl`, `waitpid`, filesystem) run in `spawn_blocking` to avoid blocking the event loop. Implemented in `pu-engine/src/main.rs` (tokio main), `pu-engine/src/pty_manager.rs` (spawn_blocking for PTY I/O and waitpid).
 
@@ -31,15 +31,16 @@ The daemon is the context assembler — every task should automatically inject r
 
 - Primary platform: macOS. Future: Linux.
 - Auto-start when CLI or app needs it and it's not running
-- Graceful shutdown with resource cleanup (SIGTERM/SIGINT handled, PID file + socket cleaned up)
+- Graceful shutdown with resource cleanup (SIGTERM/SIGINT handled, agents stopped with SIGTERM then SIGKILL, PID file + socket cleaned up). Agents killed by shutdown are not recorded as `Broken`, so the next daemon's init marks them suspended and they resume.
 - No root/sudo requirement
 - Support for multiple projects simultaneously
-- Managed mode (`--managed` flag): launched by the macOS app as an embedded subprocess. Skips PID file. App sends Shutdown on quit. Agents stop, state saved to manifest for restore.
-- Standalone mode (default): launched by CLI or manually. Writes PID file. Agents persist across CLI sessions.
+- One daemon per socket in every mode: an exclusive `flock` on `daemon.sock.lock`, taken before the socket is touched. A second daemon (a racing app launch, or the CLI auto-starting one) exits instead of unlinking the live socket and stranding the first daemon's agents.
+- Managed mode (`--managed` flag): launched by the macOS app as an embedded subprocess. Writes the PID file like standalone mode, so the app can stop a daemon it cannot reach. Exits when the app dies. App sends Shutdown on quit. Agents stop, state saved to manifest for restore.
+- Standalone mode (default): launched by CLI or manually. Agents persist across CLI sessions.
 
 ## Research Notes
 
-**Daemon startup sequence (from `pu-engine/src/main.rs`):** Parse args (looks for `--managed` flag and `--socket <path>`). Resolve socket path (`--socket` arg or `~/.pu/daemon.sock`). Init tracing. Create `Engine`, bind `IpcServer` to socket (removes stale socket file first). In standalone mode, write PID file; in managed mode, skip PID file. Run server until SIGTERM, SIGINT, or `Request::Shutdown`. On exit, clean up PID file and socket.
+**Daemon startup sequence (from `pu-engine/src/main.rs`):** Parse args (looks for `--managed` flag and `--socket <path>`). Resolve socket path (`--socket` arg or `~/.pu/daemon.sock`). Init tracing. Take the `daemon.sock.lock` flock (exit 0 if another daemon holds it), then write the PID file (both modes) and raise the fd soft limit. Create `Engine`, bind `IpcServer` to socket (removes the stale socket file first, which is safe only because the lock is held). Run server until SIGTERM, SIGINT, or `Request::Shutdown`. On exit, stop agents gracefully, then remove the PID file and socket if the PID file still names this daemon.
 
 **Shutdown handling:** SIGTERM and SIGINT are caught via `tokio::signal::unix`. `Request::Shutdown` from any client also triggers graceful shutdown via `Arc<Notify>`.
 

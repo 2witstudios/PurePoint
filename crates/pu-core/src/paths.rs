@@ -25,7 +25,7 @@ pub fn global_pu_dir() -> Result<PathBuf, std::io::Error> {
 }
 
 pub fn daemon_pid_path() -> Result<PathBuf, std::io::Error> {
-    Ok(global_pu_dir()?.join("daemon.pid"))
+    Ok(global_pu_dir()?.join("daemon.sock.pid"))
 }
 
 pub fn daemon_socket_path() -> Result<PathBuf, std::io::Error> {
@@ -173,7 +173,7 @@ mod tests {
     fn given_daemon_pid_path_should_live_under_home_pu() {
         let path = daemon_pid_path().unwrap();
         assert!(
-            path.to_string_lossy().contains(".pu/daemon.pid"),
+            path.to_string_lossy().contains(".pu/daemon.sock.pid"),
             "unexpected path: {path:?}"
         );
     }

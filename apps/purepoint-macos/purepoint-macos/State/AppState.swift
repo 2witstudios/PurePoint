@@ -173,14 +173,18 @@ final class AppState {
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
             let client = DaemonClient()
+            // Only an instance that owns the daemon stops anything. A second app
+            // instance attached to a shared daemon must leave the owner's agents
+            // running: suspending them would strand them, since that daemon stays
+            // up and nothing would resume them.
+            guard await DaemonLifecycle.didLaunchDaemon() else {
+                semaphore.signal()
+                return
+            }
             for root in projectRoots {
                 _ = try? await client.send(.suspend(projectRoot: root, target: .all))
             }
-            // Only shut down a daemon this instance launched — a second app
-            // instance attached to a shared daemon must not kill it on quit.
-            if await DaemonLifecycle.didLaunchDaemon() {
-                _ = try? await client.send(.shutdown)
-            }
+            _ = try? await client.send(.shutdown)
             semaphore.signal()
         }
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
@@ -231,12 +235,27 @@ final class AppState {
         Task {
             do {
                 try await DaemonLifecycle.restartDaemon()
+                // Re-run the full open sequence, not just a refresh: init marks the
+                // agents the old daemon stopped as suspended, and they get resumed.
                 for project in projects {
-                    project.refresh()
+                    project.startWatching()
                 }
             } catch {
                 self.daemonError = error.localizedDescription
             }
         }
+    }
+}
+
+extension AppState {
+    /// The directory a workspace's file panes are rooted at: its worktree, else the project root.
+    func fileRoot(forWorkspace workspaceId: String, registry: WorkspaceRegistry) -> String? {
+        guard let projectRoot = registry.projectRoot(forWorkspace: workspaceId) else { return nil }
+        if let worktreeId = registry.workspace(id: workspaceId)?.container.worktreeId,
+            let path = projectState(forRoot: projectRoot)?.worktrees.first(where: { $0.id == worktreeId })?.path
+        {
+            return path
+        }
+        return projectRoot
     }
 }

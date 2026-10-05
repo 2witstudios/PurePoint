@@ -25,7 +25,7 @@ Key behaviors:
 
 ## Decisions
 
-! [CLI-001] Auto-start polls 30x100ms (3s timeout), exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health, then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. Polls `Request::Health` every 100ms up to 30 attempts. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
+! [CLI-001] Auto-start with a 3s wall-clock startup budget, exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health (up to three 2s-bounded probes, 200ms apart; a `BUSY` reply counts as a live daemon), then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. A redundant spawn is harmless: it exits on the daemon lock. Then polls `Request::Health` with exponential backoff (10ms doubling to 640ms) inside a 3s timeout that includes the probes. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
 ! [CLI-002] `--json` flag for machine-readable output — provides raw JSON responses for conductor agents and scripts. Available on nearly every command: `init`, `spawn`, `status`, `bench`, `play`, `kill`, `logs`, `health`, `pulse`, `diff`, `clean`, and all CRUD subcommands (`prompt`, `agent`, `swarm`, `schedule`, `trigger`). Per-command flag (not global). Implemented across command handlers in `pu-cli/src/commands/`.
 
@@ -70,7 +70,13 @@ Key behaviors:
 | `pu grid split` | `--axis <v\|h>`, `--leaf <id>` | Split a pane |
 | `pu grid close` | `--leaf <id>` | Close a pane |
 | `pu grid focus` | `--direction <up\|down\|left\|right>`, `--leaf <id>` | Move focus to another pane |
-| `pu grid assign <agent_id>` | `--leaf <id>` | Assign an agent to a pane |
+| `pu grid assign <agent_id>` | `--leaf <id>` | Show an agent in a pane's active tab (default: focused pane) |
+| `pu grid tab new` | `--leaf <id>`, `--agent <id>` | Open a tab after the active one (empty unless `--agent`) |
+| `pu grid tab select [N]` | `--next`, `--prev`, `--leaf <id>` | Select tab by 1-based position or next/prev (exactly one) |
+| `pu grid tab close` | `--leaf <id>`, `--tab <id>` | Close a tab (default: active tab of focused pane) |
+| `pu grid tab move <tab_id>` | `--to <leaf>`, `--index <n>` | Move a tab to another pane (default: append) |
+| `pu grid tab break` | `--tab <id>`, `--axis <v\|h>` | Move a tab into a new pane split off its pane |
+| `pu grid <any but show>` | `--workspace <id>` | Act on that workspace instead of the one on screen (leaf and tab ids are only unique within a workspace) |
 | `pu trigger list` | `--json` | List trigger definitions |
 | `pu trigger show <name>` | `--json` | Show trigger details |
 | `pu trigger create <name>` | `--on <event>`, `--inject`, `--gate`, `--description`, `--scope`, `--json` | Create trigger definition |
