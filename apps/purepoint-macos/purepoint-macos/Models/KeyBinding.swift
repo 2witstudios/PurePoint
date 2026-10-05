@@ -7,6 +7,7 @@ enum HotkeyCategory: String, CaseIterable, Identifiable {
     case application
     case navigation
     case panes
+    case tabs
     case chat
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum HotkeyCategory: String, CaseIterable, Identifiable {
         case .application: "Application"
         case .navigation: "Navigation"
         case .panes: "Panes"
+        case .tabs: "Tabs"
         case .chat: "Chat"
         }
     }
@@ -47,6 +49,21 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     case focusLeft
     case focusRight
 
+    // Tabs
+    case newTab
+    case nextTab
+    case previousTab
+    case selectTab1
+    case selectTab2
+    case selectTab3
+    case selectTab4
+    case selectTab5
+    case selectTab6
+    case selectTab7
+    case selectTab8
+    case selectLastTab
+    case breakTab
+
     // Chat
     case toggleChatSidebar
 
@@ -57,7 +74,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .newAgent: "New Agent"
         case .openProject: "Open Project"
         case .settings: "Settings"
-        case .closeAgent: "Close Agent"
+        case .closeAgent: "Close Tab"
         case .focusSidebar: "Focus Sidebar"
         case .focusContent: "Focus Content"
         case .toggleSidebar: "Toggle Sidebar"
@@ -71,15 +88,26 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .focusDown: "Focus Down"
         case .focusLeft: "Focus Left"
         case .focusRight: "Focus Right"
+        case .newTab: "New Tab"
+        case .nextTab: "Next Tab"
+        case .previousTab: "Previous Tab"
+        case .selectTab1, .selectTab2, .selectTab3, .selectTab4,
+            .selectTab5, .selectTab6, .selectTab7, .selectTab8:
+            "Go to Tab \(tabIndex.map { $0 + 1 } ?? 0)"
+        case .selectLastTab: "Go to Last Tab"
+        case .breakTab: "Move Tab to New Pane"
         case .toggleChatSidebar: "Toggle Chat Sidebar"
         }
     }
 
     var category: HotkeyCategory {
         switch self {
-        case .newAgent, .openProject, .settings, .closeAgent: .application
+        case .newAgent, .openProject, .settings: .application
         case .focusSidebar, .focusContent, .toggleSidebar, .navDashboard, .navAgents, .navSchedule: .navigation
         case .splitBelow, .splitRight, .closePane, .focusUp, .focusDown, .focusLeft, .focusRight: .panes
+        case .closeAgent, .newTab, .nextTab, .previousTab, .selectTab1, .selectTab2, .selectTab3, .selectTab4,
+            .selectTab5, .selectTab6, .selectTab7, .selectTab8, .selectLastTab, .breakTab:
+            .tabs
         case .toggleChatSidebar: .chat
         }
     }
@@ -103,6 +131,19 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .focusDown: KeyBinding(key: .special(.downArrow), modifiers: [.command, .option])
         case .focusLeft: KeyBinding(key: .special(.leftArrow), modifiers: [.command, .option])
         case .focusRight: KeyBinding(key: .special(.rightArrow), modifiers: [.command, .option])
+        case .newTab: KeyBinding(key: .character("t"), modifiers: [.command])
+        case .nextTab: KeyBinding(key: .character("]"), modifiers: [.command, .shift])
+        case .previousTab: KeyBinding(key: .character("["), modifiers: [.command, .shift])
+        case .selectTab1: KeyBinding(key: .character("1"), modifiers: [.command])
+        case .selectTab2: KeyBinding(key: .character("2"), modifiers: [.command])
+        case .selectTab3: KeyBinding(key: .character("3"), modifiers: [.command])
+        case .selectTab4: KeyBinding(key: .character("4"), modifiers: [.command])
+        case .selectTab5: KeyBinding(key: .character("5"), modifiers: [.command])
+        case .selectTab6: KeyBinding(key: .character("6"), modifiers: [.command])
+        case .selectTab7: KeyBinding(key: .character("7"), modifiers: [.command])
+        case .selectTab8: KeyBinding(key: .character("8"), modifiers: [.command])
+        case .selectLastTab: KeyBinding(key: .character("9"), modifiers: [.command])
+        case .breakTab: KeyBinding(key: .character("d"), modifiers: [.command, .option])
         case .toggleChatSidebar: KeyBinding(key: .character("s"), modifiers: [.command, .shift])
         }
     }
@@ -118,6 +159,25 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
             return false
         }
     }
+
+    /// The 0-based tab position a "Go to Tab N" action selects.
+    var tabIndex: Int? {
+        switch self {
+        case .selectTab1: 0
+        case .selectTab2: 1
+        case .selectTab3: 2
+        case .selectTab4: 3
+        case .selectTab5: 4
+        case .selectTab6: 5
+        case .selectTab7: 6
+        case .selectTab8: 7
+        default: nil
+        }
+    }
+
+    static let selectTabActions: [HotkeyAction] = [
+        .selectTab1, .selectTab2, .selectTab3, .selectTab4, .selectTab5, .selectTab6, .selectTab7, .selectTab8,
+    ]
 
     static func actions(for category: HotkeyCategory) -> [HotkeyAction] {
         allCases.filter { $0.category == category }

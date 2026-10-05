@@ -77,6 +77,13 @@ pub struct Engine {
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
     /// Projects that have been initialized or used — scheduler scans these.
     registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Agents with a resume in progress, so two resumes of one agent can never
+    /// both spawn `claude --resume` on the same transcript.
+    resuming: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Pids of the agent processes daemon teardown is killing. Those agents
+    /// must stay resumable, so their exits are not recorded as Broken; any
+    /// other exit (including one that happened just before teardown) is.
+    shutdown_killed: Arc<std::sync::Mutex<HashSet<u32>>>,
 }
 
 impl Default for Engine {
@@ -122,6 +129,8 @@ impl Engine {
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
             registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -177,14 +186,16 @@ impl Engine {
 
     async fn resolve_login_env() -> Vec<(String, String)> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        match tokio::process::Command::new(&shell)
+        // Every spawn and resume waits on this one probe (it fills a OnceCell),
+        // so a login shell that hangs on a prompt must not hang them all.
+        let probe = tokio::process::Command::new(&shell)
             .args(["-li", "-c", "env -0"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .output()
-            .await
-        {
-            Ok(output) if output.status.success() => output
+            .kill_on_drop(true)
+            .output();
+        match tokio::time::timeout(Duration::from_secs(10), probe).await {
+            Ok(Ok(output)) if output.status.success() => output
                 .stdout
                 .split(|&b| b == 0)
                 .filter_map(|entry| {
@@ -220,6 +231,10 @@ impl Engine {
     /// Used by the managed-mode parent-died path so a force-quit of the macOS app reaps
     /// agents and their grandchildren (vitest/node workers, dev servers) before the
     /// daemon exits — `process::exit(0)` skips `Drop`, so this must run explicitly.
+    ///
+    /// Only processes still running when drained are recorded as killed by
+    /// shutdown (and so left resumable); an agent that had already exited keeps
+    /// its natural exit.
     pub async fn kill_all_sessions(&self, grace: Duration) {
         let handles: Vec<AgentHandle> = {
             let mut sessions = self.sessions.lock().await;
@@ -228,7 +243,6 @@ impl Engine {
         if handles.is_empty() {
             return;
         }
-
         // One `ps` snapshot for all handles — cheaper than one per agent.
         let tree = snapshot_process_tree().await;
         let all_descendants: Vec<i32> = handles
@@ -236,6 +250,23 @@ impl Engine {
             .filter_map(|h| i32::try_from(h.pid).ok())
             .flat_map(|pid| descendants_from_tree(&tree, pid))
             .collect();
+
+        // Mark only the agents still running at the moment they are signalled,
+        // with no await in between: an agent that exits on its own before this
+        // point (including during the snapshot above) keeps its natural exit.
+        // The mark lands before the signal, so the exit watcher always sees it.
+        {
+            let mut killed = self
+                .shutdown_killed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            killed.extend(
+                handles
+                    .iter()
+                    .filter(|h| h.exit_rx.borrow().is_none())
+                    .map(|h| h.pid),
+            );
+        }
 
         for handle in &handles {
             if let Ok(pid) = i32::try_from(handle.pid) {
@@ -651,6 +682,12 @@ impl Engine {
 
     async fn handle_init(&self, project_root: &str) -> Response {
         let project_root = project_root.to_string();
+        // Agents this daemon is running. Init runs on every project open and
+        // every `pu init`, so reconcile must never touch these. Checked live,
+        // not snapshotted: one can be spawned or resumed while reconcile runs.
+        // Nothing holds the sessions lock while waiting on the manifest lock,
+        // so taking it inside the manifest update cannot deadlock.
+        let sessions = self.sessions.clone();
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&project_root);
             let pu_dir = paths::pu_dir(root);
@@ -671,7 +708,9 @@ impl Engine {
             {
                 Ok(f) => f,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    Self::reconcile_agents_on_init(&project_root);
+                    Self::reconcile_agents_on_init(&project_root, |id| {
+                        sessions.blocking_lock().contains_key(id)
+                    });
                     return Response::InitResult { created: false };
                 }
                 Err(e) => {

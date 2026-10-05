@@ -8,14 +8,18 @@ import Foundation
 final class TerminalViewCache {
     @ObservationIgnored private var views: [String: TerminalPaneNSView] = [:]
     @ObservationIgnored private var lastAccess: [String: Date] = [:]
-    @ObservationIgnored private var visibleAgentIds: Set<String> = []
     @ObservationIgnored private var evictionTimer: Timer?
+    /// Current status of an agent, or nil if the app no longer knows it.
+    /// Set by the app; a view's own `agent` is a stale creation-time snapshot.
+    @ObservationIgnored var agentStatus: ((String) -> AgentStatus?)?
+    /// Agents whose terminal printed output while it was off screen (a background tab),
+    /// since it was last shown. Drives the tab bar's unseen-output dot.
+    private(set) var unseenOutput: Set<String> = []
     private static let evictionDelay: TimeInterval = 30
 
     init() {
         evictionTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.evictStale(visibleIds: self.visibleAgentIds)
+            self?.evictStale()
         }
     }
 
@@ -36,32 +40,24 @@ final class TerminalViewCache {
         }
 
         let view = TerminalPaneNSView(agent: agent)
+        let agentId = agent.id
+        view.isAgentAlive = { [weak self] in self?.isAlive(agentId) ?? false }
+        view.onBackgroundOutput = { [weak self] in self?.markUnseenOutput(agentId) }
         views[agent.id] = view
         return view
     }
 
-    /// Show terminals for multiple agents (grid mode), hiding all others.
-    func showMultiple(agentIds: Set<String>) {
-        visibleAgentIds = agentIds
-        let now = Date()
-        for id in agentIds {
-            lastAccess[id] = now
-        }
-        for (id, view) in views {
-            view.isHidden = !agentIds.contains(id)
-        }
-    }
-
-    /// Show the terminal for a single agent, hiding all others.
+    /// Record that an agent's terminal is on screen. Visibility itself is
+    /// owned by each pane's container, so sibling grid panes stay shown.
     func show(agentId: String) {
-        showMultiple(agentIds: [agentId])
+        lastAccess[agentId] = Date()
+        if unseenOutput.contains(agentId) { unseenOutput.remove(agentId) }
     }
 
-    /// Hide all terminal views.
-    func hideAll() {
-        for (_, view) in views {
-            view.isHidden = true
-        }
+    /// Writes only on the first chunk after the terminal was last seen, so a busy
+    /// background agent does not invalidate observers on every chunk.
+    private func markUnseenOutput(_ agentId: String) {
+        if !unseenOutput.contains(agentId) { unseenOutput.insert(agentId) }
     }
 
     /// Check if a terminal exists for an agent.
@@ -75,11 +71,16 @@ final class TerminalViewCache {
         views[agentId]?.removeFromSuperview()
         views.removeValue(forKey: agentId)
         lastAccess.removeValue(forKey: agentId)
+        unseenOutput.remove(agentId)
     }
 
     /// Evict terminal views for completed/killed/failed agents that haven't
     /// been viewed in evictionDelay seconds and are not currently visible.
-    private func evictStale(visibleIds: Set<String> = []) {
+    private func isAlive(_ agentId: String) -> Bool {
+        agentStatus?(agentId)?.isAlive ?? false
+    }
+
+    private func evictStale() {
         let now = Date()
         var toEvict: [String] = []
 
@@ -89,8 +90,9 @@ final class TerminalViewCache {
                 toEvict.append(id)
                 continue
             }
-            guard !visibleIds.contains(id) else { continue }
-            guard !view.agent.status.isAlive else { continue }
+            // Still on screen in some pane
+            if view.window != nil && !view.isHidden { continue }
+            guard !isAlive(id) else { continue }
             guard let access = lastAccess[id],
                 now.timeIntervalSince(access) > Self.evictionDelay
             else { continue }

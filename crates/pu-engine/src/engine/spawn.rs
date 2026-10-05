@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use indexmap::IndexMap;
 use pu_core::config;
+use pu_core::error::PuError;
 use pu_core::manifest;
 use pu_core::paths;
 use pu_core::protocol::Response;
@@ -403,6 +404,7 @@ impl Engine {
         // Store handle in session map BEFORE writing manifest.
         // ManifestWatcher in Swift fires on manifest write and immediately
         // tries to attach — the session must already be in the map.
+        self.watch_natural_exit(&project_root, &agent_id, handle.pid, handle.exit_rx.clone());
         self.sessions.lock().await.insert(agent_id.clone(), handle);
 
         // Bind trigger if explicitly specified via --trigger <name>
@@ -474,30 +476,37 @@ impl Engine {
 
         let wt_id_for_manifest = worktree_id.clone();
         let agent_id_clone = agent_id.clone();
-        let manifest_result = manifest::update_manifest(root_path, move |mut m| {
-            if let Some(ref wt_id) = wt_id_for_manifest {
-                // Add or update worktree entry
-                let wt_entry = m
-                    .worktrees
-                    .entry(wt_id.clone())
-                    .or_insert_with(|| WorktreeEntry {
-                        id: wt_id.clone(),
-                        name: agent_name.clone(),
-                        path: cwd.clone(),
-                        branch: format!("pu/{agent_name}"),
-                        base_branch: Some(base_branch.clone()),
-                        status: WorktreeStatus::Active,
-                        agents: IndexMap::new(),
-                        created_at: chrono::Utc::now(),
-                        merged_at: None,
-                        error: None,
-                    });
-                wt_entry.agents.insert(agent_id_clone, agent_entry);
-            } else {
-                m.agents.insert(agent_id_clone, agent_entry);
-            }
-            m
-        });
+        // Off the async runtime: update_manifest blocks on the manifest file lock,
+        // and a parked worker thread here stalls every other request.
+        let manifest_root = root_path.to_path_buf();
+        let manifest_result = tokio::task::spawn_blocking(move || {
+            manifest::update_manifest(&manifest_root, move |mut m| {
+                if let Some(ref wt_id) = wt_id_for_manifest {
+                    // Add or update worktree entry
+                    let wt_entry =
+                        m.worktrees
+                            .entry(wt_id.clone())
+                            .or_insert_with(|| WorktreeEntry {
+                                id: wt_id.clone(),
+                                name: agent_name.clone(),
+                                path: cwd.clone(),
+                                branch: format!("pu/{agent_name}"),
+                                base_branch: Some(base_branch.clone()),
+                                status: WorktreeStatus::Active,
+                                agents: IndexMap::new(),
+                                created_at: chrono::Utc::now(),
+                                merged_at: None,
+                                error: None,
+                            });
+                    wt_entry.agents.insert(agent_id_clone, agent_entry);
+                } else {
+                    m.agents.insert(agent_id_clone, agent_entry);
+                }
+                m
+            })
+        })
+        .await
+        .unwrap_or_else(|e| Err(PuError::Io(std::io::Error::other(e))));
 
         if let Err(e) = manifest_result {
             // Rollback: remove session and kill process

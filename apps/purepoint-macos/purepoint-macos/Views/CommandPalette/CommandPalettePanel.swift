@@ -480,9 +480,9 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private func filterItems(query: String) {
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
         if q.isEmpty {
-            filteredItems = availableItems
+            filteredItems = availableItems.filter { !$0.isQueryOnly }
         } else {
-            filteredItems =
+            let scored =
                 availableItems
                 .compactMap { item -> (CommandPaletteItem, Int)? in
                     let text = item.searchableText.lowercased()
@@ -495,6 +495,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
                         score = 50
                     } else if text.contains(q) {
                         score = 10
+                    } else if item.isQueryOnly, Self.isSubsequence(q, of: text) {
+                        score = 5
                     } else {
                         return nil
                     }
@@ -502,11 +504,29 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
                 }
                 .sorted { $0.1 > $1.1 }
                 .map(\.0)
+            // File items can number in the thousands; keep the list scannable.
+            var fileCount = 0
+            filteredItems = scored.filter { item in
+                guard item.isQueryOnly else { return true }
+                fileCount += 1
+                return fileCount <= Self.maxFileResults
+            }
         }
         selectedIndex = filteredItems.isEmpty ? -1 : 0
         tableView.reloadData()
         updateHighlight()
         resizePanel(rowCount: filteredItems.count)
+    }
+
+    private static let maxFileResults = 30
+
+    /// `q` appears in `text` in order, not necessarily contiguously ("edst" matches "EditorState").
+    private static func isSubsequence(_ q: String, of text: String) -> Bool {
+        var it = text.makeIterator()
+        return q.allSatisfy { ch in
+            while let next = it.next() { if next == ch { return true } }
+            return false
+        }
     }
 
     // MARK: - Highlight
@@ -534,6 +554,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
             switch item {
             case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: nil)
             case .swarm(let s): result = .runSwarm(def: s)
+            case .files: result = .openFilePane(path: nil)
+            case .file(let f): result = .openFilePane(path: f.absolutePath)
             case .builtIn: return
             }
             onSelect?(result)
@@ -559,6 +581,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
             }
         case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: promptOrNil)
         case .swarm(let s): result = .runSwarm(def: s)
+        case .files: result = .openFilePane(path: nil)
+        case .file(let f): result = .openFilePane(path: f.absolutePath)
         }
         onSelect?(result)
     }

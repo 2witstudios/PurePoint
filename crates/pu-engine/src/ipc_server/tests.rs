@@ -410,3 +410,85 @@ async fn given_attach_disconnect_should_not_crash_server() {
 
     server_handle.abort();
 }
+
+async fn send_health(stream: UnixStream) -> Option<Response> {
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let req = serde_json::to_string(&Request::Health).unwrap();
+    writer.write_all(format!("{req}\n").as_bytes()).await.ok()?;
+    let mut line = String::new();
+    match reader.read_line(&mut line).await {
+        Ok(n) if n > 0 => serde_json::from_str(&line).ok(),
+        _ => None,
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_connection_limit_reached_should_reject_new_connection_promptly() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, Engine::new())
+        .unwrap()
+        .with_connection_limit(2);
+    let handle = tokio::spawn(async move { server.run().await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Hold the limit's worth of live connections (each proven served).
+    let mut held = Vec::new();
+    for _ in 0..2 {
+        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let req = serde_json::to_string(&Request::Health).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Response>(&line).unwrap(),
+            Response::HealthReport { .. }
+        ));
+        held.push((reader, writer));
+    }
+
+    // One more is rejected promptly: BUSY error or EOF, never left hanging.
+    let extra = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, _writer) = extra.into_split();
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        reader.read_line(&mut line),
+    )
+    .await
+    .expect("excess connection must be closed promptly, not held waiting");
+    match read {
+        Ok(0) | Err(_) => {}
+        Ok(_) => match serde_json::from_str::<Response>(&line).unwrap() {
+            Response::Error { code, .. } => assert_eq!(code, "BUSY"),
+            other => panic!("expected BUSY error, got {other:?}"),
+        },
+    }
+
+    // Releasing one held connection frees a slot for a new request.
+    drop(held.pop());
+    let mut served = None;
+    for _ in 0..50 {
+        let stream = UnixStream::connect(&sock_path).await.unwrap();
+        if let Some(resp) = send_health(stream).await {
+            if matches!(resp, Response::HealthReport { .. }) {
+                served = Some(resp);
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        served.is_some(),
+        "health request must succeed after a slot frees"
+    );
+
+    handle.abort();
+}

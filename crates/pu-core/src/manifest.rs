@@ -23,16 +23,26 @@ pub fn write_manifest(project_root: &Path, manifest: &Manifest) -> Result<(), Pu
     let path = paths::manifest_path(project_root);
     let content = serde_json::to_string_pretty(manifest)? + "\n";
 
-    // Atomic write: write to temp file, fsync, then rename
-    let tmp_path = path.with_extension("json.tmp");
-    let file = std::fs::File::create(&tmp_path)?;
-    let mut writer = std::io::BufWriter::new(file);
-    writer.write_all(content.as_bytes())?;
-    let file = writer
-        .into_inner()
-        .map_err(std::io::IntoInnerError::into_error)?;
-    file.sync_all()?;
-    std::fs::rename(&tmp_path, &path)?;
+    // Atomic write: write to a temp file unique to this writer, fsync, then
+    // rename. A shared temp path would let two writers interleave into it.
+    static WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_path = path.with_extension(format!("json.tmp.{}.{seq}", std::process::id()));
+    let write = || -> std::io::Result<()> {
+        let file = std::fs::File::create(&tmp_path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        writer.write_all(content.as_bytes())?;
+        let file = writer
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp_path, &path)
+    };
+    // The temp name is unique per write, so a failed write must clean up after
+    // itself or every failure leaves another file in .pu/.
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp_path);
+    })?;
     Ok(())
 }
 
@@ -42,32 +52,25 @@ pub fn update_manifest(
 ) -> Result<Manifest, PuError> {
     let path = paths::manifest_path(project_root);
 
-    // Lock the manifest file during update
+    // Lock the manifest during update. The lock file is never deleted: unlinking
+    // it while another writer waits on it would let a third writer lock a fresh
+    // file, and two writers would then both "hold" the lock.
     use fs4::fs_std::FileExt;
     let lock_path = path.with_extension("json.lock");
-    let lock_file = std::fs::File::create(&lock_path)?;
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
     lock_file
         .lock_exclusive()
         .map_err(|_| PuError::ManifestLocked)?;
-
-    // RAII guard ensures lock file is cleaned up even on panic
-    let _guard = LockFileGuard { path: &lock_path };
 
     let manifest = read_manifest(project_root)?;
     let mut updated = updater(manifest);
     updated.updated_at = chrono::Utc::now();
     write_manifest(project_root, &updated)?;
     Ok(updated)
-}
-
-struct LockFileGuard<'a> {
-    path: &'a Path,
-}
-
-impl Drop for LockFileGuard<'_> {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(self.path);
-    }
 }
 
 #[cfg(test)]
@@ -175,5 +178,47 @@ mod tests {
         let manifest: Manifest = serde_json::from_str(json).unwrap();
         assert_eq!(manifest.version, 2);
         assert_eq!(manifest.project_root, "/test");
+    }
+
+    #[test]
+    fn given_concurrent_updates_should_lose_none() {
+        let tmp = TempDir::new().unwrap();
+        let path = paths::manifest_path(tmp.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_manifest(
+            tmp.path(),
+            &Manifest::new(tmp.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let root = tmp.path().to_path_buf();
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        let id = format!("ag-{t}-{i}");
+                        update_manifest(&root, |mut m| {
+                            let entry: crate::types::AgentEntry =
+                                serde_json::from_value(serde_json::json!({
+                                    "id": id,
+                                    "name": id,
+                                    "agentType": "claude",
+                                    "status": "running",
+                                    "startedAt": "2026-01-01T00:00:00Z",
+                                }))
+                                .unwrap();
+                            m.agents.insert(id.clone(), entry);
+                            m
+                        })
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        assert_eq!(read_manifest(tmp.path()).unwrap().agents.len(), 200);
     }
 }

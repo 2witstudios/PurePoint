@@ -1,12 +1,35 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
-    let output = tokio::process::Command::new("git")
+/// Longest any single git command may run. Worktree checkouts of large repos
+/// are the slow case; a held index.lock or a credential prompt is the hang case.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Run git with no stdin (it can never stop to prompt) and a timeout, killing
+/// it if the timeout fires so it cannot pin a request forever.
+async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, std::io::Error> {
+    let command = tokio::process::Command::new("git")
         .args(args)
         .current_dir(cwd)
-        .output()
-        .await?;
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // An empty GIT_ASKPASS makes git skip core.askPass and SSH_ASKPASS,
+        // so an inherited credential helper cannot prompt either.
+        .env("GIT_ASKPASS", "")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    tokio::time::timeout(GIT_TIMEOUT, command)
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("git {} timed out", args.join(" ")),
+            )
+        })?
+}
+
+async fn run_git(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
+    let output = git_output(args, cwd).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(std::io::Error::other(format!(
@@ -169,11 +192,7 @@ pub async fn diff_worktree(
 
 /// Like run_git but treats empty output as success (no changes = no error).
 async fn run_git_allow_empty(args: &[&str], cwd: &Path) -> Result<String, std::io::Error> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .await?;
+    let output = git_output(args, cwd).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(std::io::Error::other(format!(

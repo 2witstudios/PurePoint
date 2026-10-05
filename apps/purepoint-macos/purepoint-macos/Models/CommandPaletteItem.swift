@@ -2,16 +2,28 @@ import Foundation
 
 // MARK: - CommandPaletteItem
 
+/// A file that can be opened into a file pane.
+struct PaletteFileEntry: Equatable, Sendable {
+    let relativePath: String
+    let absolutePath: String
+}
+
 enum CommandPaletteItem: Identifiable {
     case builtIn(AgentVariant)
     case agentDef(AgentDefinition)
     case swarm(SwarmDefinition)
+    /// Opens the file navigator in a pane.
+    case files
+    /// Opens a specific file in a pane. Only offered once the user types a query.
+    case file(PaletteFileEntry)
 
     var id: String {
         switch self {
         case .builtIn(let v): "builtin:\(v.id):\(v.kind)"
         case .agentDef(let d): "agentdef:\(d.id)"
         case .swarm(let s): "swarm:\(s.id)"
+        case .files: "files"
+        case .file(let f): "file:\(f.absolutePath)"
         }
     }
 
@@ -20,6 +32,8 @@ enum CommandPaletteItem: Identifiable {
         case .builtIn(let v): v.displayName
         case .agentDef(let d): d.name
         case .swarm(let s): s.name
+        case .files: "Files"
+        case .file(let f): (f.relativePath as NSString).lastPathComponent
         }
     }
 
@@ -28,6 +42,8 @@ enum CommandPaletteItem: Identifiable {
         case .builtIn(let v): v.icon
         case .agentDef(let d): d.icon ?? "cpu"
         case .swarm: "person.3"
+        case .files: "folder"
+        case .file(let f): EditorLanguage.detect(from: (f.relativePath as NSString).lastPathComponent).icon
         }
     }
 
@@ -44,6 +60,8 @@ enum CommandPaletteItem: Identifiable {
             }
         case .swarm(let s):
             "\(s.totalAgents) agent\(s.totalAgents == 1 ? "" : "s") across \(s.worktreeCount) worktree\(s.worktreeCount == 1 ? "" : "s")"
+        case .files: "Browse and edit files"
+        case .file(let f): f.relativePath
         }
     }
 
@@ -52,15 +70,16 @@ enum CommandPaletteItem: Identifiable {
         case .builtIn(let v): v.promptPlaceholder
         case .agentDef(let d):
             if d.template != nil { "Override prompt (optional)..." } else { "Enter prompt..." }
-        case .swarm: ""
+        case .swarm, .files, .file: ""
         }
     }
 
     var categoryLabel: String? {
         switch self {
-        case .builtIn: nil
+        case .builtIn, .files: nil
         case .agentDef: "Agent"
         case .swarm: "Swarm"
+        case .file: "File"
         }
     }
 
@@ -73,6 +92,10 @@ enum CommandPaletteItem: Identifiable {
             return "\(d.name) \(d.agentType) \(d.tags.joined(separator: " "))"
         case .swarm(let s):
             return s.name
+        case .files:
+            return "files file browser explorer navigator editor markdown"
+        case .file(let f):
+            return f.relativePath
         }
     }
 
@@ -81,16 +104,21 @@ enum CommandPaletteItem: Identifiable {
         switch self {
         case .builtIn: false
         case .agentDef(let d): d.inlinePrompt != nil
-        case .swarm: true
+        case .swarm, .files, .file: true
         }
+    }
+
+    /// Only shown when the user has typed a query (one per file would flood the default list).
+    var isQueryOnly: Bool {
+        if case .file = self { return true }
+        return false
     }
 
     /// The worktree-style name field should be shown in the prompt phase.
     var showsNameField: Bool {
         switch self {
         case .builtIn(let v): v.kind == .worktree
-        case .agentDef: false
-        case .swarm: false
+        case .agentDef, .swarm, .files, .file: false
         }
     }
 
@@ -100,14 +128,16 @@ enum CommandPaletteItem: Identifiable {
         switch self {
         case .builtIn(let v): v.kind != .worktree
         case .agentDef: true
-        case .swarm: false
+        case .swarm, .files, .file: false
         }
     }
 
     static func buildItems(
         builtInVariants: [AgentVariant],
         agents: [AgentDefinition],
-        swarms: [SwarmDefinition]
+        swarms: [SwarmDefinition],
+        includeFiles: Bool = false,
+        files: [PaletteFileEntry] = []
     ) -> [CommandPaletteItem] {
         let builtIns = builtInVariants.map { CommandPaletteItem.builtIn($0) }
         let agentItems =
@@ -115,7 +145,8 @@ enum CommandPaletteItem: Identifiable {
             .filter(\.availableInCommandDialog)
             .map { CommandPaletteItem.agentDef($0) }
         let swarmItems = swarms.map { CommandPaletteItem.swarm($0) }
-        return builtIns + agentItems + swarmItems
+        let fileItems: [CommandPaletteItem] = includeFiles ? [.files] + files.map { .file($0) } : []
+        return builtIns + fileItems + agentItems + swarmItems
     }
 }
 
@@ -126,4 +157,6 @@ enum CommandPaletteResult {
     case spawnAgentDef(def: AgentDefinition, prompt: String?)
     case runSwarm(def: SwarmDefinition)
     case createWorktree(name: String?)
+    /// Show the file navigator in the pane, optionally opened on `path`.
+    case openFilePane(path: String?)
 }

@@ -31,6 +31,9 @@ final class ProjectState: Identifiable {
     /// brand-new workspace — a row appearing for a pane the user just closed.
     @ObservationIgnored private var killedAgentIds = Set<String>()
 
+    /// How long to keep retrying daemon start + init before surfacing an error.
+    private static let daemonConnectBudget: Duration = .seconds(20)
+
     init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?) {
         self.projectRoot = projectRoot
         self.service = service
@@ -49,27 +52,37 @@ final class ProjectState: Identifiable {
         manifestWatcher = nil
 
         openTask = Task { [weak self] in
-            do {
-                try await DaemonLifecycle.ensureDaemon()
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.appState?.daemonError = error.localizedDescription
-                return
-            }
-
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.initProject(projectRoot: root))
-                if case .error(_, let message) = response {
-                    self?.appState?.daemonError = message
+            // Retry with backoff: right after an update relaunch the previous
+            // daemon can still be draining its agents and holding the daemon
+            // lock, so the first start attempt fails. Giving up on it left the
+            // app daemonless until the user quit and relaunched.
+            // Bounded by wall-clock time, not attempts: one attempt against a
+            // daemon that never answers can itself take ~20s of health probes.
+            let deadline = ContinuousClock.now + Self.daemonConnectBudget
+            var attempt = 0
+            while true {
+                do {
+                    try await DaemonLifecycle.ensureDaemon()
+                    let response = try await DaemonClient().send(.initProject(projectRoot: root))
+                    if case .error(let code, let message) = response {
+                        // At its connection limit: transient, so back off and retry.
+                        if code == "BUSY" { throw DaemonClientError.busy }
+                        self?.appState?.daemonError = message
+                        return
+                    }
+                    break
+                } catch is CancellationError {
                     return
+                } catch {
+                    attempt += 1
+                    guard ContinuousClock.now < deadline else {
+                        self?.appState?.daemonError = error.localizedDescription
+                        return
+                    }
+                    print("[Daemon] connect attempt \(attempt) failed: \(error); retrying")
+                    let delay = UInt64(min(attempt, 4)) * 1_000_000_000
+                    do { try await Task.sleep(nanoseconds: delay) } catch { return }
                 }
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.appState?.daemonError = error.localizedDescription
-                return
             }
 
             guard let self, !Task.isCancelled else { return }
@@ -81,9 +94,19 @@ final class ProjectState: Identifiable {
 
             self.startGridSubscription()
             self.startStatusSubscription()
-            self.refresh()
-            // Resume suspended agents after initial data load
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // Resume from the snapshot taken after init, not after a fixed delay: a
+            // slow first load would otherwise resume against the agents from before
+            // init (or a daemon restart) and leave the newly suspended ones paused.
+            do {
+                let snapshot = try await svc.loadWorkspace(projectRoot: root)
+                guard !Task.isCancelled else { return }
+                self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+                return
+            }
             self.resumeSuspendedAgents()
         }
     }
@@ -173,17 +196,17 @@ final class ProjectState: Identifiable {
         }
     }
 
-    /// Spawn an agent into a specific pane.
+    /// Spawn an agent into a specific tab.
     ///
-    /// The pane is reserved before the request goes out, so whichever arrives first — the
-    /// manifest write or the spawn response — the agent lands in this pane and never
+    /// The tab is reserved before the request goes out, so whichever arrives first — the
+    /// manifest write or the spawn response — the agent lands in this tab and never
     /// surfaces as a workspace of its own.
-    func spawnAgentForPane(agent: String, prompt: String, workspaceId: String, leafId: Int) {
+    func spawnAgentForSurface(agent: String, prompt: String, workspaceId: String, surfaceId: Int) {
         guard let registry, let workspace = registry.workspace(id: workspaceId) else { return }
         let root = projectRoot
         let spawnWorktree = workspace.container.worktreeId
 
-        registry.reservePane(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+        registry.reserveSurface(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
 
         sendDaemonRequest(
             .spawn(
@@ -191,14 +214,14 @@ final class ProjectState: Identifiable {
                 root: spawnWorktree == nil, worktree: spawnWorktree
             ),
             onFailure: { [weak registry] in
-                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
             }
         ) { [weak registry] response in
             if case .spawnResult(_, let agentId, _) = response {
                 registry?.fulfillReservation(
-                    projectRoot: root, workspaceId: workspaceId, leafId: leafId, agentId: agentId)
+                    projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId, agentId: agentId)
             } else {
-                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
             }
         }
     }
@@ -229,6 +252,8 @@ final class ProjectState: Identifiable {
             Task { await hub.runSwarm(projectRoot: root, name: def.name) }
         case .createWorktree(let name):
             createWorktree(name: name)
+        case .openFilePane:
+            break  // Only offered by pane-targeted palettes, which handle it themselves.
         }
     }
 
@@ -380,15 +405,27 @@ final class ProjectState: Identifiable {
         let sub = DaemonStatusSubscription(projectRoot: projectRoot)
         statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in
-            await sub.start { worktrees, agents in
-                self?.apply(rootAgents: agents, worktrees: worktrees)
-            }
+            await sub.start(
+                onEvent: { worktrees, agents in
+                    self?.apply(rootAgents: agents, worktrees: worktrees)
+                },
+                // The daemon is gone (crashed, or exited with the app instance
+                // that launched it). startWatching ensures a daemon, then inits and
+                // resumes, so this project's agents come back on the new one.
+                onDaemonLost: {
+                    self?.startWatching()
+                }
+            )
         }
     }
 
     private func startGridSubscription() {
         gridSubscriptionTask?.cancel()
-        Task { await gridSubscription?.stop() }
+        // Capture before reassigning: the Task runs later and would otherwise stop
+        // the new subscription and leak the old one.
+        let previousGrid = gridSubscription
+        gridSubscription = nil
+        Task { await previousGrid?.stop() }
         guard let registry else { return }
         let sub = DaemonGridSubscription(projectRoot: projectRoot, registry: registry)
         gridSubscription = sub

@@ -38,12 +38,49 @@ nonisolated enum SuspendTarget: Encodable {
     }
 }
 
-/// Grid command payload matching Rust GridCommand.
-nonisolated enum GridCommandPayload: Codable {
+/// Grid command payload matching Rust GridCommand: one action, plus the workspace it targets.
+/// Leaf and tab IDs are only unique within a workspace, so a command may name its workspace;
+/// `nil` means the workspace on screen.
+nonisolated struct GridCommandPayload: Codable {
+    var workspaceId: String?
+    var action: GridAction
+
+    init(_ action: GridAction, workspaceId: String? = nil) {
+        self.action = action
+        self.workspaceId = workspaceId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        // The workspace rides alongside the action's own fields in one flat object.
+        workspaceId = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .workspaceId)
+        action = try GridAction(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try action.encode(to: encoder)
+        if action != .getLayout {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(workspaceId, forKey: .workspaceId)
+        }
+    }
+}
+
+/// One grid action. Optional leaf IDs mean the focused pane; tab positions (`index`) are
+/// 1-based; tab IDs are surface IDs.
+nonisolated enum GridAction: Codable, Equatable {
     case split(leafId: Int?, axis: String)
     case close(leafId: Int?)
     case focus(leafId: Int?, direction: String?)
-    case setAgent(leafId: UInt32, agentId: String)
+    case setAgent(leafId: Int?, agentId: String)
+    case newTab(leafId: Int?, agentId: String?)
+    case selectTab(leafId: Int?, index: Int?, direction: String?)
+    case closeTab(leafId: Int?, tabId: Int?)
+    case moveTab(tabId: Int, toLeaf: Int, index: Int?)
+    case breakTab(tabId: Int?, axis: String)
     case getLayout
 
     private enum CodingKeys: String, CodingKey {
@@ -52,52 +89,93 @@ nonisolated enum GridCommandPayload: Codable {
         case axis
         case direction
         case agentId = "agent_id"
+        case index
+        case tabId = "tab_id"
+        case toLeaf = "to_leaf"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let action = try container.decode(String.self, forKey: .action)
+        let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
         switch action {
         case "split":
-            let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
             let axis = try container.decodeIfPresent(String.self, forKey: .axis) ?? "v"
             self = .split(leafId: leafId, axis: axis)
         case "close":
-            let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
             self = .close(leafId: leafId)
         case "focus":
-            let leafId = try container.decodeIfPresent(Int.self, forKey: .leafId)
             let direction = try container.decodeIfPresent(String.self, forKey: .direction)
             self = .focus(leafId: leafId, direction: direction)
         case "set_agent":
-            let leafId = try container.decode(UInt32.self, forKey: .leafId)
             let agentId = try container.decode(String.self, forKey: .agentId)
             self = .setAgent(leafId: leafId, agentId: agentId)
+        case "new_tab":
+            let agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+            self = .newTab(leafId: leafId, agentId: agentId)
+        case "select_tab":
+            let index = try container.decodeIfPresent(Int.self, forKey: .index)
+            let direction = try container.decodeIfPresent(String.self, forKey: .direction)
+            self = .selectTab(leafId: leafId, index: index, direction: direction)
+        case "close_tab":
+            let tabId = try container.decodeIfPresent(Int.self, forKey: .tabId)
+            self = .closeTab(leafId: leafId, tabId: tabId)
+        case "move_tab":
+            let tabId = try container.decode(Int.self, forKey: .tabId)
+            let toLeaf = try container.decode(Int.self, forKey: .toLeaf)
+            let index = try container.decodeIfPresent(Int.self, forKey: .index)
+            self = .moveTab(tabId: tabId, toLeaf: toLeaf, index: index)
+        case "break_tab":
+            let tabId = try container.decodeIfPresent(Int.self, forKey: .tabId)
+            let axis = try container.decodeIfPresent(String.self, forKey: .axis) ?? "v"
+            self = .breakTab(tabId: tabId, axis: axis)
         default:
             self = .getLayout
         }
     }
 
     func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DynamicCodingKey.self)
+        var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .split(let leafId, let axis):
-            try container.encode("split", forKey: .key("action"))
-            if let leafId { try container.encode(leafId, forKey: .key("leaf_id")) }
-            try container.encode(axis, forKey: .key("axis"))
+            try container.encode("split", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
+            try container.encode(axis, forKey: .axis)
         case .close(let leafId):
-            try container.encode("close", forKey: .key("action"))
-            if let leafId { try container.encode(leafId, forKey: .key("leaf_id")) }
+            try container.encode("close", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
         case .focus(let leafId, let direction):
-            try container.encode("focus", forKey: .key("action"))
-            if let leafId { try container.encode(leafId, forKey: .key("leaf_id")) }
-            if let direction { try container.encode(direction, forKey: .key("direction")) }
+            try container.encode("focus", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
+            try container.encodeIfPresent(direction, forKey: .direction)
         case .setAgent(let leafId, let agentId):
-            try container.encode("set_agent", forKey: .key("action"))
-            try container.encode(leafId, forKey: .key("leaf_id"))
-            try container.encode(agentId, forKey: .key("agent_id"))
+            try container.encode("set_agent", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
+            try container.encode(agentId, forKey: .agentId)
+        case .newTab(let leafId, let agentId):
+            try container.encode("new_tab", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
+            try container.encodeIfPresent(agentId, forKey: .agentId)
+        case .selectTab(let leafId, let index, let direction):
+            try container.encode("select_tab", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
+            try container.encodeIfPresent(index, forKey: .index)
+            try container.encodeIfPresent(direction, forKey: .direction)
+        case .closeTab(let leafId, let tabId):
+            try container.encode("close_tab", forKey: .action)
+            try container.encodeIfPresent(leafId, forKey: .leafId)
+            try container.encodeIfPresent(tabId, forKey: .tabId)
+        case .moveTab(let tabId, let toLeaf, let index):
+            try container.encode("move_tab", forKey: .action)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(toLeaf, forKey: .toLeaf)
+            try container.encodeIfPresent(index, forKey: .index)
+        case .breakTab(let tabId, let axis):
+            try container.encode("break_tab", forKey: .action)
+            try container.encodeIfPresent(tabId, forKey: .tabId)
+            try container.encode(axis, forKey: .axis)
         case .getLayout:
-            try container.encode("get_layout", forKey: .key("action"))
+            try container.encode("get_layout", forKey: .action)
         }
     }
 }

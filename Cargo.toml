@@ -20,3 +20,10 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "process", "fs"] }
 uuid = { version = "1", features = ["v4"] }
 indexmap = { version = "2", features = ["serde"] }
+
+# No panic = "abort": the daemon catches panics from blocking tasks and
+# recovers poisoned locks.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
