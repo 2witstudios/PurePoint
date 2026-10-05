@@ -9,11 +9,20 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
     which::which("pu-engine").ok()
 }
 
+/// Longest a single health probe may take. A daemon that accepts but never
+/// answers would otherwise hold each probe for the full request timeout.
+const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// True if a daemon is alive on `socket`. A daemon at its connection limit
+/// answers `BUSY` instead of a health report: it is alive, and starting another
+/// one would only lose the single-instance lock.
 pub async fn check_daemon_health(socket: &Path) -> bool {
-    matches!(
-        crate::client::send_request(socket, &Request::Health).await,
-        Ok(Response::HealthReport { .. })
-    )
+    let probe = crate::client::send_request(socket, &Request::Health);
+    match tokio::time::timeout(HEALTH_PROBE_TIMEOUT, probe).await {
+        Ok(Ok(Response::HealthReport { .. })) => true,
+        Ok(Ok(Response::Error { code, .. })) => code == "BUSY",
+        _ => false,
+    }
 }
 
 pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
@@ -123,5 +132,61 @@ mod tests {
         let sock = tmp.path().join("nope.sock");
         let healthy = check_daemon_health(&sock).await;
         assert!(!healthy);
+    }
+
+    /// Serve one canned reply line (or none) to every connection on `sock`.
+    fn fake_daemon(sock: &Path, reply: Option<&'static str>) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(sock).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+                    let (reader, mut writer) = stream.split();
+                    let mut line = String::new();
+                    tokio::io::BufReader::new(reader)
+                        .read_line(&mut line)
+                        .await
+                        .ok();
+                    match reply {
+                        Some(reply) => {
+                            writer.write_all(reply.as_bytes()).await.ok();
+                        }
+                        None => std::future::pending::<()>().await,
+                    }
+                });
+            }
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_daemon_at_connection_limit_should_report_alive() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("busy.sock");
+        let server = fake_daemon(
+            &sock,
+            Some(
+                "{\"type\":\"error\",\"code\":\"BUSY\",\"message\":\"daemon connection limit reached\"}\n",
+            ),
+        );
+
+        assert!(check_daemon_health(&sock).await);
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_daemon_that_never_answers_should_give_up_quickly() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let sock = tmp.path().join("mute.sock");
+        let server = fake_daemon(&sock, None);
+
+        let started = std::time::Instant::now();
+        assert!(!check_daemon_health(&sock).await);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        server.abort();
     }
 }
