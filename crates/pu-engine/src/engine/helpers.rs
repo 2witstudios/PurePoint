@@ -163,52 +163,6 @@ impl Engine {
         }
     }
 
-    /// Scan the manifest for Running agents whose PID is dead and retire them
-    /// (resumable ones become suspended, the rest Broken; see `retire_stale_agent`).
-    /// Called once per project on the first status request after daemon (re)start,
-    /// which can come before any init (e.g. the app restarting the daemon and
-    /// refreshing), so it must leave stopped agents just as resumable as init does.
-    /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
-    pub(super) fn reap_stale_agents(project_root: &str) {
-        let root = Path::new(project_root);
-        let Ok(m) = manifest::read_manifest(root) else {
-            return;
-        };
-        let needs_reap = |a: &AgentEntry| {
-            !a.suspended
-                && matches!(a.status, AgentStatus::Running)
-                && a.pid
-                    .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
-        };
-        let has_stale = m
-            .agents
-            .values()
-            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
-            .any(needs_reap);
-        if !has_stale {
-            return;
-        }
-        manifest::update_manifest(root, move |mut m| {
-            let now = chrono::Utc::now();
-            for agent in m.agents.values_mut().chain(
-                m.worktrees
-                    .values_mut()
-                    .flat_map(|wt| wt.agents.values_mut()),
-            ) {
-                if !agent.suspended
-                    && matches!(agent.status, AgentStatus::Running)
-                    && agent
-                        .pid
-                        .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
-                {
-                    retire_stale_agent(agent, now);
-                }
-            }
-            m
-        })
-        .ok();
-    }
-
     pub(super) fn agent_not_found(agent_id: &str) -> Response {
         Response::Error {
             code: "AGENT_NOT_FOUND".into(),
@@ -352,18 +306,53 @@ mod reconcile_tests {
         ));
     }
 
-    #[test]
-    fn given_dead_resumable_agent_on_first_status_should_mark_suspended_not_broken() {
-        let tmp = project_with(vec![
-            agent("ag-1", "claude", Some("sid-1")),
-            agent("ag-2", "terminal", None),
-        ]);
+    #[tokio::test]
+    async fn given_orphan_on_first_status_should_stop_it_and_mark_suspended() {
+        let engine = Engine::new();
+        // An agent process that outlived its daemon: alive, running its session,
+        // but not in this daemon's session map.
+        let orphan = engine
+            .pty_host
+            .spawn(crate::pty_manager::SpawnConfig {
+                command: "/bin/sh".into(),
+                // `; true` keeps sh from exec-ing sleep; the session id rides in
+                // sh's own argv ($0), as it does in an agent's command line.
+                args: vec![
+                    "-c".into(),
+                    "sleep 30; true".into(),
+                    "sid-orphan-xyz".into(),
+                ],
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        let mut entry = agent("ag-1", "claude", Some("sid-orphan-xyz"));
+        entry.pid = Some(orphan.pid);
+        let tmp = project_with(vec![entry]);
 
-        Engine::reap_stale_agents(&root(&tmp));
+        engine.handle_status(&root(&tmp), None).await;
 
-        let resumable = read(&tmp, "ag-1");
-        assert!(resumable.suspended);
-        assert_eq!(resumable.status, AgentStatus::Running);
-        assert_eq!(read(&tmp, "ag-2").status, AgentStatus::Broken);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !read(&tmp, "ag-1").suspended {
+            assert!(tokio::time::Instant::now() < deadline, "never reconciled");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert_eq!(read(&tmp, "ag-1").pid, None);
+        // Stopped, not left running: its exit has been observed. (kill(pid, 0)
+        // would still see the unreaped zombie, since this test is its parent.)
+        let mut exit_rx = orphan.exit_rx.clone();
+        let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while exit_rx.borrow_and_update().is_none() {
+                if exit_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(stopped.is_ok(), "orphan was not stopped");
     }
 }
