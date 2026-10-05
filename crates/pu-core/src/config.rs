@@ -55,9 +55,9 @@ pub fn update_agent_config(
     // (the daemon serves each request on its own blocking thread) can't lose or
     // interleave writes. The lock file is left in place: unlinking it on release
     // would let a waiter and a new caller lock different inodes.
-    use fs4::fs_std::FileExt;
+    use fs4::FileExt;
     let lock_file = std::fs::File::create(path.with_extension("yaml.lock"))?;
-    lock_file.lock_exclusive()?;
+    FileExt::lock(&lock_file)?;
 
     // Load raw config from file (without merging code defaults)
     let mut raw_config: Config = match std::fs::read_to_string(&path) {
