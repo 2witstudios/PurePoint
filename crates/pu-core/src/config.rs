@@ -51,6 +51,14 @@ pub fn update_agent_config(
     }
     let path = paths::config_path(project_root);
 
+    // Hold an exclusive lock across the read-modify-write so overlapping updates
+    // (the daemon serves each request on its own blocking thread) can't lose or
+    // interleave writes. The lock file is left in place: unlinking it on release
+    // would let a waiter and a new caller lock different inodes.
+    use fs4::fs_std::FileExt;
+    let lock_file = std::fs::File::create(path.with_extension("yaml.lock"))?;
+    lock_file.lock_exclusive()?;
+
     // Load raw config from file (without merging code defaults)
     let mut raw_config: Config = match std::fs::read_to_string(&path) {
         Ok(content) => serde_yml::from_str(&content)?,
@@ -79,9 +87,16 @@ pub fn update_agent_config(
 
     agent.launch_args = launch_args;
 
-    // Write back to YAML
+    // Write back to YAML atomically: temp file, fsync, rename. A plain truncating
+    // write can leave a torn file (e.g. a duplicated `envFiles:` tail) that fails
+    // every later load.
     let yaml = serde_yml::to_string(&raw_config)?;
-    std::fs::write(&path, yaml)?;
+    let tmp_path = path.with_extension("yaml.tmp");
+    let mut tmp = std::fs::File::create(&tmp_path)?;
+    std::io::Write::write_all(&mut tmp, yaml.as_bytes())?;
+    tmp.sync_all()?;
+    std::fs::rename(&tmp_path, &path)?;
+    drop(lock_file);
 
     // Return fully merged config (with code defaults filled in)
     load_config_strict(project_root)
@@ -449,5 +464,34 @@ agents:
             config.agents["claude"].launch_args,
             Some(vec!["--permission-mode".to_string(), "plan".to_string()])
         );
+    }
+
+    #[test]
+    fn given_concurrent_update_agent_config_calls_should_leave_parseable_config() {
+        // Overlapping read-modify-write calls (the settings UI fires one per change)
+        // used to interleave truncating writes, leaving a stale tail such as a
+        // second `envFiles:` key that made every later config load fail.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(crate::paths::pu_dir(&root)).unwrap();
+
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let agent = ["claude", "codex", "opencode", "terminal"][i % 4];
+                    let args: Vec<String> = (0..=i).map(|n| format!("--flag-{n}")).collect();
+                    for _ in 0..20 {
+                        update_agent_config(&root, agent, Some(args.clone())).unwrap();
+                        update_agent_config(&root, agent, None).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        load_config_strict(&root).unwrap();
     }
 }
