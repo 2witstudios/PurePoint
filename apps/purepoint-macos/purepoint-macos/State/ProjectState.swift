@@ -31,6 +31,9 @@ final class ProjectState: Identifiable {
     /// brand-new workspace — a row appearing for a pane the user just closed.
     @ObservationIgnored private var killedAgentIds = Set<String>()
 
+    /// How long to keep retrying daemon start + init before surfacing an error.
+    private static let daemonConnectBudget: Duration = .seconds(20)
+
     init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?) {
         self.projectRoot = projectRoot
         self.service = service
@@ -49,27 +52,37 @@ final class ProjectState: Identifiable {
         manifestWatcher = nil
 
         openTask = Task { [weak self] in
-            do {
-                try await DaemonLifecycle.ensureDaemon()
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.appState?.daemonError = error.localizedDescription
-                return
-            }
-
-            do {
-                let client = DaemonClient()
-                let response = try await client.send(.initProject(projectRoot: root))
-                if case .error(_, let message) = response {
-                    self?.appState?.daemonError = message
+            // Retry with backoff: right after an update relaunch the previous
+            // daemon can still be draining its agents and holding the daemon
+            // lock, so the first start attempt fails. Giving up on it left the
+            // app daemonless until the user quit and relaunched.
+            // Bounded by wall-clock time, not attempts: one attempt against a
+            // daemon that never answers can itself take ~20s of health probes.
+            let deadline = ContinuousClock.now + Self.daemonConnectBudget
+            var attempt = 0
+            while true {
+                do {
+                    try await DaemonLifecycle.ensureDaemon()
+                    let response = try await DaemonClient().send(.initProject(projectRoot: root))
+                    if case .error(let code, let message) = response {
+                        // At its connection limit: transient, so back off and retry.
+                        if code == "BUSY" { throw DaemonClientError.busy }
+                        self?.appState?.daemonError = message
+                        return
+                    }
+                    break
+                } catch is CancellationError {
                     return
+                } catch {
+                    attempt += 1
+                    guard ContinuousClock.now < deadline else {
+                        self?.appState?.daemonError = error.localizedDescription
+                        return
+                    }
+                    print("[Daemon] connect attempt \(attempt) failed: \(error); retrying")
+                    let delay = UInt64(min(attempt, 4)) * 1_000_000_000
+                    do { try await Task.sleep(nanoseconds: delay) } catch { return }
                 }
-            } catch is CancellationError {
-                return
-            } catch {
-                self?.appState?.daemonError = error.localizedDescription
-                return
             }
 
             guard let self, !Task.isCancelled else { return }

@@ -169,13 +169,13 @@ private actor DaemonLauncher {
 
         // Redirect stderr to log file for diagnostics
         try? FileManager.default.createDirectory(at: puDir, withIntermediateDirectories: true)
+        // O_APPEND, never a plain write from offset 0: during an update relaunch
+        // the old daemon may still be writing, and without O_APPEND each process
+        // keeps its own offset and overwrites the other's lines.
         let logFile = puDir.appendingPathComponent("daemon.log")
+        let logFd = open(logFile.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
         process.standardError =
-            FileHandle(forWritingAtPath: logFile.path)
-            ?? {
-                FileManager.default.createFile(atPath: logFile.path, contents: nil)
-                return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
-            }()
+            logFd >= 0 ? FileHandle(fileDescriptor: logFd, closeOnDealloc: true) : FileHandle.nullDevice
 
         try process.run()
 

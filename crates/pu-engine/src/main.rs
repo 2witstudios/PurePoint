@@ -124,4 +124,9 @@ async fn main() {
     daemon_lifecycle::cleanup_files(&pid_path, &socket);
 
     tracing::info!("pu-engine stopped");
+
+    // Exit now rather than returning: dropping the runtime waits on every
+    // blocking PTY reader, and one whose terminal a surviving grandchild still
+    // holds open never returns, leaving a socketless daemon lingering.
+    std::process::exit(0);
 }
