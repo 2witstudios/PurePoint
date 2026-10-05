@@ -25,7 +25,7 @@ Key behaviors:
 
 ## Decisions
 
-! [CLI-001] Auto-start polls 30x100ms (3s timeout), exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health, then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. Polls `Request::Health` every 100ms up to 30 attempts. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
+! [CLI-001] Auto-start with a 3s wall-clock startup budget, exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health (up to three 2s-bounded probes, 200ms apart; a `BUSY` reply counts as a live daemon), then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. A redundant spawn is harmless: it exits on the daemon lock. Then polls `Request::Health` with exponential backoff (10ms doubling to 640ms) inside a 3s timeout that includes the probes. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
 ! [CLI-002] `--json` flag for machine-readable output — provides raw JSON responses for conductor agents and scripts. Available on nearly every command: `init`, `spawn`, `status`, `bench`, `play`, `kill`, `logs`, `health`, `pulse`, `diff`, `clean`, and all CRUD subcommands (`prompt`, `agent`, `swarm`, `schedule`, `trigger`). Per-command flag (not global). Implemented across command handlers in `pu-cli/src/commands/`.
 

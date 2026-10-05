@@ -10,7 +10,7 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 | Protocol version | 5 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes) |
-| Max connections | 64 (semaphore-limited) |
+| Max connections | 1024 (semaphore-limited; further connections get one `BUSY` error line and are closed) |
 | Client timeout | 30 seconds |
 | Binary data | Hex-encoded within JSON |
 
