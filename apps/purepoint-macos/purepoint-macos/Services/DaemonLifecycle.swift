@@ -169,13 +169,15 @@ private actor DaemonLauncher {
 
         // Redirect stderr to log file for diagnostics
         try? FileManager.default.createDirectory(at: puDir, withIntermediateDirectories: true)
+        // Append, never overwrite from offset 0: a new daemon writing over the
+        // previous one's log interleaves both and hides why a restart failed.
         let logFile = puDir.appendingPathComponent("daemon.log")
-        process.standardError =
-            FileHandle(forWritingAtPath: logFile.path)
-            ?? {
-                FileManager.default.createFile(atPath: logFile.path, contents: nil)
-                return FileHandle(forWritingAtPath: logFile.path) ?? FileHandle.nullDevice
-            }()
+        if !FileManager.default.fileExists(atPath: logFile.path) {
+            FileManager.default.createFile(atPath: logFile.path, contents: nil)
+        }
+        let logHandle = FileHandle(forWritingAtPath: logFile.path)
+        _ = try? logHandle?.seekToEnd()
+        process.standardError = logHandle ?? FileHandle.nullDevice
 
         try process.run()
 
