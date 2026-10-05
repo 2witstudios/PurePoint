@@ -28,6 +28,7 @@ PurePoint uses flat files for all storage:
 
 | Path | Purpose |
 |------|---------|
+| `daemon.lock` | Single-instance daemon lock (`flock`) |
 | `daemon.pid` | Daemon process ID |
 | `daemon.sock` | Unix domain socket for IPC |
 | `daemon.log` | Daemon log output |

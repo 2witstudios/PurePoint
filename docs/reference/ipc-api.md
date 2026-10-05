@@ -417,6 +417,8 @@ Gate evaluation timeouts: 60 seconds per command, 5 minutes total.
 ## Daemon lifecycle
 
 - **Auto-start**: CLI calls `ensure_daemon()`, finds binary, spawns detached, polls health with exponential backoff (up to 3s)
-- **Standalone mode**: Writes PID file to `~/.pu/daemon.pid`
+- **Single instance**: before touching the socket, every daemon takes an exclusive `flock` on `daemon.lock` beside it; if another live daemon holds it, the new one logs "already running" and exits 0
+- **PID file**: written to `~/.pu/daemon.pid` in both modes; on exit the PID file and socket are removed only if the PID file still names this daemon
 - **Managed mode**: `--managed` flag (for macOS app); exits when parent process dies
+- **Connection limit**: at most 1024 concurrent connections; further connections get one `BUSY` error line and are closed
 - **Signals**: SIGTERM and SIGINT trigger graceful shutdown

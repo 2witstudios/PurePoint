@@ -23,8 +23,8 @@ cat ~/.pu/daemon.log
 ```
 
 Common causes:
-- **Socket already exists**: A stale `~/.pu/daemon.sock` from a crashed daemon. Remove it: `rm ~/.pu/daemon.sock`
-- **PID file conflict**: A stale `~/.pu/daemon.pid`. Remove it: `rm ~/.pu/daemon.pid`
+- **Already running**: `pu-engine already running for ~/.pu/daemon.sock; exiting` in the log is normal. Only one daemon may own the socket (it holds an exclusive lock on `~/.pu/daemon.lock`), and extra launches exit. A stale socket or PID file from a crashed daemon needs no cleanup: the kernel releases the lock when a daemon dies, and the next daemon replaces both files.
+- **More than one daemon**: `pgrep -fl pu-engine` should list a single `pu-engine` (agent shells are its children). Older builds without the lock could leave several, each with agents the others cannot reach; quit the app, `pkill pu-engine`, and relaunch.
 - **Port/socket permissions**: Ensure `~/.pu/` is writable
 
 ## Agent stuck in "waiting"
