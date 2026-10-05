@@ -144,7 +144,9 @@ impl Engine {
     }
 
     /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
-    /// wait up to 3s, then SIGKILL.
+    /// wait up to 3s for the whole group to exit, then SIGKILL whatever is left.
+    /// Waiting on the leader alone would let a child that ignores SIGTERM keep
+    /// running beside the resumed agent.
     fn stop_process_group(pid: u32) {
         let Ok(pgid) = i32::try_from(pid) else {
             return;
@@ -152,8 +154,9 @@ impl Engine {
         unsafe {
             libc::killpg(pgid, libc::SIGTERM);
         }
+        let group_alive = || unsafe { libc::killpg(pgid, 0) } == 0;
         for _ in 0..30 {
-            if !daemon_lifecycle::is_process_alive(pid) {
+            if !group_alive() {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -336,12 +339,11 @@ mod reconcile_tests {
 
         engine.handle_status(&root(&tmp), None).await;
 
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !read(&tmp, "ag-1").suspended {
-            assert!(tokio::time::Instant::now() < deadline, "never reconciled");
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        assert_eq!(read(&tmp, "ag-1").pid, None);
+        // No polling: the first status awaits reconcile, so a `send` issued
+        // right after it never sees the orphan as Running.
+        let a = read(&tmp, "ag-1");
+        assert!(a.suspended, "first status returned before reconciling");
+        assert_eq!(a.pid, None);
         // Stopped, not left running: its exit has been observed. (kill(pid, 0)
         // would still see the unreaped zombie, since this test is its parent.)
         let mut exit_rx = orphan.exit_rx.clone();
@@ -354,5 +356,45 @@ mod reconcile_tests {
         })
         .await;
         assert!(stopped.is_ok(), "orphan was not stopped");
+    }
+
+    #[tokio::test]
+    async fn given_orphan_child_ignoring_sigterm_should_stop_whole_group() {
+        let engine = Engine::new();
+        // Leader exits on SIGTERM; its background child ignores it (and the SIGHUP
+        // sent when the session leader exits).
+        let orphan = engine
+            .pty_host
+            .spawn(crate::pty_manager::SpawnConfig {
+                command: "/bin/sh".into(),
+                args: vec![
+                    "-c".into(),
+                    "(trap '' TERM HUP; sleep 30) & sleep 30; true".into(),
+                    "sid-group-xyz".into(),
+                ],
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let pgid = i32::try_from(orphan.pid).unwrap();
+
+        tokio::task::spawn_blocking(move || Engine::stop_process_group(pgid as u32))
+            .await
+            .unwrap();
+
+        // SIGKILL reached the SIGTERM-ignoring child too; allow it to be reaped.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while unsafe { libc::killpg(pgid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process group survived"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }

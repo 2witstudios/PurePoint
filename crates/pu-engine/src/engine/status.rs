@@ -18,8 +18,8 @@ impl Engine {
         // On the first status call per project, reconcile exactly as init does.
         // A fresh daemon may get status before (or instead of) init, e.g. from the
         // CLI; agents it does not own must be retired or have their orphaned
-        // process stopped either way. Fire-and-forget: first status returns
-        // immediately, next refresh corrects.
+        // process stopped either way. Awaited, so this very response already
+        // reflects it: a `send` right after must not see a stale Running entry.
         let should_reconcile = {
             let mut reaped = self.reaped_projects.lock().unwrap();
             reaped.insert(project_root.to_string())
@@ -27,15 +27,11 @@ impl Engine {
         if should_reconcile {
             let pr = project_root.to_string();
             let sessions = self.sessions.clone();
-            tokio::spawn(async move {
-                tokio::task::spawn_blocking(move || {
-                    Self::reconcile_agents_on_init(&pr, |id| {
-                        sessions.blocking_lock().contains_key(id)
-                    })
-                })
-                .await
-                .ok();
-            });
+            tokio::task::spawn_blocking(move || {
+                Self::reconcile_agents_on_init(&pr, |id| sessions.blocking_lock().contains_key(id))
+            })
+            .await
+            .ok();
         }
 
         if let Some(id) = agent_id {

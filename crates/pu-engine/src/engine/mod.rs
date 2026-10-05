@@ -243,7 +243,18 @@ impl Engine {
         if handles.is_empty() {
             return;
         }
-        // Before any signal, so the exit watcher always sees the mark.
+        // One `ps` snapshot for all handles — cheaper than one per agent.
+        let tree = snapshot_process_tree().await;
+        let all_descendants: Vec<i32> = handles
+            .iter()
+            .filter_map(|h| i32::try_from(h.pid).ok())
+            .flat_map(|pid| descendants_from_tree(&tree, pid))
+            .collect();
+
+        // Mark only the agents still running at the moment they are signalled,
+        // with no await in between: an agent that exits on its own before this
+        // point (including during the snapshot above) keeps its natural exit.
+        // The mark lands before the signal, so the exit watcher always sees it.
         {
             let mut killed = self
                 .shutdown_killed
@@ -256,14 +267,6 @@ impl Engine {
                     .map(|h| h.pid),
             );
         }
-
-        // One `ps` snapshot for all handles — cheaper than one per agent.
-        let tree = snapshot_process_tree().await;
-        let all_descendants: Vec<i32> = handles
-            .iter()
-            .filter_map(|h| i32::try_from(h.pid).ok())
-            .flat_map(|pid| descendants_from_tree(&tree, pid))
-            .collect();
 
         for handle in &handles {
             if let Ok(pid) = i32::try_from(handle.pid) {

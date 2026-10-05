@@ -53,8 +53,8 @@ Created automatically. Holds daemon runtime files and global-scope definitions.
 ~/.pu/
 ├── bin/
 │   └── pu                 # CLI binary (installed by macOS app)
-├── daemon.lock            # Single-instance lock held by the running daemon
-├── daemon.pid             # Daemon process ID
+├── daemon.sock.lock            # Single-instance lock held by the running daemon
+├── daemon.sock.pid             # Daemon process ID
 ├── daemon.sock            # Unix domain socket for IPC
 ├── daemon.log             # Daemon stderr log
 ├── templates/             # Global prompt templates
@@ -68,8 +68,8 @@ Created automatically. Holds daemon runtime files and global-scope definitions.
 
 | File | Purpose | When present |
 |---|---|---|
-| `daemon.lock` | Exclusive `flock` that makes one daemon the owner of the socket; released by the kernel when the daemon exits | Always (the lock, not the file, marks a live daemon) |
-| `daemon.pid` | PID of the running daemon, so the app can stop one it cannot reach | While daemon is running (both modes) |
+| `daemon.sock.lock` | Exclusive `flock` that makes one daemon the owner of the socket; released by the kernel when the daemon exits | Always (the lock, not the file, marks a live daemon) |
+| `daemon.sock.pid` | PID of the running daemon, so the app can stop one it cannot reach | While daemon is running (both modes) |
 | `daemon.sock` | Unix socket for CLI-to-daemon communication | While daemon is running |
 | `daemon.log` | Daemon stderr output for debugging | While daemon is running |
 

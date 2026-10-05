@@ -59,7 +59,7 @@ nonisolated enum DaemonLifecycle {
 private actor DaemonLauncher {
     private let puDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".pu")
-    private var pidPath: String { puDir.appendingPathComponent("daemon.pid").path }
+    private var pidPath: String { puDir.appendingPathComponent("daemon.sock.pid").path }
     /// PID of the daemon this app instance launched, if it is the one that won
     /// the daemon lock.
     private var launchedPid: Int?
@@ -122,7 +122,7 @@ private actor DaemonLauncher {
     // MARK: - Private
 
     /// Stop the daemon named by the PID file. The socket is left alone: only the
-    /// daemon holding `daemon.lock` may unlink or rebind it, so deleting it here
+    /// daemon holding `daemon.sock.lock` may unlink or rebind it, so deleting it here
     /// could strand a live daemon that is merely slow to answer.
     private func killExistingDaemon() async {
         guard let content = try? String(contentsOfFile: pidPath, encoding: .utf8),
