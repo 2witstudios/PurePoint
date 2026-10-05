@@ -165,11 +165,13 @@ private actor DaemonLauncher {
         // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s).
         // If another pu-engine already holds the daemon lock, ours exits at once
         // and this attaches to the running one.
+        // Only claim ownership if the daemon answering is the one we spawned;
+        // otherwise a racing app instance's daemon would be shut down on quit.
         for attempt in 0..<5 {
             let delay = UInt64(100_000_000 * (1 << attempt))
             try await Task.sleep(nanoseconds: delay)
-            if await isHealthy(attempts: 1) {
-                didLaunchDaemon = true
+            if let pid = await healthyPid(timeout: 2.0) {
+                didLaunchDaemon = pid == Int(process.processIdentifier)
                 return
             }
         }
@@ -208,17 +210,22 @@ private actor DaemonLauncher {
     }
 
     private func healthCheck(timeout: TimeInterval) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
+        await healthyPid(timeout: timeout) != nil
+    }
+
+    /// The pid reported by a healthy daemon, or nil if none answered in time.
+    private func healthyPid(timeout: TimeInterval) async -> Int? {
+        await withTaskGroup(of: Int?.self) { group in
             group.addTask {
-                guard let response = try? await DaemonClient().send(.health) else { return false }
-                if case .healthReport = response { return true }
-                return false
+                guard let response = try? await DaemonClient().send(.health) else { return nil }
+                if case .healthReport(let pid, _, _, _) = response { return pid }
+                return nil
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return false
+                return nil
             }
-            let first = await group.next() ?? false
+            let first = await group.next() ?? nil
             group.cancelAll()
             return first
         }
