@@ -17,12 +17,25 @@ pub struct DaemonLock {
 
 /// Lock file guarding `socket_path` (`daemon.sock` -> `daemon.lock`).
 pub fn lock_path_for(socket_path: &Path) -> PathBuf {
-    socket_path.with_extension("lock")
+    sibling_path(socket_path, "lock")
 }
 
 /// PID file for the daemon on `socket_path` (`daemon.sock` -> `daemon.pid`).
 pub fn pid_path_for(socket_path: &Path) -> PathBuf {
-    socket_path.with_extension("pid")
+    sibling_path(socket_path, "pid")
+}
+
+/// `daemon.sock` keeps the canonical `daemon.<ext>` names the app and docs use.
+/// Any other socket name gets `.<ext>` appended to its full file name, so
+/// distinct sockets (`pu.sock`, `pu.test`) never share a lock or PID file.
+fn sibling_path(socket_path: &Path, ext: &str) -> PathBuf {
+    if socket_path.file_name().is_some_and(|n| n == "daemon.sock") {
+        return socket_path.with_extension(ext);
+    }
+    let mut name = socket_path.as_os_str().to_owned();
+    name.push(".");
+    name.push(ext);
+    PathBuf::from(name)
 }
 
 /// Take the daemon lock for `socket_path` without blocking.
@@ -220,5 +233,17 @@ mod tests {
         let sock = Path::new("/x/.pu/daemon.sock");
         assert_eq!(lock_path_for(sock), Path::new("/x/.pu/daemon.lock"));
         assert_eq!(pid_path_for(sock), Path::new("/x/.pu/daemon.pid"));
+    }
+
+    #[test]
+    fn given_distinct_custom_sockets_should_not_share_lock_or_pid_paths() {
+        let a = Path::new("/tmp/pu.sock");
+        let b = Path::new("/tmp/pu.test");
+        let c = Path::new("/tmp/pu");
+        assert_eq!(lock_path_for(a), Path::new("/tmp/pu.sock.lock"));
+        assert_eq!(pid_path_for(b), Path::new("/tmp/pu.test.pid"));
+        assert_ne!(lock_path_for(a), lock_path_for(b));
+        assert_ne!(lock_path_for(a), lock_path_for(c));
+        assert_ne!(pid_path_for(b), pid_path_for(c));
     }
 }
