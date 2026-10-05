@@ -43,7 +43,7 @@ trigger:
 project_root: /projects/myapp
 created_at: "2025-01-01T00:00:00Z"
 "#;
-    let def: ScheduleDef = serde_yml::from_str(yaml).unwrap();
+    let def: ScheduleDef = serde_yaml_ng::from_str(yaml).unwrap();
     assert_eq!(def.name, "nightly-review");
     assert!(def.enabled);
     assert_eq!(def.recurrence, Recurrence::Daily);
@@ -64,7 +64,7 @@ trigger:
 project_root: /tmp
 created_at: "2025-06-01T00:00:00Z"
 "#;
-    let def: ScheduleDef = serde_yml::from_str(yaml).unwrap();
+    let def: ScheduleDef = serde_yaml_ng::from_str(yaml).unwrap();
     assert!(def.enabled); // default true
     assert_eq!(def.recurrence, Recurrence::None); // default none
     assert_eq!(def.target, ""); // default empty
@@ -86,13 +86,13 @@ root: false
 agent_name: overnight-build
 created_at: "2025-06-01T00:00:00Z"
 "#;
-    let def: ScheduleDef = serde_yml::from_str(yaml).unwrap();
+    let def: ScheduleDef = serde_yaml_ng::from_str(yaml).unwrap();
     assert!(!def.root);
     assert_eq!(def.agent_name.as_deref(), Some("overnight-build"));
 
     // Round-trip through YAML
-    let serialized = serde_yml::to_string(&def).unwrap();
-    let reparsed: ScheduleDef = serde_yml::from_str(&serialized).unwrap();
+    let serialized = serde_yaml_ng::to_string(&def).unwrap();
+    let reparsed: ScheduleDef = serde_yaml_ng::from_str(&serialized).unwrap();
     assert!(!reparsed.root);
     assert_eq!(reparsed.agent_name.as_deref(), Some("overnight-build"));
 }
@@ -147,8 +147,8 @@ fn given_trigger_agent_def_should_round_trip() {
     let trigger = ScheduleTrigger::AgentDef {
         name: "reviewer".to_string(),
     };
-    let yaml = serde_yml::to_string(&trigger).unwrap();
-    let parsed: ScheduleTrigger = serde_yml::from_str(&yaml).unwrap();
+    let yaml = serde_yaml_ng::to_string(&trigger).unwrap();
+    let parsed: ScheduleTrigger = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(parsed, trigger);
 }
 
@@ -160,8 +160,8 @@ fn given_trigger_swarm_def_with_vars_should_round_trip() {
         name: "full-stack".to_string(),
         vars,
     };
-    let yaml = serde_yml::to_string(&trigger).unwrap();
-    let parsed: ScheduleTrigger = serde_yml::from_str(&yaml).unwrap();
+    let yaml = serde_yaml_ng::to_string(&trigger).unwrap();
+    let parsed: ScheduleTrigger = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(parsed, trigger);
 }
 
@@ -171,8 +171,8 @@ fn given_trigger_inline_prompt_should_round_trip() {
         prompt: "Review all deps".to_string(),
         agent: "claude".to_string(),
     };
-    let yaml = serde_yml::to_string(&trigger).unwrap();
-    let parsed: ScheduleTrigger = serde_yml::from_str(&yaml).unwrap();
+    let yaml = serde_yaml_ng::to_string(&trigger).unwrap();
+    let parsed: ScheduleTrigger = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(parsed, trigger);
 }
 
@@ -246,7 +246,7 @@ fn given_schedule_def_should_save_and_load() {
     assert!(path.is_file());
 
     let content = std::fs::read_to_string(&path).unwrap();
-    let loaded: ScheduleDef = serde_yml::from_str(&content).unwrap();
+    let loaded: ScheduleDef = serde_yaml_ng::from_str(&content).unwrap();
     assert_eq!(loaded.name, "test-schedule");
     assert_eq!(loaded.recurrence, Recurrence::Daily);
 }

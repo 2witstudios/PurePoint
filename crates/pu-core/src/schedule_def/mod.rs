@@ -151,7 +151,7 @@ pub fn save_schedule_def(dir: &Path, def: &ScheduleDef) -> Result<(), std::io::E
     }
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
-    let yaml = serde_yml::to_string(def).map_err(std::io::Error::other)?;
+    let yaml = serde_yaml_ng::to_string(def).map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 
@@ -295,7 +295,7 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<ScheduleDef> {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                match serde_yml::from_str::<ScheduleDef>(&content) {
+                match serde_yaml_ng::from_str::<ScheduleDef>(&content) {
                     Ok(mut def) => {
                         if let Err(e) = def.validate() {
                             eprintln!("warning: invalid schedule {}: {e}", path.display());
@@ -319,7 +319,7 @@ fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<ScheduleDef> {
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut def) = serde_yml::from_str::<ScheduleDef>(&content) {
+            if let Ok(mut def) = serde_yaml_ng::from_str::<ScheduleDef>(&content) {
                 if def.validate().is_err() {
                     return None;
                 }
