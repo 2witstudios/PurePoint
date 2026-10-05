@@ -40,10 +40,14 @@ struct PaneCellView: View {
         case .file(let path):
             if let rootPath = fileRootPath, let surface = activeTab {
                 FilePaneView(
-                    workspaceId: workspaceId, leafId: leafId, rootPath: rootPath,
-                    initialPath: path, onFocus: focus
+                    rootPath: rootPath,
+                    initialPath: path,
+                    session: registry.fileTabs.session(
+                        workspaceId: workspaceId, surfaceId: surface.id, initialPath: path),
+                    onFocus: focus,
+                    onPathChange: { registry.openFile(workspaceId: workspaceId, surfaceId: surface.id, path: $0) }
                 )
-                // Each file tab keeps its own navigator and editor state.
+                // One view per tab; its state lives in the tab's FileTabSession, not the view.
                 .id(surface.id)
             }
         case .empty, nil:

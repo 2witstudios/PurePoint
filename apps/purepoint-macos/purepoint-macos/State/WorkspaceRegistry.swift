@@ -24,10 +24,23 @@ private struct SurfaceReservation {
 final class WorkspaceRegistry {
 
     /// Canonical workspaces per project root, in sidebar order.
-    private(set) var workspacesByProject: [String: [Workspace]] = [:]
+    private(set) var workspacesByProject: [String: [Workspace]] = [:] {
+        didSet { fileTabs.retain(only: Self.fileTabKeys(in: workspacesByProject)) }
+    }
 
-    /// The workspace whose grid is on screen.
-    var activeWorkspaceId: String?
+    /// The workspace whose grid is on screen. Persisted with its project's layout so
+    /// `pu grid show` can say which workspace commands without `--workspace` will reach.
+    var activeWorkspaceId: String? {
+        didSet {
+            guard activeWorkspaceId != oldValue else { return }
+            for id in [oldValue, activeWorkspaceId].compactMap({ $0 }) {
+                if let root = projectRoot(forWorkspace: id) { scheduleSave(projectRoot: root) }
+            }
+        }
+    }
+
+    /// Editor and navigator state of every open file tab, kept while the tab is off screen.
+    @ObservationIgnored let fileTabs = FileTabStore()
 
     /// Set after a UI-initiated split or new tab so that empty tab opens the command palette.
     var pendingPaletteSurfaceId: Int?
@@ -94,7 +107,8 @@ final class WorkspaceRegistry {
     /// Reconcile `stored` against `live` and publish the result if it changed.
     private func publish(projectRoot: String, stored: [Workspace], live: [LiveAgent]) {
         let reconciled = WorkspaceReconciler.reconcile(
-            stored: stored, live: deferringReservedAgents(projectRoot: projectRoot, stored: stored, live: live))
+            stored: stored, live: deferringReservedAgents(projectRoot: projectRoot, stored: stored, live: live),
+            reserved: reservedWorkspaceIds(projectRoot: projectRoot))
         guard reconciled != workspacesByProject[projectRoot] else { return }
 
         workspacesByProject[projectRoot] = reconciled
@@ -113,6 +127,10 @@ final class WorkspaceRegistry {
         let reservedContainers = Set(reservations.map(\.container))
         let placed = Set(stored.flatMap(\.agentIds))
         return live.filter { placed.contains($0.id) || !reservedContainers.contains($0.container) }
+    }
+
+    private func reservedWorkspaceIds(projectRoot: String) -> Set<String> {
+        Set((reservationsByProject[projectRoot] ?? []).map(\.workspaceId))
     }
 
     /// Drop the active selection if its workspace no longer exists.
@@ -163,10 +181,17 @@ final class WorkspaceRegistry {
 
     /// Close a pane and every tab in it, killing the agents they held.
     func closePane(workspaceId: String, leafId: Int) {
-        guard let workspace = workspace(id: workspaceId), let pane = workspace.panes[leafId] else { return }
-        let surfaceIds = pane.tabs.map(\.id)
-        removeTabs(workspaceId: workspaceId, surfaceIds: surfaceIds, dropsWorkspace: workspace.paneCount <= 1) {
-            $0.closePane(leafId: leafId)
+        guard let pane = workspace(id: workspaceId)?.panes[leafId] else { return }
+        removeTabs(workspaceId: workspaceId, surfaceIds: pane.tabs.map(\.id)) { $0.closePane(leafId: leafId) }
+    }
+
+    /// Close a whole workspace (its sidebar row), killing every agent in it.
+    func closeWorkspace(_ workspaceId: String) {
+        guard let workspace = workspace(id: workspaceId) else { return }
+        removeTabs(workspaceId: workspaceId, surfaceIds: workspace.surfaces.map(\.surface.id)) { workspace in
+            let killed = workspace.agentIds
+            _ = workspace.removeSurfaces { _ in true }
+            return killed
         }
     }
 
@@ -226,10 +251,8 @@ final class WorkspaceRegistry {
     /// Close a tab, killing the agent it held. Its pane goes with its last tab, and the
     /// workspace goes with its last pane, so neither lingers as an empty shell.
     func closeTab(workspaceId: String, surfaceId: Int) {
-        guard let workspace = workspace(id: workspaceId), workspace.leafId(ofSurface: surfaceId) != nil else { return }
-        removeTabs(workspaceId: workspaceId, surfaceIds: [surfaceId], dropsWorkspace: workspace.isLastTab(surfaceId)) {
-            $0.closeTab(surfaceId)
-        }
+        guard workspace(id: workspaceId)?.leafId(ofSurface: surfaceId) != nil else { return }
+        removeTabs(workspaceId: workspaceId, surfaceIds: [surfaceId]) { $0.closeTab(surfaceId) }
     }
 
     /// Move a tab to a 0-based position in a pane (`nil` appends). The agent keeps running.
@@ -237,12 +260,13 @@ final class WorkspaceRegistry {
         mutate(workspaceId) { $0.moveTab(surfaceId, toLeaf: leafId, index: index) }
     }
 
-    func breakTab(workspaceId: String, surfaceId: Int, axis: PaneSplitNode.Axis) {
-        mutate(workspaceId) { $0.breakTab(surfaceId, axis: axis) }
+    /// Move a tab to just before another tab — a tab dropped onto a tab.
+    func moveTab(workspaceId: String, surfaceId: Int, before targetSurfaceId: Int) {
+        mutate(workspaceId) { $0.moveTab(surfaceId, before: targetSurfaceId) }
     }
 
-    func joinPane(workspaceId: String, leafId: Int, into targetLeafId: Int) {
-        mutate(workspaceId) { $0.joinPane(leafId, into: targetLeafId) }
+    func breakTab(workspaceId: String, surfaceId: Int, axis: PaneSplitNode.Axis) {
+        mutate(workspaceId) { $0.breakTab(surfaceId, axis: axis) }
     }
 
     /// Show the file navigator in a tab (optionally opened on a file). No daemon involved.
@@ -285,18 +309,21 @@ final class WorkspaceRegistry {
         publish(projectRoot: projectRoot, stored: stored, live: live)
     }
 
-    /// Shared path for closing tabs and panes: apply `body`, drop the workspace when nothing
-    /// is left to show, release reservations on the removed tabs, and kill their agents.
-    private func removeTabs(
-        workspaceId: String, surfaceIds: [Int], dropsWorkspace: Bool, _ body: (inout Workspace) -> [String]
-    ) {
+    /// Shared path for closing tabs, panes and workspaces: apply `body`, release reservations
+    /// on the removed tabs, drop the workspace when nothing the user opened is left (the same
+    /// rule the reconciler applies, applied now rather than at the next manifest change), and
+    /// kill the removed agents.
+    private func removeTabs(workspaceId: String, surfaceIds: [Int], _ body: (inout Workspace) -> [String]) {
         guard let projectRoot = projectRoot(forWorkspace: workspaceId),
             var list = workspacesByProject[projectRoot],
             let index = list.firstIndex(where: { $0.id == workspaceId })
         else { return }
 
         let killed = body(&list[index])
-        if dropsWorkspace {
+        for surfaceId in surfaceIds {
+            dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, surfaceId: surfaceId)
+        }
+        if list[index].isGhost, !reservedWorkspaceIds(projectRoot: projectRoot).contains(workspaceId) {
             list.remove(at: index)
             if activeWorkspaceId == workspaceId { activeWorkspaceId = nil }
         } else {
@@ -304,9 +331,6 @@ final class WorkspaceRegistry {
         }
 
         workspacesByProject[projectRoot] = list
-        for surfaceId in surfaceIds {
-            dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, surfaceId: surfaceId)
-        }
         scheduleSave(projectRoot: projectRoot)
 
         for agentId in killed {
@@ -332,11 +356,11 @@ final class WorkspaceRegistry {
 
     // MARK: - Remote Commands
 
-    /// Grid commands from `pu grid ...` address panes and tabs but know nothing about
-    /// workspaces, so they apply to whichever workspace is on screen for that project.
-    /// Tab positions arrive 1-based (as `pu grid show` prints them); tab IDs are surface IDs.
+    /// Grid commands from `pu grid ...` address panes and tabs. They apply to the workspace
+    /// they name, else to whichever workspace is on screen for that project. Tab positions
+    /// arrive 1-based (as `pu grid show` prints them); tab IDs are surface IDs.
     func handleRemoteCommand(_ command: GridCommandPayload, from sourceProjectRoot: String) {
-        guard let workspaceId = activeWorkspaceId,
+        guard let workspaceId = command.workspaceId ?? activeWorkspaceId,
             projectRoot(forWorkspace: workspaceId) == sourceProjectRoot,
             let current = workspace(id: workspaceId)
         else { return }
@@ -347,7 +371,7 @@ final class WorkspaceRegistry {
         }
         func axis(_ value: String) -> PaneSplitNode.Axis { value == "h" ? .horizontal : .vertical }
 
-        switch command {
+        switch command.action {
         case .split(let leafId, let axisStr):
             guard let target = pane(leafId) else { return }
             split(workspaceId: workspaceId, leafId: target, axis: axis(axisStr))
@@ -404,8 +428,9 @@ final class WorkspaceRegistry {
     private func scheduleSave(projectRoot: String) {
         saveWorkItems[projectRoot]?.cancel()
         let snapshot = workspacesByProject[projectRoot] ?? []
+        let active = activeWorkspaceId(inProject: projectRoot)
         let item = DispatchWorkItem {
-            WorkspacePersistence.save(snapshot, projectRoot: projectRoot)
+            WorkspacePersistence.save(snapshot, projectRoot: projectRoot, activeWorkspaceId: active)
         }
         saveWorkItems[projectRoot] = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
@@ -415,8 +440,25 @@ final class WorkspaceRegistry {
     func saveAll() {
         for (projectRoot, workspaces) in workspacesByProject {
             saveWorkItems[projectRoot]?.cancel()
-            WorkspacePersistence.save(workspaces, projectRoot: projectRoot)
+            WorkspacePersistence.save(
+                workspaces, projectRoot: projectRoot, activeWorkspaceId: activeWorkspaceId(inProject: projectRoot))
         }
+    }
+
+    private func activeWorkspaceId(inProject projectRoot: String) -> String? {
+        guard let id = activeWorkspaceId, workspacesByProject[projectRoot]?.contains(where: { $0.id == id }) == true
+        else { return nil }
+        return id
+    }
+
+    private static func fileTabKeys(in workspacesByProject: [String: [Workspace]]) -> Set<FileTabStore.Key> {
+        var keys = Set<FileTabStore.Key>()
+        for workspace in workspacesByProject.values.joined() {
+            for (_, surface) in workspace.surfaces {
+                if case .file = surface.content { keys.insert(.init(workspaceId: workspace.id, surfaceId: surface.id)) }
+            }
+        }
+        return keys
     }
 
     func forgetProject(_ projectRoot: String) {

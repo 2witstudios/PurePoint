@@ -78,7 +78,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let title: String
         let paneCount: Int
         let tabCount: Int
-        let status: AgentStatus
+        /// `nil` for a workspace holding only file tabs — it has no agent to report on.
+        let status: AgentStatus?
     }
 
     // MARK: - Lifecycle
@@ -167,9 +168,14 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// with the pane count when it holds more than one.
     private func renderState(for workspace: Workspace, in project: ProjectState) -> WorkspaceRenderState {
         let agents = workspace.agentIds.compactMap { project.agent(byId: $0) }
-        let title = agents.first?.displayName ?? workspace.primaryAgentId ?? workspace.id
-        let status: AgentStatus =
-            agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
+        let firstFile = workspace.surfaces.lazy.compactMap { entry -> String? in
+            guard case .file(let path) = entry.surface.content else { return nil }
+            return path.map { ($0 as NSString).lastPathComponent } ?? "Files"
+        }.first
+        let title = agents.first?.displayName ?? workspace.primaryAgentId ?? firstFile ?? workspace.id
+        let status: AgentStatus? =
+            agents.isEmpty
+            ? nil : agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
         return WorkspaceRenderState(
             id: workspace.id, title: title, paneCount: workspace.paneCount, tabCount: workspace.tabCount,
             status: status)
@@ -367,7 +373,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         guard let project = findProject(forWorkspaceId: workspace.id) else { return cell }
         let state = renderState(for: workspace, in: project)
 
-        stack.addArrangedSubview(makeStatusDot(color: state.status.nsColor))
+        stack.addArrangedSubview(makeStatusDot(color: state.status?.nsColor ?? .tertiaryLabelColor))
 
         let label = NSTextField(labelWithString: state.title)
         label.font = .systemFont(ofSize: 11)
@@ -387,7 +393,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         let paneNote = state.paneCount > 1 ? ", \(state.paneCount) panes" : ""
         let tabNote = state.tabCount > state.paneCount ? ", \(state.tabCount) tabs" : ""
-        cell.setAccessibilityLabel("\(state.title), \(state.status.rawValue)\(paneNote)\(tabNote)")
+        cell.setAccessibilityLabel("\(state.title), \(state.status?.rawValue ?? "files")\(paneNote)\(tabNote)")
         return cell
     }
 
@@ -607,8 +613,14 @@ extension SidebarOutlineViewController: NSMenuDelegate {
     private func buildWorkspaceContextMenu(_ menu: NSMenu, workspace: Workspace) {
         menu.addItem(makeMenuItem(title: "Rename\u{2026}", action: #selector(contextRenameAgent(_:))))
         menu.addItem(.separator())
-        let paneCount = workspace.agentIds.count
-        let title = paneCount > 1 ? "Close Workspace (\(paneCount) agents)" : "Kill Agent"
+        let agentCount = workspace.agentIds.count
+        let title =
+            switch agentCount {
+            case 0: "Close Workspace"
+            case 1 where workspace.tabCount == 1: "Kill Agent"
+            case 1: "Close Workspace (1 agent)"
+            default: "Close Workspace (\(agentCount) agents)"
+            }
         menu.addItem(makeMenuItem(title: title, action: #selector(contextKillWorkspace(_:))))
     }
 

@@ -38,9 +38,40 @@ nonisolated enum SuspendTarget: Encodable {
     }
 }
 
-/// Grid command payload matching Rust GridCommand.
-/// Optional leaf IDs mean the focused pane; tab positions (`index`) are 1-based; tab IDs are surface IDs.
-nonisolated enum GridCommandPayload: Codable {
+/// Grid command payload matching Rust GridCommand: one action, plus the workspace it targets.
+/// Leaf and tab IDs are only unique within a workspace, so a command may name its workspace;
+/// `nil` means the workspace on screen.
+nonisolated struct GridCommandPayload: Codable {
+    var workspaceId: String?
+    var action: GridAction
+
+    init(_ action: GridAction, workspaceId: String? = nil) {
+        self.action = action
+        self.workspaceId = workspaceId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaceId = "workspace_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        // The workspace rides alongside the action's own fields in one flat object.
+        workspaceId = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .workspaceId)
+        action = try GridAction(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try action.encode(to: encoder)
+        if action != .getLayout {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(workspaceId, forKey: .workspaceId)
+        }
+    }
+}
+
+/// One grid action. Optional leaf IDs mean the focused pane; tab positions (`index`) are
+/// 1-based; tab IDs are surface IDs.
+nonisolated enum GridAction: Codable, Equatable {
     case split(leafId: Int?, axis: String)
     case close(leafId: Int?)
     case focus(leafId: Int?, direction: String?)

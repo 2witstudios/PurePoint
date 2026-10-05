@@ -221,6 +221,25 @@ struct WorkspaceReconcilerTests {
         }
     }
 
+    @Test func givenOnlyFileTabsLeftShouldKeepTheWorkspace() {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .worktree("wt-1"))
+        workspace.newTab(leafId: 0, content: .file(path: "/tmp/notes.md"))
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: [])
+
+        #expect(result.count == 1)
+        #expect(result.first?.panes[0]?.tabs.map(\.content) == [.file(path: "/tmp/notes.md")])
+        #expect(result.first?.container == .worktree("wt-1"))
+    }
+
+    @Test func givenOnlyEmptyTabsLeftShouldDropTheWorkspaceUnlessASpawnIsPending() {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        workspace.newTab(leafId: 0)
+
+        #expect(WorkspaceReconciler.reconcile(stored: [workspace], live: []).isEmpty)
+        #expect(WorkspaceReconciler.reconcile(stored: [workspace], live: [], reserved: [workspace.id]).count == 1)
+    }
+
     // MARK: - Migration
 
     /// Version 2 stored one agent per leaf and file panes in a side list. Each leaf becomes a
@@ -266,6 +285,27 @@ struct WorkspaceReconcilerTests {
             #expect(result.count == 1)
             #expect(result.first?.paneCount == 2)
             #expect(!FileManager.default.fileExists(atPath: legacyPath))
+        }
+    }
+
+    @Test func givenNewerDocumentOnDiskShouldNotOverwriteIt() {
+        withTempProject { root in
+            let path = WorkspacePersistence.filePath(projectRoot: root)
+            let newer = #"{"version":99,"workspaces":[],"somethingNew":true}"#
+            try? newer.write(toFile: path, atomically: true, encoding: .utf8)
+
+            WorkspacePersistence.save([makeGroupedWorkspace()], projectRoot: root)
+
+            #expect((try? String(contentsOfFile: path, encoding: .utf8)) == newer)
+        }
+    }
+
+    @Test func givenActiveWorkspaceShouldRecordItForTheCLI() throws {
+        try withTempProject { root in
+            WorkspacePersistence.save([makeGroupedWorkspace()], projectRoot: root, activeWorkspaceId: "ws-ag-a")
+            let data = try Data(contentsOf: URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: root)))
+            let document = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
+            #expect(document.activeWorkspaceId == "ws-ag-a")
         }
     }
 

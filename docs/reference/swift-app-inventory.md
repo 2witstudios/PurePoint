@@ -93,7 +93,8 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | DraggableSplit.swift | Draggable split handle for pane resizing |
 | WorkspacePersistence.swift | Workspace layout save/load (`.pu/workspaces.json`, version 3 with per-leaf tab stacks), including migration from version 2 and the legacy `grid-layout.json` |
 | PaneCellView.swift | Individual pane cell in grid: tab strip above the active tab's content (terminal, file navigator, or empty-tab placeholder) |
-| PaneTabBar.swift | A pane's always-visible tab strip: tabs (status icon, unseen-output dot, close, drag to reorder/move) and pane actions; also the close-pane confirmation |
+| FileTabStore.swift (State/) | Per-tab file navigator/editor sessions (`FileTabSession`), kept while a file tab is hidden or moved; pruned by WorkspaceRegistry when tabs close |
+| PaneTabBar.swift | A pane's always-visible tab strip: tabs (status icon, unseen-output dot, close, drag to reorder/move) and pane actions; also the close confirmation (unsaved edits, several running agents) |
 | FilePaneView.swift | File navigator + editor pane; Code/Preview toggle for markdown |
 | MarkdownPreviewView.swift | WKWebView rendered markdown preview (JS disabled) |
 | PaneGridView.swift | Pane grid system (split layout) |

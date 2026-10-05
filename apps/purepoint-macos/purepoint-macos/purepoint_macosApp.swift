@@ -343,8 +343,9 @@ struct purepoint_macosApp: App {
     }
 
     private func closeFocusedPane() {
-        guard let workspace = registry.activeWorkspace, let pane = workspace.focusedPane else { return }
-        guard PaneCloseConfirmation.confirm(pane: pane, appState: appState) else { return }
+        guard let workspace = registry.activeWorkspace, let pane = workspace.focusedPane,
+            TabCloseConfirmation.confirm(closing: pane.tabs, in: workspace.id, appState: appState, registry: registry)
+        else { return }
         registry.closePane(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
     }
 

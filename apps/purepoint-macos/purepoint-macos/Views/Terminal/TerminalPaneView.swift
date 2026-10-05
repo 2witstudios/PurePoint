@@ -31,9 +31,9 @@ class TerminalPaneNSView: NSView {
     /// Called when output arrives while this terminal is not on screen — a background tab.
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
-    /// Every attach replays the daemon's buffer; output before this moment is that replay,
-    /// not new activity, so it must not flag the tab as having unseen output.
-    private var replaySettlesAt = Date.distantFuture
+    /// A resize sends SIGWINCH, and full-screen programs answer by redrawing everything.
+    /// That redraw is not new activity, so output until this moment does not count.
+    private var resizeRedrawSettlesAt = Date.distantPast
     private(set) var terminal: ScrollableTerminal?
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
@@ -120,8 +120,15 @@ class TerminalPaneNSView: NSView {
     }
 
     private func noteOutput() {
-        guard Date() >= replaySettlesAt, isHidden || window == nil else { return }
+        guard Date() >= resizeRedrawSettlesAt, isHidden || window == nil else { return }
         onBackgroundOutput?()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize != frame.size {
+            resizeRedrawSettlesAt = Date().addingTimeInterval(1.5)
+        }
+        super.setFrameSize(newSize)
     }
 
     private func startDaemonAttach() {
@@ -145,7 +152,6 @@ class TerminalPaneNSView: NSView {
             onFirstOutput: { [weak self] in self?.removeSpinner() },
             onOutput: { [weak self] in self?.noteOutput() }
         )
-        replaySettlesAt = Date().addingTimeInterval(2)
         tv.attachSession = session
 
         attachTask = Task { [weak self] in

@@ -139,6 +139,18 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
 
     func contains(agentId: String) -> Bool { agentIds.contains(agentId) }
 
+    /// Nothing the user opened is left: no agent tab and no file tab, only empty tabs (or
+    /// none). Such a workspace is a ghost row and goes away — unless a spawn is pending into
+    /// one of its empty tabs, which the caller knows and this type does not.
+    var isGhost: Bool {
+        !surfaces.contains { surface in
+            switch surface.surface.content {
+            case .agent, .file: true
+            case .empty: false
+            }
+        }
+    }
+
     /// The pane holding a tab.
     func leafId(ofSurface surfaceId: Int) -> Int? {
         surfaces.first { $0.surface.id == surfaceId }?.leafId
@@ -182,11 +194,6 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
             }
         }
         return pane.tabs.compactMap(\.content.agentId)
-    }
-
-    /// Whether closing this tab would leave the workspace with nothing to show.
-    func isLastTab(_ surfaceId: Int) -> Bool {
-        tabCount == 1 && leafId(ofSurface: surfaceId) != nil
     }
 
     mutating func setRatio(_ ratio: CGFloat, forSplitIdentifiedByFirstLeaf leafId: Int) {
@@ -274,9 +281,24 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
         focusedLeafId = targetLeafId
     }
 
+    /// Move a tab to just before another tab, in that tab's pane — what dropping one tab onto
+    /// another does. Accounts for the moved tab leaving an earlier slot in the same pane.
+    mutating func moveTab(_ surfaceId: Int, before targetSurfaceId: Int) {
+        guard surfaceId != targetSurfaceId, let targetLeafId = leafId(ofSurface: targetSurfaceId),
+            var index = panes[targetLeafId]?.index(of: targetSurfaceId)
+        else { return }
+        if leafId(ofSurface: surfaceId) == targetLeafId,
+            let from = panes[targetLeafId]?.index(of: surfaceId), from < index
+        {
+            index -= 1
+        }
+        moveTab(surfaceId, toLeaf: targetLeafId, index: index)
+    }
+
     /// Move a tab out of its pane into a new pane split off beside it — tmux's break-pane,
     /// within the workspace. Does nothing for a pane's only tab (there is nothing to break
-    /// away from) or when the grid is full. Returns the new pane's leaf ID.
+    /// away from) or when the grid is full. Returns the new pane's leaf ID. Moving a tab
+    /// onto another pane's strip (`moveTab`) is the way back.
     @discardableResult
     mutating func breakTab(_ surfaceId: Int, axis: PaneSplitNode.Axis) -> Int? {
         guard let sourceLeafId = leafId(ofSurface: surfaceId),
@@ -290,18 +312,6 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
         panes[newLeafId] = Pane(tabs: [surface], activeTabId: surface.id)
         focusedLeafId = newLeafId
         return newLeafId
-    }
-
-    /// Stack every tab of one pane onto the end of another and remove the emptied pane —
-    /// the inverse of `breakTab`. The joined pane's active tab stays active.
-    mutating func joinPane(_ leafId: Int, into targetLeafId: Int) {
-        guard leafId != targetLeafId, let source = panes[leafId], panes[targetLeafId] != nil else { return }
-        let activeId = source.activeTab?.id
-        panes[targetLeafId]?.tabs.append(contentsOf: source.tabs)
-        if let activeId { panes[targetLeafId]?.activeTabId = activeId }
-        panes[leafId] = nil
-        root = root.removingLeaf(id: leafId) ?? root
-        focusedLeafId = targetLeafId
     }
 
     /// Change what a tab shows — a reservation being fulfilled, or the palette's choice.
@@ -408,9 +418,10 @@ nonisolated enum WorkspaceReconciler {
     /// Guarantees on the returned list:
     /// 1. Every live agent occupies exactly one tab of exactly one workspace.
     /// 2. No tab references an agent that is no longer in the manifest.
-    /// 3. Every workspace holds at least one live agent (no ghost rows).
+    /// 3. Every workspace holds a live agent or a file tab, or is waiting on a spawn
+    ///    (`reserved`) — no ghost rows.
     /// 4. Each workspace's container matches where its agents actually live.
-    static func reconcile(stored: [Workspace], live: [LiveAgent]) -> [Workspace] {
+    static func reconcile(stored: [Workspace], live: [LiveAgent], reserved: Set<String> = []) -> [Workspace] {
         let containerByAgent = Dictionary(live.map { ($0.id, $0.container) }, uniquingKeysWith: { first, _ in first })
 
         var claimed = Set<String>()
@@ -437,10 +448,13 @@ nonisolated enum WorkspaceReconciler {
                 }
             }
 
-            // A workspace exists to hold agents. One that has lost them all is a ghost row.
-            guard let primary = workspace.agentIds.first else { continue }
+            // A workspace exists to hold what the user opened. One left with only empty tabs
+            // is a ghost row — unless one of those tabs is waiting for its agent.
+            guard !workspace.isGhost || reserved.contains(workspace.id) else { continue }
 
-            workspace.container = containerByAgent[primary] ?? workspace.container
+            if let primary = workspace.agentIds.first {
+                workspace.container = containerByAgent[primary] ?? workspace.container
+            }
             workspace.normalize()
             result.append(workspace)
         }

@@ -147,12 +147,12 @@ struct ContentView: View {
         case .closeAgent:
             // ⌘W closes the focused tab; its pane goes with its last tab, and the workspace
             // with its last pane.
-            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface else { break }
-            let wasLastTab = workspace.isLastTab(surface.id)
+            // (A workspace left with nothing open is removed; the selection then falls back
+            // to the dashboard via the workspacesByProject observer.)
+            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface,
+                TabCloseConfirmation.confirm(closing: [surface], in: workspace.id, appState: appState, registry: registry)
+            else { break }
             registry.closeTab(workspaceId: workspace.id, surfaceId: surface.id)
-            if wasLastTab {
-                selection = .nav(.dashboard)
-            }
 
         case .toggleChatSidebar:
             NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)

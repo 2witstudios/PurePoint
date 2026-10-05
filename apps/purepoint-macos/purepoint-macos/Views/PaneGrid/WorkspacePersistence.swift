@@ -93,6 +93,14 @@ nonisolated struct PersistedWorkspaceDocument: Codable, Sendable {
 
     let version: Int
     let workspaces: [PersistedWorkspace]
+    /// The workspace on screen when this was written — where `pu grid` commands without
+    /// `--workspace` land. Read by the CLI only; the app restores selection from UserDefaults.
+    var activeWorkspaceId: String? = nil
+}
+
+/// Just the version, readable from any document — including one too new to decode.
+nonisolated private struct PersistedVersionProbe: Decodable {
+    let version: Int
 }
 
 /// Legacy `.pu/grid-layout.json` — a single app-wide grid owned by one agent.
@@ -118,7 +126,11 @@ nonisolated enum WorkspacePersistence {
 
     // MARK: - Save
 
-    static func save(_ workspaces: [Workspace], projectRoot: String) {
+    /// Write the layout — unless the file on disk was written by a newer build. Overwriting it
+    /// would downgrade it and silently drop whatever that build stored (an older build reading
+    /// a v3 file this way is how tab groupings would be lost), so a newer file is left alone.
+    static func save(_ workspaces: [Workspace], projectRoot: String, activeWorkspaceId: String? = nil) {
+        guard !isNewerThanSupported(projectRoot: projectRoot) else { return }
         let document = PersistedWorkspaceDocument(
             version: PersistedWorkspaceDocument.currentVersion,
             workspaces: workspaces.map { workspace in
@@ -131,7 +143,8 @@ nonisolated enum WorkspacePersistence {
                     tree: layoutNode(workspace.root, panes: workspace.panes),
                     filePanes: nil
                 )
-            }
+            },
+            activeWorkspaceId: activeWorkspaceId
         )
 
         let encoder = JSONEncoder()
@@ -142,6 +155,14 @@ nonisolated enum WorkspacePersistence {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
+    }
+
+    static func isNewerThanSupported(projectRoot: String) -> Bool {
+        let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
+        guard let data = try? Data(contentsOf: url),
+            let probe = try? JSONDecoder().decode(PersistedVersionProbe.self, from: data)
+        else { return false }
+        return probe.version > PersistedWorkspaceDocument.currentVersion
     }
 
     // MARK: - Load

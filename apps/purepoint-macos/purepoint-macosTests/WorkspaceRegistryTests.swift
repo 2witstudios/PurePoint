@@ -114,6 +114,72 @@ struct WorkspaceRegistryTests {
         #expect(registry.activeWorkspaceId == nil)
     }
 
+    @Test func closingTheLastAgentTabKeepsAWorkspaceThatStillHasAFileTab() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        registry.newTab(workspaceId: "ws-ag-a", leafId: 0, content: .file(path: "/tmp/x.md"))
+
+        registry.closeTab(workspaceId: "ws-ag-a", surfaceId: 0)
+        registry.reconcile(projectRoot: root, rootAgents: [], worktrees: [])
+
+        #expect(registry.workspace(id: "ws-ag-a")?.panes[0]?.tabs.map(\.content) == [.file(path: "/tmp/x.md")])
+    }
+
+    @Test func closingTheLastAgentTabBesideAnEmptyTabDropsTheWorkspaceAtOnce() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        registry.newTab(workspaceId: "ws-ag-a", leafId: 0)
+
+        registry.closeTab(workspaceId: "ws-ag-a", surfaceId: 0)
+
+        #expect(registry.workspace(id: "ws-ag-a") == nil)
+    }
+
+    @Test func anEmptyTabWaitingForASpawnKeepsItsWorkspace() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        let pending = registry.newTab(workspaceId: "ws-ag-a", leafId: 0)!
+        registry.reserveSurface(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: pending)
+
+        registry.closeTab(workspaceId: "ws-ag-a", surfaceId: 0)
+        registry.reconcile(projectRoot: root, rootAgents: [], worktrees: [])
+        registry.fulfillReservation(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: pending, agentId: "ag-new")
+
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-new"])
+    }
+
+    @Test func closingAWorkspaceKillsItsAgentsAndRemovesFileOnlyWorkspacesToo() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        registry.newTab(workspaceId: "ws-ag-a", leafId: 0, content: .file(path: nil))
+        var killed: [String] = []
+        registry.onCloseAgent = { _, agentId in killed.append(agentId) }
+
+        registry.closeWorkspace("ws-ag-a")
+
+        #expect(killed == ["ag-a"])
+        #expect(registry.workspace(id: "ws-ag-a") == nil)
+    }
+
+    @Test func fileTabSessionsLiveUntilTheirTabCloses() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        let fileTab = registry.newTab(workspaceId: "ws-ag-a", leafId: 0, content: .file(path: nil))!
+        let session = registry.fileTabs.session(workspaceId: "ws-ag-a", surfaceId: fileTab, initialPath: nil)
+
+        registry.selectTab(workspaceId: "ws-ag-a", surfaceId: 0)
+        #expect(registry.fileTabs.existingSession(workspaceId: "ws-ag-a", surfaceId: fileTab) === session)
+
+        registry.closeTab(workspaceId: "ws-ag-a", surfaceId: fileTab)
+        #expect(registry.fileTabs.existingSession(workspaceId: "ws-ag-a", surfaceId: fileTab) == nil)
+    }
+
+    @Test func activatingAWorkspaceRecordsItInTheSavedLayout() throws {
+        let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
+        registry.activeWorkspaceId = "ws-ag-b"
+        registry.saveAll()
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: root)))
+        let document = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
+        #expect(document.activeWorkspaceId == "ws-ag-b")
+        try? FileManager.default.removeItem(atPath: root)
+    }
+
     @Test func closingAPaneKillsEveryAgentInItsTabs() {
         let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b", "ag-c"])
         registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
@@ -137,8 +203,8 @@ struct WorkspaceRegistryTests {
         registry.activeWorkspaceId = "ws-ag-a"
         let before = registry.workspace(id: "ws-ag-a")
 
-        registry.handleRemoteCommand(.split(leafId: 99, axis: "v"), from: root)
-        registry.handleRemoteCommand(.close(leafId: 99), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.split(leafId: 99, axis: "v")), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.close(leafId: 99)), from: root)
 
         #expect(registry.workspace(id: "ws-ag-a") == before)
     }
@@ -147,7 +213,7 @@ struct WorkspaceRegistryTests {
         let registry = makeRegistry(root: root, agents: ["ag-a"])
         registry.activeWorkspaceId = "ws-ag-a"
 
-        registry.handleRemoteCommand(.split(leafId: nil, axis: "v"), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.split(leafId: nil, axis: "v")), from: root)
 
         #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 2)
     }
@@ -156,7 +222,7 @@ struct WorkspaceRegistryTests {
         let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
         registry.activeWorkspaceId = "ws-ag-a"
 
-        registry.handleRemoteCommand(.newTab(leafId: nil, agentId: "ag-b"), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.newTab(leafId: nil, agentId: "ag-b")), from: root)
 
         let workspace = registry.workspace(id: "ws-ag-a")
         #expect(workspace?.panes[0]?.tabs.map(\.content) == [.agent("ag-a"), .agent("ag-b")])
@@ -169,10 +235,10 @@ struct WorkspaceRegistryTests {
         registry.activeWorkspaceId = "ws-ag-a"
         registry.newTab(workspaceId: "ws-ag-a", leafId: 0)
 
-        registry.handleRemoteCommand(.selectTab(leafId: nil, index: 1, direction: nil), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.selectTab(leafId: nil, index: 1, direction: nil)), from: root)
         #expect(registry.workspace(id: "ws-ag-a")?.focusedAgentId == "ag-a")
 
-        registry.handleRemoteCommand(.selectTab(leafId: nil, index: nil, direction: "prev"), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.selectTab(leafId: nil, index: nil, direction: "prev")), from: root)
         #expect(registry.workspace(id: "ws-ag-a")?.focusedSurface?.content == .empty)
     }
 
@@ -181,9 +247,29 @@ struct WorkspaceRegistryTests {
         registry.activeWorkspaceId = "ws-ag-a"
         registry.newTab(workspaceId: "ws-ag-a", leafId: 0)
 
-        registry.handleRemoteCommand(.setAgent(leafId: nil, agentId: "ag-b"), from: root)
+        registry.handleRemoteCommand(GridCommandPayload(.setAgent(leafId: nil, agentId: "ag-b")), from: root)
 
         #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-b"])
+    }
+
+    @Test func remoteCommandNamingAWorkspaceTargetsItNotTheActiveOne() {
+        let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
+        registry.activeWorkspaceId = "ws-ag-a"
+        var killed: [String] = []
+        registry.onCloseAgent = { _, agentId in killed.append(agentId) }
+
+        registry.handleRemoteCommand(
+            GridCommandPayload(.closeTab(leafId: nil, tabId: 0), workspaceId: "ws-ag-b"), from: root)
+
+        #expect(killed == ["ag-b"])
+        #expect(registry.workspace(id: "ws-ag-a") != nil)
+    }
+
+    @Test func remoteCommandNamingAWorkspaceOfAnotherProjectIsIgnored() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        registry.handleRemoteCommand(
+            GridCommandPayload(.closeTab(leafId: nil, tabId: 0), workspaceId: "ws-ag-a"), from: root + "-other")
+        #expect(registry.workspace(id: "ws-ag-a") != nil)
     }
 
     // MARK: - Pending workspace restore

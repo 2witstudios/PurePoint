@@ -75,7 +75,9 @@ struct PaneTabBar: View {
     }
 
     private func closePane() {
-        guard let pane, PaneCloseConfirmation.confirm(pane: pane, appState: appState) else { return }
+        guard let pane,
+            TabCloseConfirmation.confirm(closing: pane.tabs, in: workspaceId, appState: appState, registry: registry)
+        else { return }
         registry.closePane(workspaceId: workspaceId, leafId: leafId)
     }
 }
@@ -138,19 +140,9 @@ private struct PaneTab: View {
         }
         // Dropping on a tab inserts before it.
         .dropDestination(for: String.self) { items, _ in
-            guard let moved = items.lazy.compactMap(TabDragPayload.surfaceId(from:)).first,
-                moved != surface.id,
-                let workspace = registry.workspace(id: workspaceId),
-                let leafId = workspace.leafId(ofSurface: surface.id),
-                var index = workspace.panes[leafId]?.index(of: surface.id)
+            guard let moved = items.lazy.compactMap(TabDragPayload.surfaceId(from:)).first, moved != surface.id
             else { return false }
-            // Removing a tab that sat earlier in this same pane shifts everything after it left.
-            if workspace.leafId(ofSurface: moved) == leafId,
-                let from = workspace.panes[leafId]?.index(of: moved), from < index
-            {
-                index -= 1
-            }
-            registry.moveTab(workspaceId: workspaceId, surfaceId: moved, toLeaf: leafId, index: index)
+            registry.moveTab(workspaceId: workspaceId, surfaceId: moved, before: surface.id)
             return true
         } isTargeted: { isDropTargeted = $0 }
         .accessibilityElement(children: .combine)
@@ -226,6 +218,8 @@ private struct PaneTab: View {
     }
 
     private func close() {
+        guard TabCloseConfirmation.confirm(closing: [surface], in: workspaceId, appState: appState, registry: registry)
+        else { return }
         registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
     }
 }
@@ -262,21 +256,36 @@ enum TabDragPayload {
     }
 }
 
-/// Closing a pane stops every agent in its tabs. One is what closing a tab does anyway;
-/// more than one is easy to do by accident, so it asks first.
+/// Asks before closing tabs would lose something: unsaved edits in a file tab, or — when
+/// a whole pane goes — more than one running agent (one is what closing a tab does anyway).
 @MainActor
-enum PaneCloseConfirmation {
-    static func confirm(pane: Pane, appState: AppState) -> Bool {
-        let running = pane.tabs.compactMap(\.content.agentId).filter {
+enum TabCloseConfirmation {
+    static func confirm(
+        closing tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry
+    ) -> Bool {
+        let running = tabs.compactMap(\.content.agentId).filter {
             appState.agent(byId: $0)?.status.isAlive ?? false
         }
-        guard running.count > 1 else { return true }
+        let unsaved = tabs.compactMap { tab -> String? in
+            guard case .file = tab.content,
+                let session = registry.fileTabs.existingSession(workspaceId: workspaceId, surfaceId: tab.id),
+                session.hasUnsavedChanges
+            else { return nil }
+            return session.editor.currentFile?.name ?? "a file"
+        }
+        guard running.count > 1 || !unsaved.isEmpty else { return true }
+
+        var reasons: [String] = []
+        if running.count > 1 { reasons.append("\(running.count) running agents will be stopped.") }
+        if !unsaved.isEmpty {
+            reasons.append("Unsaved changes to \(unsaved.joined(separator: ", ")) will be lost.")
+        }
 
         let alert = NSAlert()
-        alert.messageText = "Close pane and stop \(running.count) agents?"
-        alert.informativeText = "Every tab in this pane closes, and the agents running in them are stopped."
+        alert.messageText = tabs.count > 1 ? "Close this pane?" : "Close this tab?"
+        alert.informativeText = reasons.joined(separator: " ")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Close Pane")
+        alert.addButton(withTitle: tabs.count > 1 ? "Close Pane" : "Close Tab")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }

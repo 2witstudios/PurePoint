@@ -129,12 +129,6 @@ import Testing
         #expect(workspace.focusedLeafId == 0)
     }
 
-    @Test func isLastTabOnlyForTheWorkspacesSoleTab() {
-        let single = Workspace.adopting(agentId: "A", container: .projectRoot)
-        #expect(single.isLastTab(0))
-        #expect(!stacked().isLastTab(0))
-    }
-
     @Test func closingAPaneReturnsEveryAgentInIt() {
         var workspace = stacked()
         workspace.split(leafId: 0, axis: .vertical, content: .agent("D"))
@@ -185,6 +179,35 @@ import Testing
         #expect(labels(workspace, 0) == ["A", "B", "C", "D"])
     }
 
+    @Test func moveBeforeLaterTabInSamePaneLandsJustBeforeIt() {
+        var workspace = stacked()
+        let a = workspace.location(ofAgent: "A")!.surfaceId
+        let c = workspace.location(ofAgent: "C")!.surfaceId
+        workspace.moveTab(a, before: c)
+        #expect(labels(workspace, 0) == ["B", "A", "C"])
+    }
+
+    @Test func moveBeforeEarlierTabInSamePane() {
+        var workspace = stacked()
+        workspace.moveTab(workspace.location(ofAgent: "C")!.surfaceId, before: workspace.location(ofAgent: "A")!.surfaceId)
+        #expect(labels(workspace, 0) == ["C", "A", "B"])
+    }
+
+    @Test func moveBeforeTabInAnotherPane() {
+        var workspace = stacked()
+        workspace.split(leafId: 0, axis: .vertical, content: .agent("D"))
+        workspace.moveTab(workspace.location(ofAgent: "B")!.surfaceId, before: workspace.location(ofAgent: "D")!.surfaceId)
+        #expect(labels(workspace, 0) == ["A", "C"])
+        #expect(labels(workspace, 1) == ["B", "D"])
+    }
+
+    @Test func moveBeforeItselfDoesNothing() {
+        var workspace = stacked()
+        let b = workspace.location(ofAgent: "B")!.surfaceId
+        workspace.moveTab(b, before: b)
+        #expect(workspace == stacked())
+    }
+
     @Test func moveTabToMissingPaneDoesNothing() {
         var workspace = stacked()
         workspace.moveTab(0, toLeaf: 9)
@@ -220,15 +243,22 @@ import Testing
         #expect(labels(workspace, 0) == ["A", "B", "C"])
     }
 
-    @Test func joinPaneIsTheInverseOfBreakTab() {
+    // MARK: - Ghosts
+
+    @Test func aWorkspaceWithOnlyEmptyTabsIsAGhost() {
         var workspace = stacked()
-        let newLeaf = workspace.breakTab(workspace.location(ofAgent: "B")!.surfaceId, axis: .vertical)!
+        #expect(!workspace.isGhost)
+        _ = workspace.removeSurfaces { $0.content.agentId != nil }
+        workspace.normalize()
+        #expect(workspace.isGhost)
+    }
 
-        workspace.joinPane(newLeaf, into: 0)
-
-        #expect(workspace.paneCount == 1)
-        #expect(labels(workspace, 0) == ["A", "C", "B"])
-        #expect(workspace.focusedAgentId == "B")
+    @Test func aFileTabKeepsAWorkspaceAlive() {
+        var workspace = Workspace.adopting(agentId: "A", container: .projectRoot)
+        workspace.newTab(leafId: 0, content: .file(path: "/tmp/x.md"))
+        workspace.closeTab(0)
+        #expect(workspace.agentIds.isEmpty)
+        #expect(!workspace.isGhost)
     }
 
     // MARK: - Content and pruning
