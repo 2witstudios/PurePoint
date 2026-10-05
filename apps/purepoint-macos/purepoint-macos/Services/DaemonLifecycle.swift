@@ -17,7 +17,7 @@ nonisolated enum DaemonLifecycle {
     /// Used to avoid shutting down a daemon we merely attached to (e.g. a
     /// second app instance quitting must not kill the shared daemon).
     static func didLaunchDaemon() async -> Bool {
-        await launcher.didLaunchDaemon
+        await launcher.ownsRunningDaemon()
     }
 
     static func findBinary() -> String? {
@@ -50,74 +50,110 @@ nonisolated enum DaemonLifecycle {
 }
 
 /// Serializes daemon lifecycle operations so concurrent callers don't race.
+///
+/// Actor isolation alone is not enough: the actor is reentrant at every `await`,
+/// so N projects opening at launch would each see "no daemon yet" while the first
+/// launch is still polling health, and each start its own pu-engine. Every
+/// operation therefore runs as the single in-flight `Task`, and concurrent callers
+/// await that task instead of starting another.
 private actor DaemonLauncher {
     private let puDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".pu")
-    private var pidPath: String { puDir.appendingPathComponent("daemon.pid").path }
-    private var socketPath: String { puDir.appendingPathComponent("daemon.sock").path }
-    private(set) var didLaunchDaemon = false
+    private var pidPath: String { puDir.appendingPathComponent("daemon.sock.pid").path }
+    /// PID of the daemon this app instance launched, if it is the one that won
+    /// the daemon lock.
+    private var launchedPid: Int?
+    private var inFlight: Task<Void, Error>?
 
     func ensureDaemon() async throws {
-        let client = DaemonClient()
-        let binaryPath = DaemonLifecycle.findBinary()
-
-        // Check if already healthy
-        let healthy = await isHealthy(client: client)
-        let restart = shouldRestart(binaryPath: binaryPath)
-        print("[Daemon] healthy=\(healthy), shouldRestart=\(restart)")
-        if healthy {
-            if restart {
-                killExistingDaemon()
-            } else {
-                return
-            }
-        } else {
-            killExistingDaemon()
-        }
-
-        try await launchDaemon(binaryPath: binaryPath)
+        try await serialized(coalesce: true) { try await $0.ensureDaemonNow() }
     }
 
     func restartDaemon() async throws {
-        killExistingDaemon()
+        try await serialized(coalesce: false) { try await $0.restartDaemonNow() }
+    }
+
+    /// Run `operation` as the only lifecycle operation in flight. With `coalesce`,
+    /// a caller arriving while another operation runs just awaits that one.
+    /// True only if the daemon answering right now is the one this instance
+    /// launched. Checked live rather than remembered: the daemon may have been
+    /// replaced since (restarted by the CLI or another app instance), and
+    /// shutting down a replacement would stop its owner's agents.
+    func ownsRunningDaemon() async -> Bool {
+        guard let launchedPid else { return false }
+        if case .healthy(let pid) = await probe(timeout: 1.0) { return pid == launchedPid }
+        return false
+    }
+
+    private func serialized(
+        coalesce: Bool,
+        _ operation: @escaping @Sendable (DaemonLauncher) async throws -> Void
+    ) async throws {
+        while let running = inFlight {
+            let outcome = await running.result
+            // The owner clears inFlight only once it is back on the actor; clear a
+            // finished task here too so this loop cannot spin on it meanwhile.
+            if inFlight == running { inFlight = nil }
+            if coalesce { return try outcome.get() }
+        }
+        let task = Task { try await operation(self) }
+        inFlight = task
+        defer { if inFlight == task { inFlight = nil } }
+        try await task.value
+    }
+
+    private func ensureDaemonNow() async throws {
+        let binaryPath = DaemonLifecycle.findBinary()
+
+        let healthy = await isHealthy(attempts: 3)
+        let restart = healthy && shouldRestart(binaryPath: binaryPath)
+        print("[Daemon] healthy=\(healthy), shouldRestart=\(restart)")
+        if healthy && !restart { return }
+
+        await killExistingDaemon()
+        try await launchDaemon(binaryPath: binaryPath)
+    }
+
+    private func restartDaemonNow() async throws {
+        await killExistingDaemon()
         try await launchDaemon(binaryPath: DaemonLifecycle.findBinary())
     }
 
     // MARK: - Private
 
-    private func killExistingDaemon() {
-        // Read PID from file
+    /// Stop the daemon named by the PID file. The socket is left alone: only the
+    /// daemon holding `daemon.sock.lock` may unlink or rebind it, so deleting it here
+    /// could strand a live daemon that is merely slow to answer.
+    private func killExistingDaemon() async {
         guard let content = try? String(contentsOfFile: pidPath, encoding: .utf8),
             let pid = pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines)),
             pid > 0,
-            kill(pid, 0) == 0
+            kill(pid, 0) == 0,
+            Self.isDaemonProcess(pid)
         else {
-            // No running process — just clean up stale files
-            cleanupFiles()
+            try? FileManager.default.removeItem(atPath: pidPath)
             return
         }
 
         // SIGTERM (IPC shutdown removed — fire-and-forget raced with the signal)
         kill(pid, SIGTERM)
 
-        // Poll for death (up to 2s, 100ms intervals)
-        for _ in 0..<20 {
-            Thread.sleep(forTimeInterval: 0.1)
-            if kill(pid, 0) != 0 { break }
+        // Poll for death (up to 3s, 100ms intervals)
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if kill(pid, 0) != 0 { return }
         }
 
-        // Force kill if still alive
-        if kill(pid, 0) == 0 {
-            kill(pid, SIGKILL)
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-
-        cleanupFiles()
+        kill(pid, SIGKILL)
+        try? await Task.sleep(nanoseconds: 200_000_000)
     }
 
-    private func cleanupFiles() {
-        try? FileManager.default.removeItem(atPath: pidPath)
-        try? FileManager.default.removeItem(atPath: socketPath)
+    /// True if `pid` is a pu-engine. A daemon killed outright leaves its PID file
+    /// behind, and the pid may since have been reused by an unrelated process.
+    private static func isDaemonProcess(_ pid: pid_t) -> Bool {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+        return URL(fileURLWithPath: String(cString: buffer)).lastPathComponent == "pu-engine"
     }
 
     private func launchDaemon(binaryPath: String?) async throws {
@@ -150,14 +186,25 @@ private actor DaemonLauncher {
             try? stderrHandle.close()
         }
 
-        // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s)
-        let client = DaemonClient()
+        // Poll health with backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (total ~3s).
+        // If another pu-engine already holds the daemon lock, ours exits at once
+        // and this attaches to the running one.
+        // Only claim ownership if the daemon answering is the one we spawned;
+        // otherwise a racing app instance's daemon would be shut down on quit.
         for attempt in 0..<5 {
             let delay = UInt64(100_000_000 * (1 << attempt))
             try await Task.sleep(nanoseconds: delay)
-            if await isHealthy(client: client) {
-                didLaunchDaemon = true
+            switch await probe(timeout: 2.0) {
+            case .healthy(let pid):
+                launchedPid = pid == Int(process.processIdentifier) ? pid : nil
                 return
+            case .busy:
+                // Alive but at its connection limit, so it cannot be ours: ours
+                // would be brand new. Attach without claiming ownership.
+                launchedPid = nil
+                return
+            case .unreachable:
+                continue
             }
         }
 
@@ -184,13 +231,41 @@ private actor DaemonLauncher {
         try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
     }
 
-    private func isHealthy(client: DaemonClient) async -> Bool {
-        do {
-            let response = try await client.send(.health)
-            if case .healthReport = response { return true }
-            return false
-        } catch {
-            return false
+    /// Whether a daemon is alive, retrying a failed check so one slow answer from
+    /// a busy daemon is not mistaken for a dead one (which would kill its agents).
+    /// A daemon refusing connections as BUSY is alive.
+    private func isHealthy(attempts: Int) async -> Bool {
+        for attempt in 0..<attempts {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 250_000_000) }
+            if case .unreachable = await probe(timeout: 2.0) { continue }
+            return true
+        }
+        return false
+    }
+
+    private enum Probe {
+        case healthy(pid: Int)
+        /// Answered, but turned the connection away at its connection limit.
+        case busy
+        case unreachable
+    }
+
+    private func probe(timeout: TimeInterval) async -> Probe {
+        await withTaskGroup(of: Probe.self) { group in
+            group.addTask {
+                switch try? await DaemonClient().send(.health) {
+                case .healthReport(let pid, _, _, _)?: return .healthy(pid: pid)
+                case .error(let code, _)? where code == "BUSY": return .busy
+                default: return .unreachable
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return .unreachable
+            }
+            let first = await group.next() ?? .unreachable
+            group.cancelAll()
+            return first
         }
     }
 }

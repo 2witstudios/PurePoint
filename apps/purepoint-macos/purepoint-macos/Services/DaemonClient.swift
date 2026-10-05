@@ -5,6 +5,7 @@ import Network
 
 nonisolated final class DaemonClient: @unchecked Sendable {
     static let connectionQueue = DispatchQueue(label: "purepoint.daemon.connection")
+    static let connectTimeout: TimeInterval = 5
     private let socketPath: String
 
     init(socketPath: String? = nil) {
@@ -17,20 +18,39 @@ nonisolated final class DaemonClient: @unchecked Sendable {
     }
 
     /// Send a single request and return the response.
+    /// Cancellation-aware: NWConnection ignores task cancellation, so cancelling
+    /// the task cancels the connection, which completes any pending connect or
+    /// receive with an error instead of leaving the caller suspended.
     func send(_ request: DaemonRequest) async throws -> DaemonResponse {
-        let (connection, reader) = try await connect()
+        let connection = makeConnection()
         defer { connection.cancel() }
 
-        try await Self.write(request, to: connection)
-        return try await readOne(from: reader)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let reader = try await Self.connect(connection)
+            try await Self.write(request, to: connection)
+            return try await readOne(from: reader)
+        } onCancel: {
+            connection.cancel()
+        }
     }
 
     /// Connect to the daemon and return the connection + a line reader.
     func connect() async throws -> (NWConnection, DaemonLineReader) {
+        let connection = makeConnection()
+        let reader = try await Self.connect(connection)
+        return (connection, reader)
+    }
+
+    // MARK: - Private
+
+    private func makeConnection() -> NWConnection {
         let params = NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
         let endpoint = NWEndpoint.unix(path: socketPath)
-        let connection = NWConnection(to: endpoint, using: params)
+        return NWConnection(to: endpoint, using: params)
+    }
 
+    private static func connect(_ connection: NWConnection) async throws -> DaemonLineReader {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             // nonisolated(unsafe) is safe because the handler runs on the serial connectionQueue
             nonisolated(unsafe) var resumed = false
@@ -56,13 +76,18 @@ nonisolated final class DaemonClient: @unchecked Sendable {
                 }
             }
             connection.start(queue: DaemonClient.connectionQueue)
+            // A daemon that has stopped accepting leaves the connection pending
+            // forever; give up so callers see an error instead of hanging.
+            DaemonClient.connectionQueue.asyncAfter(deadline: .now() + Self.connectTimeout) {
+                guard !resumed else { return }
+                resumed = true
+                connection.cancel()
+                cont.resume(throwing: DaemonClientError.connectTimeout)
+            }
         }
 
-        let reader = DaemonLineReader(connection: connection)
-        return (connection, reader)
+        return DaemonLineReader(connection: connection)
     }
-
-    // MARK: - Private
 
     static func write(_ request: DaemonRequest, to connection: NWConnection) async throws {
         let json = try JSONEncoder().encode(request)

@@ -81,9 +81,19 @@ final class ProjectState: Identifiable {
 
             self.startGridSubscription()
             self.startStatusSubscription()
-            self.refresh()
-            // Resume suspended agents after initial data load
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // Resume from the snapshot taken after init, not after a fixed delay: a
+            // slow first load would otherwise resume against the agents from before
+            // init (or a daemon restart) and leave the newly suspended ones paused.
+            do {
+                let snapshot = try await svc.loadWorkspace(projectRoot: root)
+                guard !Task.isCancelled else { return }
+                self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+                return
+            }
             self.resumeSuspendedAgents()
         }
     }
@@ -382,15 +392,27 @@ final class ProjectState: Identifiable {
         let sub = DaemonStatusSubscription(projectRoot: projectRoot)
         statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in
-            await sub.start { worktrees, agents in
-                self?.apply(rootAgents: agents, worktrees: worktrees)
-            }
+            await sub.start(
+                onEvent: { worktrees, agents in
+                    self?.apply(rootAgents: agents, worktrees: worktrees)
+                },
+                // The daemon is gone (crashed, or exited with the app instance
+                // that launched it). startWatching ensures a daemon, then inits and
+                // resumes, so this project's agents come back on the new one.
+                onDaemonLost: {
+                    self?.startWatching()
+                }
+            )
         }
     }
 
     private func startGridSubscription() {
         gridSubscriptionTask?.cancel()
-        Task { await gridSubscription?.stop() }
+        // Capture before reassigning: the Task runs later and would otherwise stop
+        // the new subscription and leak the old one.
+        let previousGrid = gridSubscription
+        gridSubscription = nil
+        Task { await previousGrid?.stop() }
         guard let registry else { return }
         let sub = DaemonGridSubscription(projectRoot: projectRoot, registry: registry)
         gridSubscription = sub

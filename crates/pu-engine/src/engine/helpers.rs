@@ -9,6 +9,24 @@ use crate::daemon_lifecycle;
 
 use super::Engine;
 
+/// Agent types that can continue their conversation with a stored session id.
+fn is_resumable(a: &AgentEntry) -> bool {
+    a.session_id.is_some() && matches!(a.agent_type.as_str(), "claude" | "codex" | "opencode")
+}
+
+/// Retire an agent the manifest says is running but no daemon is running: a
+/// resumable agent becomes suspended so it can be resumed, anything else Broken.
+fn retire_stale_agent(agent: &mut AgentEntry, now: chrono::DateTime<chrono::Utc>) {
+    if is_resumable(agent) {
+        agent.suspended = true;
+        agent.pid = None;
+        agent.suspended_at = Some(now);
+    } else {
+        agent.status = AgentStatus::Broken;
+        agent.completed_at = Some(now);
+    }
+}
+
 impl Engine {
     /// Parse an agent config's command string into (program, args), resolving
     /// the "shell" sentinel to the user's login shell.
@@ -56,25 +74,46 @@ impl Engine {
         }
     }
 
-    /// On daemon restart, reconcile agents that appear alive in the manifest but have no
-    /// live process. Resumable agents (claude, codex, opencode) with a session_id get marked
+    /// Reconcile agents that the manifest says are running but this daemon is not
+    /// running (`is_live` says whether it is). Liveness is asked at the point of
+    /// use, not snapshotted, because an agent can be spawned or resumed while
+    /// reconcile runs (stopping orphans can take seconds).
+    ///
+    /// Resumable agents (claude, codex, opencode) with a session_id get marked
     /// suspended so the Swift side can auto-resume them. Others get marked Broken.
+    ///
+    /// A resumable agent whose process outlived its daemon is still writing its
+    /// transcript; it is stopped first, because resuming next to it would put two
+    /// writers on one conversation.
     /// Called synchronously inside handle_init so state is correct before the first status read.
-    pub(super) fn reconcile_agents_on_init(project_root: &str) {
+    pub(super) fn reconcile_agents_on_init(project_root: &str, is_live: impl Fn(&str) -> bool) {
         let root = Path::new(project_root);
         let Ok(m) = manifest::read_manifest(root) else {
             return;
         };
-        let is_stale = |a: &AgentEntry| !a.suspended && matches!(a.status, AgentStatus::Running);
-        let has_stale = m
+        let is_stale = |a: &AgentEntry| {
+            !a.suspended && matches!(a.status, AgentStatus::Running) && !is_live(&a.id)
+        };
+        let stale: Vec<&AgentEntry> = m
             .agents
             .values()
             .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
-            .any(is_stale);
-        if !has_stale {
+            .filter(|a| is_stale(a))
+            .collect();
+        if stale.is_empty() {
             return;
         }
-        let is_resumable = |t: &str| matches!(t, "claude" | "codex" | "opencode");
+        for a in stale.iter().filter(|a| is_resumable(a)) {
+            if is_live(&a.id) {
+                continue;
+            }
+            if let (Some(pid), Some(sid)) = (a.pid, a.session_id.as_deref())
+                && Self::is_orphaned_session(pid, sid)
+            {
+                tracing::warn!(agent_id = %a.id, pid, "stopping orphaned agent before resume");
+                Self::stop_process_group(pid);
+            }
+        }
         let now = chrono::Utc::now();
         manifest::update_manifest(root, move |mut m| {
             for agent in m.agents.values_mut().chain(
@@ -82,16 +121,8 @@ impl Engine {
                     .values_mut()
                     .flat_map(|wt| wt.agents.values_mut()),
             ) {
-                if !agent.suspended && matches!(agent.status, AgentStatus::Running) {
-                    if agent.session_id.is_some() && is_resumable(&agent.agent_type) {
-                        agent.status = AgentStatus::Running;
-                        agent.suspended = true;
-                        agent.pid = None;
-                        agent.suspended_at = Some(now);
-                    } else {
-                        agent.status = AgentStatus::Broken;
-                        agent.completed_at = Some(now);
-                    }
+                if is_stale(agent) {
+                    retire_stale_agent(agent, now);
                 }
             }
             m
@@ -99,48 +130,40 @@ impl Engine {
         .ok();
     }
 
-    /// Scan the manifest for Running/Idle agents whose PID is dead, mark them Lost.
-    /// Called once per project on the first status request after daemon (re)start.
-    /// Note: Suspended agents are intentionally unaffected — they have no PID and are paused.
-    pub(super) fn reap_stale_agents(project_root: &str) {
-        let root = Path::new(project_root);
-        let Ok(m) = manifest::read_manifest(root) else {
-            return;
-        };
-        let needs_reap = |a: &AgentEntry| {
-            !a.suspended
-                && matches!(a.status, AgentStatus::Running)
-                && a.pid
-                    .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
-        };
-        let has_stale = m
-            .agents
-            .values()
-            .chain(m.worktrees.values().flat_map(|wt| wt.agents.values()))
-            .any(needs_reap);
-        if !has_stale {
-            return;
+    /// True if `pid` is alive and is still the agent process for `session_id`
+    /// (not an unrelated process that reused the pid).
+    fn is_orphaned_session(pid: u32, session_id: &str) -> bool {
+        if !daemon_lifecycle::is_process_alive(pid) {
+            return false;
         }
-        manifest::update_manifest(root, move |mut m| {
-            let now = chrono::Utc::now();
-            for agent in m.agents.values_mut().chain(
-                m.worktrees
-                    .values_mut()
-                    .flat_map(|wt| wt.agents.values_mut()),
-            ) {
-                if !agent.suspended
-                    && matches!(agent.status, AgentStatus::Running)
-                    && agent
-                        .pid
-                        .is_none_or(|pid| !daemon_lifecycle::is_process_alive(pid))
-                {
-                    agent.status = AgentStatus::Broken;
-                    agent.completed_at = Some(now);
-                }
+        std::process::Command::new("ps")
+            .args(["-o", "command=", "-p", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(session_id))
+    }
+
+    /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
+    /// wait up to 3s for the whole group to exit, then SIGKILL whatever is left.
+    /// Waiting on the leader alone would let a child that ignores SIGTERM keep
+    /// running beside the resumed agent.
+    fn stop_process_group(pid: u32) {
+        let Ok(pgid) = i32::try_from(pid) else {
+            return;
+        };
+        unsafe {
+            libc::killpg(pgid, libc::SIGTERM);
+        }
+        let group_alive = || unsafe { libc::killpg(pgid, 0) } == 0;
+        for _ in 0..30 {
+            if !group_alive() {
+                return;
             }
-            m
-        })
-        .ok();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
     }
 
     pub(super) fn agent_not_found(agent_id: &str) -> Response {
@@ -182,6 +205,196 @@ impl Engine {
             other => Err(format!(
                 "unknown scope: {other} (expected 'local' or 'global')"
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn agent(id: &str, agent_type: &str, session_id: Option<&str>) -> AgentEntry {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": id,
+            "agentType": agent_type,
+            "status": "running",
+            "startedAt": "2026-01-01T00:00:00Z",
+            "pid": 999_999_999u32,
+            "sessionId": session_id,
+            "suspended": false,
+        }))
+        .unwrap()
+    }
+
+    fn project_with(entries: Vec<AgentEntry>) -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let manifest_path = pu_core::paths::manifest_path(tmp.path());
+        std::fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+        let mut m = Manifest::new(tmp.path().to_string_lossy().into_owned());
+        for e in entries {
+            m.agents.insert(e.id.clone(), e);
+        }
+        manifest::write_manifest(tmp.path(), &m).unwrap();
+        tmp
+    }
+
+    fn read(tmp: &TempDir, id: &str) -> AgentEntry {
+        manifest::read_manifest(tmp.path()).unwrap().agents[id].clone()
+    }
+
+    fn root(tmp: &TempDir) -> String {
+        tmp.path().to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn given_agent_live_in_this_daemon_should_leave_it_running() {
+        let tmp = project_with(vec![agent("ag-1", "claude", Some("sid-1"))]);
+        Engine::reconcile_agents_on_init(&root(&tmp), |id| id == "ag-1");
+
+        let a = read(&tmp, "ag-1");
+        assert!(!a.suspended);
+        assert_eq!(a.pid, Some(999_999_999));
+        assert_eq!(a.status, AgentStatus::Running);
+    }
+
+    #[test]
+    fn given_dead_resumable_agent_should_mark_suspended() {
+        let tmp = project_with(vec![agent("ag-1", "claude", Some("sid-1"))]);
+
+        Engine::reconcile_agents_on_init(&root(&tmp), |_| false);
+
+        let a = read(&tmp, "ag-1");
+        assert!(a.suspended);
+        assert_eq!(a.pid, None);
+        assert_eq!(a.status, AgentStatus::Running);
+    }
+
+    #[test]
+    fn given_dead_agent_without_session_should_mark_broken() {
+        let tmp = project_with(vec![agent("ag-1", "terminal", None)]);
+
+        Engine::reconcile_agents_on_init(&root(&tmp), |_| false);
+
+        let a = read(&tmp, "ag-1");
+        assert!(!a.suspended);
+        assert_eq!(a.status, AgentStatus::Broken);
+    }
+
+    #[test]
+    fn given_agent_becoming_live_after_reconcile_starts_should_leave_it_running() {
+        let tmp = project_with(vec![agent("ag-1", "terminal", None)]);
+        // Not live when reconcile first looks, live by the time it writes
+        // (spawned or resumed in between).
+        let checks = std::cell::Cell::new(0);
+        let is_live = |_: &str| {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        };
+
+        Engine::reconcile_agents_on_init(&root(&tmp), is_live);
+
+        let a = read(&tmp, "ag-1");
+        assert_eq!(a.status, AgentStatus::Running);
+        assert!(!a.suspended);
+    }
+
+    #[test]
+    fn given_pid_reused_by_unrelated_process_should_not_be_orphan() {
+        // Our own pid is alive but its command line has no session id.
+        assert!(!Engine::is_orphaned_session(
+            std::process::id(),
+            "not-a-session-id-xyz"
+        ));
+    }
+
+    #[tokio::test]
+    async fn given_orphan_on_first_status_should_stop_it_and_mark_suspended() {
+        let engine = Engine::new();
+        // An agent process that outlived its daemon: alive, running its session,
+        // but not in this daemon's session map.
+        let orphan = engine
+            .pty_host
+            .spawn(crate::pty_manager::SpawnConfig {
+                command: "/bin/sh".into(),
+                // `; true` keeps sh from exec-ing sleep; the session id rides in
+                // sh's own argv ($0), as it does in an agent's command line.
+                args: vec![
+                    "-c".into(),
+                    "sleep 30; true".into(),
+                    "sid-orphan-xyz".into(),
+                ],
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        let mut entry = agent("ag-1", "claude", Some("sid-orphan-xyz"));
+        entry.pid = Some(orphan.pid);
+        let tmp = project_with(vec![entry]);
+
+        engine.handle_status(&root(&tmp), None).await;
+
+        // No polling: the first status awaits reconcile, so a `send` issued
+        // right after it never sees the orphan as Running.
+        let a = read(&tmp, "ag-1");
+        assert!(a.suspended, "first status returned before reconciling");
+        assert_eq!(a.pid, None);
+        // Stopped, not left running: its exit has been observed. (kill(pid, 0)
+        // would still see the unreaped zombie, since this test is its parent.)
+        let mut exit_rx = orphan.exit_rx.clone();
+        let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while exit_rx.borrow_and_update().is_none() {
+                if exit_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(stopped.is_ok(), "orphan was not stopped");
+    }
+
+    #[tokio::test]
+    async fn given_orphan_child_ignoring_sigterm_should_stop_whole_group() {
+        let engine = Engine::new();
+        // Leader exits on SIGTERM; its background child ignores it (and the SIGHUP
+        // sent when the session leader exits).
+        let orphan = engine
+            .pty_host
+            .spawn(crate::pty_manager::SpawnConfig {
+                command: "/bin/sh".into(),
+                args: vec![
+                    "-c".into(),
+                    "(trap '' TERM HUP; sleep 30) & sleep 30; true".into(),
+                    "sid-group-xyz".into(),
+                ],
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let pgid = i32::try_from(orphan.pid).unwrap();
+
+        tokio::task::spawn_blocking(move || Engine::stop_process_group(pgid as u32))
+            .await
+            .unwrap();
+
+        // SIGKILL reached the SIGTERM-ignoring child too; allow it to be reaped.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while unsafe { libc::killpg(pgid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "process group survived"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
 }
