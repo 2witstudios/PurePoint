@@ -28,6 +28,12 @@ class TerminalPaneNSView: NSView {
     /// Live status lookup. `agent` is a snapshot from creation, so its status
     /// is stale; set by `TerminalViewCache`.
     var isAgentAlive: () -> Bool = { true }
+    /// Called when output arrives while this terminal is not on screen — a background tab.
+    /// Set by `TerminalViewCache`.
+    var onBackgroundOutput: (() -> Void)?
+    /// Every attach replays the daemon's buffer; output before this moment is that replay,
+    /// not new activity, so it must not flag the tab as having unseen output.
+    private var replaySettlesAt = Date.distantFuture
     private(set) var terminal: ScrollableTerminal?
     private var attachTask: Task<Void, Never>?
     private var attachStarted = false
@@ -113,6 +119,11 @@ class TerminalPaneNSView: NSView {
         }
     }
 
+    private func noteOutput() {
+        guard Date() >= replaySettlesAt, isHidden || window == nil else { return }
+        onBackgroundOutput?()
+    }
+
     private func startDaemonAttach() {
         guard let tv = terminal else { return }
 
@@ -131,8 +142,10 @@ class TerminalPaneNSView: NSView {
             // Every attach replays the daemon's whole buffer; only the first
             // one lands in an empty terminal.
             resetBeforeReplay: oldSession != nil,
-            onFirstOutput: { [weak self] in self?.removeSpinner() }
+            onFirstOutput: { [weak self] in self?.removeSpinner() },
+            onOutput: { [weak self] in self?.noteOutput() }
         )
+        replaySettlesAt = Date().addingTimeInterval(2)
         tv.attachSession = session
 
         attachTask = Task { [weak self] in

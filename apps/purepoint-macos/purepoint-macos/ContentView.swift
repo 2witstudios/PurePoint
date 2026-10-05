@@ -60,6 +60,11 @@ struct ContentView: View {
             selectPendingAgentIfReady()
         }
         .onChange(of: registry.workspacesByProject) { _, _ in
+            // Closing a workspace's last tab removes the workspace; fall back to the dashboard
+            // rather than leaving a dangling selection, whichever path closed it.
+            if case .workspace(let id) = selection, registry.workspace(id: id) == nil {
+                selection = .nav(.dashboard)
+            }
             // A spawn's workspace only exists once the manifest lands and reconcile runs.
             selectPendingAgentIfReady()
             selectPendingWorkspaceIfReady()
@@ -140,13 +145,12 @@ struct ContentView: View {
             selection = .nav(.schedule)
 
         case .closeAgent:
-            guard let workspace = registry.activeWorkspace else { break }
-            if let agentId = workspace.focusedAgentId {
-                viewCache.remove(agentId: agentId)
-            }
-            let wasLastPane = workspace.paneCount <= 1
-            registry.closePane(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
-            if wasLastPane {
+            // ⌘W closes the focused tab; its pane goes with its last tab, and the workspace
+            // with its last pane.
+            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface else { break }
+            let wasLastTab = workspace.isLastTab(surface.id)
+            registry.closeTab(workspaceId: workspace.id, surfaceId: surface.id)
+            if wasLastTab {
                 selection = .nav(.dashboard)
             }
 

@@ -12,6 +12,9 @@ final class TerminalViewCache {
     /// Current status of an agent, or nil if the app no longer knows it.
     /// Set by the app; a view's own `agent` is a stale creation-time snapshot.
     @ObservationIgnored var agentStatus: ((String) -> AgentStatus?)?
+    /// Agents whose terminal printed output while it was off screen (a background tab),
+    /// since it was last shown. Drives the tab bar's unseen-output dot.
+    private(set) var unseenOutput: Set<String> = []
     private static let evictionDelay: TimeInterval = 30
 
     init() {
@@ -39,6 +42,7 @@ final class TerminalViewCache {
         let view = TerminalPaneNSView(agent: agent)
         let agentId = agent.id
         view.isAgentAlive = { [weak self] in self?.isAlive(agentId) ?? false }
+        view.onBackgroundOutput = { [weak self] in self?.markUnseenOutput(agentId) }
         views[agent.id] = view
         return view
     }
@@ -47,6 +51,13 @@ final class TerminalViewCache {
     /// owned by each pane's container, so sibling grid panes stay shown.
     func show(agentId: String) {
         lastAccess[agentId] = Date()
+        if unseenOutput.contains(agentId) { unseenOutput.remove(agentId) }
+    }
+
+    /// Writes only on the first chunk after the terminal was last seen, so a busy
+    /// background agent does not invalidate observers on every chunk.
+    private func markUnseenOutput(_ agentId: String) {
+        if !unseenOutput.contains(agentId) { unseenOutput.insert(agentId) }
     }
 
     /// Check if a terminal exists for an agent.
@@ -60,6 +71,7 @@ final class TerminalViewCache {
         views[agentId]?.removeFromSuperview()
         views.removeValue(forKey: agentId)
         lastAccess.removeValue(forKey: agentId)
+        unseenOutput.remove(agentId)
     }
 
     /// Evict terminal views for completed/killed/failed agents that haven't

@@ -173,17 +173,17 @@ final class ProjectState: Identifiable {
         }
     }
 
-    /// Spawn an agent into a specific pane.
+    /// Spawn an agent into a specific tab.
     ///
-    /// The pane is reserved before the request goes out, so whichever arrives first — the
-    /// manifest write or the spawn response — the agent lands in this pane and never
+    /// The tab is reserved before the request goes out, so whichever arrives first — the
+    /// manifest write or the spawn response — the agent lands in this tab and never
     /// surfaces as a workspace of its own.
-    func spawnAgentForPane(agent: String, prompt: String, workspaceId: String, leafId: Int) {
+    func spawnAgentForSurface(agent: String, prompt: String, workspaceId: String, surfaceId: Int) {
         guard let registry, let workspace = registry.workspace(id: workspaceId) else { return }
         let root = projectRoot
         let spawnWorktree = workspace.container.worktreeId
 
-        registry.reservePane(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+        registry.reserveSurface(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
 
         sendDaemonRequest(
             .spawn(
@@ -191,14 +191,14 @@ final class ProjectState: Identifiable {
                 root: spawnWorktree == nil, worktree: spawnWorktree
             ),
             onFailure: { [weak registry] in
-                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
             }
         ) { [weak registry] response in
             if case .spawnResult(_, let agentId, _) = response {
                 registry?.fulfillReservation(
-                    projectRoot: root, workspaceId: workspaceId, leafId: leafId, agentId: agentId)
+                    projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId, agentId: agentId)
             } else {
-                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, leafId: leafId)
+                registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
             }
         }
     }

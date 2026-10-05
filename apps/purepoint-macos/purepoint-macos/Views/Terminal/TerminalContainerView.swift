@@ -63,6 +63,12 @@ struct TerminalContainerView: NSViewRepresentable {
         context.coordinator.onFocus = onFocus
         context.coordinator.startMonitor()
 
+        // A tab coming back on screen has now been seen. Deferred: this runs inside a
+        // SwiftUI update, and the cache is observed by the tab bar.
+        let cache = viewCache
+        let agentId = agent.id
+        DispatchQueue.main.async { cache.show(agentId: agentId) }
+
         return container
     }
 
@@ -91,7 +97,9 @@ struct TerminalContainerView: NSViewRepresentable {
         }
 
         termView.isHidden = false
-        viewCache.show(agentId: agent.id)
+        let cache = viewCache
+        let agentId = agent.id
+        DispatchQueue.main.async { cache.show(agentId: agentId) }
 
         // Always focus terminal when switching to a new agent
         makeTerminalFirstResponder(termView, in: nsView)

@@ -17,6 +17,8 @@ actor DaemonAttachSession {
     /// attach replays the agent's whole output buffer.
     private(set) var didStreamEnd = false
     private var onFirstOutput: (() -> Void)?
+    /// Called on the main actor after each chunk is fed to the terminal.
+    private let onOutput: (@MainActor @Sendable () -> Void)?
     /// The daemon replays its whole buffer on every attach, so a terminal that
     /// already shows output must be reset first or the scrollback duplicates.
     private var resetBeforeReplay: Bool
@@ -28,12 +30,14 @@ actor DaemonAttachSession {
         agentId: String,
         terminalView: TerminalView,
         resetBeforeReplay: Bool = false,
-        onFirstOutput: (() -> Void)? = nil
+        onFirstOutput: (() -> Void)? = nil,
+        onOutput: (@MainActor @Sendable () -> Void)? = nil
     ) {
         self.agentId = agentId
         self.terminalView = terminalView
         self.resetBeforeReplay = resetBeforeReplay
         self.onFirstOutput = onFirstOutput
+        self.onOutput = onOutput
     }
 
     /// Start streaming output from the daemon to the terminal view.
@@ -170,8 +174,10 @@ actor DaemonAttachSession {
                     // A retry within this session replays from the start again.
                     resetBeforeReplay = true
                 }
+                let onOutput = self.onOutput
                 await MainActor.run {
                     guard let tv else { return }
+                    defer { onOutput?() }
                     let term = tv.getTerminal()
                     if reset {
                         // RIS: full reset, clears the screen and scrollback before the replay.

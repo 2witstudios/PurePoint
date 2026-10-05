@@ -23,8 +23,8 @@ private func live(root: [String] = [], worktrees: [(String, [String])] = []) -> 
 /// A three-pane workspace: ag-a split right into ag-b, then that split down into ag-c.
 private func makeGroupedWorkspace() -> Workspace {
     var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
-    workspace.split(leafId: 0, axis: .vertical, agentId: "ag-b")
-    workspace.split(leafId: workspace.focusedLeafId, axis: .horizontal, agentId: "ag-c")
+    workspace.split(leafId: 0, axis: .vertical, content: .agent("ag-b"))
+    workspace.split(leafId: workspace.focusedLeafId, axis: .horizontal, content: .agent("ag-c"))
     return workspace
 }
 
@@ -136,8 +136,9 @@ struct WorkspaceReconcilerTests {
 
     @Test func givenAgentClaimedByTwoWorkspacesShouldKeepOnlyTheFirst() {
         let duplicate = Workspace(
-            id: "ws-duplicate", container: .projectRoot,
-            root: .leaf(id: 0, agentId: "ag-a"), focusedLeafId: 0, nextLeafId: 1)
+            id: "ws-duplicate", container: .projectRoot, root: .leaf(id: 0),
+            panes: [0: Pane(tabs: [Surface(id: 0, content: .agent("ag-a"))], activeTabId: 0)],
+            focusedLeafId: 0, nextLeafId: 1)
         let agents = live(root: ["ag-a"])
 
         let result = WorkspaceReconciler.reconcile(
@@ -160,7 +161,7 @@ struct WorkspaceReconcilerTests {
 
     @Test func givenFocusOnARemovedPaneShouldRefocusASurvivingOne() {
         var workspace = makeGroupedWorkspace()
-        workspace.focusedLeafId = workspace.root.leafId(forAgentId: "ag-b")!
+        workspace.focusedLeafId = workspace.location(ofAgent: "ag-b")!.leafId
 
         let result = WorkspaceReconciler.reconcile(stored: [workspace], live: live(root: ["ag-a", "ag-c"]))
 
@@ -168,7 +169,85 @@ struct WorkspaceReconcilerTests {
         #expect(survivor?.root.allLeafIds.contains(survivor!.focusedLeafId) == true)
     }
 
+    // MARK: - Tabs
+
+    @Test func givenDeadAgentInABackgroundTabShouldDropTheTabAndKeepThePane() {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        workspace.newTab(leafId: 0, content: .agent("ag-b"))
+        workspace.selectTab(0)
+        let agents = live(root: ["ag-a"])
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.first?.paneCount == 1)
+        #expect(result.first?.panes[0]?.tabs.map(\.content) == [.agent("ag-a")])
+    }
+
+    @Test func givenDeadActiveTabShouldActivateItsLeftNeighbour() {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        workspace.newTab(leafId: 0, content: .agent("ag-b"))
+        let agents = live(root: ["ag-a"])
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        #expect(result.first?.focusedAgentId == "ag-a")
+    }
+
+    @Test func givenAgentInTwoTabsShouldKeepOnlyTheFirst() {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        workspace.newTab(leafId: 0, content: .agent("ag-a"))
+        let agents = live(root: ["ag-a"])
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.first?.tabCount == 1)
+    }
+
+    @Test func givenSavedTabsShouldRestoreStacksAndActiveTabsAcrossRestart() {
+        withTempProject { root in
+            var original = makeGroupedWorkspace()
+            original.newTab(leafId: 0, content: .file(path: "/tmp/notes.md"))
+            original.newTab(leafId: 0, content: .agent("ag-d"))
+            WorkspacePersistence.save([original], projectRoot: root)
+
+            let agents = live(root: ["ag-a", "ag-b", "ag-c", "ag-d"])
+            let restored = WorkspaceReconciler.reconcile(
+                stored: WorkspacePersistence.load(projectRoot: root), live: agents)
+
+            expectInvariant(restored, agents)
+            #expect(restored == [original])
+        }
+    }
+
     // MARK: - Migration
+
+    /// Version 2 stored one agent per leaf and file panes in a side list. Each leaf becomes a
+    /// one-tab pane: its agent, else its file, else an empty tab.
+    @Test func givenVersionTwoDocumentShouldMigrateEachLeafToOneTab() {
+        withTempProject { root in
+            let v2 = """
+                {"version":2,"workspaces":[{"id":"ws-ag-a","focusedLeafId":2,"nextLeafId":3,
+                "filePanes":[{"leafId":1,"path":"/tmp/x.md"}],
+                "tree":{"type":"split","axis":"vertical","ratio":0.5,
+                  "first":{"type":"leaf","leafId":0,"agentId":"ag-a"},
+                  "second":{"type":"split","axis":"horizontal","ratio":0.5,
+                    "first":{"type":"leaf","leafId":1},
+                    "second":{"type":"leaf","leafId":2}}}}]}
+                """
+            try? v2.write(toFile: WorkspacePersistence.filePath(projectRoot: root), atomically: true, encoding: .utf8)
+
+            let workspace = WorkspacePersistence.load(projectRoot: root).first
+
+            #expect(workspace?.root.allLeafIds == [0, 1, 2])
+            #expect(workspace?.panes[0]?.tabs.map(\.content) == [.agent("ag-a")])
+            #expect(workspace?.panes[1]?.tabs.map(\.content) == [.file(path: "/tmp/x.md")])
+            #expect(workspace?.panes[2]?.tabs.map(\.content) == [.empty])
+            #expect(workspace?.focusedLeafId == 2)
+            #expect(Set(workspace?.surfaces.map(\.surface.id) ?? []).count == 3)
+        }
+    }
 
     @Test func givenLegacyGridLayoutShouldMigrateIntoOneWorkspaceAndRetireTheFile() {
         withTempProject { root in

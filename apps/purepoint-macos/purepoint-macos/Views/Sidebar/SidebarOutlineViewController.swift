@@ -77,6 +77,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let id: String
         let title: String
         let paneCount: Int
+        let tabCount: Int
         let status: AgentStatus
     }
 
@@ -170,7 +171,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let status: AgentStatus =
             agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
         return WorkspaceRenderState(
-            id: workspace.id, title: title, paneCount: workspace.paneCount, status: status)
+            id: workspace.id, title: title, paneCount: workspace.paneCount, tabCount: workspace.tabCount,
+            status: status)
     }
 
     private func makeRenderState(projects: [ProjectState]) -> SidebarRenderState {
@@ -373,13 +375,19 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         label.identifier = Self.workspaceNameLabelId
         stack.addArrangedSubview(label)
 
-        if state.paneCount > 1 {
+        if state.paneCount > 1 || state.tabCount > 1 {
             stack.addArrangedSubview(spacerView())
-            stack.addArrangedSubview(makePaneCountIcon(state.paneCount))
+        }
+        if state.paneCount > 1 {
+            stack.addArrangedSubview(makeCountIcon("rectangle.split.2x2", description: "Panes", count: state.paneCount))
+        }
+        if state.tabCount > state.paneCount {
+            stack.addArrangedSubview(makeCountIcon("square.stack", description: "Tabs", count: state.tabCount))
         }
 
         let paneNote = state.paneCount > 1 ? ", \(state.paneCount) panes" : ""
-        cell.setAccessibilityLabel("\(state.title), \(state.status.rawValue)\(paneNote)")
+        let tabNote = state.tabCount > state.paneCount ? ", \(state.tabCount) tabs" : ""
+        cell.setAccessibilityLabel("\(state.title), \(state.status.rawValue)\(paneNote)\(tabNote)")
         return cell
     }
 
@@ -435,13 +443,13 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return badge
     }
 
-    private func makePaneCountIcon(_ count: Int) -> NSStackView {
+    private func makeCountIcon(_ symbol: String, description: String, count: Int) -> NSStackView {
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.spacing = 2
 
         let icon = NSImageView(
-            image: NSImage(systemSymbolName: "rectangle.split.2x2", accessibilityDescription: "Panes")!)
+            image: NSImage(systemSymbolName: symbol, accessibilityDescription: description)!)
         icon.contentTintColor = .tertiaryLabelColor
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
         icon.setContentHuggingPriority(.required, for: .horizontal)

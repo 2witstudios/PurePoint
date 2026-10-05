@@ -28,7 +28,7 @@ struct WorkspaceRegistryTests {
 
     @Test func pendingReservationDoesNotAdoptUnrelatedAgent() {
         let registry = makeRegistry(root: root, agents: ["ag-a"])
-        registry.reservePane(projectRoot: root, workspaceId: "ws-ag-a", leafId: 0)
+        registry.reserveSurface(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: 0)
 
         registry.reconcile(projectRoot: root, rootAgents: [agent("ag-a"), agent("ag-x")], worktrees: [])
 
@@ -39,39 +39,95 @@ struct WorkspaceRegistryTests {
     @Test func fulfillingByAgentIdPlacesTheBoundAgentNotTheFirstLiveOne() {
         let registry = makeRegistry(root: root, agents: ["ag-a"])
         registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
-        let newLeaf = registry.workspace(id: "ws-ag-a")!.focusedLeafId
-        registry.reservePane(projectRoot: root, workspaceId: "ws-ag-a", leafId: newLeaf)
+        let newTab = registry.workspace(id: "ws-ag-a")!.focusedSurface!.id
+        registry.reserveSurface(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: newTab)
 
         registry.reconcile(projectRoot: root, rootAgents: [agent("ag-a"), agent("ag-x"), agent("ag-new")], worktrees: [])
-        registry.fulfillReservation(projectRoot: root, workspaceId: "ws-ag-a", leafId: newLeaf, agentId: "ag-new")
+        registry.fulfillReservation(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: newTab, agentId: "ag-new")
 
-        #expect(registry.workspace(id: "ws-ag-a")?.root.agentId(forLeafId: newLeaf) == "ag-new")
+        #expect(registry.workspace(id: "ws-ag-a")?.surface(id: newTab)?.content == .agent("ag-new"))
         #expect(registry.workspaceId(forAgent: "ag-x") == "ws-ag-x")
         #expect(registry.workspaces(forProject: root).map(\.id) == ["ws-ag-a", "ws-ag-x"])
     }
 
     @Test func releasedReservationLetDeferredAgentsSurface() {
         let registry = makeRegistry(root: root, agents: ["ag-a"])
-        registry.reservePane(projectRoot: root, workspaceId: "ws-ag-a", leafId: 0)
+        registry.reserveSurface(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: 0)
         registry.reconcile(projectRoot: root, rootAgents: [agent("ag-a"), agent("ag-x")], worktrees: [])
 
-        registry.releaseReservation(projectRoot: root, workspaceId: "ws-ag-a", leafId: 0)
+        registry.releaseReservation(projectRoot: root, workspaceId: "ws-ag-a", surfaceId: 0)
 
         #expect(registry.workspaceId(forAgent: "ag-x") == "ws-ag-x")
     }
 
     // MARK: - setAgent
 
-    @Test func bindingAnAgentRemovesItsOtherPaneClaims() {
+    @Test func bindingAnAgentRemovesItsOtherTabClaims() {
         let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
         registry.split(workspaceId: "ws-ag-b", leafId: 0, axis: .vertical)
-        let newLeaf = registry.workspace(id: "ws-ag-b")!.focusedLeafId
+        let newTab = registry.workspace(id: "ws-ag-b")!.focusedSurface!.id
 
-        registry.setAgent("ag-a", workspaceId: "ws-ag-b", leafId: newLeaf)
+        registry.setAgent("ag-a", workspaceId: "ws-ag-b", surfaceId: newTab)
 
         #expect(registry.workspaceId(forAgent: "ag-a") == "ws-ag-b")
         #expect(registry.workspace(id: "ws-ag-a") == nil)
         #expect(registry.workspace(id: "ws-ag-b")?.agentIds == ["ag-b", "ag-a"])
+    }
+
+    @Test func bindingAnAgentAlreadyInAnotherTabOfTheSameWorkspaceMovesIt() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        let newTab = registry.newTab(workspaceId: "ws-ag-a", leafId: 0)!
+
+        registry.setAgent("ag-a", workspaceId: "ws-ag-a", surfaceId: newTab)
+
+        let workspace = registry.workspace(id: "ws-ag-a")
+        #expect(workspace?.agentIds == ["ag-a"])
+        #expect(workspace?.surface(id: newTab)?.content == .agent("ag-a"))
+        #expect(workspace?.tabCount == 1)
+    }
+
+    // MARK: - Tabs
+
+    @Test func closingATabKillsOnlyItsAgent() {
+        let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
+        registry.setAgent("ag-b", workspaceId: "ws-ag-a", surfaceId: registry.newTab(workspaceId: "ws-ag-a", leafId: 0)!)
+        var killed: [String] = []
+        registry.onCloseAgent = { _, agentId in killed.append(agentId) }
+
+        let tab = registry.workspace(id: "ws-ag-a")!.location(ofAgent: "ag-b")!.surfaceId
+        registry.closeTab(workspaceId: "ws-ag-a", surfaceId: tab)
+
+        #expect(killed == ["ag-b"])
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a"])
+    }
+
+    @Test func closingTheLastTabDropsTheWorkspace() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        registry.activeWorkspaceId = "ws-ag-a"
+        var killed: [String] = []
+        registry.onCloseAgent = { _, agentId in killed.append(agentId) }
+
+        registry.closeTab(workspaceId: "ws-ag-a", surfaceId: 0)
+
+        #expect(killed == ["ag-a"])
+        #expect(registry.workspace(id: "ws-ag-a") == nil)
+        #expect(registry.activeWorkspaceId == nil)
+    }
+
+    @Test func closingAPaneKillsEveryAgentInItsTabs() {
+        let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b", "ag-c"])
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+        let ws = registry.workspace(id: "ws-ag-a")!
+        let newLeaf = ws.focusedLeafId
+        registry.setAgent("ag-b", workspaceId: "ws-ag-a", surfaceId: ws.focusedSurface!.id)
+        registry.setAgent("ag-c", workspaceId: "ws-ag-a", surfaceId: registry.newTab(workspaceId: "ws-ag-a", leafId: newLeaf)!)
+        var killed: [String] = []
+        registry.onCloseAgent = { _, agentId in killed.append(agentId) }
+
+        registry.closePane(workspaceId: "ws-ag-a", leafId: newLeaf)
+
+        #expect(Set(killed) == ["ag-b", "ag-c"])
+        #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 1)
     }
 
     // MARK: - Remote commands
@@ -94,6 +150,40 @@ struct WorkspaceRegistryTests {
         registry.handleRemoteCommand(.split(leafId: nil, axis: "v"), from: root)
 
         #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 2)
+    }
+
+    @Test func remoteNewTabWithAgentOpensItBesideTheActiveTab() {
+        let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
+        registry.activeWorkspaceId = "ws-ag-a"
+
+        registry.handleRemoteCommand(.newTab(leafId: nil, agentId: "ag-b"), from: root)
+
+        let workspace = registry.workspace(id: "ws-ag-a")
+        #expect(workspace?.panes[0]?.tabs.map(\.content) == [.agent("ag-a"), .agent("ag-b")])
+        #expect(workspace?.focusedAgentId == "ag-b")
+        #expect(registry.workspace(id: "ws-ag-b") == nil)
+    }
+
+    @Test func remoteSelectTabUsesOneBasedPositionsAndCycles() {
+        let registry = makeRegistry(root: root, agents: ["ag-a"])
+        registry.activeWorkspaceId = "ws-ag-a"
+        registry.newTab(workspaceId: "ws-ag-a", leafId: 0)
+
+        registry.handleRemoteCommand(.selectTab(leafId: nil, index: 1, direction: nil), from: root)
+        #expect(registry.workspace(id: "ws-ag-a")?.focusedAgentId == "ag-a")
+
+        registry.handleRemoteCommand(.selectTab(leafId: nil, index: nil, direction: "prev"), from: root)
+        #expect(registry.workspace(id: "ws-ag-a")?.focusedSurface?.content == .empty)
+    }
+
+    @Test func remoteSetAgentWithoutLeafTargetsTheFocusedPanesActiveTab() {
+        let registry = makeRegistry(root: root, agents: ["ag-a", "ag-b"])
+        registry.activeWorkspaceId = "ws-ag-a"
+        registry.newTab(workspaceId: "ws-ag-a", leafId: 0)
+
+        registry.handleRemoteCommand(.setAgent(leafId: nil, agentId: "ag-b"), from: root)
+
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-b"])
     }
 
     // MARK: - Pending workspace restore

@@ -4,6 +4,12 @@ nonisolated enum Theme {
     // MARK: - Text
     static let primaryText = adaptive(dark: (0.85, 0.85, 0.87, 1.0), light: (0.10, 0.10, 0.12, 1.0))
 
+    // MARK: - Panes
+    /// Behind a pane's tab strip — a step darker than the terminal, so the active tab
+    /// (drawn in the terminal's color) reads as attached to the content below it. Not
+    /// adaptive: the terminal is dark in both appearances, and the strip belongs to it.
+    static let tabBarBackground = NSColor(srgbRed: 0.08, green: 0.08, blue: 0.09, alpha: 1.0)
+
     // MARK: - Cards
     static let cardBackground = adaptive(dark: (0.14, 0.14, 0.15, 1.0), light: (1.0, 1.0, 1.0, 1.0))
     static let cardHeaderBackground = adaptive(dark: (0.16, 0.16, 0.17, 1.0), light: (0.93, 0.925, 0.92, 1.0))

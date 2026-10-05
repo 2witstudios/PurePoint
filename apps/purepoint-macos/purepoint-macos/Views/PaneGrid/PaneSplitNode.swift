@@ -2,8 +2,12 @@ import Foundation
 
 /// Recursive binary split tree model for the pane grid.
 /// Each node is either a leaf (single pane) or a split (two children with ratio).
+///
+/// The tree is geometry only: it says *where* panes are, never *what* they show. A leaf's
+/// content is its tab stack, kept in `Workspace.panes` under the leaf's ID, so moving a tab
+/// between panes never touches the tree and every tree operation stays content-agnostic.
 nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
-    case leaf(id: Int, agentId: String?)
+    case leaf(id: Int)
     case split(axis: Axis, ratio: CGFloat, first: PaneSplitNode, second: PaneSplitNode)
 
     enum Axis: String, Codable, Equatable, Sendable {
@@ -15,16 +19,8 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
 
     var allLeafIds: [Int] {
         switch self {
-        case .leaf(let id, _): return [id]
+        case .leaf(let id): return [id]
         case .split(_, _, let first, let second): return first.allLeafIds + second.allLeafIds
-        }
-    }
-
-    /// Every pane in layout order, with the agent it holds (nil for a deliberate empty pane).
-    var leaves: [(id: Int, agentId: String?)] {
-        switch self {
-        case .leaf(let id, let agentId): return [(id: id, agentId: agentId)]
-        case .split(_, _, let first, let second): return first.leaves + second.leaves
         }
     }
 
@@ -37,40 +33,15 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
 
     var firstLeafId: Int {
         switch self {
-        case .leaf(let id, _): return id
+        case .leaf(let id): return id
         case .split(_, _, let first, _): return first.firstLeafId
         }
     }
 
     var lastLeafId: Int {
         switch self {
-        case .leaf(let id, _): return id
+        case .leaf(let id): return id
         case .split(_, _, _, let second): return second.lastLeafId
-        }
-    }
-
-    func agentId(forLeafId leafId: Int) -> String? {
-        switch self {
-        case .leaf(let id, let agentId): return id == leafId ? agentId : nil
-        case .split(_, _, let first, let second):
-            return first.agentId(forLeafId: leafId) ?? second.agentId(forLeafId: leafId)
-        }
-    }
-
-    func containsAgent(_ agentId: String) -> Bool {
-        switch self {
-        case .leaf(_, let id): return id == agentId
-        case .split(_, _, let first, let second):
-            return first.containsAgent(agentId) || second.containsAgent(agentId)
-        }
-    }
-
-    /// Find the leaf ID that contains a given agent.
-    func leafId(forAgentId agentId: String) -> Int? {
-        switch self {
-        case .leaf(let id, let aId): return aId == agentId ? id : nil
-        case .split(_, _, let first, let second):
-            return first.leafId(forAgentId: agentId) ?? second.leafId(forAgentId: agentId)
         }
     }
 
@@ -97,14 +68,14 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
     /// Split a leaf into two leaves along the given axis.
     func splittingLeaf(id targetId: Int, axis: Axis, ratio: CGFloat = 0.5, nextId: inout Int) -> PaneSplitNode {
         switch self {
-        case .leaf(let id, let agentId) where id == targetId:
+        case .leaf(let id) where id == targetId:
             let newId = nextId
             nextId += 1
             return .split(
                 axis: axis,
                 ratio: ratio,
-                first: .leaf(id: id, agentId: agentId),
-                second: .leaf(id: newId, agentId: nil)
+                first: .leaf(id: id),
+                second: .leaf(id: newId)
             )
         case .leaf:
             return self
@@ -121,7 +92,7 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
     /// Remove a leaf and collapse the tree.
     func removingLeaf(id targetId: Int) -> PaneSplitNode? {
         switch self {
-        case .leaf(let id, _):
+        case .leaf(let id):
             return id == targetId ? nil : self
         case .split(let axis, let ratio, let first, let second):
             let newFirst = first.removingLeaf(id: targetId)
@@ -139,7 +110,7 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
     /// Returns nil when nothing is left.
     func removingLeaves(ids targetIds: Set<Int>) -> PaneSplitNode? {
         switch self {
-        case .leaf(let id, _):
+        case .leaf(let id):
             return targetIds.contains(id) ? nil : self
         case .split(let axis, let ratio, let first, let second):
             switch (first.removingLeaves(ids: targetIds), second.removingLeaves(ids: targetIds)) {
@@ -165,23 +136,6 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
                 ratio: ratio,
                 first: first.settingRatio(newRatio, forSplitIdentifiedByFirstLeaf: targetLeafId),
                 second: second.settingRatio(newRatio, forSplitIdentifiedByFirstLeaf: targetLeafId)
-            )
-        }
-    }
-
-    /// Set the agent for a specific leaf.
-    func settingAgent(_ agentId: String?, forLeafId targetId: Int) -> PaneSplitNode {
-        switch self {
-        case .leaf(let id, _) where id == targetId:
-            return .leaf(id: id, agentId: agentId)
-        case .leaf:
-            return self
-        case .split(let axis, let ratio, let first, let second):
-            return .split(
-                axis: axis,
-                ratio: ratio,
-                first: first.settingAgent(agentId, forLeafId: targetId),
-                second: second.settingAgent(agentId, forLeafId: targetId)
             )
         }
     }
@@ -232,7 +186,7 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
     /// Build the path from root to the leaf with the given ID.
     private func pathTo(leafId: Int) -> [PathStep]? {
         switch self {
-        case .leaf(let id, _):
+        case .leaf(let id):
             return id == leafId ? [] : nil
         case .split(_, _, let first, let second):
             if let subpath = first.pathTo(leafId: leafId) {
@@ -245,53 +199,11 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
         }
     }
 
-    // MARK: - Codable Persistence
-
-    /// Leaf IDs are written to disk. They are the handles the daemon's grid protocol
-    /// addresses panes by, so a restart that renumbered them would silently retarget
-    /// every in-flight `pu grid` command.
-    func toLayoutNode() -> GridLayoutNode {
-        switch self {
-        case .leaf(let id, let agentId):
-            return GridLayoutNode(
-                type: .leaf, leafId: id, agentId: agentId, axis: nil, ratio: nil, first: nil, second: nil)
-        case .split(let axis, let ratio, let first, let second):
-            return GridLayoutNode(
-                type: .split, leafId: nil, agentId: nil, axis: axis, ratio: ratio, first: first.toLayoutNode(),
-                second: second.toLayoutNode())
-        }
-    }
-
-    /// Rebuild a tree from disk. Persisted leaf IDs are reused; `nextId` only supplies
-    /// IDs for legacy files written before leaf IDs were stored.
-    static func fromLayoutNode(_ node: GridLayoutNode, nextId: inout Int) -> PaneSplitNode {
-        switch node.type {
-        case .leaf:
-            let id = node.leafId ?? nextId
-            nextId = max(nextId, id + 1)
-            return .leaf(id: id, agentId: node.agentId)
-        case .split:
-            guard let axis = node.axis, let ratio = node.ratio,
-                let first = node.first, let second = node.second
-            else {
-                let id = node.leafId ?? nextId
-                nextId = max(nextId, id + 1)
-                return .leaf(id: id, agentId: nil)
-            }
-            return .split(
-                axis: axis,
-                ratio: ratio,
-                first: fromLayoutNode(first, nextId: &nextId),
-                second: fromLayoutNode(second, nextId: &nextId)
-            )
-        }
-    }
-
     // Equatable conformance
     static func == (lhs: PaneSplitNode, rhs: PaneSplitNode) -> Bool {
         switch (lhs, rhs) {
-        case (.leaf(let id1, let a1), .leaf(let id2, let a2)):
-            return id1 == id2 && a1 == a2
+        case (.leaf(let id1), .leaf(let id2)):
+            return id1 == id2
         case (.split(let ax1, let r1, let f1, let s1), .split(let ax2, let r2, let f2, let s2)):
             return ax1 == ax2 && r1 == r2 && f1 == f2 && s1 == s2
         default:
