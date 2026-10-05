@@ -1,33 +1,20 @@
 import SwiftUI
 
-/// A pane showing a file navigator and editor (code, or rendered markdown) rooted at the
-/// workspace's worktree or project. Each pane owns its own tree and editor state.
+/// A tab showing a file navigator and editor (code, or rendered markdown) rooted at the
+/// workspace's worktree or project. Its tree and editor state live in a `FileTabSession`
+/// owned by `FileTabStore`, so they survive the view being unmounted when the tab is hidden.
 struct FilePaneView: View {
-    let workspaceId: String
-    let leafId: Int
     let rootPath: String
     let initialPath: String?
+    @Bindable var session: FileTabSession
     let onFocus: () -> Void
+    /// The file shown changed — the tab records it, so its title and the restored file follow.
+    let onPathChange: (String) -> Void
 
-    @State private var fileTree = FileTreeState()
-    @State private var editor = EditorState()
-    @State private var showTree: Bool
-    @State private var showPreview = true
     @State private var saveError: String?
-    @State private var treeWidth: CGFloat = 200
 
-    init(
-        workspaceId: String, leafId: Int, rootPath: String, initialPath: String?,
-        onFocus: @escaping () -> Void
-    ) {
-        self.workspaceId = workspaceId
-        self.leafId = leafId
-        self.rootPath = rootPath
-        self.initialPath = initialPath
-        self.onFocus = onFocus
-        _showTree = State(initialValue: initialPath == nil)
-    }
-
+    private var fileTree: FileTreeState { session.fileTree }
+    private var editor: EditorState { session.editor }
     private var isMarkdown: Bool { editor.currentFile?.language == .markdown }
 
     var body: some View {
@@ -35,12 +22,12 @@ struct FilePaneView: View {
             header
             Divider()
             HStack(spacing: 0) {
-                if showTree {
+                if session.showTree {
                     FileTreeSidebarView(
-                        fileTreeState: fileTree, showFileTree: $showTree,
+                        fileTreeState: fileTree, showFileTree: $session.showTree,
                         onFileSelected: { path, name in editor.openFile(path: path, name: name) }
                     )
-                    .frame(width: treeWidth)
+                    .frame(width: session.treeWidth)
                     Divider()
                 }
                 content
@@ -49,30 +36,35 @@ struct FilePaneView: View {
         .background(Color(nsColor: Theme.cardBackground))
         .simultaneousGesture(TapGesture().onEnded { onFocus() })
         .onAppear {
-            fileTree.load(worktreePath: rootPath)
-            openInitial()
+            // Returning to a tab finds its session as it was left: only a first appearance
+            // (or a new root) loads the tree and opens the tab's file.
+            if session.loadedRoot != rootPath {
+                fileTree.load(worktreePath: rootPath)
+                session.loadedRoot = rootPath
+            }
+            if editor.currentFile == nil { openInitial() }
         }
         .onChange(of: initialPath) { _, _ in openInitial() }
-        .onDisappear {
-            fileTree.stopWatching()
-            editor.stopWatching()
+        .onChange(of: editor.currentFile?.id) { _, path in
+            if let path, path != initialPath { onPathChange(path) }
         }
+        // Watchers keep running while the tab is hidden; the store stops them when it closes.
     }
 
     private func openInitial() {
-        guard let initialPath else { return }
+        guard let initialPath, editor.currentFile?.id != initialPath else { return }
         editor.openFile(path: initialPath, name: (initialPath as NSString).lastPathComponent)
     }
 
     private var header: some View {
         HStack(spacing: 8) {
             Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showTree.toggle() }
+                withAnimation(.easeInOut(duration: 0.2)) { session.showTree.toggle() }
             } label: {
                 Image(systemName: "sidebar.left")
             }
             .buttonStyle(.plain)
-            .help(showTree ? "Hide file tree" : "Show file tree")
+            .help(session.showTree ? "Hide file tree" : "Show file tree")
 
             if let file = editor.currentFile {
                 Image(systemName: file.language.icon).foregroundStyle(.secondary)
@@ -88,7 +80,7 @@ struct FilePaneView: View {
             Spacer()
 
             if isMarkdown {
-                Picker("", selection: $showPreview) {
+                Picker("", selection: $session.showPreview) {
                     Text("Code").tag(false)
                     Text("Preview").tag(true)
                 }
@@ -120,7 +112,7 @@ struct FilePaneView: View {
             if let file = editor.currentFile {
                 if file.isBinary {
                     placeholder("Binary file — can't be shown", icon: "doc.fill")
-                } else if isMarkdown && showPreview {
+                } else if isMarkdown && session.showPreview {
                     MarkdownPreviewView(
                         markdown: file.content,
                         baseDirectory: (file.id as NSString).deletingLastPathComponent,

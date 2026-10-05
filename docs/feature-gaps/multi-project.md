@@ -19,7 +19,7 @@ What worked well: Quick keyboard switching between projects was fast. Per-projec
 ## PurePoint Opportunity
 
 - **Daemon-native multi-project**: The Rust daemon already has project isolation in its architecture. Multiple project roots can be managed concurrently with independent agent pools.
-- **Flexible presentation**: Multi-project could be implemented as tabs (like ppg-cli), separate windows (more macOS-native), or a unified sidebar with project grouping.
+- **Flexible presentation**: Multi-project could be implemented as tabs (like ppg-cli), separate windows (more macOS-native), or a unified sidebar with project grouping. Note: `Cmd+1-9` now selects tabs within the focused pane (APP-005, APP-009), so keyboard project switching should use `Ctrl+Cmd+1-9`.
 - **Cross-project orchestration**: Daemon can coordinate agents across projects — e.g., a swarm that touches multiple repos.
 - **CLI parity**: `pu project list`, `pu project switch <name>` for terminal access to the same multi-project state.
 

@@ -36,12 +36,10 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             project.createAgent(agent: "terminal", prompt: "", selection: .worktree(worktree.id))
         }
 
-        vc.onKillWorkspace = { [viewCache, registry] project, workspaceId in
-            guard let workspace = registry.workspace(id: workspaceId) else { return }
-            for agentId in workspace.agentIds {
-                viewCache.remove(agentId: agentId)
-                project.killAgent(agentId)
-            }
+        // Closing the row closes everything in it — agent tabs (killed via the registry's
+        // onCloseAgent) and file tabs alike — so a workspace of only files can be closed too.
+        vc.onKillWorkspace = { [registry] _, workspaceId in
+            registry.closeWorkspace(workspaceId)
         }
 
         vc.onKillWorktreeAgents = { [viewCache] project, worktreeId in

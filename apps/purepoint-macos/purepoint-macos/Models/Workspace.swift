@@ -12,10 +12,50 @@ nonisolated enum WorkspaceContainer: Equatable, Hashable, Sendable {
     }
 }
 
-/// A leaf that shows the file navigator/editor instead of a terminal.
-/// `openPath` is the absolute path of the file to show; `nil` opens the navigator alone.
-nonisolated struct FilePaneConfig: Equatable, Sendable {
-    var openPath: String?
+/// What a tab shows. Shells are agents too (the daemon spawns them under an `ag-` ID).
+nonisolated enum SurfaceContent: Equatable, Sendable {
+    /// A tab waiting for the palette: spawn an agent, open a file, or stay empty.
+    case empty
+    case agent(String)
+    /// The file navigator/editor. `path` is the absolute file to show; `nil` opens the navigator alone.
+    case file(path: String?)
+
+    var agentId: String? {
+        if case .agent(let id) = self { return id }
+        return nil
+    }
+}
+
+/// One tab. The ID is stable for the tab's lifetime — moving it between panes keeps it —
+/// so it is what reservations, drag and drop, and `pu grid tab` address.
+nonisolated struct Surface: Identifiable, Equatable, Sendable {
+    let id: Int
+    var content: SurfaceContent
+}
+
+/// The content of one leaf of the split tree: an ordered stack of tabs, one of them active.
+/// A pane always holds at least one tab; an "empty pane" is a pane whose only tab is `.empty`.
+nonisolated struct Pane: Equatable, Sendable {
+    var tabs: [Surface]
+    var activeTabId: Int
+
+    var activeTab: Surface? { tabs.first { $0.id == activeTabId } ?? tabs.first }
+
+    var activeIndex: Int? { tabs.firstIndex { $0.id == activeTabId } }
+
+    func index(of surfaceId: Int) -> Int? { tabs.firstIndex { $0.id == surfaceId } }
+
+    /// Remove a tab. When it was the active one, its left neighbour becomes active —
+    /// or the new first tab when it was leftmost.
+    @discardableResult
+    mutating func remove(surfaceId: Int) -> Surface? {
+        guard let index = index(of: surfaceId) else { return nil }
+        let removed = tabs.remove(at: index)
+        if activeTabId == surfaceId, !tabs.isEmpty {
+            activeTabId = tabs[max(0, index - 1)].id
+        }
+        return removed
+    }
 }
 
 /// A workspace is the single unit of the UI: **one sidebar row, one pane layout.**
@@ -25,29 +65,36 @@ nonisolated struct FilePaneConfig: Equatable, Sendable {
 /// an agent into a row on its own — so a pane and a stray row for the same agent are
 /// not two states that must be kept in sync, they are one state.
 ///
-/// Every live agent in the manifest occupies exactly one pane of exactly one workspace.
-/// `WorkspaceReconciler.reconcile` is the only function that establishes that invariant,
-/// and it is total: any (stored layout, manifest) pair maps to one canonical answer.
+/// Layout and content are separate: `root` is pure geometry, and `panes` maps each of its
+/// leaves to a tab stack of surfaces. Invariants, restored by `normalize()`:
+/// 1. The keys of `panes` are exactly the tree's leaf IDs, and every pane has a tab.
+/// 2. Surface IDs are unique within the workspace and below `nextSurfaceId`.
+/// 3. Every live agent in the manifest occupies exactly one surface of exactly one workspace —
+///    `WorkspaceReconciler.reconcile` is the only function that establishes that, and it is
+///    total: any (stored layout, manifest) pair maps to one canonical answer.
 nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     let id: String
     var container: WorkspaceContainer
     var root: PaneSplitNode
+    var panes: [Int: Pane]
     var focusedLeafId: Int
     var nextLeafId: Int
-    /// Leaves showing files rather than an agent, keyed by leaf ID. Kept beside the tree so
-    /// the tree's leaf shape (and every operation on it) stays agent-only.
-    var filePanes: [Int: FilePaneConfig]
+    var nextSurfaceId: Int
 
+    /// Leaves missing from `panes` get a single empty tab, so a caller can describe just the
+    /// geometry plus whichever panes it cares about.
     init(
-        id: String, container: WorkspaceContainer, root: PaneSplitNode, focusedLeafId: Int, nextLeafId: Int,
-        filePanes: [Int: FilePaneConfig] = [:]
+        id: String, container: WorkspaceContainer, root: PaneSplitNode, panes: [Int: Pane] = [:],
+        focusedLeafId: Int, nextLeafId: Int, nextSurfaceId: Int = 0
     ) {
         self.id = id
         self.container = container
         self.root = root
+        self.panes = panes
         self.focusedLeafId = focusedLeafId
         self.nextLeafId = nextLeafId
-        self.filePanes = filePanes
+        self.nextSurfaceId = nextSurfaceId
+        normalize()
     }
 
     /// A brand-new single-pane workspace holding one agent.
@@ -57,9 +104,11 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
         Workspace(
             id: "ws-\(agentId)",
             container: container,
-            root: .leaf(id: 0, agentId: agentId),
+            root: .leaf(id: 0),
+            panes: [0: Pane(tabs: [Surface(id: 0, content: .agent(agentId))], activeTabId: 0)],
             focusedLeafId: 0,
-            nextLeafId: 1
+            nextLeafId: 1,
+            nextSurfaceId: 1
         )
     }
 
@@ -67,55 +116,84 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
 
     var paneCount: Int { root.leafCount }
 
-    /// Agent IDs occupying panes, in pane order.
-    var agentIds: [String] { root.leaves.compactMap(\.agentId) }
+    var tabCount: Int { panes.values.reduce(0) { $0 + $1.tabs.count } }
 
-    /// The agent that names this workspace in the sidebar — the first pane holding one.
+    /// Every tab in layout order: panes in tree order, tabs in stack order.
+    var surfaces: [(leafId: Int, surface: Surface)] {
+        root.allLeafIds.flatMap { leafId in
+            (panes[leafId]?.tabs ?? []).map { (leafId: leafId, surface: $0) }
+        }
+    }
+
+    /// Agent IDs occupying tabs, in layout order.
+    var agentIds: [String] { surfaces.compactMap(\.surface.content.agentId) }
+
+    /// The agent that names this workspace in the sidebar — the first tab holding one.
     var primaryAgentId: String? { agentIds.first }
 
-    var focusedAgentId: String? { root.agentId(forLeafId: focusedLeafId) }
+    var focusedPane: Pane? { panes[focusedLeafId] }
 
-    func contains(agentId: String) -> Bool { root.containsAgent(agentId) }
+    var focusedSurface: Surface? { focusedPane?.activeTab }
 
-    func isFilePane(leafId: Int) -> Bool { filePanes[leafId] != nil }
+    var focusedAgentId: String? { focusedSurface?.content.agentId }
 
-    // MARK: - Mutations
+    func contains(agentId: String) -> Bool { agentIds.contains(agentId) }
 
-    mutating func split(leafId: Int, axis: PaneSplitNode.Axis, agentId: String? = nil) {
-        guard root.canSplit(axis: axis) else { return }
+    /// Nothing the user opened is left: no agent tab and no file tab, only empty tabs (or
+    /// none). Such a workspace is a ghost row and goes away — unless a spawn is pending into
+    /// one of its empty tabs, which the caller knows and this type does not.
+    var isGhost: Bool {
+        !surfaces.contains { surface in
+            switch surface.surface.content {
+            case .agent, .file: true
+            case .empty: false
+            }
+        }
+    }
+
+    /// The pane holding a tab.
+    func leafId(ofSurface surfaceId: Int) -> Int? {
+        surfaces.first { $0.surface.id == surfaceId }?.leafId
+    }
+
+    func surface(id surfaceId: Int) -> Surface? {
+        surfaces.first { $0.surface.id == surfaceId }?.surface
+    }
+
+    /// The tab holding an agent, and the pane it is in.
+    func location(ofAgent agentId: String) -> (leafId: Int, surfaceId: Int)? {
+        surfaces.first { $0.surface.content.agentId == agentId }.map { ($0.leafId, $0.surface.id) }
+    }
+
+    // MARK: - Pane Mutations
+
+    /// Split a pane. The new pane starts with one tab showing `content` and takes focus.
+    /// Returns the new pane's leaf ID, or `nil` when there is no room for another pane.
+    @discardableResult
+    mutating func split(leafId: Int, axis: PaneSplitNode.Axis, content: SurfaceContent = .empty) -> Int? {
+        guard root.canSplit(axis: axis), panes[leafId] != nil else { return nil }
         root = root.splittingLeaf(id: leafId, axis: axis, nextId: &nextLeafId)
         let newLeafId = nextLeafId - 1
-        if let agentId {
-            root = root.settingAgent(agentId, forLeafId: newLeafId)
-        }
+        let surface = makeSurface(content)
+        panes[newLeafId] = Pane(tabs: [surface], activeTabId: surface.id)
         focusedLeafId = newLeafId
+        return newLeafId
     }
 
-    /// Remove a pane. Returns the agent that occupied it, if any, so the caller can kill it.
-    /// Returns `nil` for the whole result when this was the last pane — a workspace with no
-    /// panes cannot exist, so the caller drops the workspace instead.
-    mutating func closePane(leafId: Int) -> String? {
-        let occupant = root.agentId(forLeafId: leafId)
-        filePanes[leafId] = nil
+    /// Remove a pane and every tab in it. Returns the agents those tabs held so the caller
+    /// can kill them. Removing the last pane leaves the workspace with no panes at all —
+    /// a state that cannot be shown, so the caller drops the workspace instead.
+    @discardableResult
+    mutating func closePane(leafId: Int) -> [String] {
+        guard let pane = panes.removeValue(forKey: leafId) else { return [] }
         let sibling = root.siblingLeafId(of: leafId)
-        guard let newRoot = root.removingLeaf(id: leafId) else { return occupant }
-        root = newRoot
-        if focusedLeafId == leafId {
-            focusedLeafId = sibling ?? root.firstLeafId
+        if let newRoot = root.removingLeaf(id: leafId) {
+            root = newRoot
+            if focusedLeafId == leafId {
+                focusedLeafId = sibling ?? root.firstLeafId
+            }
         }
-        return occupant
-    }
-
-    mutating func setAgent(_ agentId: String?, forLeafId leafId: Int) {
-        if agentId != nil { filePanes[leafId] = nil }
-        root = root.settingAgent(agentId, forLeafId: leafId)
-    }
-
-    /// Turn a pane into a file pane. Refuses panes that hold an agent, so a file can never
-    /// silently displace a running terminal.
-    mutating func setFilePane(leafId: Int, path: String?) {
-        guard root.allLeafIds.contains(leafId), root.agentId(forLeafId: leafId) == nil else { return }
-        filePanes[leafId] = FilePaneConfig(openPath: path)
+        return pane.tabs.compactMap(\.content.agentId)
     }
 
     mutating func setRatio(_ ratio: CGFloat, forSplitIdentifiedByFirstLeaf leafId: Int) {
@@ -129,15 +207,183 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
         }
     }
 
+    // MARK: - Tab Mutations
+
+    /// Open a tab right after the pane's active one. It becomes active and its pane takes focus.
+    @discardableResult
+    mutating func newTab(leafId: Int, content: SurfaceContent = .empty) -> Int? {
+        guard var pane = panes[leafId] else { return nil }
+        let surface = makeSurface(content)
+        let insertAt = (pane.activeIndex ?? pane.tabs.count - 1) + 1
+        pane.tabs.insert(surface, at: insertAt)
+        pane.activeTabId = surface.id
+        panes[leafId] = pane
+        focusedLeafId = leafId
+        return surface.id
+    }
+
+    /// Show a tab and focus its pane.
+    mutating func selectTab(_ surfaceId: Int) {
+        guard let leafId = leafId(ofSurface: surfaceId) else { return }
+        panes[leafId]?.activeTabId = surfaceId
+        focusedLeafId = leafId
+    }
+
+    /// Show the tab at a 0-based position in a pane. Out-of-range positions do nothing.
+    mutating func selectTab(leafId: Int, index: Int) {
+        guard let pane = panes[leafId], pane.tabs.indices.contains(index) else { return }
+        selectTab(pane.tabs[index].id)
+    }
+
+    mutating func selectLastTab(leafId: Int) {
+        guard let last = panes[leafId]?.tabs.last else { return }
+        selectTab(last.id)
+    }
+
+    /// Step through a pane's tabs, wrapping at either end.
+    mutating func cycleTab(leafId: Int, by offset: Int) {
+        guard let pane = panes[leafId], !pane.tabs.isEmpty else { return }
+        let current = pane.activeIndex ?? 0
+        let count = pane.tabs.count
+        selectTab(pane.tabs[((current + offset) % count + count) % count].id)
+    }
+
+    /// Close a tab. Returns the agent it held so the caller can kill it. A pane whose last
+    /// tab closes is removed, exactly as if the pane itself had been closed.
+    @discardableResult
+    mutating func closeTab(_ surfaceId: Int) -> [String] {
+        guard let leafId = leafId(ofSurface: surfaceId) else { return [] }
+        if panes[leafId]?.tabs.count == 1 {
+            return closePane(leafId: leafId)
+        }
+        let removed = panes[leafId]?.remove(surfaceId: surfaceId)
+        return removed?.content.agentId.map { [$0] } ?? []
+    }
+
+    /// Move a tab to a 0-based position in another (or the same) pane. The tab keeps its ID
+    /// and content — an agent in it keeps running — and becomes active where it lands.
+    /// A source pane left with no tabs collapses.
+    mutating func moveTab(_ surfaceId: Int, toLeaf targetLeafId: Int, index: Int? = nil) {
+        guard let sourceLeafId = leafId(ofSurface: surfaceId), panes[targetLeafId] != nil,
+            let surface = panes[sourceLeafId]?.remove(surfaceId: surfaceId)
+        else { return }
+
+        var target = panes[targetLeafId]!
+        let insertAt = min(max(0, index ?? target.tabs.count), target.tabs.count)
+        target.tabs.insert(surface, at: insertAt)
+        target.activeTabId = surface.id
+        panes[targetLeafId] = target
+
+        if panes[sourceLeafId]?.tabs.isEmpty == true {
+            panes[sourceLeafId] = nil
+            root = root.removingLeaf(id: sourceLeafId) ?? root
+        }
+        focusedLeafId = targetLeafId
+    }
+
+    /// Move a tab to just before another tab, in that tab's pane — what dropping one tab onto
+    /// another does. Accounts for the moved tab leaving an earlier slot in the same pane.
+    mutating func moveTab(_ surfaceId: Int, before targetSurfaceId: Int) {
+        guard surfaceId != targetSurfaceId, let targetLeafId = leafId(ofSurface: targetSurfaceId),
+            var index = panes[targetLeafId]?.index(of: targetSurfaceId)
+        else { return }
+        if leafId(ofSurface: surfaceId) == targetLeafId,
+            let from = panes[targetLeafId]?.index(of: surfaceId), from < index
+        {
+            index -= 1
+        }
+        moveTab(surfaceId, toLeaf: targetLeafId, index: index)
+    }
+
+    /// Move a tab out of its pane into a new pane split off beside it — tmux's break-pane,
+    /// within the workspace. Does nothing for a pane's only tab (there is nothing to break
+    /// away from) or when the grid is full. Returns the new pane's leaf ID. Moving a tab
+    /// onto another pane's strip (`moveTab`) is the way back.
+    @discardableResult
+    mutating func breakTab(_ surfaceId: Int, axis: PaneSplitNode.Axis) -> Int? {
+        guard let sourceLeafId = leafId(ofSurface: surfaceId),
+            let source = panes[sourceLeafId], source.tabs.count > 1,
+            root.canSplit(axis: axis)
+        else { return nil }
+
+        root = root.splittingLeaf(id: sourceLeafId, axis: axis, nextId: &nextLeafId)
+        let newLeafId = nextLeafId - 1
+        guard let surface = panes[sourceLeafId]?.remove(surfaceId: surfaceId) else { return nil }
+        panes[newLeafId] = Pane(tabs: [surface], activeTabId: surface.id)
+        focusedLeafId = newLeafId
+        return newLeafId
+    }
+
+    /// Change what a tab shows — a reservation being fulfilled, or the palette's choice.
+    mutating func setContent(_ content: SurfaceContent, forSurface surfaceId: Int) {
+        guard let leafId = leafId(ofSurface: surfaceId),
+            let index = panes[leafId]?.index(of: surfaceId)
+        else { return }
+        panes[leafId]?.tabs[index].content = content
+    }
+
+    /// Remove every tab matching `predicate`, collapsing panes left empty. Returns `false`
+    /// when no pane survives, in which case the workspace must be dropped.
+    mutating func removeSurfaces(where predicate: (Surface) -> Bool) -> Bool {
+        var emptied = Set<Int>()
+        for (leafId, var pane) in panes {
+            let doomed = pane.tabs.filter(predicate).map(\.id)
+            guard !doomed.isEmpty else { continue }
+            for surfaceId in doomed { pane.remove(surfaceId: surfaceId) }
+            if pane.tabs.isEmpty {
+                emptied.insert(leafId)
+            } else {
+                panes[leafId] = pane
+            }
+        }
+        guard !emptied.isEmpty else { return true }
+        for leafId in emptied { panes[leafId] = nil }
+        guard let pruned = root.removingLeaves(ids: emptied) else { return false }
+        root = pruned
+        return true
+    }
+
+    private mutating func makeSurface(_ content: SurfaceContent) -> Surface {
+        defer { nextSurfaceId += 1 }
+        return Surface(id: nextSurfaceId, content: content)
+    }
+
+    // MARK: - Normalize
+
     /// Re-establish internal consistency after any structural edit.
     mutating func normalize() {
         let ids = root.allLeafIds
-        if !ids.contains(focusedLeafId) {
+        let live = Set(ids)
+        panes = panes.filter { live.contains($0.key) }
+
+        // Surface IDs must be unique across the workspace; a duplicate (hand-edited or
+        // corrupt file) gets a fresh ID rather than silently aliasing another tab.
+        nextSurfaceId = max(nextSurfaceId, (panes.values.flatMap(\.tabs).map(\.id).max() ?? -1) + 1)
+        var seen = Set<Int>()
+        for leafId in ids {
+            var pane = panes[leafId] ?? Pane(tabs: [], activeTabId: -1)
+            for index in pane.tabs.indices where !seen.insert(pane.tabs[index].id).inserted {
+                let wasActive = pane.activeTabId == pane.tabs[index].id
+                pane.tabs[index] = Surface(id: nextSurfaceId, content: pane.tabs[index].content)
+                seen.insert(nextSurfaceId)
+                if wasActive { pane.activeTabId = nextSurfaceId }
+                nextSurfaceId += 1
+            }
+            if pane.tabs.isEmpty {
+                pane.tabs = [Surface(id: nextSurfaceId, content: .empty)]
+                seen.insert(nextSurfaceId)
+                nextSurfaceId += 1
+            }
+            if pane.index(of: pane.activeTabId) == nil {
+                pane.activeTabId = pane.tabs[0].id
+            }
+            panes[leafId] = pane
+        }
+
+        if !live.contains(focusedLeafId) {
             focusedLeafId = ids.first ?? 0
         }
         nextLeafId = max(nextLeafId, (ids.max() ?? -1) + 1)
-        let live = Set(ids)
-        filePanes = filePanes.filter { live.contains($0.key) && root.agentId(forLeafId: $0.key) == nil }
     }
 }
 
@@ -170,11 +416,12 @@ nonisolated struct LiveAgent: Equatable, Sendable {
 nonisolated enum WorkspaceReconciler {
 
     /// Guarantees on the returned list:
-    /// 1. Every live agent occupies exactly one pane of exactly one workspace.
-    /// 2. No pane references an agent that is no longer in the manifest.
-    /// 3. Every workspace holds at least one live agent (no ghost rows).
+    /// 1. Every live agent occupies exactly one tab of exactly one workspace.
+    /// 2. No tab references an agent that is no longer in the manifest.
+    /// 3. Every workspace holds a live agent or a file tab, or is waiting on a spawn
+    ///    (`reserved`) — no ghost rows.
     /// 4. Each workspace's container matches where its agents actually live.
-    static func reconcile(stored: [Workspace], live: [LiveAgent]) -> [Workspace] {
+    static func reconcile(stored: [Workspace], live: [LiveAgent], reserved: Set<String> = []) -> [Workspace] {
         let containerByAgent = Dictionary(live.map { ($0.id, $0.container) }, uniquingKeysWith: { first, _ in first })
 
         var claimed = Set<String>()
@@ -185,32 +432,34 @@ nonisolated enum WorkspaceReconciler {
             // A duplicated workspace ID would make selection ambiguous; the first wins.
             guard seenWorkspaceIds.insert(workspace.id).inserted else { continue }
 
-            // Drop panes whose agent died, and panes claiming an agent another workspace
-            // already holds. A pane stored with no agent is a deliberate empty pane and stays.
-            var stalePaneIds = Set<Int>()
-            for leaf in workspace.root.leaves {
-                guard let agentId = leaf.agentId else { continue }
+            // Drop tabs whose agent died, and tabs claiming an agent another tab already
+            // holds. Empty and file tabs are deliberate and stay.
+            var staleSurfaceIds = Set<Int>()
+            for (_, surface) in workspace.surfaces {
+                guard let agentId = surface.content.agentId else { continue }
                 if containerByAgent[agentId] == nil || !claimed.insert(agentId).inserted {
-                    stalePaneIds.insert(leaf.id)
+                    staleSurfaceIds.insert(surface.id)
                 }
             }
 
-            if !stalePaneIds.isEmpty {
-                guard let pruned = workspace.root.removingLeaves(ids: stalePaneIds) else {
+            if !staleSurfaceIds.isEmpty {
+                guard workspace.removeSurfaces(where: { staleSurfaceIds.contains($0.id) }) else {
                     continue  // every pane went away — the workspace goes with it
                 }
-                workspace.root = pruned
             }
 
-            // A workspace exists to hold agents. One that has lost them all is a ghost row.
-            guard let primary = workspace.agentIds.first else { continue }
+            // A workspace exists to hold what the user opened. One left with only empty tabs
+            // is a ghost row — unless one of those tabs is waiting for its agent.
+            guard !workspace.isGhost || reserved.contains(workspace.id) else { continue }
 
-            workspace.container = containerByAgent[primary] ?? workspace.container
+            if let primary = workspace.agentIds.first {
+                workspace.container = containerByAgent[primary] ?? workspace.container
+            }
             workspace.normalize()
             result.append(workspace)
         }
 
-        // Any live agent no pane claimed becomes its own single-pane workspace.
+        // Any live agent no tab claimed becomes its own single-pane workspace.
         // This is the step that makes a loose sidebar item impossible: an agent the layout
         // forgot still surfaces as a workspace, never as a bare agent row.
         for agent in live where !claimed.contains(agent.id) {

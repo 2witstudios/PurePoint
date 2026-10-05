@@ -17,6 +17,9 @@ actor DaemonAttachSession {
     /// attach replays the agent's whole output buffer.
     private(set) var didStreamEnd = false
     private var onFirstOutput: (() -> Void)?
+    /// Called on the main actor after each chunk of *live* output is fed to the terminal —
+    /// never for the replay of the daemon's buffer that every attach starts with.
+    private let onOutput: (@MainActor @Sendable () -> Void)?
     /// The daemon replays its whole buffer on every attach, so a terminal that
     /// already shows output must be reset first or the scrollback duplicates.
     private var resetBeforeReplay: Bool
@@ -28,12 +31,14 @@ actor DaemonAttachSession {
         agentId: String,
         terminalView: TerminalView,
         resetBeforeReplay: Bool = false,
-        onFirstOutput: (() -> Void)? = nil
+        onFirstOutput: (() -> Void)? = nil,
+        onOutput: (@MainActor @Sendable () -> Void)? = nil
     ) {
         self.agentId = agentId
         self.terminalView = terminalView
         self.resetBeforeReplay = resetBeforeReplay
         self.onFirstOutput = onFirstOutput
+        self.onOutput = onOutput
     }
 
     /// Start streaming output from the daemon to the terminal view.
@@ -115,7 +120,7 @@ actor DaemonAttachSession {
         // Read AttachReady
         let firstLine = try await reader.readLine()
         let firstResponse = DaemonClient.parse(firstLine)
-        guard case .attachReady = firstResponse else {
+        guard case .attachReady(let bufferedBytes) = firstResponse else {
             if case .error(let code, let msg) = firstResponse {
                 print("[DaemonAttach \(agentId.prefix(8))] attach error: \(msg)")
                 if code == "AGENT_NOT_FOUND" {
@@ -144,6 +149,9 @@ actor DaemonAttachSession {
             )
         }
 
+        // The daemon replays exactly `bufferedBytes` before live output begins.
+        var replayRemaining = bufferedBytes
+
         // Stream loop
         var isFirstChunk = true
         while !stopped {
@@ -170,8 +178,12 @@ actor DaemonAttachSession {
                     // A retry within this session replays from the start again.
                     resetBeforeReplay = true
                 }
+                let isReplay = replayRemaining > 0
+                replayRemaining -= data.count
+                let onOutput = isReplay ? nil : self.onOutput
                 await MainActor.run {
                     guard let tv else { return }
+                    defer { onOutput?() }
                     let term = tv.getTerminal()
                     if reset {
                         // RIS: full reset, clears the screen and scrollback before the replay.

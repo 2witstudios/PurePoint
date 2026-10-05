@@ -30,21 +30,33 @@ Pick one, name the worktree, enter a prompt, and spawn. Fuzzy search narrows the
 
 ## Pane grid
 
-Split your workspace into terminal panes:
+Split your workspace into panes:
 
 | Action | Shortcut |
 |---|---|
-| Split Right | `Cmd+K Cmd+L` |
-| Split Below | `Cmd+K Cmd+J` |
-| Close Pane | `Cmd+K Q` |
-| Focus Up | `Cmd+K Up` |
-| Focus Down | `Cmd+K Down` |
-| Focus Left | `Cmd+K Left` |
-| Focus Right | `Cmd+K Right` |
+| Split Right | `Shift+Cmd+D` |
+| Split Below | `Cmd+D` |
+| Close Pane | `Shift+Cmd+W` |
+| Focus Up / Down / Left / Right | `Option+Cmd+Arrow` |
 
 Drag dividers to resize. Layouts persist across sessions.
 
-Each pane displays one agent's terminal. Use `pu grid assign <agent_id>` from the CLI to assign agents to panes.
+## Tabs
+
+Every pane holds a stack of tabs — agents, shells, or files — shown in a strip along its top. Background tabs keep running; a blue dot marks a tab whose terminal printed output since you last looked at it.
+
+| Action | Shortcut |
+|---|---|
+| New Tab (opens the palette) | `Cmd+T` |
+| Close Tab | `Cmd+W` |
+| Next / Previous Tab | `Shift+Cmd+]` / `Shift+Cmd+[` |
+| Go to Tab 1–8 | `Cmd+1` … `Cmd+8` |
+| Go to Last Tab | `Cmd+9` |
+| Move Tab to New Pane | `Option+Cmd+D` |
+
+Drag a tab to reorder it, or drop it on another pane's strip to move it there. Closing a pane's last tab closes the pane. All shortcuts can be changed in Settings → Hotkeys.
+
+From the CLI, `pu grid show` lists each pane's tabs, `pu grid tab new --agent <id>` opens an agent in a new tab, and `pu grid assign <agent_id>` puts an agent in the focused pane's active tab.
 
 ## Point Guard
 

@@ -19,7 +19,7 @@ struct PaneGridView: View {
     /// and recreating the entire view hierarchy.
     private func rootView(_ workspace: Workspace) -> AnyView {
         switch workspace.root {
-        case .leaf(let id, let agentId):
+        case .leaf(let id):
             return AnyView(
                 DraggableSplit(
                     axis: .vertical,
@@ -30,7 +30,6 @@ struct PaneGridView: View {
                         PaneCellView(
                             workspaceId: workspaceId,
                             leafId: id,
-                            agentId: agentId,
                             isFocused: id == workspace.focusedLeafId
                         )
                     )
@@ -46,12 +45,11 @@ struct PaneGridView: View {
     /// Uses AnyView to break the recursive opaque return type inference.
     private func nodeView(_ node: PaneSplitNode, focusedLeafId: Int) -> AnyView {
         switch node {
-        case .leaf(let id, let agentId):
+        case .leaf(let id):
             return AnyView(
                 PaneCellView(
                     workspaceId: workspaceId,
                     leafId: id,
-                    agentId: agentId,
                     isFocused: id == focusedLeafId
                 )
             )
