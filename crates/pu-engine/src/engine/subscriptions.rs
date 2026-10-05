@@ -107,7 +107,8 @@ impl Engine {
     /// handle is reaped, status falls back to the manifest, and an entry left at
     /// `Running` would make clients treat the agent as alive and reattach.
     ///
-    /// Exits during daemon shutdown are not recorded (see `begin_shutdown`).
+    /// Exits of processes killed by daemon shutdown are not recorded (see
+    /// `kill_all_sessions`).
     ///
     /// Only the entry for this exact process lifetime is touched (same agent id
     /// and pid). Kill removes the entry and suspend clears the pid, so an
@@ -120,7 +121,7 @@ impl Engine {
         mut exit_rx: tokio::sync::watch::Receiver<Option<i32>>,
     ) {
         let status_channels = self.status_channels.clone();
-        let shutting_down = self.shutting_down.clone();
+        let shutdown_killed = self.shutdown_killed.clone();
         let project_root = project_root.to_string();
         let agent_id = agent_id.to_string();
         tokio::spawn(async move {
@@ -132,7 +133,11 @@ impl Engine {
             }
             // The daemon killed it on the way down: leave the entry Running so
             // the next daemon's init marks it suspended and it resumes.
-            if shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            if shutdown_killed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&pid)
+            {
                 return;
             }
             let exit_code = *exit_rx.borrow();
@@ -211,6 +216,7 @@ impl Engine {
 #[cfg(test)]
 mod natural_exit_tests {
     use super::*;
+    use crate::pty_manager::{AgentHandle, SpawnConfig};
     use pu_core::types::Manifest;
     use tempfile::TempDir;
 
@@ -294,20 +300,77 @@ mod natural_exit_tests {
         );
     }
 
-    #[tokio::test]
-    async fn given_exit_during_shutdown_should_leave_agent_resumable() {
-        let tmp = project_with(agent("ag-1", Some(42), false));
-        let engine = Engine::new();
-        let (tx, rx) = tokio::sync::watch::channel(None);
-        engine.watch_natural_exit(&tmp.path().to_string_lossy(), "ag-1", 42, rx);
+    async fn spawn_process(engine: &Engine, command: &str, args: &[&str]) -> AgentHandle {
+        engine
+            .pty_host
+            .spawn(SpawnConfig {
+                command: command.into(),
+                args: args.iter().map(|a| a.to_string()).collect(),
+                cwd: "/tmp".into(),
+                env: vec![],
+                env_remove: vec![],
+                cols: 80,
+                rows: 24,
+            })
+            .await
+            .unwrap()
+    }
 
-        engine.begin_shutdown();
-        tx.send(Some(143)).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    async fn wait_for_exit(handle: &AgentHandle) {
+        let mut rx = handle.exit_rx.clone();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while rx.borrow_and_update().is_none() {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn given_agent_killed_by_shutdown_should_leave_agent_resumable() {
+        let engine = Engine::new();
+        let handle = spawn_process(&engine, "/bin/sleep", &["30"]).await;
+        let pid = handle.pid;
+        let tmp = project_with(agent("ag-1", Some(pid), false));
+        engine.watch_natural_exit(
+            &tmp.path().to_string_lossy(),
+            "ag-1",
+            pid,
+            handle.exit_rx.clone(),
+        );
+        engine.sessions.lock().await.insert("ag-1".into(), handle);
+
+        engine
+            .kill_all_sessions(std::time::Duration::from_secs(2))
+            .await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         let a = read(&tmp, "ag-1");
         assert_eq!(a.status, AgentStatus::Running);
         assert_eq!(a.exit_code, None);
+    }
+
+    #[tokio::test]
+    async fn given_agent_exited_before_shutdown_with_watcher_pending_should_record_broken() {
+        let engine = Engine::new();
+        let handle = spawn_process(&engine, "/usr/bin/true", &[]).await;
+        let pid = handle.pid;
+        let exit_rx = handle.exit_rx.clone();
+        let tmp = project_with(agent("ag-1", Some(pid), false));
+        wait_for_exit(&handle).await;
+        engine.sessions.lock().await.insert("ag-1".into(), handle);
+
+        engine
+            .kill_all_sessions(std::time::Duration::from_secs(2))
+            .await;
+        // The watcher only gets to run after teardown began.
+        engine.watch_natural_exit(&tmp.path().to_string_lossy(), "ag-1", pid, exit_rx);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(read(&tmp, "ag-1").status, AgentStatus::Broken);
     }
 
     #[tokio::test]

@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::Path;
 
 use pu_core::error::PuError;
@@ -58,21 +57,24 @@ impl Engine {
     }
 
     /// Reconcile agents that the manifest says are running but this daemon is not
-    /// running (`live` holds the agents it is). Resumable agents (claude, codex,
-    /// opencode) with a session_id get marked suspended so the Swift side can
-    /// auto-resume them. Others get marked Broken.
+    /// running (`is_live` says whether it is). Liveness is asked at the point of
+    /// use, not snapshotted, because an agent can be spawned or resumed while
+    /// reconcile runs (stopping orphans can take seconds).
+    ///
+    /// Resumable agents (claude, codex, opencode) with a session_id get marked
+    /// suspended so the Swift side can auto-resume them. Others get marked Broken.
     ///
     /// A resumable agent whose process outlived its daemon is still writing its
     /// transcript; it is stopped first, because resuming next to it would put two
     /// writers on one conversation.
     /// Called synchronously inside handle_init so state is correct before the first status read.
-    pub(super) fn reconcile_agents_on_init(project_root: &str, live: &HashSet<String>) {
+    pub(super) fn reconcile_agents_on_init(project_root: &str, is_live: impl Fn(&str) -> bool) {
         let root = Path::new(project_root);
         let Ok(m) = manifest::read_manifest(root) else {
             return;
         };
         let is_stale = |a: &AgentEntry| {
-            !a.suspended && matches!(a.status, AgentStatus::Running) && !live.contains(&a.id)
+            !a.suspended && matches!(a.status, AgentStatus::Running) && !is_live(&a.id)
         };
         let is_resumable = |a: &AgentEntry| {
             a.session_id.is_some()
@@ -88,6 +90,9 @@ impl Engine {
             return;
         }
         for a in stale.iter().filter(|a| is_resumable(a)) {
+            if is_live(&a.id) {
+                continue;
+            }
             if let (Some(pid), Some(sid)) = (a.pid, a.session_id.as_deref())
                 && Self::is_orphaned_session(pid, sid)
             {
@@ -281,9 +286,7 @@ mod reconcile_tests {
     #[test]
     fn given_agent_live_in_this_daemon_should_leave_it_running() {
         let tmp = project_with(vec![agent("ag-1", "claude", Some("sid-1"))]);
-        let live = HashSet::from(["ag-1".to_string()]);
-
-        Engine::reconcile_agents_on_init(&root(&tmp), &live);
+        Engine::reconcile_agents_on_init(&root(&tmp), |id| id == "ag-1");
 
         let a = read(&tmp, "ag-1");
         assert!(!a.suspended);
@@ -295,7 +298,7 @@ mod reconcile_tests {
     fn given_dead_resumable_agent_should_mark_suspended() {
         let tmp = project_with(vec![agent("ag-1", "claude", Some("sid-1"))]);
 
-        Engine::reconcile_agents_on_init(&root(&tmp), &HashSet::new());
+        Engine::reconcile_agents_on_init(&root(&tmp), |_| false);
 
         let a = read(&tmp, "ag-1");
         assert!(a.suspended);
@@ -307,11 +310,29 @@ mod reconcile_tests {
     fn given_dead_agent_without_session_should_mark_broken() {
         let tmp = project_with(vec![agent("ag-1", "terminal", None)]);
 
-        Engine::reconcile_agents_on_init(&root(&tmp), &HashSet::new());
+        Engine::reconcile_agents_on_init(&root(&tmp), |_| false);
 
         let a = read(&tmp, "ag-1");
         assert!(!a.suspended);
         assert_eq!(a.status, AgentStatus::Broken);
+    }
+
+    #[test]
+    fn given_agent_becoming_live_after_reconcile_starts_should_leave_it_running() {
+        let tmp = project_with(vec![agent("ag-1", "terminal", None)]);
+        // Not live when reconcile first looks, live by the time it writes
+        // (spawned or resumed in between).
+        let checks = std::cell::Cell::new(0);
+        let is_live = |_: &str| {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        };
+
+        Engine::reconcile_agents_on_init(&root(&tmp), is_live);
+
+        let a = read(&tmp, "ag-1");
+        assert_eq!(a.status, AgentStatus::Running);
+        assert!(!a.suspended);
     }
 
     #[test]

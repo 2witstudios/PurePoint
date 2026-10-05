@@ -113,8 +113,8 @@ async fn main() {
     }
 
     // Stop agents gracefully (SIGTERM, then SIGKILL) while the runtime is still
-    // up. They stay resumable: begin_shutdown keeps their exits from being
-    // recorded as Broken.
+    // up. They stay resumable: kill_all_sessions keeps the exits it causes from
+    // being recorded as Broken.
     let _ = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         engine.kill_all_sessions(std::time::Duration::from_secs(2)),
