@@ -68,6 +68,13 @@ impl IpcServer {
         })
     }
 
+    /// Override the concurrent connection cap (defaults to `MAX_CONNECTIONS`).
+    #[cfg(test)]
+    pub(crate) fn with_connection_limit(mut self, limit: usize) -> Self {
+        self.conn_limit = Arc::new(Semaphore::new(limit));
+        self
+    }
+
     /// Get a reference to the engine for starting background tasks.
     pub fn engine(&self) -> &Arc<Engine> {
         &self.engine
@@ -91,16 +98,18 @@ impl IpcServer {
                             continue;
                         }
                     };
+                    // Never wait for a permit: waiting here would stall accepting,
+                    // shutdown and signals, and parking the stream in a task would
+                    // let stalled clients pile up descriptors past the cap.
+                    let Ok(permit) = self.conn_limit.clone().try_acquire_owned() else {
+                        tracing::warn!("connection limit reached; rejecting connection");
+                        reject_busy(&stream);
+                        continue; // dropping the stream closes it
+                    };
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
-                    let conn_limit = self.conn_limit.clone();
-                    // The permit is awaited inside the task: awaiting it here would
-                    // stop this loop from accepting, and from seeing shutdown and
-                    // signals, whenever the limit is reached.
                     tokio::spawn(async move {
-                        let Ok(_permit) = conn_limit.acquire_owned().await else {
-                            return; // semaphore closed
-                        };
+                        let _permit = permit;
                         Self::handle_connection(stream, engine, shutdown).await;
                     });
                 }
@@ -207,6 +216,19 @@ impl IpcServer {
         }
 
         true
+    }
+}
+
+/// Best-effort, non-blocking BUSY reply to a connection over the limit; a
+/// partial or failed write is ignored since the stream is closed right after.
+fn reject_busy(stream: &tokio::net::UnixStream) {
+    let resp = Response::Error {
+        code: "BUSY".into(),
+        message: "daemon connection limit reached".into(),
+    };
+    if let Ok(mut json) = serde_json::to_vec(&resp) {
+        json.push(b'\n');
+        let _ = stream.try_write(&json);
     }
 }
 

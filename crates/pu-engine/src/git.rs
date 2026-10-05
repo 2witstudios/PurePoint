@@ -12,6 +12,9 @@ async fn git_output(args: &[&str], cwd: &Path) -> Result<std::process::Output, s
         .args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
+        // An empty GIT_ASKPASS makes git skip core.askPass and SSH_ASKPASS,
+        // so an inherited credential helper cannot prompt either.
+        .env("GIT_ASKPASS", "")
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
