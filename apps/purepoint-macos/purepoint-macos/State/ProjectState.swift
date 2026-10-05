@@ -81,9 +81,19 @@ final class ProjectState: Identifiable {
 
             self.startGridSubscription()
             self.startStatusSubscription()
-            self.refresh()
-            // Resume suspended agents after initial data load
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            // Resume from the snapshot taken after init, not after a fixed delay: a
+            // slow first load would otherwise resume against the agents from before
+            // init (or a daemon restart) and leave the newly suspended ones paused.
+            do {
+                let snapshot = try await svc.loadWorkspace(projectRoot: root)
+                guard !Task.isCancelled else { return }
+                self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.appState?.daemonError = error.localizedDescription
+                return
+            }
             self.resumeSuspendedAgents()
         }
     }

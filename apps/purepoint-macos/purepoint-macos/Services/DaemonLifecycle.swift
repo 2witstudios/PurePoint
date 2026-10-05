@@ -17,7 +17,7 @@ nonisolated enum DaemonLifecycle {
     /// Used to avoid shutting down a daemon we merely attached to (e.g. a
     /// second app instance quitting must not kill the shared daemon).
     static func didLaunchDaemon() async -> Bool {
-        await launcher.didLaunchDaemon
+        await launcher.ownsRunningDaemon()
     }
 
     static func findBinary() -> String? {
@@ -60,7 +60,9 @@ private actor DaemonLauncher {
     private let puDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".pu")
     private var pidPath: String { puDir.appendingPathComponent("daemon.pid").path }
-    private(set) var didLaunchDaemon = false
+    /// PID of the daemon this app instance launched, if it is the one that won
+    /// the daemon lock.
+    private var launchedPid: Int?
     private var inFlight: Task<Void, Error>?
 
     func ensureDaemon() async throws {
@@ -73,6 +75,16 @@ private actor DaemonLauncher {
 
     /// Run `operation` as the only lifecycle operation in flight. With `coalesce`,
     /// a caller arriving while another operation runs just awaits that one.
+    /// True only if the daemon answering right now is the one this instance
+    /// launched. Checked live rather than remembered: the daemon may have been
+    /// replaced since (restarted by the CLI or another app instance), and
+    /// shutting down a replacement would stop its owner's agents.
+    func ownsRunningDaemon() async -> Bool {
+        guard let launchedPid else { return false }
+        if case .healthy(let pid) = await probe(timeout: 1.0) { return pid == launchedPid }
+        return false
+    }
+
     private func serialized(
         coalesce: Bool,
         _ operation: @escaping @Sendable (DaemonLauncher) async throws -> Void
@@ -184,11 +196,12 @@ private actor DaemonLauncher {
             try await Task.sleep(nanoseconds: delay)
             switch await probe(timeout: 2.0) {
             case .healthy(let pid):
-                didLaunchDaemon = pid == Int(process.processIdentifier)
+                launchedPid = pid == Int(process.processIdentifier) ? pid : nil
                 return
             case .busy:
                 // Alive but at its connection limit, so it cannot be ours: ours
                 // would be brand new. Attach without claiming ownership.
+                launchedPid = nil
                 return
             case .unreachable:
                 continue
