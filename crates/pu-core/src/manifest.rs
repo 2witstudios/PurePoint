@@ -55,16 +55,15 @@ pub fn update_manifest(
     // Lock the manifest during update. The lock file is never deleted: unlinking
     // it while another writer waits on it would let a third writer lock a fresh
     // file, and two writers would then both "hold" the lock.
-    use fs4::fs_std::FileExt;
+    use fs4::FileExt;
     let lock_path = path.with_extension("json.lock");
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(&lock_path)?;
-    lock_file
-        .lock_exclusive()
-        .map_err(|_| PuError::ManifestLocked)?;
+    // Fully qualified: std's inherent `File::lock` would otherwise shadow the trait.
+    FileExt::lock(&lock_file).map_err(|_| PuError::ManifestLocked)?;
 
     let manifest = read_manifest(project_root)?;
     let mut updated = updater(manifest);
