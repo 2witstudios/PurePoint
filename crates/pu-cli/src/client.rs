@@ -10,8 +10,24 @@ use crate::error::CliError;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Requests that type a prompt into an agent wait on the daemon's
+/// screen-confirmed delivery, which can take up to ~170s (60s for the input
+/// box, three typing attempts, submit confirmation). Waiting longer than that
+/// lets the daemon's own error (e.g. "input box never became ready") reach
+/// the user instead of a bare timeout.
+const DELIVERY_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn timeout_for(request: &Request) -> Duration {
+    match request {
+        Request::Input { submit: true, .. } => DELIVERY_TIMEOUT,
+        Request::Spawn { prompt, .. } if !prompt.trim().is_empty() => DELIVERY_TIMEOUT,
+        _ => REQUEST_TIMEOUT,
+    }
+}
+
 pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, CliError> {
-    let result = tokio::time::timeout(REQUEST_TIMEOUT, async {
+    let timeout = timeout_for(request);
+    let result = tokio::time::timeout(timeout, async {
         let stream = UnixStream::connect(socket)
             .await
             .map_err(|e| match e.kind() {
@@ -39,7 +55,7 @@ pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, 
 
     match result {
         Ok(inner) => inner,
-        Err(_) => Err(CliError::RequestTimeout),
+        Err(_) => Err(CliError::RequestTimeout(timeout.as_secs())),
     }
 }
 
@@ -56,6 +72,18 @@ mod tests {
         tokio::spawn(async move {
             server.run().await.ok();
         })
+    }
+
+    #[test]
+    fn given_submitted_input_should_wait_for_delivery() {
+        let input = |submit| Request::Input {
+            agent_id: "ag-1".into(),
+            data: b"hi".to_vec(),
+            submit,
+        };
+        assert_eq!(timeout_for(&input(true)), DELIVERY_TIMEOUT);
+        assert_eq!(timeout_for(&input(false)), REQUEST_TIMEOUT);
+        assert_eq!(timeout_for(&Request::Health), REQUEST_TIMEOUT);
     }
 
     #[tokio::test(flavor = "current_thread")]
