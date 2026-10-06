@@ -111,8 +111,30 @@ impl ScreenTracker {
         self.parser.screen().rows(0, self.cols).collect()
     }
 
+    /// Screen rows with dim cells blanked. Claude Code draws a dim
+    /// placeholder hint (`Try "..."`) in its empty input box, and that must
+    /// not read as typed text.
+    fn rows_without_dim(&self) -> Vec<String> {
+        let screen = self.parser.screen();
+        (0..self.rows)
+            .map(|r| {
+                let mut row = String::new();
+                for c in 0..self.cols {
+                    match screen.cell(r, c) {
+                        Some(cell) if cell.is_wide_continuation() => {}
+                        Some(cell) if cell.has_contents() && !cell.dim() => {
+                            row.push_str(cell.contents())
+                        }
+                        _ => row.push(' '),
+                    }
+                }
+                row
+            })
+            .collect()
+    }
+
     pub fn input_box(&self) -> Option<InputBox> {
-        find_input_box(&self.rows())
+        find_input_box(&self.rows_without_dim())
     }
 
     /// The input box is drawn and empty, so keystrokes will land in it.
@@ -224,5 +246,29 @@ mod tests {
         assert!(t.is_ready());
         assert!(t.echoes("full text here"));
         assert!(!t.echoes("something else"));
+    }
+
+    #[test]
+    fn given_dim_placeholder_in_empty_box_should_be_ready() {
+        // Claude Code's empty box, as captured from a live agent.
+        let buf = OutputBuffer::new();
+        buf.write(
+            "\x1b[38;2;136;136;136m────────────────────\r\n\x1b[39m❯\u{a0}\x1b[2mTry \"fix typecheck errors\"\r\n\x1b[22m\x1b[38;2;136;136;136m────────────────────\x1b[39m\r\n"
+                .as_bytes(),
+        );
+        let t = ScreenTracker::new(&buf, 24, 80);
+        assert!(t.input_box().is_some_and(|b| b.is_empty()));
+        assert!(t.is_ready());
+    }
+
+    #[test]
+    fn given_typed_text_after_placeholder_should_read_typed_text() {
+        let buf = OutputBuffer::new();
+        buf.write(
+            "────────\r\n❯\u{a0}\x1b[2mTry \"x\"\x1b[22m\r\n────────\r\n\x1b[2;3H\x1b[Khello\r\n"
+                .as_bytes(),
+        );
+        let t = ScreenTracker::new(&buf, 24, 80);
+        assert_eq!(t.input_box().unwrap().text, "hello");
     }
 }
