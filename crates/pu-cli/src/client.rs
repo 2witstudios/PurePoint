@@ -20,7 +20,11 @@ const DELIVERY_TIMEOUT: Duration = Duration::from_secs(180);
 fn timeout_for(request: &Request) -> Duration {
     match request {
         Request::Input { submit: true, .. } => DELIVERY_TIMEOUT,
-        Request::Spawn { prompt, .. } if !prompt.trim().is_empty() => DELIVERY_TIMEOUT,
+        // Plan mode prefixes its own instructions, so even a blank prompt is
+        // delivered (the engine only rejects a literally empty one).
+        Request::Spawn {
+            prompt, plan_mode, ..
+        } if *plan_mode || !prompt.trim().is_empty() => DELIVERY_TIMEOUT,
         _ => REQUEST_TIMEOUT,
     }
 }
@@ -84,6 +88,29 @@ mod tests {
         assert_eq!(timeout_for(&input(true)), DELIVERY_TIMEOUT);
         assert_eq!(timeout_for(&input(false)), REQUEST_TIMEOUT);
         assert_eq!(timeout_for(&Request::Health), REQUEST_TIMEOUT);
+    }
+
+    #[test]
+    fn given_prompted_or_plan_mode_spawn_should_wait_for_delivery() {
+        let spawn = |prompt: &str, plan_mode| Request::Spawn {
+            project_root: "/p".into(),
+            prompt: prompt.into(),
+            agent: "claude".into(),
+            name: None,
+            base: None,
+            root: false,
+            worktree: None,
+            command: None,
+            no_auto: false,
+            extra_args: vec![],
+            plan_mode,
+            no_trigger: false,
+            trigger: None,
+        };
+        assert_eq!(timeout_for(&spawn("review", false)), DELIVERY_TIMEOUT);
+        assert_eq!(timeout_for(&spawn("  ", true)), DELIVERY_TIMEOUT);
+        assert_eq!(timeout_for(&spawn("  ", false)), REQUEST_TIMEOUT);
+        assert_eq!(timeout_for(&spawn("", false)), REQUEST_TIMEOUT);
     }
 
     #[tokio::test(flavor = "current_thread")]
