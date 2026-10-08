@@ -480,6 +480,9 @@ impl Engine {
         agent_cfg: &pu_core::types::AgentConfig,
         session_id: Option<&str>,
     ) -> Result<(String, Vec<String>, Option<String>), Response> {
+        // Preserve the configured executable and wrapper prefix on resume, just
+        // as on initial spawn. Resume flags belong to the wrapped agent.
+        let (command, mut args) = Self::parse_agent_command(agent_cfg, agent_type)?;
         let launch_args =
             pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
         match agent_type {
@@ -488,26 +491,25 @@ impl Engine {
                     code: "RESUME_FAILED".into(),
                     message: "cannot resume Claude agent: no session_id preserved".into(),
                 })?;
-                let mut args = launch_args;
+                args.extend(launch_args);
                 args.push("--resume".into());
                 args.push(sid.to_string());
-                Ok(("claude".into(), args, Some(sid.to_string())))
+                Ok((command, args, Some(sid.to_string())))
             }
             "codex" => {
                 // Top-level flags (e.g. --sandbox) must precede the subcommand
-                let mut args = launch_args;
+                args.extend(launch_args);
                 args.push("resume".into());
                 args.push("--last".into());
-                Ok(("codex".into(), args, None))
+                Ok((command, args, None))
             }
             "opencode" => {
-                let mut args = vec!["--continue".into()];
                 args.extend(launch_args);
-                Ok(("opencode".into(), args, None))
+                args.push("--continue".into());
+                Ok((command, args, None))
             }
             _ => {
                 // Terminal / unknown: fresh shell in same directory
-                let (command, args) = Self::parse_agent_command(agent_cfg, agent_type)?;
                 Ok((command, args, None))
             }
         }
@@ -563,5 +565,72 @@ impl Drop for ResumeGuard {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.agent_id);
+    }
+}
+
+#[cfg(test)]
+mod resume_command_tests {
+    use super::*;
+
+    #[test]
+    fn given_wrapped_agents_should_run_wrapper_setup_on_resume() {
+        // given: setup performed by a wrapper, then an executable supplied by config
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = dir.path().join("agent-launch.sh");
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\nprintf 'wrapper-ready\\n'\nexec \"$@\"\n",
+        )
+        .unwrap();
+        let engine = Engine::new();
+        for (agent_type, session_id, resume_args) in [
+            ("claude", Some("sess-123"), vec!["--resume", "sess-123"]),
+            ("codex", None, vec!["resume", "--last"]),
+            ("opencode", None, vec!["--continue"]),
+        ] {
+            let cfg = pu_core::types::AgentConfig {
+                name: agent_type.into(),
+                command: format!(
+                    "/bin/sh {} /usr/bin/printf %s\\n --configured shared",
+                    wrapper.display()
+                ),
+                prompt_flag: None,
+                interactive: true,
+                launch_args: Some(vec!["--first".into(), "shared".into()]),
+            };
+
+            // when
+            let (command, args, sid) = engine
+                .build_resume_command(agent_type, &cfg, session_id)
+                .unwrap();
+
+            // then: config prefix and launch options precede the resume arguments
+            assert_eq!(command, "/bin/sh", "{agent_type}");
+            let mut expected_args = vec![
+                wrapper.to_string_lossy().into_owned(),
+                "/usr/bin/printf".into(),
+                "%s\\n".into(),
+                "--configured".into(),
+                "shared".into(),
+                "--first".into(),
+                "shared".into(),
+            ];
+            expected_args.extend(resume_args.iter().map(|arg| arg.to_string()));
+            assert_eq!(args, expected_args, "{agent_type}");
+            assert_eq!(sid.as_deref(), session_id, "{agent_type}");
+            let output = std::process::Command::new(command)
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(0), "{agent_type}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!(
+                    "wrapper-ready\n--configured\nshared\n--first\nshared\n{}\n",
+                    resume_args.join("\n")
+                ),
+                "{agent_type}"
+            );
+        }
     }
 }

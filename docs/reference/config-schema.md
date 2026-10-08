@@ -58,6 +58,15 @@ The `launchArgs` field has three-state semantics:
 | `[]` (empty array) | No launch args; explicitly disables auto-mode |
 | `["--flag", ...]` | Use exactly these args, replacing defaults |
 
+On spawn and resume, launch args are appended after arguments in `command`.
+Resume keeps the configured executable and wrapper prefix, then adds the agent's
+resume arguments (`--resume SESSION_ID`, `resume --last`, or `--continue`).
+On spawn, launch args are followed by
+`--agent-args` and the startup prompt. For a wrapper, use e.g.
+`command: scripts/agent-launch.sh codex` and keep agent flags in `launchArgs`.
+Arguments retain their order and repeated values; avoid defining the same CLI
+option in both `command` and `launchArgs`.
+
 ### Example: customize Claude flags
 
 ```yaml
