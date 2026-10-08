@@ -216,11 +216,7 @@ impl Engine {
             if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
                 tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
             }
-            for arg in launch_args.into_iter().rev() {
-                if !args.iter().any(|a| a == &arg) {
-                    args.insert(0, arg);
-                }
-            }
+            Self::append_launch_args(&mut args, launch_args);
 
             // Append extra args from --agent-args (always applied, even with --no-auto)
             args.extend(extra_args.iter().cloned());
@@ -559,5 +555,85 @@ impl Engine {
             agent_id,
             status: AgentStatus::Running,
         }
+    }
+
+    fn append_launch_args(args: &mut Vec<String>, launch_args: Vec<String>) {
+        // Keep wrapper arguments (including the agent executable) first. Treat
+        // launch args as an ordered sequence: deduplicating individual tokens
+        // can remove values shared by unrelated options.
+        args.extend(launch_args);
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    #[test]
+    fn given_wrapper_command_should_execute_agent_with_launch_args() {
+        // given: a wrapper that becomes its first argument, like agent-launch.sh
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = dir.path().join("agent-launch.sh");
+        std::fs::write(&wrapper, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+        let mut args = vec!["/usr/bin/printf".into(), "%s\\n".into()];
+
+        // when
+        Engine::append_launch_args(
+            &mut args,
+            vec![
+                "-s".into(),
+                "danger-full-access".into(),
+                "-a".into(),
+                "on-request".into(),
+            ],
+        );
+        let output = std::process::Command::new("/bin/sh")
+            .arg(wrapper)
+            .args(args)
+            .output()
+            .unwrap();
+
+        // then: the wrapper runs the agent, rather than trying to exec -s
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "-s\ndanger-full-access\n-a\non-request\n"
+        );
+    }
+
+    #[test]
+    fn given_launch_args_with_shared_values_should_preserve_flag_value_pairs() {
+        // given
+        let mut args = vec!["codex".into(), "--existing".into(), "shared".into()];
+
+        // when
+        Engine::append_launch_args(
+            &mut args,
+            vec![
+                "--first".into(),
+                "shared".into(),
+                "--second".into(),
+                "shared".into(),
+            ],
+        );
+
+        // then
+        assert_eq!(
+            args,
+            [
+                "codex",
+                "--existing",
+                "shared",
+                "--first",
+                "shared",
+                "--second",
+                "shared"
+            ]
+        );
     }
 }
