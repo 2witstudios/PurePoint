@@ -110,6 +110,7 @@ private struct EmptyTabView: View {
         let sid = surfaceId
         let hub = state.agentsHubState
         let rootPath = state.fileRoot(forWorkspace: wsId, registry: reg)
+        let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
             await hub.loadAll(projectRoots: state.projects.map(\.projectRoot))
             let files = await Task.detached { rootPath.map { FileIndex.list(root: $0) } ?? [] }.value
@@ -121,14 +122,14 @@ private struct EmptyTabView: View {
                 files: files,
                 preferredOrder: settingsState.commandPaletteOrder
             )
-            showPalette(items: items, state: state, reg: reg, wsId: wsId, sid: sid)
+            showPalette(items: items, window: window, state: state, reg: reg, wsId: wsId, sid: sid)
         }
     }
 
     private func showPalette(
-        items: [CommandPaletteItem], state: AppState, reg: WorkspaceRegistry, wsId: String, sid: Int
+        items: [CommandPaletteItem], window: NSWindow?, state: AppState, reg: WorkspaceRegistry, wsId: String, sid: Int
     ) {
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+        CommandPalettePanel.show(relativeTo: window, items: items) { result in
             guard let projectRoot = reg.projectRoot(forWorkspace: wsId),
                 let project = state.projectState(forRoot: projectRoot)
             else { return }

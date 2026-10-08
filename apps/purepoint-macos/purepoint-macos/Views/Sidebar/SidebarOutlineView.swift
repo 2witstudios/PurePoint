@@ -21,6 +21,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         let hub = appState.agentsHubState
         vc.onShowCommandPalette = { project, sel, includeWorktree in
             let builtIns = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
+            let window = NSApp.keyWindow
             CommandPalettePanel.requestOpen {
                 await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
                 let items = CommandPaletteItem.buildItems(
@@ -30,7 +31,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
                     preferredOrder: settingsState.commandPaletteOrder
                 )
 
-                CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+                CommandPalettePanel.show(relativeTo: window, items: items) { result in
                     project.handlePaletteResult(result, selection: sel, hub: hub)
                 }
             }

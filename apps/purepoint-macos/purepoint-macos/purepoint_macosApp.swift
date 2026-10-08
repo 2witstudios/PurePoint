@@ -316,6 +316,7 @@ struct purepoint_macosApp: App {
 
         let hub = appState.agentsHubState
         let sel = appState.activeSidebarSelection
+        let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
             await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
             let items = CommandPaletteItem.buildItems(
@@ -325,7 +326,7 @@ struct purepoint_macosApp: App {
                 preferredOrder: settingsState.commandPaletteOrder
             )
 
-            CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+            CommandPalettePanel.show(relativeTo: window, items: items) { result in
                 project.handlePaletteResult(result, selection: sel, hub: hub)
             }
         }
