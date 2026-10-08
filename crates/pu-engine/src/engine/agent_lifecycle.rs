@@ -540,6 +540,34 @@ impl Engine {
     }
 }
 
+/// Marks an agent as being resumed for as long as the guard lives.
+struct ResumeGuard {
+    set: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    agent_id: String,
+}
+
+impl ResumeGuard {
+    fn claim(
+        set: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+        agent_id: &str,
+    ) -> Option<Self> {
+        let mut ids = set.lock().unwrap_or_else(|e| e.into_inner());
+        ids.insert(agent_id.to_string()).then(|| Self {
+            set: set.clone(),
+            agent_id: agent_id.to_string(),
+        })
+    }
+}
+
+impl Drop for ResumeGuard {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.agent_id);
+    }
+}
+
 #[cfg(test)]
 mod resume_command_tests {
     use super::*;
@@ -604,33 +632,5 @@ mod resume_command_tests {
                 "{agent_type}"
             );
         }
-    }
-}
-
-/// Marks an agent as being resumed for as long as the guard lives.
-struct ResumeGuard {
-    set: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    agent_id: String,
-}
-
-impl ResumeGuard {
-    fn claim(
-        set: &std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-        agent_id: &str,
-    ) -> Option<Self> {
-        let mut ids = set.lock().unwrap_or_else(|e| e.into_inner());
-        ids.insert(agent_id.to_string()).then(|| Self {
-            set: set.clone(),
-            agent_id: agent_id.to_string(),
-        })
-    }
-}
-
-impl Drop for ResumeGuard {
-    fn drop(&mut self) {
-        self.set
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.agent_id);
     }
 }
