@@ -1,8 +1,6 @@
 export const clip = (value, limit = 65536) => {
   const s = String(value ?? "");
-  return s.length > limit
-    ? s.slice(0, limit) + "\n[Display truncated; full content remains in Pi]"
-    : s;
+  return s.length > limit ? s.slice(0, limit) + "\n[Display truncated]" : s;
 };
 export class LineDecoder {
   constructor(onRecord, limit = 8 * 1024 * 1024) {

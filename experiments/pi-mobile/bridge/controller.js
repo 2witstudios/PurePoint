@@ -15,6 +15,7 @@ export class Controller extends EventEmitter {
     this.busy = false;
     this.state = {};
     this.queue = [];
+    this.canceled = [];
     this.dialogs = new Map();
     this.notices = [];
     this.statuses = new Map();
@@ -150,6 +151,7 @@ export class Controller extends EventEmitter {
       messages: boundedRows(this.projection.messages, 1024 * 1024),
       tools: boundedRows(this.projection.tools, 256 * 1024),
       queue: boundedRows(this.queue, 128 * 1024),
+      canceled: boundedRows(this.canceled, 128 * 1024),
       dialogs: [...this.dialogs.values()].map((x) => x.dialog),
       notices: [
         ...this.notices,
@@ -258,6 +260,19 @@ export class Controller extends EventEmitter {
         );
       const run = this.runId;
       const recovered = await this.rpc.call("clear_queue");
+      const texts = [
+        ...(recovered.steering ?? []),
+        ...(recovered.followUp ?? []),
+      ];
+      this.canceled.push(
+        ...texts.map((text, index) => ({
+          id: `${r.id}:${index}`,
+          text: clip(text),
+          sessionId: this.state.sessionId,
+        })),
+      );
+      this.canceled = this.canceled.slice(-100);
+      this.changed();
       // Native completion or extension activity can happen while queue clearing is in flight.
       if (this.busy && this.runId === run) await this.rpc.call("abort");
       this.queue = [];

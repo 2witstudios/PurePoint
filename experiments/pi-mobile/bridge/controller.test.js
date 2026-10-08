@@ -166,3 +166,13 @@ test("extension editor offers survive disconnected snapshots", async () => {
   assert.equal((await request(c, "sync")).editor.text, "Suggested text");
   c.dispose();
 });
+test("lost Stop acknowledgement still exposes canceled text after reconnect", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  rpc.emit("event", { type: "agent_start" });
+  await request(c, "stop", { epoch: c.epoch, runId: c.runId });
+  const reconnected = await request(c, "sync");
+  assert.equal(reconnected.canceled[0].text, "recover me");
+  c.dispose();
+});
