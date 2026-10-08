@@ -83,7 +83,7 @@ struct SidebarFooter: View {
         guard let project = activeProject else { return }
         let sel = selection
         let hub = appState.agentsHubState
-        Task {
+        CommandPalettePanel.requestOpen {
             await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.variantsWithWorktree,

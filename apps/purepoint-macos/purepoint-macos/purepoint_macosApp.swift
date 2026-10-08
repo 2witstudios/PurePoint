@@ -316,7 +316,7 @@ struct purepoint_macosApp: App {
 
         let hub = appState.agentsHubState
         let sel = appState.activeSidebarSelection
-        Task {
+        CommandPalettePanel.requestOpen {
             await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.variantsWithWorktree,

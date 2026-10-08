@@ -110,7 +110,7 @@ private struct EmptyTabView: View {
         let sid = surfaceId
         let hub = state.agentsHubState
         let rootPath = state.fileRoot(forWorkspace: wsId, registry: reg)
-        Task {
+        CommandPalettePanel.requestOpen {
             await hub.loadAll(projectRoots: state.projects.map(\.projectRoot))
             let files = await Task.detached { rootPath.map { FileIndex.list(root: $0) } ?? [] }.value
             let items = CommandPaletteItem.buildItems(

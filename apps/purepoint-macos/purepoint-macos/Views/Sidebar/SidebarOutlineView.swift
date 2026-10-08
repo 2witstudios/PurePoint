@@ -21,7 +21,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         let hub = appState.agentsHubState
         vc.onShowCommandPalette = { project, sel, includeWorktree in
             let builtIns = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
-            Task {
+            CommandPalettePanel.requestOpen {
                 await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
                 let items = CommandPaletteItem.buildItems(
                     builtInVariants: builtIns,
