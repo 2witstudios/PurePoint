@@ -12,6 +12,7 @@ export class Controller extends EventEmitter {
     this.activityVersion = 0;
     this.editorOffer = null;
     this.runId = null;
+    this.stoppingRun = null;
     this.busy = false;
     this.state = {};
     this.queue = [];
@@ -88,7 +89,9 @@ export class Controller extends EventEmitter {
     if (e.type === "extension_ui_request") {
       const method = e.method;
       if (["confirm", "select", "input", "editor"].includes(method)) {
-        if (this.dialogs.size >= 32) {
+        if (this.stoppingRun && this.stoppingRun === this.runId) {
+          this.rpc.answer({ id: e.id, cancelled: true });
+        } else if (this.dialogs.size >= 32) {
           this.rpc.answer({ id: e.id, cancelled: true });
           this.notice(
             "An extension opened too many dialogs; the extra request was canceled.",
@@ -236,7 +239,11 @@ export class Controller extends EventEmitter {
   async mutate(r) {
     this.checkEpoch(r);
     if (r.op === "send") {
-      if (typeof r.text !== "string" || !r.text.trim() || r.text.length > 65536)
+      if (
+        typeof r.text !== "string" ||
+        !r.text.trim() ||
+        Buffer.byteLength(r.text, "utf8") > 65536
+      )
         throw new Error("Write a message of at most 64 KiB.");
       if (!["send", "steer", "after"].includes(r.mode))
         throw new Error("Choose Send, Steer or After reply.");
@@ -259,25 +266,39 @@ export class Controller extends EventEmitter {
           "Run changed or already finished. This Stop was ignored.",
         );
       const run = this.runId;
-      const recovered = await this.rpc.call("clear_queue");
-      const texts = [
-        ...(recovered.steering ?? []),
-        ...(recovered.followUp ?? []),
-      ];
-      this.canceled.push(
-        ...texts.map((text, index) => ({
-          id: `${r.id}:${index}`,
-          text: clip(text),
-          sessionId: this.state.sessionId,
-        })),
-      );
-      this.canceled = this.canceled.slice(-100);
-      this.changed();
-      // Native completion or extension activity can happen while queue clearing is in flight.
-      if (this.busy && this.runId === run) await this.rpc.call("abort");
-      this.queue = [];
-      await this.refresh();
-      return recovered;
+      this.stoppingRun = run;
+      try {
+        const recovered = await this.rpc.call("clear_queue");
+        const texts = [
+          ...(recovered.steering ?? []),
+          ...(recovered.followUp ?? []),
+        ];
+        this.canceled.push(
+          ...texts.map((text, index) => ({
+            id: `${r.id}:${index}`,
+            text: clip(text),
+            sessionId: this.state.sessionId,
+          })),
+        );
+        this.canceled = this.canceled.slice(-100);
+        this.changed();
+        // Native completion or extension activity can happen while queue clearing is in flight.
+        if (this.busy && this.runId === run) {
+          // Dialog responses bypass mutation serialization, including cancellation during Stop.
+          for (const { dialog, timer } of this.dialogs.values()) {
+            this.rpc.answer({ id: dialog.id, cancelled: true });
+            clearTimeout(timer);
+          }
+          this.dialogs.clear();
+          this.changed();
+          await this.rpc.call("abort");
+        }
+        this.queue = [];
+        await this.refresh();
+        return recovered;
+      } finally {
+        this.stoppingRun = null;
+      }
     }
     const native = await this.rpc.call("get_state");
     if (
@@ -322,7 +343,10 @@ export class Controller extends EventEmitter {
         throw new Error("Choose Allow or Decline");
       result.confirmed = r.confirmed;
     } else {
-      if (typeof r.value !== "string" || r.value.length > 65536)
+      if (
+        typeof r.value !== "string" ||
+        Buffer.byteLength(r.value, "utf8") > 65536
+      )
         throw new Error("Enter an answer of at most 64 KiB");
       if (d.method === "select" && !d.options.includes(r.value))
         throw new Error("Choose an offered option");

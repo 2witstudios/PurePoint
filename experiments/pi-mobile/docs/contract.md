@@ -14,7 +14,7 @@ Research progressed SEED (lifetime / session authority questions), EXPLORING (up
 
 ! [MOB-002] Use revisioned authoritative snapshots rather than a durable network event ledger — a single child and controller need reconnect state, not another transcript store. Walk get_entries parentId from leafId; do not flatten abandoned branches. Display raw branch history with compaction/branch-summary markers; this is reading history, not rebuilding model context. Pi alone applies firstKeptEntryId/context edits to model context. Read-only session browsing uses native SessionManager.inMemory with bounded file entries; native SessionManager.listAll enumerates metadata. Switching uses RPC switch_session. Sources: [session format](https://github.com/earendil-works/pi/blob/ce950d78f424dcaf9f5d6a03ce80ab141130eb1d/packages/coding-agent/docs/session-format.md), session-manager.ts.
 
-! [MOB-003] Serialize mutations; use epoch/run target for Stop — clear_queue returns text, abort waits for idle, and agent_end can precede automatic continuation. agent_settled is the idle boundary. Dialog responses bypass mutation serialization so extension commands cannot deadlock. No automatic prompt replay. Unknown protocol/operations reject visibly.
+! [MOB-003] Serialize mutations; use epoch/run target for Stop — clear_queue returns text, pending dialogs are canceled so abort can reach idle, abort waits for idle, and agent_end can precede automatic continuation. agent_settled is the idle boundary. Dialog responses bypass mutation serialization so extension commands cannot deadlock. No automatic prompt replay. Unknown protocol/operations reject visibly.
 
 ! [MOB-004] Bind only explicit tailnet IPv4/IPv6 or loopback, authenticate in WebSocket HTTP upgrade with an owner-provided bearer secret — Tailscale encrypts traffic even for ws inside the tailnet. Optional owner TLS supports wss. Reject public/wildcard binds. Second controller is rejected; disconnect never aborts Pi. No credential generation or global installation.
 
@@ -42,3 +42,16 @@ Replies: `{type:"receipt",id,ok,data?,error?}`. Command timeouts are uncertain, 
 ## Edge cases and limits
 
 One controller, one active session. No bridge crash durability for request receipts; Pi sessions survive, partial in-flight generation may not. Restart creates a fresh session unless PI_MOBILE_SESSION is supplied. Stop cannot cancel an extension handler before it starts a future independent run; stale epochs/runs reject. Dialogs may be canceled by Pi timeouts; bridge expires them. TUI-only custom widgets are unsupported by Pi RPC; string widgets/status/notices are surfaced. Images display a text placeholder in this text-first slice. At most 500 visible history rows, 64KiB per text, 100 tools, 32 dialogs, 8MiB RPC records, 16MiB history files, 1MiB network requests and 4MiB client backlog. Older complete history remains in Pi native files. Tailnet membership/access policy and Mac availability remain owner-managed.
+
+## Sum sheet and module boundaries
+
+| Situation                      | Required result                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------- |
+| Phone detaches                 | Pi child remains alive; no abort/replay                                                     |
+| Reconnect                      | Native active branch + current partial/tools/queue/dialogs + bounded canceled-text recovery |
+| Submit                         | Local draft captured once; distinct acceptance receipt; later edits remain local            |
+| Stop observed run              | Clear queue → cancel blocking dialogs → guarded abort → idle refresh                        |
+| Browse / switch                | Read-only native projection during work; explicit idle/Stop gate before native switch       |
+| Child fails / wire unsupported | Visible setup/error state; no silent restart or uncertain resend                            |
+
+`core.js` exposes independent framing and branch/live projection helpers. `rpc.js` owns process transport and correlated commands. `controller.js` owns semantic operations and bounded in-memory projection/recovery; it depends on injected RPC/session interfaces. `setup.js` adapts native resource/session discovery; `network.js` authenticates and transports semantic records; `main.js` composes them. Swift ChatDomain is Foundation-only; ChatModel owns phone transport/draft recovery, PairingSecret owns Keychain IO, and SwiftUI views own presentation. Neither core/client calls PurePoint APIs. Public wire operations and limits are specified above; tests are colocated with each bridge boundary and the Swift domain target.

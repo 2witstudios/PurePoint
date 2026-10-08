@@ -176,3 +176,25 @@ test("lost Stop acknowledgement still exposes canceled text after reconnect", as
   assert.equal(reconnected.canceled[0].text, "recover me");
   c.dispose();
 });
+test("Stop cancels correlated extension dialogs so abort can reach idle", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  rpc.emit("event", { type: "agent_start" });
+  rpc.emit("event", {
+    type: "extension_ui_request",
+    id: "blocked-tool",
+    method: "confirm",
+    title: "Continue?",
+  });
+  rpc.answer = (value) => {
+    rpc.answerValue = value;
+    rpc.calls.push("answer");
+  };
+  await request(c, "stop", { epoch: c.epoch, runId: c.runId });
+  assert.equal(rpc.answerValue?.cancelled, true);
+  assert.equal(c.snapshot().dialogs.length, 0);
+  assert.ok(rpc.calls.indexOf("clear_queue") < rpc.calls.indexOf("answer"));
+  assert.ok(rpc.calls.indexOf("answer") < rpc.calls.indexOf("abort"));
+  c.dispose();
+});
