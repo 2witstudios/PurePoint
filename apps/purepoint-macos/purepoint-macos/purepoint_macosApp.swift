@@ -315,16 +315,20 @@ struct purepoint_macosApp: App {
         guard let project else { return }
 
         let hub = appState.agentsHubState
-        let items = CommandPaletteItem.buildItems(
-            builtInVariants: AgentVariant.variantsWithWorktree,
-            agents: hub.agents,
-            swarms: hub.swarms
-        )
-        Task { await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot)) }
-
         let sel = appState.activeSidebarSelection
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
-            project.handlePaletteResult(result, selection: sel, hub: hub)
+        let window = NSApp.keyWindow
+        CommandPalettePanel.requestOpen {
+            await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            let items = CommandPaletteItem.buildItems(
+                builtInVariants: AgentVariant.variantsWithWorktree,
+                agents: hub.agents,
+                swarms: hub.swarms,
+                preferredOrder: settingsState.commandPaletteOrder
+            )
+
+            CommandPalettePanel.show(relativeTo: window, items: items) { result in
+                project.handlePaletteResult(result, selection: sel, hub: hub)
+            }
         }
     }
 
