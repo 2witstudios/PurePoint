@@ -93,7 +93,7 @@ Browse schedules in month, week, day, or list view. See upcoming scheduled runs 
 
 Access via the settings panel:
 
-- **General**: Restore projects on launch, launch at login
+- **General**: Restore projects on launch, launch at login, command palette order. Use the up/down arrows to reorder built-in agents and custom commands from the Agents Hub in `Cmd+N`. The first entry is selected by default. Changes persist across launches; Reset restores the default order.
 - **Point Guard**: Configure launch command and skip-permissions for the root terminal
 - **Agents**: Per-agent configuration (launch arguments for Claude, Codex, OpenCode)
 - **Hotkeys**: Rebind all keyboard shortcuts with live key recording and conflict detection

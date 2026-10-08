@@ -3,6 +3,7 @@ import SwiftUI
 /// NSViewControllerRepresentable wrapping SidebarOutlineViewController.
 /// Bridges SwiftUI state (selection, appState, workspace registry) to the AppKit outline view.
 struct SidebarOutlineView: NSViewControllerRepresentable {
+    @Environment(SettingsState.self) private var settingsState
     @Binding var selection: SidebarSelection?
     var appState: AppState
     var registry: WorkspaceRegistry
@@ -20,15 +21,18 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         let hub = appState.agentsHubState
         vc.onShowCommandPalette = { project, sel, includeWorktree in
             let builtIns = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
-            let items = CommandPaletteItem.buildItems(
-                builtInVariants: builtIns,
-                agents: hub.agents,
-                swarms: includeWorktree ? hub.swarms : []
-            )
-            Task { await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot)) }
+            Task {
+                await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+                let items = CommandPaletteItem.buildItems(
+                    builtInVariants: builtIns,
+                    agents: hub.agents,
+                    swarms: includeWorktree ? hub.swarms : [],
+                    preferredOrder: settingsState.commandPaletteOrder
+                )
 
-            CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
-                project.handlePaletteResult(result, selection: sel, hub: hub)
+                CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+                    project.handlePaletteResult(result, selection: sel, hub: hub)
+                }
             }
         }
 

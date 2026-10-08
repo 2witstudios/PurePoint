@@ -137,7 +137,8 @@ enum CommandPaletteItem: Identifiable {
         agents: [AgentDefinition],
         swarms: [SwarmDefinition],
         includeFiles: Bool = false,
-        files: [PaletteFileEntry] = []
+        files: [PaletteFileEntry] = [],
+        preferredOrder: [String] = []
     ) -> [CommandPaletteItem] {
         let builtIns = builtInVariants.map { CommandPaletteItem.builtIn($0) }
         let agentItems =
@@ -146,7 +147,16 @@ enum CommandPaletteItem: Identifiable {
             .map { CommandPaletteItem.agentDef($0) }
         let swarmItems = swarms.map { CommandPaletteItem.swarm($0) }
         let fileItems: [CommandPaletteItem] = includeFiles ? [.files] + files.map { .file($0) } : []
-        return builtIns + fileItems + agentItems + swarmItems
+        let items = builtIns + fileItems + agentItems + swarmItems
+        var ranks: [String: Int] = [:]
+        for (index, id) in preferredOrder.enumerated() where ranks[id] == nil {
+            ranks[id] = index
+        }
+        return items.enumerated().sorted { lhs, rhs in
+            let left = ranks[lhs.element.id] ?? Int.max
+            let right = ranks[rhs.element.id] ?? Int.max
+            return left == right ? lhs.offset < rhs.offset : left < right
+        }.map(\.element)
     }
 }
 

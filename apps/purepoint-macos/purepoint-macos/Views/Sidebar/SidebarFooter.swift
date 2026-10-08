@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SidebarFooter: View {
+    @Environment(SettingsState.self) private var settingsState
     @Environment(AppState.self) private var appState
     let selection: SidebarSelection?
 
@@ -82,15 +83,18 @@ struct SidebarFooter: View {
         guard let project = activeProject else { return }
         let sel = selection
         let hub = appState.agentsHubState
-        let items = CommandPaletteItem.buildItems(
-            builtInVariants: AgentVariant.variantsWithWorktree,
-            agents: hub.agents,
-            swarms: hub.swarms
-        )
-        Task { await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot)) }
+        Task {
+            await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            let items = CommandPaletteItem.buildItems(
+                builtInVariants: AgentVariant.variantsWithWorktree,
+                agents: hub.agents,
+                swarms: hub.swarms,
+                preferredOrder: settingsState.commandPaletteOrder
+            )
 
-        CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
-            project.handlePaletteResult(result, selection: sel, hub: hub)
+            CommandPalettePanel.show(relativeTo: NSApp.keyWindow, items: items) { result in
+                project.handlePaletteResult(result, selection: sel, hub: hub)
+            }
         }
     }
 }

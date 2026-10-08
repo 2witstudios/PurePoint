@@ -44,6 +44,8 @@ Desktop App
 
 ! [APP-007] Triggers: Event-driven automation via TriggersState. Supports agent_idle, pre_commit, pre_push events. Each trigger defines a sequence of actions (inject prompts, run gates). Managed via daemon IPC.
 
+! [APP-010] Command palette order is a user preference in Settings → General. Up/down controls reorder built-in variants, visible agent definitions (including custom commands), and swarms together. Preferences persist in UserDefaults using palette item IDs, apply to all agent palettes, and retain positions for temporarily unavailable entries. Unranked entries follow in their default order. Reset restores the default order. Palettes load definitions before constructing the list so custom entries are available on the first open.
+
 ! [APP-006] NSOutlineView sidebar: Replaced SwiftUI List with AppKit NSOutlineView for compact 24pt rows. SidebarOutlineViewController manages outline data source.
 ! [APP-008] Files tab: a tab can show a file navigator + editor instead of a terminal. Offered in the empty-tab palette as "Files", and as per-file items once a query is typed. Rooted at the workspace worktree (else project root). Markdown files toggle Code/Preview (WKWebView, JS disabled, `MarkdownHTMLRenderer`). A file is a surface kind (`SurfaceContent.file(path:)`, see APP-009), so it sits in a pane's tab stack beside agent tabs; the version 2 `filePanes` side list is read only for migration.
 

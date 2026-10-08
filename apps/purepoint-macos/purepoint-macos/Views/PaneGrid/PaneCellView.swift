@@ -68,6 +68,7 @@ struct PaneCellView: View {
 private struct EmptyTabView: View {
     let workspaceId: String
     let surfaceId: Int
+    @Environment(SettingsState.self) private var settingsState
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
 
@@ -109,15 +110,16 @@ private struct EmptyTabView: View {
         let sid = surfaceId
         let hub = state.agentsHubState
         let rootPath = state.fileRoot(forWorkspace: wsId, registry: reg)
-        Task { await hub.loadAll(projectRoots: state.projects.map(\.projectRoot)) }
         Task {
+            await hub.loadAll(projectRoots: state.projects.map(\.projectRoot))
             let files = await Task.detached { rootPath.map { FileIndex.list(root: $0) } ?? [] }.value
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.allVariants,
                 agents: hub.agents,
                 swarms: [],
                 includeFiles: true,
-                files: files
+                files: files,
+                preferredOrder: settingsState.commandPaletteOrder
             )
             showPalette(items: items, state: state, reg: reg, wsId: wsId, sid: sid)
         }
