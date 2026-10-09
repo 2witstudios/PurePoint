@@ -41,14 +41,18 @@ struct ChatView: View {
                     Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open conversations sidebar")
                 }
                 ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
-                        Text("PurePoint").font(.headline)
-                        Text(model.busy ? "Working" : model.connected ? (model.demo ? "Preview" : "Connected") : "Disconnected")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }.accessibilityElement(children: .combine)
+                    Button { showConnection = true } label: {
+                        HStack(spacing: 8) {
+                            Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("PurePoint").font(.headline)
+                                Text(headerStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }.frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityHint("Open connection settings")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
@@ -119,6 +123,10 @@ struct ChatView: View {
         .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
             if !showSidebar && value.startLocation.x < 24 && value.translation.width > 70 && abs(value.translation.width) > abs(value.translation.height) { openSidebar() }
         })
+    }
+    private var headerStatus: String {
+        if !model.connected { return model.connectionStatus }
+        return model.demo ? "Preview" : model.busy ? "Working" : "Connected"
     }
     private func openSidebar() { composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { await model.loadConversations() } }
     private func closeSidebar() { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = false } }
@@ -224,7 +232,6 @@ struct ChatView: View {
             .padding(12)
             .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 26))
             .overlay { RoundedRectangle(cornerRadius: 26).stroke(Color(uiColor: .separator).opacity(0.3), lineWidth: 0.5) }
-            if !model.connected { Button(model.connectionStatus) { showConnection = true }.font(.footnote).foregroundStyle(.secondary) }
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
     }

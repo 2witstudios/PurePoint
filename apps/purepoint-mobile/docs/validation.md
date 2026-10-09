@@ -95,3 +95,9 @@ Verification from apps/purepoint-mobile: bridge tests 28/28, checkJs, Swift doma
 ## Remove on-device preview — 2026-10-09
 
 Removed the Preview section/action from Connection settings under owner direction; updated the README to distinguish developer-only Xcode preview from the real app. The fixture bridge and SwiftUI #Preview remain for deterministic development. Swift source syntax checks pass. No Xcode build/device run performed; owner rebuilds with PurePoint Cmd+R. Signing/workspace edits preserved.
+
+## Header connection status — 2026-10-09
+
+Moved connection status from the conditional composer footer into the existing header subtitle. The header uses connectionStatus while disconnected (including connecting/reconnect failure), Connected while connected/idle, and Working while connected/busy; cached busy state cannot mask disconnection. Always-present, single-line subtitle keeps header structure stable. Header now opens Connection settings with a plain style and accessible hint, replacing the former footer shortcut. No bridge or persistence changes.
+
+All iOS Swift sources parse; Mac SDK domain/model typecheck and diff whitespace checks pass. No iOS SDK compilation/render/device run performed. Owner rebuilds PurePoint Cmd+R; inspect composer position while reconnecting and test the header's connection shortcut.

@@ -114,3 +114,5 @@ Gesture grounding: Apple's [simultaneousGesture documentation](https://developer
 - The standalone mobile module lives at apps/purepoint-mobile, alongside apps/purepoint-macos. PurePoint.xcodeproj and the app/test source folders are at the module root; bridge and dedicated docs/verification remain within that module. The owner's relocation instruction supersedes the original experiments-only path restriction.
 
 - Connection settings should offer real pairing/connection controls without an on-device Preview/demo entry point. Developer-only SwiftUI previews and the deterministic fake bridge remain available for implementation/testing.
+
+- Connection/loading status should occupy the existing single-line subtitle under PurePoint in the navigation header. Disconnected/connecting/connection-lost states take priority over a cached Working state; connected sessions show Connected or Working. The header opens connection settings. No connection-status row should be inserted below the composer, so reconnect transitions cannot change its height.
