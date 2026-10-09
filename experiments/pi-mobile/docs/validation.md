@@ -9,10 +9,11 @@
 - `swiftc -frontend -parse` on iOS sources/test source: passed (syntax only).
 - `plutil -lint` on standalone Xcode project and Info.plist: passed. Shared scheme and all file references checked. No shell build phases, PurePoint references or installed binary destinations.
 - App mark: 1024×1024 RGB PNG, no alpha.
+- Owner OpenRouter authentication and a real model call: passed through the bridge's RPC child with native configuration, provider `openrouter` and model `~anthropic/claude-haiku-latest`. The prompt was accepted as started, returned “Pi Mobile real connection works.”, and settled without abort/error. This smoke test used `--no-session --no-tools`; it did not save a conversation or delegate workers. The alias's underlying model version was not independently verified.
 
 TDD: initial framing/projection, RPC, controller and network suites were run red with absent implementations, then implemented and passed. Further regression tests cover race discoveries and the real native boundary. Tests are colocated in the standalone module; Swift XCTest domain tests ship for owner Cmd+U, with safe standalone execution of the same core behaviors here.
 
-Not validated: Xcode/iOS SDK build or XCTest execution, SwiftUI rendering/screenshots, simulator/device installation, signing, physical-device keyboard/IME/accessibility, live tailnet connection, owner provider auth/model calls, actual worker delegation. No xcodebuild, PurePoint Swift build, root Cargo build, daemon install/overwrite, deployment, merge, credential issuance or global executable changes were performed. Owner steps and acceptance exercise are in README.
+Not validated: Xcode/iOS SDK build or XCTest execution, SwiftUI rendering/screenshots, simulator/device installation, signing, physical-device keyboard/IME/accessibility, live phone-to-Mac tailnet connection, actual worker delegation. No xcodebuild, PurePoint Swift build, root Cargo build, daemon install/overwrite, deployment, merge, credential issuance or global executable changes were performed. Owner steps and acceptance exercise are in README.
 
 ## Scoped completion review
 
