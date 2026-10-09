@@ -194,12 +194,18 @@ export class Controller extends EventEmitter {
       editor: this.editorOffer,
     };
   }
-  async refresh() {
+  async refresh(reset = false) {
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
       const activityVersion = this.activityVersion;
       const state = await this.rpc.call("get_state");
       const history = await this.rpc.call("get_entries");
+      if (
+        reset ||
+        (this.state.sessionId !== undefined &&
+          this.state.sessionId !== state.sessionId)
+      )
+        this.resetConversation();
       this.state = state;
       // Events are consumed continuously. Never let an older get_state clear a live run.
       if (activityVersion === this.activityVersion) {
@@ -293,13 +299,20 @@ export class Controller extends EventEmitter {
         throw new Error(
           "No Pi model configured. Open local Pi and configure a provider/model first.",
         );
-      return await this.rpc.call("prompt", {
+      const result = await this.rpc.call("prompt", {
         message: r.text,
         ...(images.length ? { images } : {}),
         ...(r.mode === "send"
           ? {}
           : { streamingBehavior: r.mode === "steer" ? "steer" : "followUp" }),
       });
+      if (result.disposition === "handled") {
+        // An extension may change sessions/branches without emitting agent events.
+        // Drain any older sync before requesting post-command state.
+        if (this.refreshing) await this.refreshing;
+        await this.refresh();
+      }
+      return result;
     }
     if (r.op === "stop") {
       if (!this.busy || r.runId !== this.runId)
@@ -359,16 +372,24 @@ export class Controller extends EventEmitter {
           });
     if (result.cancelled)
       throw new Error("A Pi extension canceled the conversation change.");
+    if (this.refreshing) await this.refreshing;
+    // Explicitly reselecting the same session still invalidates old actions.
+    await this.refresh(true);
+    return { sessionId: this.state.sessionId };
+  }
+  resetConversation() {
     this.epoch = randomUUID();
     this.runId = null;
+    this.stoppingRun = null;
     this.projection.reset();
     this.editorOffer = null;
     this.titleOverride = null;
     this.queue = [];
+    this.notices = [];
+    this.statuses.clear();
+    this.widgets.clear();
     for (const item of this.dialogs.values()) clearTimeout(item.timer);
     this.dialogs.clear();
-    await this.refresh();
-    return { sessionId: this.state.sessionId };
   }
   answer(r) {
     const item = this.dialogs.get(r.dialogId);

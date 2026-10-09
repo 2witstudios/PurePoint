@@ -139,7 +139,7 @@ import SwiftUI
             catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }
     }
-    func setForeground(_ active: Bool) { foreground = active; if active { if wantsConnection || !endpoint.isEmpty { connect() } } else { writer.flush(); detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac" } }
+    func setForeground(_ active: Bool) { foreground = active; if active { if wantsConnection { connect() } } else { writer.flush(); detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac" } }
     func disconnect() { wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected" }
     private func detach() {
         generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil

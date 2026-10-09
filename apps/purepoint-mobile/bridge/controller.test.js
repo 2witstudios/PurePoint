@@ -260,3 +260,110 @@ test("selection budgets should cancel oversized native values without truncating
     c.dispose();
   }
 });
+
+test("handled native session commands refresh and invalidate queued stale actions", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  c.editorOffer = { id: "old", text: "old draft" };
+  c.titleOverride = "old title";
+  c.queue = [{ mode: "after", text: "old queued text" }];
+  c.statuses.set("old", "old status");
+  c.widgets.set("old", "old widget");
+  c.notice("old notice");
+  c.projection.event({
+    type: "message_end",
+    message: { role: "user", timestamp: 1, content: "Old conversation" },
+  });
+  const original = rpc.call.bind(rpc);
+  rpc.call = async (op) => {
+    if (op === "prompt") {
+      rpc.calls.push(op);
+      rpc.state = {
+        ...rpc.state,
+        sessionId: "two",
+        sessionName: "New conversation",
+      };
+      return { disposition: "handled" };
+    }
+    return original(op);
+  };
+  const epoch = c.epoch;
+  const handled = request(c, "send", { epoch, text: "/new", mode: "send" });
+  const stale = request(c, "send", {
+    epoch,
+    text: "old conversation input",
+    mode: "send",
+  });
+  assert.deepEqual(await handled, { disposition: "handled" });
+  await assert.rejects(stale, /Conversation changed/);
+  const s = c.snapshot();
+  assert.equal(s.sessionId, "two");
+  assert.notEqual(s.epoch, epoch);
+  assert.equal(s.title, "New conversation");
+  assert.deepEqual(s.messages, []);
+  assert.deepEqual(s.tools, []);
+  assert.deepEqual(s.queue, []);
+  assert.deepEqual(s.notices, []);
+  assert.equal(s.editor, null);
+  assert.equal(rpc.calls.filter((op) => op === "prompt").length, 1);
+  c.dispose();
+});
+
+test("sync detects native session switches while same-session refresh retains epoch", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  const epoch = c.epoch;
+  assert.equal((await request(c, "sync")).epoch, epoch);
+  rpc.state = { ...rpc.state, sessionId: "resumed" };
+  const s = await request(c, "sync");
+  assert.equal(s.sessionId, "resumed");
+  assert.notEqual(s.epoch, epoch);
+  await assert.rejects(request(c, "new", { epoch }), /Conversation changed/);
+  c.dispose();
+});
+
+test("handled commands request fresh state after an older sync finishes", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  const epoch = c.epoch;
+  let resolveHistory;
+  let resolvePrompt;
+  let historyStarted;
+  let promptStarted;
+  const historyReady = new Promise((resolve) => {
+    historyStarted = resolve;
+  });
+  const promptReady = new Promise((resolve) => {
+    promptStarted = resolve;
+  });
+  const original = rpc.call.bind(rpc);
+  rpc.call = async (op) => {
+    if (op === "get_entries" && !resolveHistory)
+      return new Promise((resolve) => {
+        resolveHistory = resolve;
+        historyStarted();
+      });
+    if (op === "prompt") {
+      rpc.state = { ...rpc.state, sessionId: "changed" };
+      return new Promise((resolve) => {
+        resolvePrompt = resolve;
+        promptStarted();
+      });
+    }
+    return original(op);
+  };
+  const sync = request(c, "sync");
+  await historyReady;
+  const command = request(c, "send", { epoch, text: "/new", mode: "send" });
+  await promptReady;
+  resolvePrompt({ disposition: "handled" });
+  resolveHistory({ entries: [], leafId: null });
+  await sync;
+  await command;
+  assert.equal(c.state.sessionId, "changed");
+  assert.notEqual(c.epoch, epoch);
+  c.dispose();
+});

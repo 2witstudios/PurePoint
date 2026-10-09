@@ -71,6 +71,18 @@ function contentText(content) {
       .join("\n\n"),
   );
 }
+function toolIds(entries) {
+  const ids = new Set();
+  for (const e of entries) {
+    if (e.type !== "message") continue;
+    const m = e.message;
+    if (m.role === "toolResult") ids.add(m.toolCallId);
+    if (Array.isArray(m.content))
+      for (const block of m.content)
+        if (block.type === "toolCall") ids.add(block.id);
+  }
+  return ids;
+}
 const key = (m) => `${m.role}-${m.timestamp ?? 0}-${m.toolCallId ?? ""}`;
 function row(m, id = key(m)) {
   return {
@@ -112,7 +124,11 @@ export class Projection {
         });
     }
     // Preserve event-only records that have not reached the native session yet.
-    const ids = new Set(rows.map((x) => x.id));
+    const selectedTools = toolIds(path);
+    const persistedTools = toolIds(entries);
+    this.tools = this.tools.filter(
+      (tool) => selectedTools.has(tool.id) || !persistedTools.has(tool.id),
+    );
     const persisted = new Set(
       entries.filter((x) => x.type === "message").map((x) => key(x.message)),
     );

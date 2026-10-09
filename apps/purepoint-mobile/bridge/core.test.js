@@ -143,3 +143,77 @@ test("display data is bounded while native storage remains authoritative", () =>
   assert.equal(p.messages.length, 500);
   assert.ok(p.messages[0].text.length < 66000);
 });
+
+test("branch changes discard persisted abandoned tools while preserving unpersisted activity", () => {
+  const p = new Projection();
+  for (const id of [
+    "shared",
+    "abandoned",
+    "call-only",
+    "live",
+    "completed-live",
+  ])
+    p.event({
+      type: id === "live" ? "tool_execution_start" : "tool_execution_end",
+      toolCallId: id,
+      toolName: "read",
+      result: { content: [{ type: "text", text: id }] },
+    });
+  const entries = [
+    {
+      id: "root",
+      parentId: null,
+      type: "message",
+      message: {
+        role: "toolResult",
+        timestamp: 1,
+        toolCallId: "shared",
+        toolName: "read",
+        content: "shared",
+      },
+    },
+    {
+      id: "left",
+      parentId: "root",
+      type: "message",
+      message: {
+        role: "toolResult",
+        timestamp: 2,
+        toolCallId: "abandoned",
+        toolName: "read",
+        content: "abandoned",
+      },
+    },
+    {
+      id: "left-call",
+      parentId: "left",
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: 3,
+        content: [
+          { type: "toolCall", id: "call-only", name: "read", arguments: {} },
+        ],
+      },
+    },
+    {
+      id: "right",
+      parentId: "root",
+      type: "message",
+      message: { role: "user", timestamp: 4, content: "Selected branch" },
+    },
+  ];
+  p.load(entries, "left-call");
+  assert.equal(p.tools.length, 5);
+  p.load(entries, "right");
+  assert.equal(p.tools.find((tool) => tool.id === "live").state, "running");
+  assert.deepEqual(
+    p.tools.map((tool) => tool.id),
+    ["shared", "live", "completed-live"],
+  );
+  p.load(entries, "right");
+  assert.deepEqual(
+    p.tools.map((tool) => tool.id),
+    ["shared", "live", "completed-live"],
+  );
+});

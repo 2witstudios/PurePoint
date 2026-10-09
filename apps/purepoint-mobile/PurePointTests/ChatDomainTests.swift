@@ -1,6 +1,26 @@
 import XCTest
 @testable import PurePoint
 final class ChatDomainTests: XCTestCase {
+    @MainActor func testGivenExplicitDisconnectShouldStayDisconnectedOnForegroundWithSavedEndpoint() {
+        let model = ChatModel()
+        model.endpoint = "ws://100.100.1.2:8787/v1"
+        model.disconnect()
+        model.setForeground(false)
+        model.setForeground(true)
+        XCTAssertFalse(model.connected)
+        XCTAssertFalse(model.connectionStatus.contains("Connecting"))
+    }
+
+    @MainActor func testGivenConnectionIntentShouldReconnectOnForeground() {
+        let model = ChatModel()
+        model.endpoint = "ws://100.100.1.2:8787/v1"
+        model.connect()
+        model.setForeground(false)
+        model.setForeground(true)
+        XCTAssertEqual(model.connectionStatus, "Connecting to your Mac…")
+        model.disconnect()
+    }
+
     func testGivenAttachedFilesShouldComposeNativeImagesAndReadableTextWithinBudgets() throws {
         let file = ComposerAttachment(id: "file", name: "notes.txt", mimeType: "text/plain", data: Data("Project notes".utf8))
         let photo = ComposerAttachment(id: "photo", name: "photo.jpg", mimeType: "image/jpeg", data: Data([255,216,255,1]))
