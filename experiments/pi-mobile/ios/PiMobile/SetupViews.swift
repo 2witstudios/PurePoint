@@ -14,18 +14,18 @@ struct ConnectionView: View {
                         Text("Pi runs on your Mac. This phone connects over your existing Tailscale network, so work continues when you close the app.").font(.body).foregroundStyle(.secondary)
                     }.padding(.vertical, 16)
                 }
-                Section("Connect to your Mac") {
+                Section {
                     TextField("ws://100.100.1.2:8787/v1", text: $endpoint).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).accessibilityLabel("Mac endpoint")
                     SecureField("Pairing secret", text: $secret).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Pairing secret")
                     Button("Connect") { model.pair(endpoint: endpoint, secret: secret) }
-                } footer: { Text("Use the address printed by the Mac bridge and the secret you created there. The secret is stored only in this device’s Keychain. Keep both devices connected to Tailscale.") }
+                } header: { Text("Connect to your Mac") } footer: { Text("Use the address printed by the Mac bridge and the secret you created there. The secret is stored only in this device’s Keychain. Keep both devices connected to Tailscale.") }
                 if let error = model.error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
                 Section {
                     HStack { Text(model.connectionStatus); Spacer(); if model.connected && !model.demo { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) } }
                     if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
                     Button("Reconnect") { model.connect() }.disabled(endpoint.isEmpty)
                 }
-                Section("Try the interface") { Button("Explore on-device preview") { model.exploreDemo(); dismiss() } } footer: { Text("For deterministic full-flow testing, run the fixture bridge on your Mac. In the simulator use ws://127.0.0.1:8787/v1. Setup instructions are in the standalone project’s README.") }
+                Section { Button("Explore on-device preview") { model.exploreDemo(); dismiss() } } header: { Text("Try the interface") } footer: { Text("For deterministic full-flow testing, run the fixture bridge on your Mac. In the simulator use ws://127.0.0.1:8787/v1. Setup instructions are in the standalone project’s README.") }
             }
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
