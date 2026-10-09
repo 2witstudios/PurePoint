@@ -24,7 +24,7 @@ enum SpawnTargetResolver {
                 return SpawnTarget(root: false, worktree: wtId)
             }
             return SpawnTarget(root: true, worktree: nil)
-        case nil, .nav, .project:
+        case nil, .nav, .project, .channel:
             return SpawnTarget(root: true, worktree: nil)
         }
     }

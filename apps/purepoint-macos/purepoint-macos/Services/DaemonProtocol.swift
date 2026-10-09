@@ -292,6 +292,10 @@ nonisolated struct ScheduleInfoPayload: Decodable {
 }
 
 nonisolated enum DaemonRequest: Encodable {
+    case channelRead(projectRoot: String, after: UInt64? = nil, before: UInt64? = nil, limit: Int = 100, query: String? = nil, parentId: String? = nil, knownRevision: UInt64? = nil)
+    case channelSend(projectRoot: String, text: String, parentId: String? = nil, references: [ChannelReference] = [])
+    case channelEdit(projectRoot: String, messageId: String, text: String)
+    case channelReact(projectRoot: String, messageId: String, active: Bool)
     case health
     case initProject(projectRoot: String)
     case status(projectRoot: String, agentId: String? = nil)
@@ -350,6 +354,32 @@ nonisolated enum DaemonRequest: Encodable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicCodingKey.self)
         switch self {
+        case .channelRead(let root, let after, let before, let limit, let query, let parent, let revision):
+            try container.encode("channel_read", forKey: .key("type"))
+            try container.encode(root, forKey: .key("project_root"))
+            try container.encodeIfPresent(after, forKey: .key("after"))
+            try container.encodeIfPresent(before, forKey: .key("before"))
+            try container.encode(limit, forKey: .key("limit"))
+            try container.encodeIfPresent(query, forKey: .key("query"))
+            try container.encodeIfPresent(parent, forKey: .key("parent_id"))
+            try container.encodeIfPresent(revision, forKey: .key("known_revision"))
+        case .channelSend(let root, let text, let parent, let references):
+            try container.encode("channel_send", forKey: .key("type"))
+            try container.encode(root, forKey: .key("project_root"))
+            try container.encode(text, forKey: .key("text"))
+            try container.encodeIfPresent(parent, forKey: .key("parent_id"))
+            try container.encode(references, forKey: .key("references"))
+        case .channelEdit(let root, let id, let text):
+            try container.encode("channel_edit", forKey: .key("type"))
+            try container.encode(root, forKey: .key("project_root"))
+            try container.encode(id, forKey: .key("message_id"))
+            try container.encode(text, forKey: .key("text"))
+        case .channelReact(let root, let id, let active):
+            try container.encode("channel_react", forKey: .key("type"))
+            try container.encode(root, forKey: .key("project_root"))
+            try container.encode(id, forKey: .key("message_id"))
+            try container.encode("👍", forKey: .key("emoji"))
+            try container.encode(active, forKey: .key("active"))
         case .health:
             try container.encode("health", forKey: .key("type"))
         case .initProject(let projectRoot):
@@ -552,6 +582,8 @@ nonisolated enum DaemonRequest: Encodable {
 }
 
 nonisolated enum DaemonResponse: Decodable {
+    case channelHistory(ChannelHistory)
+    case channelMessage(ChannelMutation)
     case healthReport(pid: Int, uptimeSeconds: Int, protocolVersion: Int, agentCount: Int)
     case initResult(created: Bool)
     case statusReport(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
@@ -596,6 +628,8 @@ nonisolated enum DaemonResponse: Decodable {
         let type = try container.decode(String.self, forKey: .type)
 
         switch type {
+        case "channel_history": self = .channelHistory(try ChannelHistory(from: decoder))
+        case "channel_message": self = .channelMessage(try ChannelMutation(from: decoder))
         case "health_report":
             let p = try HealthReportPayload(from: decoder)
             self = .healthReport(

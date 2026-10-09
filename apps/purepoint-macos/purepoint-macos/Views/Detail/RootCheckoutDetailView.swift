@@ -1,13 +1,11 @@
 import SwiftUI
 
-struct WorktreeDetailView: View {
-    let worktree: WorktreeModel
-    var project: ProjectState?
-    @State private var showChannel = false
+struct RootCheckoutDetailView: View {
+    let project: ProjectState
     @State private var diffState = DiffState()
     @State private var fileTreeState = FileTreeState()
     @State private var editorState = EditorState()
-    @State private var showFileTree = false
+    @State private var showFileTree = true
     @State private var sidebarRatio: CGFloat = 0.22
     @State private var saveError: String?
 
@@ -15,7 +13,6 @@ struct WorktreeDetailView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            HStack(spacing: 0) {
             DraggableSplit(
                 axis: .vertical,
                 ratio: showFileTree ? sidebarRatio : 0,
@@ -34,21 +31,16 @@ struct WorktreeDetailView: View {
                     editorContent
                 }
             }
-            if showChannel, let project {
-                Divider()
-                ProjectChannelView(project: project, compact: true).frame(minWidth: 280, idealWidth: 340, maxWidth: 400)
-            }
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .top) {
             externalChangeBanner
         }
-        .task(id: worktree.id) {
+        .task(id: project.projectRoot) {
             editorState.stopWatching()
             editorState = EditorState()
-            diffState.loadForWorktree(worktree)
-            fileTreeState.load(worktreePath: worktree.path)
+            diffState.loadForProject(projectRoot: project.projectRoot)
+            fileTreeState.load(worktreePath: project.projectRoot)
         }
         .onDisappear {
             diffState.stopWatching()
@@ -65,7 +57,6 @@ struct WorktreeDetailView: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showFileTree = true
-                        editorState.showChanges = false
                     }
                 } label: {
                     Image(systemName: "sidebar.left")
@@ -74,20 +65,16 @@ struct WorktreeDetailView: View {
                 .help("Show file tree")
             }
 
-            Image(systemName: "arrow.triangle.branch")
+            Image(systemName: "folder.fill")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
 
-            Text(worktree.name)
+            Text(project.projectName)
                 .font(.system(size: 14, weight: .semibold))
 
-            Text(worktree.branch)
-                .font(.system(size: 12, design: .monospaced))
+            Text("\(project.worktrees.count) worktrees")
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
 
             if let file = editorState.currentFile, !editorState.showChanges {
                 Image(systemName: "chevron.right")
@@ -107,8 +94,6 @@ struct WorktreeDetailView: View {
             }
 
             Spacer()
-            Button { showFileTree.toggle(); editorState.showChanges = !showFileTree } label: { Label("Files", systemImage: "doc.text") }.buttonStyle(.borderless)
-            if project != nil { Button { showChannel.toggle() } label: { Label("Channel", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(.borderless) }
 
             Button {
                 editorState.showChanges.toggle()
@@ -254,18 +239,5 @@ struct WorktreeDetailView: View {
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .padding(8)
-    }
-
-    // MARK: - Binding Helpers
-
-    private var prBinding: Binding<Int> {
-        Binding(
-            get: { diffState.selectedPR?.number ?? 0 },
-            set: { number in
-                if let pr = diffState.pullRequests.first(where: { $0.number == number }) {
-                    diffState.selectPR(pr)
-                }
-            }
-        )
     }
 }

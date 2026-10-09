@@ -51,14 +51,17 @@ struct DetailView: View {
 
         case .worktree(let id):
             if let wt = appState.projectState(forWorktreeId: id)?.worktrees.first(where: { $0.id == id }) {
-                WorktreeDetailView(worktree: wt)
+                WorktreeDetailView(worktree: wt, project: appState.projectState(forWorktreeId: id))
             } else {
                 placeholderView(icon: "arrow.triangle.branch", title: "Worktree not found")
             }
 
+        case .channel(let root):
+            if let project = appState.projectState(forRoot: root) { ProjectChannelView(project: project) }
+            else { placeholderView(icon: "bubble.left.and.bubble.right", title: "Project channel") }
         case .project(let root):
             if let project = appState.projectState(forRoot: root) {
-                ProjectDetailView(project: project)
+                ProjectDetailView(project: project, selection: $selection)
             } else {
                 placeholderView(icon: "folder.fill", title: "Project")
             }

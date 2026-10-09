@@ -11,6 +11,8 @@ final class ProjectState: Identifiable {
     nonisolated var id: String { projectRoot }
     var projectName: String { URL(fileURLWithPath: projectRoot).lastPathComponent }
 
+    let channel: ChannelState
+
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
 
@@ -36,6 +38,7 @@ final class ProjectState: Identifiable {
 
     init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?) {
         self.projectRoot = projectRoot
+        self.channel = ChannelState(projectRoot: projectRoot)
         self.service = service
         self.registry = registry
     }
@@ -92,6 +95,7 @@ final class ProjectState: Identifiable {
                 self?.refresh()
             }
 
+            self.channel.startBackground()
             self.startGridSubscription()
             self.startStatusSubscription()
             // Resume from the snapshot taken after init, not after a fixed delay: a
@@ -112,6 +116,7 @@ final class ProjectState: Identifiable {
     }
 
     func stopWatching() {
+        channel.shutdown()
         openTask?.cancel()
         refreshTask?.cancel()
         gridSubscriptionTask?.cancel()
