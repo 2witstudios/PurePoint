@@ -14,4 +14,4 @@ No production activation, deployment, global install or main merge. Git builders
 
 Check obligations: Rust tests/fmt/clippy; protocol serialization; persistence/cursor/ownership/concurrency; no channel-to-PTY/trigger coupling; real Git edge cases; safe Swift parsing/typechecking and state tests; independent review; Xcode app build/test and native light/dark keyboard/scroll inspection (owner, cannot run in this agent session).
 
-Status: planning/independent review, execution authorized by owner. Main acceptance pending; Xcode evidence not yet run.
+Status: implementation delivered for review. Rust and Git producer reviews clean; composed source b574dfc independently approved. See agent-watch-handoff.md for evidence and actual producer pins. Main acceptance pending owner Xcode/native verification; task remains In Review.
