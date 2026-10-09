@@ -99,16 +99,17 @@ struct ProjectChannelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    let topLevel = channel.topLevelMessages
                     if channel.hasMore { Button("Load older messages") { Task { await channel.loadOlder() } }.buttonStyle(.plain).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(16) }
-                    if channel.topLevelMessages.isEmpty {
+                    if topLevel.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 30)).foregroundStyle(.tertiary)
                             Text(channel.query.isEmpty ? "The conversation starts here" : "No messages found").font(.system(size: 15, weight: .semibold))
                             if channel.query.isEmpty { Text("Share progress, ask a question, or leave a note for the team.").font(.system(size: 12)).foregroundStyle(.secondary) }
                         }.frame(maxWidth: .infinity).padding(.vertical, 60)
                     }
-                    ForEach(Array(channel.topLevelMessages.enumerated()), id: \.element.id) { index, message in
-                        let previous = index > 0 ? channel.topLevelMessages[index - 1] : nil
+                    ForEach(Array(topLevel.enumerated()), id: \.element.id) { index, message in
+                        let previous = index > 0 ? topLevel[index - 1] : nil
                         if let boundary = unreadBoundary, message.sequence > boundary, previous == nil || previous!.sequence <= boundary {
                             HStack { Rectangle().frame(height: 1); Text("New messages").font(.system(size: 10, weight: .semibold)); Rectangle().frame(height: 1) }.foregroundStyle(Color.accentColor).padding(.horizontal, 20).padding(.vertical, 12)
                         }
