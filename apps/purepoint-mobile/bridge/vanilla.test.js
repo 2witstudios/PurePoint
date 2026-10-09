@@ -14,7 +14,7 @@ test("published vanilla Pi supports the pinned state/history/queue contract", as
     path.join(skill, "SKILL.md"),
     "---\nname: pu\ndescription: PurePoint test skill\n---\nRead the CLI reference.",
   );
-  // Isolate config and HOME, disable external extensions/skills; no owner auth files or model requests.
+  // Isolate native config and disable external extensions/skills; no owner auth files or model requests.
   const rpc = new Rpc(
     process.execPath,
     [
@@ -31,7 +31,6 @@ test("published vanilla Pi supports the pinned state/history/queue contract", as
     folder,
     {
       PATH: process.env.PATH,
-      HOME: folder,
       PI_CODING_AGENT_DIR: path.join(folder, "agent"),
       PI_SKIP_VERSION_CHECK: "1",
     },
@@ -90,6 +89,14 @@ test("native session changes, custom messages and shell output project against p
   await writeFile(
     extension,
     `export default function(pi) {
+    pi.on("session_start", async (_event, ctx) => {
+      const tag = "Native hook " + ctx.sessionManager.getSessionId();
+      ctx.ui.notify(tag + " notice");
+      ctx.ui.setStatus("native", tag + " status");
+      ctx.ui.setWidget("native", [tag + " widget"]);
+      ctx.ui.setTitle(tag);
+      ctx.ui.setEditorText(tag + " draft");
+    });
     pi.registerCommand("mobile-hidden", {handler: async () => {pi.sendMessage({customType: "mobile-context", content: "Hidden mobile context", display: false});}});
     pi.registerCommand("mobile-displayed", {handler: async () => {pi.sendMessage({customType: "mobile-note", content: "Visible mobile note", display: true});}});
     pi.registerCommand("mobile-new", {handler: async (_args, ctx) => {await ctx.newSession();}});
@@ -112,29 +119,44 @@ test("native session changes, custom messages and shell output project against p
     folder,
     {
       PATH: process.env.PATH,
-      HOME: folder,
       PI_CODING_AGENT_DIR: path.join(folder, "agent"),
       PI_SKIP_VERSION_CHECK: "1",
     },
   );
   rpc.on("failure", () => {});
-  const c = new Controller(rpc, {});
+  const c = new Controller(rpc, { path: async () => target });
   const events = [];
   rpc.on("event", (event) => events.push(event.type));
   try {
     await c.refresh();
     const initialId = c.state.sessionId;
-    for (const text of ["/mobile-new", "/mobile-switch"]) {
+    for (const operation of [
+      { op: "new" },
+      { op: "resume", sessionId: "target-session" },
+      { op: "send", text: "/mobile-new", mode: "send" },
+      { op: "send", text: "/mobile-switch", mode: "send" },
+    ]) {
       const epoch = c.epoch;
+      const previousTitle = c.snapshot().title;
+      c.notice("Outgoing marker");
+      c.statuses.set("outgoing", "Outgoing status");
       const result = await c.request({
         version: 1,
         id: crypto.randomUUID(),
-        op: "send",
         epoch,
-        text,
-        mode: "send",
+        ...operation,
       });
-      assert.equal(result.disposition, "handled");
+      if (operation.op === "send") assert.equal(result.disposition, "handled");
+      const snapshot = c.snapshot();
+      assert.equal(snapshot.title, "Native hook " + snapshot.sessionId);
+      assert.notEqual(snapshot.title, previousTitle);
+      assert.equal(snapshot.editor.text, snapshot.title + " draft");
+      for (const kind of ["notice", "status", "widget"])
+        assert.ok(snapshot.notices.includes(snapshot.title + " " + kind));
+      assert.equal(
+        snapshot.notices.some((text) => text.startsWith("Outgoing")),
+        false,
+      );
       assert.notEqual(c.epoch, epoch);
       await assert.rejects(
         c.request({
@@ -147,7 +169,8 @@ test("native session changes, custom messages and shell output project against p
         }),
         /Conversation changed/,
       );
-      if (text === "/mobile-new") assert.notEqual(c.state.sessionId, initialId);
+      if (operation.op === "new" || operation.text === "/mobile-new")
+        assert.notEqual(c.state.sessionId, initialId);
       else {
         assert.equal(c.state.sessionId, "target-session");
         assert.equal(c.snapshot().messages.at(-1).text, "Target conversation");

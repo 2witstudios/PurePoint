@@ -14,7 +14,8 @@ export class Controller extends EventEmitter {
     this.activityVersion = 0;
     this.editorOffer = null;
     this.runId = null;
-    this.stoppingRun = null;
+    this.stops = new Map();
+    this.transition = null;
     this.busy = false;
     this.state = {};
     this.queue = [];
@@ -54,6 +55,33 @@ export class Controller extends EventEmitter {
   notice(text) {
     this.notices.push(clip(text, 4000));
     this.notices = this.notices.slice(-12);
+    if (this.transition) {
+      this.transition.notices.push(clip(text, 4000));
+      this.transition.notices = this.transition.notices.slice(-12);
+    }
+  }
+  setUI(field, key, value, limit) {
+    const map = this[field];
+    if (value) map.set(key, value);
+    else map.delete(key);
+    if (this.transition) {
+      if (value) this.transition[field].set(key, value);
+      else this.transition[field].delete(key);
+    }
+    if (map.size > limit) {
+      const oldest = map.keys().next().value;
+      map.delete(oldest);
+      this.transition?.[field].delete(oldest);
+    }
+  }
+  cancelDialogs() {
+    for (const [id, { dialog, timer }] of [...this.dialogs]) {
+      this.dialogs.delete(id);
+      this.transition?.dialogs.delete(id);
+      clearTimeout(timer);
+      this.rpc.answer({ id: dialog.id, cancelled: true });
+    }
+    this.changed();
   }
   event(e) {
     if (e.type === "agent_start") {
@@ -95,7 +123,7 @@ export class Controller extends EventEmitter {
     if (e.type === "extension_ui_request") {
       const method = e.method;
       if (["confirm", "select", "input", "editor"].includes(method)) {
-        if (this.stoppingRun && this.stoppingRun === this.runId) {
+        if ([...this.stops.values()].includes(this.runId)) {
           this.rpc.answer({ id: e.id, cancelled: true });
         } else if (this.dialogs.size >= 32) {
           this.rpc.answer({ id: e.id, cancelled: true });
@@ -156,28 +184,30 @@ export class Controller extends EventEmitter {
           const timer = e.timeout
             ? setTimeout(() => {
                 this.dialogs.delete(e.id);
+                this.transition?.dialogs.delete(e.id);
                 this.changed();
               }, e.timeout)
             : null;
           this.dialogs.set(e.id, { dialog, timer, originalOptions });
+          this.transition?.dialogs.add(e.id);
         }
       } else if (method === "setStatus") {
-        if (e.statusText)
-          this.statuses.set(e.statusKey, clip(e.statusText, 1000));
-        else this.statuses.delete(e.statusKey);
-        if (this.statuses.size > 32)
-          this.statuses.delete(this.statuses.keys().next().value);
+        this.setUI("statuses", e.statusKey, clip(e.statusText, 1000), 32);
       } else if (method === "setWidget") {
         const key = clip(e.widgetKey, 200);
-        if (e.widgetLines)
-          this.widgets.set(key, clip(e.widgetLines.join("\n"), 4000));
-        else this.widgets.delete(key);
-        if (this.widgets.size > 16)
-          this.widgets.delete(this.widgets.keys().next().value);
+        this.setUI(
+          "widgets",
+          key,
+          e.widgetLines ? clip(e.widgetLines.join("\n"), 4000) : "",
+          16,
+        );
       } else if (method === "notify") this.notice(e.message);
-      else if (method === "setTitle") this.titleOverride = clip(e.title, 200);
-      else if (method === "set_editor_text") {
+      else if (method === "setTitle") {
+        this.titleOverride = clip(e.title, 200);
+        if (this.transition) this.transition.titleOverride = this.titleOverride;
+      } else if (method === "set_editor_text") {
         this.editorOffer = { id: e.id, text: clip(e.text) };
+        if (this.transition) this.transition.editorOffer = this.editorOffer;
         this.emit("editor", { type: "editor", ...this.editorOffer });
         this.notice(
           "An extension offered composer text. Your draft is preserved.",
@@ -283,13 +313,40 @@ export class Controller extends EventEmitter {
       throw new Error("Unsupported bridge operation");
     if (this.pendingMutations >= 16)
       throw new Error("Too many pending actions");
+    if (r.op === "stop") {
+      // Dialog answers must bypass a prompt awaiting an extension hook's UI.
+      this.checkEpoch(r);
+      this.checkRun(r);
+    }
     this.pendingMutations++;
-    const operation = this.serial.then(() => this.mutate(r));
-    this.serial = operation.catch(() => {});
     try {
+      if (r.op === "stop") {
+        this.stops.set(r.id, r.runId);
+        this.cancelDialogs();
+      }
+      const operation = this.serial.then(async () => {
+        // Native session_start hooks run before mutation replies. Retain their
+        // bounded UI changes for reset, while interactive dialogs stay live.
+        if (r.op !== "stop")
+          this.transition = {
+            notices: [],
+            statuses: new Map(),
+            widgets: new Map(),
+            dialogs: new Set(),
+            editorOffer: null,
+            titleOverride: null,
+          };
+        try {
+          return await this.mutate(r);
+        } finally {
+          this.transition = null;
+        }
+      });
+      this.serial = operation.catch(() => {});
       return await operation;
     } finally {
       this.pendingMutations--;
+      this.stops.delete(r.id);
     }
   }
   checkEpoch(r) {
@@ -298,6 +355,12 @@ export class Controller extends EventEmitter {
         "Conversation changed. Refresh before trying this action.",
       );
     if (this.error) throw new Error(this.error);
+  }
+  checkRun(r) {
+    if (!this.busy || r.runId !== this.runId)
+      throw new Error(
+        "Run changed or already finished. This Stop was ignored.",
+      );
   }
   async mutate(r) {
     this.checkEpoch(r);
@@ -341,44 +404,31 @@ export class Controller extends EventEmitter {
       return result;
     }
     if (r.op === "stop") {
-      if (!this.busy || r.runId !== this.runId)
-        throw new Error(
-          "Run changed or already finished. This Stop was ignored.",
-        );
+      this.checkRun(r);
       const run = this.runId;
-      this.stoppingRun = run;
-      try {
-        const recovered = await this.rpc.call("clear_queue");
-        const texts = [
-          ...(recovered.steering ?? []),
-          ...(recovered.followUp ?? []),
-        ];
-        this.canceled.push(
-          ...texts.map((text, index) => ({
-            id: `${r.id}:${index}`,
-            text: clip(text),
-            sessionId: this.state.sessionId,
-          })),
-        );
-        this.canceled = this.canceled.slice(-100);
-        this.changed();
-        // Native completion or extension activity can happen while queue clearing is in flight.
-        if (this.busy && this.runId === run) {
-          // Dialog responses bypass mutation serialization, including cancellation during Stop.
-          for (const { dialog, timer } of this.dialogs.values()) {
-            this.rpc.answer({ id: dialog.id, cancelled: true });
-            clearTimeout(timer);
-          }
-          this.dialogs.clear();
-          this.changed();
-          await this.rpc.call("abort");
-        }
-        this.queue = [];
-        await this.refreshFresh();
-        return recovered;
-      } finally {
-        this.stoppingRun = null;
+      const recovered = await this.rpc.call("clear_queue");
+      const texts = [
+        ...(recovered.steering ?? []),
+        ...(recovered.followUp ?? []),
+      ];
+      this.canceled.push(
+        ...texts.map((text, index) => ({
+          id: `${r.id}:${index}`,
+          text: clip(text),
+          sessionId: this.state.sessionId,
+        })),
+      );
+      this.canceled = this.canceled.slice(-100);
+      this.changed();
+      // Native completion or extension activity can happen while queue clearing is in flight.
+      if (this.busy && this.runId === run) {
+        // Dialog responses bypass mutation serialization, including cancellation during Stop.
+        this.cancelDialogs();
+        await this.rpc.call("abort");
       }
+      this.queue = [];
+      await this.refreshFresh();
+      return recovered;
     }
     const native = await this.rpc.call("get_state");
     if (
@@ -405,16 +455,19 @@ export class Controller extends EventEmitter {
   resetConversation() {
     this.epoch = randomUUID();
     this.runId = null;
-    this.stoppingRun = null;
     this.projection.reset();
-    this.editorOffer = null;
-    this.titleOverride = null;
+    this.editorOffer = this.transition?.editorOffer ?? null;
+    this.titleOverride = this.transition?.titleOverride ?? null;
     this.queue = [];
-    this.notices = [];
-    this.statuses.clear();
-    this.widgets.clear();
-    for (const item of this.dialogs.values()) clearTimeout(item.timer);
-    this.dialogs.clear();
+    this.notices = this.transition ? [...this.transition.notices] : [];
+    this.statuses = new Map(this.transition?.statuses);
+    this.widgets = new Map(this.transition?.widgets);
+    for (const [id, item] of this.dialogs) {
+      if (!this.transition?.dialogs.has(id)) {
+        clearTimeout(item.timer);
+        this.dialogs.delete(id);
+      }
+    }
   }
   answer(r) {
     const item = this.dialogs.get(r.dialogId);
@@ -461,6 +514,7 @@ export class Controller extends EventEmitter {
     this.rpc.answer(result);
     clearTimeout(item.timer);
     this.dialogs.delete(d.id);
+    this.transition?.dialogs.delete(d.id);
     this.changed();
     return { answered: true };
   }

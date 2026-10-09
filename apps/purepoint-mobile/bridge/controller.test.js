@@ -194,7 +194,7 @@ test("Stop cancels correlated extension dialogs so abort can reach idle", async 
   await request(c, "stop", { epoch: c.epoch, runId: c.runId });
   assert.equal(rpc.answerValue?.cancelled, true);
   assert.equal(c.snapshot().dialogs.length, 0);
-  assert.ok(rpc.calls.indexOf("clear_queue") < rpc.calls.indexOf("answer"));
+  assert.ok(rpc.calls.indexOf("answer") < rpc.calls.indexOf("clear_queue"));
   assert.ok(rpc.calls.indexOf("answer") < rpc.calls.indexOf("abort"));
   c.dispose();
 });
@@ -647,6 +647,329 @@ test("extension error diagnostics bound source, hook, error and retained history
     assert.ok(snapshot.notices.at(-1).includes(": 19: "));
     assert.equal(snapshot.error, null);
   } finally {
+    c.dispose();
+  }
+});
+
+for (const mode of ["steer", "after"]) {
+  test(`Stop cancels a blocking ${mode} prompt dialog before joining mutations`, async () => {
+    const rpc = new Runtime();
+    const c = new Controller(rpc, {});
+    await c.refresh();
+    rpc.emit("event", { type: "agent_start" });
+    const started = deferred();
+    const unblocked = deferred();
+    const original = rpc.call.bind(rpc);
+    rpc.call = async (op) => {
+      if (op === "prompt") {
+        rpc.emit("event", {
+          type: "extension_ui_request",
+          id: "blocked-prompt",
+          method: "confirm",
+        });
+        started.resolve();
+        await unblocked.promise;
+        return { disposition: "queued" };
+      }
+      return original(op);
+    };
+    rpc.answer = (value) => {
+      rpc.answerValue = value;
+      unblocked.resolve();
+    };
+    const prompt = request(c, "send", { epoch: c.epoch, text: "Work", mode });
+    await started.promise;
+    const stop = request(c, "stop", { epoch: c.epoch, runId: c.runId });
+    stop.catch(() => {});
+    try {
+      assert.deepEqual(rpc.answerValue, {
+        id: "blocked-prompt",
+        cancelled: true,
+      });
+      assert.equal(c.snapshot().dialogs.length, 0);
+      await prompt;
+      await stop;
+      assert.ok(rpc.calls.indexOf("clear_queue") < rpc.calls.indexOf("abort"));
+    } finally {
+      unblocked.resolve();
+      await Promise.allSettled([prompt, stop]);
+      c.dispose();
+    }
+  });
+}
+
+test("invalid or overcapacity Stop requests never cancel dialogs", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    await c.refresh();
+    rpc.emit("event", { type: "agent_start" });
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "unrelated",
+      method: "confirm",
+    });
+    const base = {
+      version: 1,
+      id: "stop-invalid",
+      op: "stop",
+      epoch: c.epoch,
+      runId: c.runId,
+    };
+    for (const [patch, pattern] of [
+      [{ id: "stale-epoch", epoch: "old" }, /Conversation changed/],
+      [{ id: "stale-run", runId: "old" }, /Run changed/],
+      [{ version: 2 }, /version/],
+      [{ id: "stale-epoch" }, /already/],
+    ]) {
+      await assert.rejects(c.request({ ...base, ...patch }), pattern);
+      assert.equal(rpc.answerValue, undefined);
+    }
+    c.pendingMutations = 16;
+    await assert.rejects(
+      request(c, "stop", { epoch: c.epoch, runId: c.runId }),
+      /Too many/,
+    );
+    c.pendingMutations = 0;
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "later",
+      method: "confirm",
+    });
+    assert.equal(rpc.answerValue, undefined);
+    assert.equal(c.snapshot().dialogs.length, 2);
+  } finally {
+    c.dispose();
+  }
+});
+
+test("queued Stops cancel late dialogs only for their observed run and clean up markers", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  rpc.emit("event", { type: "agent_start" });
+  const started = deferred();
+  const unblocked = deferred();
+  const original = rpc.call.bind(rpc);
+  rpc.call = async (op) => {
+    if (op === "prompt") {
+      started.resolve();
+      await unblocked.promise;
+      return { disposition: "queued" };
+    }
+    return original(op);
+  };
+  const prompt = request(c, "send", {
+    epoch: c.epoch,
+    text: "Work",
+    mode: "steer",
+  });
+  await started.promise;
+  const target = { epoch: c.epoch, runId: c.runId };
+  const stops = [request(c, "stop", target), request(c, "stop", target)];
+  for (const stop of stops) stop.catch(() => {});
+  try {
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "late",
+      method: "input",
+    });
+    assert.deepEqual(rpc.answerValue, { id: "late", cancelled: true });
+    rpc.emit("event", { type: "agent_settled" });
+    rpc.emit("event", { type: "agent_start" });
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "replacement",
+      method: "confirm",
+    });
+    assert.deepEqual(
+      c.snapshot().dialogs.map((d) => d.id),
+      ["replacement"],
+    );
+    unblocked.resolve();
+    await prompt;
+    for (const stop of stops) await assert.rejects(stop, /Run changed/);
+    assert.equal(rpc.calls.includes("abort"), false);
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "after-stop",
+      method: "confirm",
+    });
+    assert.deepEqual(
+      c.snapshot().dialogs.map((d) => d.id),
+      ["replacement", "after-stop"],
+    );
+  } finally {
+    unblocked.resolve();
+    await Promise.allSettled([prompt, ...stops]);
+    c.dispose();
+  }
+});
+
+function extensionUI(rpc, suffix) {
+  for (const event of [
+    { method: "notify", message: `${suffix} notice` },
+    { method: "setStatus", statusKey: suffix, statusText: `${suffix} status` },
+    {
+      method: "setWidget",
+      widgetKey: suffix,
+      widgetLines: [`${suffix} widget`],
+    },
+    { method: "setTitle", title: `${suffix} title` },
+    { method: "set_editor_text", text: `${suffix} draft` },
+  ])
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: `${suffix}-offer`,
+      ...event,
+    });
+}
+
+for (const op of ["new", "resume", "send"]) {
+  test(`${op} preserves incoming session hook UI and interactive answers while clearing outgoing UI`, async () => {
+    const rpc = new Runtime();
+    const c = new Controller(rpc, { path: async () => "/native/two" });
+    await c.refresh();
+    extensionUI(rpc, "old");
+    const epoch = c.epoch;
+    const started = deferred();
+    const answered = deferred();
+    const original = rpc.call.bind(rpc);
+    rpc.call = async (nativeOp) => {
+      if (["new_session", "switch_session", "prompt"].includes(nativeOp)) {
+        rpc.state = { ...rpc.state, sessionId: "two" };
+        extensionUI(rpc, "incoming");
+        rpc.emit("event", {
+          type: "extension_ui_request",
+          id: "hook-dialog",
+          method: "confirm",
+        });
+        started.resolve();
+        await answered.promise;
+        rpc.emit("event", {
+          type: "extension_ui_request",
+          id: "incoming-pending",
+          method: "input",
+        });
+        return op === "send" ? { disposition: "handled" } : {};
+      }
+      return original(nativeOp);
+    };
+    rpc.answer = () => answered.resolve();
+    const mutation = request(c, op, {
+      epoch,
+      sessionId: "two",
+      text: "/new",
+      mode: "send",
+    });
+    try {
+      await started.promise;
+      assert.ok(c.snapshot().dialogs.some((d) => d.id === "hook-dialog"));
+      await request(c, "answer", { dialogId: "hook-dialog", confirmed: true });
+      await mutation;
+      const snapshot = c.snapshot();
+      assert.notEqual(snapshot.epoch, epoch);
+      assert.equal(snapshot.title, "incoming title");
+      assert.equal(snapshot.editor.text, "incoming draft");
+      assert.ok(snapshot.notices.includes("incoming notice"));
+      assert.ok(snapshot.notices.includes("incoming status"));
+      assert.ok(snapshot.notices.includes("incoming widget"));
+      assert.equal(
+        snapshot.notices.some((text) => text.startsWith("old")),
+        false,
+      );
+      assert.deepEqual(
+        snapshot.dialogs.map((d) => d.id),
+        ["incoming-pending"],
+      );
+    } finally {
+      answered.resolve();
+      await Promise.allSettled([mutation]);
+      c.dispose();
+    }
+  });
+}
+
+for (const outcome of ["veto", "failure"]) {
+  test(`session ${outcome} retains outgoing UI and epoch`, async () => {
+    const rpc = new Runtime();
+    const c = new Controller(rpc, {});
+    await c.refresh();
+    extensionUI(rpc, "old");
+    const before = c.snapshot();
+    const original = rpc.call.bind(rpc);
+    rpc.call = async (op) => {
+      if (op === "new_session") {
+        if (outcome === "failure") throw new Error("Switch failed");
+        return { cancelled: true };
+      }
+      return original(op);
+    };
+    try {
+      await assert.rejects(
+        request(c, "new", { epoch: c.epoch }),
+        /canceled|Switch failed/,
+      );
+      const after = c.snapshot();
+      assert.equal(after.epoch, before.epoch);
+      assert.equal(after.title, before.title);
+      assert.deepEqual(after.editor, before.editor);
+      assert.deepEqual(after.notices, before.notices);
+    } finally {
+      c.dispose();
+    }
+  });
+}
+
+test("a failed Stop retains other queued Stop markers until their own cleanup", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  rpc.emit("event", { type: "agent_start" });
+  const firstClear = deferred();
+  const secondClear = deferred();
+  const secondStarted = deferred();
+  const original = rpc.call.bind(rpc);
+  let clears = 0;
+  rpc.call = async (op) => {
+    if (op === "clear_queue") {
+      if (++clears === 1) return firstClear.promise;
+      secondStarted.resolve();
+      return secondClear.promise;
+    }
+    return original(op);
+  };
+  const target = { epoch: c.epoch, runId: c.runId };
+  const stops = [request(c, "stop", target), request(c, "stop", target)];
+  for (const stop of stops) stop.catch(() => {});
+  try {
+    firstClear.reject(new Error("First queue clear failed"));
+    await assert.rejects(stops[0], /First queue/);
+    await secondStarted.promise;
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "while-second-pending",
+      method: "confirm",
+    });
+    assert.deepEqual(rpc.answerValue, {
+      id: "while-second-pending",
+      cancelled: true,
+    });
+    secondClear.reject(new Error("Second queue clear failed"));
+    await assert.rejects(stops[1], /Second queue/);
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "after-errors",
+      method: "confirm",
+    });
+    assert.deepEqual(
+      c.snapshot().dialogs.map((d) => d.id),
+      ["after-errors"],
+    );
+  } finally {
+    firstClear.resolve({});
+    secondClear.resolve({});
+    await Promise.allSettled(stops);
     c.dispose();
   }
 });
