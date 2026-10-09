@@ -1,88 +1,67 @@
 import Foundation
 
-/// Watches a git working tree's .git directory for changes using GCD file system events.
-/// Fires onChange callback (debounced) when files are modified, enabling auto-refresh of diffs.
+/// Metadata notifications supplement DiffState's foreground recursive-file polling.
 nonisolated final class WorktreeWatcher: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.purepoint.worktree-watcher")
-    private var source: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
-    private let path: String
-    private let onChange: @Sendable () -> Void
+    private var sources: [DispatchSourceFileSystemObject] = []
     private var debounceWork: DispatchWorkItem?
-    private static let debounceInterval: TimeInterval = 0.5
+    private var stopped = false
+    private let root: String
+    private let onChange: @Sendable () -> Void
 
     init(worktreePath: String, onChange: @escaping @Sendable () -> Void) {
-        // Watch the .git directory (or .git file for linked worktrees)
-        let gitPath = (worktreePath as NSString).appendingPathComponent(".git")
-        self.path = gitPath
-        self.onChange = onChange
-        startWatching()
+        root = worktreePath; self.onChange = onChange
+        queue.sync { install() }
     }
 
-    private func startWatching() {
-        if source != nil { stopSource() }
-
-        fileDescriptor = open(path, O_EVTONLY)
-        guard fileDescriptor >= 0 else { return }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .rename, .delete, .attrib],
-            queue: queue
-        )
-
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            let flags = source.data
-            if flags.contains(.delete) || flags.contains(.rename) {
-                self.queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                    guard let self else { return }
-                    self.startWatching()
-                    self.scheduleDebounce()
-                }
-            } else {
-                self.scheduleDebounce()
-            }
+    /// Resolve linked worktree .git and commondir files without assuming .git is a directory.
+    static func metadataPaths(worktreePath: String) -> [String] {
+        let marker = URL(fileURLWithPath: worktreePath).appendingPathComponent(".git")
+        var git = marker
+        if let text = try? String(contentsOf: marker, encoding: .utf8), text.hasPrefix("gitdir:") {
+            let value = text.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
+            git = URL(fileURLWithPath: value, relativeTo: marker.deletingLastPathComponent()).standardizedFileURL
         }
-
-        source.setCancelHandler { [fd = fileDescriptor] in
-            close(fd)
+        var common = git
+        if let text = try? String(contentsOf: git.appendingPathComponent("commondir"), encoding: .utf8) {
+            common = URL(fileURLWithPath: text.trimmingCharacters(in: .whitespacesAndNewlines), relativeTo: git).standardizedFileURL
         }
-
-        source.resume()
-        self.source = source
+        return Array(Set([marker.path, git.path, common.path, git.appendingPathComponent("HEAD").path,
+                          git.appendingPathComponent("index").path, common.appendingPathComponent("packed-refs").path,
+                          common.appendingPathComponent("refs").path, common.appendingPathComponent("refs/heads").path,
+                          common.appendingPathComponent("refs/remotes").path]))
     }
 
-    private func scheduleDebounce() {
+    private func install() {
+        sources.forEach { $0.cancel() }; sources = []
+        guard !stopped else { return }
+        for path in Self.metadataPaths(worktreePath: root) {
+            let fd = open(path, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete, .attrib], queue: queue)
+            source.setEventHandler { [weak self] in self?.schedule() }
+            source.setCancelHandler { close(fd) }
+            sources.append(source); source.resume()
+        }
+    }
+
+    private func schedule() {
+        guard !stopped else { return }
         debounceWork?.cancel()
-        let callback = onChange
-        let work = DispatchWorkItem {
-            DispatchQueue.main.async {
-                callback()
-            }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.install() // Reopen atomically replaced HEAD/index/refs.
+            self.onChange()
         }
         debounceWork = work
-        queue.asyncAfter(deadline: .now() + Self.debounceInterval, execute: work)
-    }
-
-    private func stopSource() {
-        source?.cancel()
-        source = nil
-        fileDescriptor = -1
+        queue.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     func stop() {
         queue.sync {
-            debounceWork?.cancel()
-            stopSource()
+            stopped = true; debounceWork?.cancel(); debounceWork = nil
+            sources.forEach { $0.cancel() }; sources = []
         }
     }
-
-    deinit {
-        debounceWork?.cancel()
-        source?.cancel()
-        if fileDescriptor >= 0 {
-            close(fileDescriptor)
-        }
-    }
+    deinit { debounceWork?.cancel(); sources.forEach { $0.cancel() } }
 }
