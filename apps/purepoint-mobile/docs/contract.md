@@ -110,3 +110,5 @@ Grounding: Apple's [Improving app responsiveness](https://developer.apple.com/do
 Gesture grounding: Apple's [simultaneousGesture documentation](https://developer.apple.com/documentation/swiftui/view/simultaneousgesture(_:including:)) describes processing a parent gesture alongside child gestures. Actual native selection/control coexistence requires the owner-device check below.
 
 - The iPhone product and default Xcode scheme should be named PurePoint; mobile is the platform, not a separate PiMobile product. Existing Point Guard/PurePoint artwork remains. Renaming presentation and Xcode targets must preserve bundle identifiers, signing settings and existing credential/draft storage namespaces. Default PurePoint Run remains Release without LLDB; PurePoint-Debug retains breakpoints.
+
+- The standalone mobile module lives at apps/purepoint-mobile, alongside apps/purepoint-macos. PurePoint.xcodeproj and the app/test source folders are at the module root; bridge and dedicated docs/verification remain within that module. The owner's relocation instruction supersedes the original experiments-only path restriction.

@@ -9,7 +9,7 @@ Everything is scoped to this directory. There are no daemon edits, global instal
 Requirements: Node **22.19+**, existing Tailscale connectivity, existing native Pi provider setup, and installed Point Guard / pu skills. Keep the Mac awake and this terminal process running for remote use.
 
 ```sh
-cd experiments/pi-mobile
+cd apps/purepoint-mobile
 npm ci --ignore-scripts
 ```
 
@@ -19,7 +19,7 @@ First open vanilla Pi locally from the folder you intend it to work in. Use an a
 
 ```sh
 cd /absolute/working/folder
-/absolute/path/to/experiments/pi-mobile/node_modules/.bin/pi
+/absolute/path/to/apps/purepoint-mobile/node_modules/.bin/pi
 ```
 
 Configure/login to your native provider and select your model there. Existing `~/.pi/agent` configuration/auth, extensions, native skills/tools/providers and trusted project resources are preserved. The bridge does not inspect auth files or change provider settings. Verify `/skill:pu` and `/skill:pu-cli` where installed, and check your desired Point Guard skills using `/skill:name`. Existing `~/.agents/skills` symlinks are supported by vanilla Pi. Claude slash commands are not automatically registered as Pi commands.
@@ -29,7 +29,7 @@ The bridge automatically generates a cryptographically random pairing secret on 
 Find the Mac’s IPv4 Tailscale address with your installed Tailscale app or `tailscale ip -4`. Then run:
 
 ```sh
-cd /absolute/path/to/experiments/pi-mobile
+cd /absolute/path/to/apps/purepoint-mobile
 PI_MOBILE_HOST=100.x.y.z \
 PI_MOBILE_CWD=/absolute/working/folder \
 npm start
@@ -68,7 +68,7 @@ To recreate the page without restarting a running bridge, run `npm run pair` wit
 
 ## iPhone / Xcode — owner-run
 
-Open **[ios/PurePoint.xcodeproj](ios/PurePoint.xcodeproj)** in Xcode 16 or later. Select the **PurePoint** scheme. The project has a standalone iPhone app target (iOS 17+) and a PurePointTests XCTest target; no script phases or references to the PurePoint app, Cargo or installed binaries.
+Open **[PurePoint.xcodeproj](PurePoint.xcodeproj)** in Xcode 16 or later. Select the **PurePoint** scheme. The project has a standalone iPhone app target (iOS 17+) and a PurePointTests XCTest target; no script phases or references to the PurePoint app, Cargo or installed binaries.
 
 1. In the PurePoint target’s Signing & Capabilities, choose your team and a unique bundle identifier. Choose the matching team for the test target if needed.
 2. Select an iPhone simulator and press **Cmd+R** to build/run. Use **Cmd+U** for the domain tests. For a local fixture, connect to `ws://127.0.0.1:8787/v1`.
@@ -99,7 +99,7 @@ Owner check: rebuild in Xcode, inspect composer/keyboard transitions and sidebar
 No provider/API calls or native session writes are made by fixture mode. It uses a real RPC child and the same bridge/controller/network path:
 
 ```sh
-cd experiments/pi-mobile
+cd apps/purepoint-mobile
 PI_MOBILE_HOST=127.0.0.1 \
 PI_MOBILE_TOKEN_FILE=/absolute/private/pairing-secret \
 npm run fixture
@@ -128,13 +128,13 @@ Run only the standalone checks from this directory:
 npm test
 npm run check
 npm audit
-swiftc ios/PiMobile/ChatDomain.swift ios/LogicChecks.swift -o /tmp/pi-mobile-logic-checks
+swiftc PurePoint/ChatDomain.swift verification/LogicChecks.swift -o /tmp/pi-mobile-logic-checks
 /tmp/pi-mobile-logic-checks
-swiftc ios/PiMobile/ChatDomain.swift verification/ResponsivenessChecks.swift -o /tmp/pi-mobile-responsiveness-checks
+swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o /tmp/pi-mobile-responsiveness-checks
 /tmp/pi-mobile-responsiveness-checks
-swiftc -typecheck ios/PiMobile/ChatDomain.swift ios/PiMobile/PairingSecret.swift ios/PiMobile/ChatModel.swift
-swiftc -frontend -parse ios/PiMobile/*.swift ios/PiMobileTests/*.swift
-plutil -lint ios/PurePoint.xcodeproj/project.pbxproj ios/PiMobile/Info.plist
+swiftc -typecheck PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
+swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
+plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
 ```
 
 Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, single-controller/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK; XCTest target and iOS views still require Xcode verification.
