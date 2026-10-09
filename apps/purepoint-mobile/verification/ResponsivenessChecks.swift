@@ -41,6 +41,22 @@ import Foundation
         let latest = try String(contentsOf: file, encoding: .utf8)
         let independent = try String(contentsOf: secondFile, encoding: .utf8)
         precondition(latest == "newer" && independent == "independent")
-        print("Responsiveness checks passed: off-main persistence, latest-write ordering, typed snapshot/receipt decoding.")
+        writer.schedule(key: "draft") { try! Data("older pending".utf8).write(to: file) }
+        try await writer.writeAndConfirm { try Data("confirmed".utf8).write(to: file) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let confirmed = try String(contentsOf: file, encoding: .utf8)
+        precondition(confirmed == "confirmed", "A delayed autosave must not overwrite the confirmed record")
+        writer.schedule(key: "draft") { try! Data("newer autosave".utf8).write(to: file) }
+        await withCheckedContinuation { continuation in writer.flush { continuation.resume() } }
+        let newerAutosave = try String(contentsOf: file, encoding: .utf8)
+        precondition(newerAutosave == "newer autosave", "An autosave scheduled after confirmation preserves serial write order")
+        do {
+            try await writer.writeAndConfirm { throw ComposerError("storage failure") }
+            preconditionFailure("Confirmation must propagate storage failures")
+        } catch { precondition(error.localizedDescription == "storage failure") }
+        try await writer.writeAndConfirm { try Data("after failure".utf8).write(to: file) }
+        let afterFailure = try String(contentsOf: file, encoding: .utf8)
+        precondition(afterFailure == "after failure", "The serial writer remains usable after a failed confirmed write")
+        print("Responsiveness checks passed: off-main persistence, confirmed-write failure/order, typed snapshot/receipt decoding.")
     }
 }

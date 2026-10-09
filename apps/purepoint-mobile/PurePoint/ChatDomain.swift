@@ -225,6 +225,18 @@ final class CoalescedWriter: @unchecked Sendable {
             completion()
         }
     }
+    func writeAndConfirm(_ work: @escaping @Sendable () throws -> Void) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                // Drain older coalesced values before the confirmed write. Their
+                // delayed callbacks then find no stale value to overwrite it.
+                let older = self.pending; self.pending.removeAll()
+                for action in older.values { action() }
+                do { try work(); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
 }
 enum IncomingRecord: Sendable {
     case snapshot(Snapshot, [TranscriptRow])

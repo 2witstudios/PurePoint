@@ -125,7 +125,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         let defaults = defaults
         writer.schedule(key: "submissions") { [weak self] in
             do { try LocalRecoveryStore.save(value, name: "submissions"); defaults.value.removeObject(forKey: "pi.submissions") }
-            catch { Task { @MainActor [weak self] in self?.error = "Could not save message recovery on this phone." } }
+            catch { Task { @MainActor [weak self] in
+                if self?.error?.hasPrefix("Message not sent:") != true { self?.error = "Could not save message recovery on this phone." }
+            } }
         }
     }
     private func saveAttachmentDraft() {
@@ -297,8 +299,17 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         let id = UUID().uuidString
         submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files)); draft = ""; attachments = []
         Task {
-            // Persist the recoverable submission before transmission, without blocking typing.
-            await withCheckedContinuation { continuation in writer.flush { continuation.resume() } }
+            // Hydration and confirmed persistence precede any transmission, while
+            // the composer remains editable. Sending receipts cannot be dismissed.
+            await recoveryTask?.value
+            let receipts = submissions
+            do {
+                try await writer.writeAndConfirm { try LocalRecoveryStore.save(receipts, name: "submissions") }
+            } catch {
+                let guidance = "Message not sent: could not save recovery on this phone. Free storage, then restore the saved message and try again. Keep the app open to retain its text and files."
+                updateSubmission(id, status: guidance, recoverable: true); self.error = guidance
+                return
+            }
             do {
                 if demo { await demoReply(content.message); updateSubmission(id, status: "Accepted", recoverable: false); return }
                 let data = try await call("send", fields: ["epoch": state.epoch, "text": content.message, "mode": mode, "images": content.images], id: id)
@@ -314,11 +325,15 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         }
     }
     func restore(_ submission: Submission) {
+        guard submissions.first(where: { $0.id == submission.id })?.status != "Sending" else { error = "Wait for this message's delivery result before restoring it."; return }
         let files = (submission.attachments ?? []).filter { file in !attachments.contains(where: { $0.id == file.id }) }
         guard attachments.count + files.count <= 4, (attachments + files).reduce(0, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Remove a draft attachment before restoring these files."; return }
         var state = DraftState(text: draft); state.restore(submission.text); draft = state.text; attachments += files; submissions.removeAll { $0.id == submission.id }
     }
-    func dismissSubmission(_ id: String) { submissions.removeAll { $0.id == id } }
+    func dismissSubmission(_ id: String) {
+        guard submissions.first(where: { $0.id == id })?.status != "Sending" else { error = "Wait for this message's delivery result before dismissing it."; return }
+        submissions.removeAll { $0.id == id }
+    }
     func useEditorOffer() { guard let offer = editorOffer else { return }; var state = DraftState(text: draft); state.restore(offer); draft = state.text; editorOffer = nil }
     func stop() async -> Bool {
         guard let state = snapshot, let run = state.runId else { return !busy }

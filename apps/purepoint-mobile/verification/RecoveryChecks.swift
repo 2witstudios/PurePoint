@@ -126,6 +126,49 @@ extension ChatModel {
         try legacyRestart.applyForChecks(canceledState(2, ["cancel-600", "cancel-600"]))
         await legacyRestart.flushForChecks()
         precondition(defaults.canceledWriteCount == writes && legacyRestart.submissions.isEmpty, "Unchanged cancellation history neither writes preferences nor re-adds recovery")
-        print("Recovery checks passed: drafts, bounded receipts, chronological cancellation retention/restart and unchanged-snapshot deduplication.")
+        try LocalRecoveryStore.save([Submission](), name: "submissions")
+        let storageModel = ChatModel(defaults: defaults)
+        await storageModel.hydrateForChecks()
+        try storageModel.applyForChecks(state)
+        storageModel.demo = true; storageModel.connected = true
+        await storageModel.flushForChecks()
+        let receiptsFile = support.appendingPathComponent("PiMobile/submissions.json")
+        try FileManager.default.removeItem(at: receiptsFile)
+        try FileManager.default.createDirectory(at: receiptsFile, withIntermediateDirectories: false)
+        storageModel.draft = "Original unsent text"; storageModel.addAttachment(file)
+        storageModel.submit(mode: "send")
+        storageModel.draft = "Newer composer edit"
+        let newerFile = ComposerAttachment(id: "newer-file", name: "later.txt", mimeType: "text/plain", data: Data("Newer file".utf8))
+        storageModel.addAttachment(newerFile)
+        for _ in 0..<200 where storageModel.submissions.first?.status == "Sending" { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(storageModel.snapshot?.messages.isEmpty == true && !storageModel.busy, "Failed recovery persistence must prevent even demo transmission")
+        precondition(storageModel.submissions.first?.recoverable == true && storageModel.submissions.first?.text == "Original unsent text" && storageModel.submissions.first?.attachments?.first?.data == file.data, "Not-sent input and original files remain recoverable")
+        precondition(storageModel.draft == "Newer composer edit" && storageModel.attachments.first?.id == newerFile.id && storageModel.error?.contains("not sent") == true, "Storage failure explains no transmission and keeps newer composer text/files")
+        await storageModel.flushForChecks()
+        try FileManager.default.removeItem(at: receiptsFile)
+        try LocalRecoveryStore.save([Submission](), name: "submissions")
+        let confirmedModel = ChatModel(defaults: defaults)
+        // Submit twice before hydration starts, while both snapshots are idle.
+        try confirmedModel.applyForChecks(state)
+        confirmedModel.demo = true; confirmedModel.connected = true
+        confirmedModel.draft = "First durable message"; confirmedModel.addAttachment(file)
+        confirmedModel.submit(mode: "send")
+        let firstReceipt = confirmedModel.submissions[0]
+        confirmedModel.dismissSubmission(firstReceipt.id)
+        confirmedModel.restore(firstReceipt)
+        precondition(confirmedModel.submissions.count == 1 && confirmedModel.draft.isEmpty, "Dismiss/restore cannot remove an in-flight receipt before confirmed persistence")
+        confirmedModel.draft = "Second durable message"; confirmedModel.addAttachment(file)
+        confirmedModel.submit(mode: "send")
+        confirmedModel.draft = "Later typing"
+        confirmedModel.addAttachment(newerFile)
+        for _ in 0..<200 where !confirmedModel.busy { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(confirmedModel.busy, "Successful confirmed storage allows demo transmission")
+        let durable = LocalRecoveryStore.load("submissions", as: [Submission].self) ?? []
+        precondition(durable.map(\.text) == ["First durable message", "Second durable message"] && durable.allSatisfy { $0.status == "Sending" && $0.attachments?.first?.data == file.data }, "Both originals and files are durable before either demo reply completes")
+        precondition(confirmedModel.draft == "Later typing" && confirmedModel.attachments.first?.id == newerFile.id, "Hydration and persistence barriers preserve later composer text/files")
+        for _ in 0..<200 where confirmedModel.submissions.contains(where: { $0.status == "Sending" }) { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(confirmedModel.submissions.allSatisfy { $0.status == "Accepted" }, "Concurrent confirmed submissions both settle")
+        await confirmedModel.flushForChecks()
+        print("Recovery checks passed: drafts, bounded receipts, cancellation retention and confirmed persistence before transmission.")
     }
 }
