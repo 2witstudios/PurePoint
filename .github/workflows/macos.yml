@@ -1,38 +1,109 @@
-name: macOS Build & Test
+name: Build & Test
 
 on:
   push:
     branches: [main]
-    paths: &macos-paths
-      - "apps/purepoint-macos/**"
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/macos.yml"
   pull_request:
-    paths: *macos-paths
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  SCHEME: purepoint-macos
-  PROJECT: apps/purepoint-macos/purepoint-macos.xcodeproj
-  DESTINATION: "platform=macOS"
 
 defaults:
   run:
     shell: bash -eo pipefail {0}
 
 jobs:
-  build-and-test:
-    name: Build & Test
-    runs-on: macos-26
-    timeout-minutes: 30
+  changes:
+    name: Changed components
+    runs-on: ubuntu-latest
+    outputs:
+      macos: ${{ steps.paths.outputs.macos }}
+      mobile: ${{ steps.paths.outputs.mobile }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check CI routing
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Detect changed components
+        id: paths
+        run: python3 .github/scripts/ci.py changes
+
+  mobile-bridge:
+    name: Mobile bridge
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/purepoint-mobile
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: apps/purepoint-mobile/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  mobile-swift:
+    name: Mobile Swift & iOS tests
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/purepoint-mobile
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Swift domain and recovery checks
+        run: |
+          swiftc PurePoint/ChatDomain.swift verification/LogicChecks.swift -o "$RUNNER_TEMP/mobile-logic"
+          "$RUNNER_TEMP/mobile-logic"
+          swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o "$RUNNER_TEMP/mobile-responsiveness"
+          "$RUNNER_TEMP/mobile-responsiveness"
+          sh verification/check-recovery.sh
+          swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
+          swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
+          plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
+      - name: iOS simulator tests
+        run: |
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/mobile-simulators.json"
+          simulator_id=$(python3 -c 'import json, os; data = json.load(open(os.environ["RUNNER_TEMP"] + "/mobile-simulators.json")); print(next(device["udid"] for runtime, devices in sorted(data["devices"].items(), reverse=True) if "iOS" in runtime for device in devices if device["name"].startswith("iPhone") and device["isAvailable"]))')
+          xcodebuild test \
+            -project PurePoint.xcodeproj \
+            -scheme PurePoint-Debug \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -resultBundlePath "$RUNNER_TEMP/mobile-tests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO
+
+  macos:
+    name: macOS Build & Test
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      SCHEME: purepoint-macos
+      PROJECT: apps/purepoint-macos/purepoint-macos.xcodeproj
+      DESTINATION: "platform=macOS"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -109,3 +180,17 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM="" \
             | xcbeautify
+
+  build-and-test:
+    name: Build & Test
+    if: always()
+    needs: [changes, macos, mobile-bridge, mobile-swift]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require every applicable check to pass
+        env:
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/ci.py gate
