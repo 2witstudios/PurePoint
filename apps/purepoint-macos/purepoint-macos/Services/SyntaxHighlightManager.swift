@@ -30,6 +30,7 @@ final class SyntaxHighlightManager {
     private weak var textView: NSTextView?
     private var highlighter: TextViewHighlighter?
     private var currentLanguage: EditorLanguage = .plaintext
+    private let fontSize: CGFloat
 
     private static let maxHighlightSize = 1_000_000
     private static var languageConfigs: [EditorLanguage: LanguageConfiguration] = [:]
@@ -39,8 +40,9 @@ final class SyntaxHighlightManager {
         NSFontManager.shared.convert(regularFont, toHaveTrait: .italicFontMask)
     }()
 
-    init(textView: NSTextView) {
+    init(textView: NSTextView, fontSize: CGFloat = 13) {
         self.textView = textView
+        self.fontSize = fontSize
     }
 
     func setLanguage(_ language: EditorLanguage) {
@@ -76,7 +78,13 @@ final class SyntaxHighlightManager {
         do {
             let config = TextViewHighlighter.Configuration(
                 languageConfiguration: langConfig,
-                attributeProvider: Self.attributeProvider,
+                attributeProvider: { [fontSize] token in
+                    var attributes = Self.attributeProvider(token)
+                    if let font = attributes[.font] as? NSFont {
+                        attributes[.font] = NSFontManager.shared.convert(font, toSize: fontSize)
+                    }
+                    return attributes
+                },
                 languageProvider: { name in
                     Self.languageConfigurationForInjection(name)
                 },
