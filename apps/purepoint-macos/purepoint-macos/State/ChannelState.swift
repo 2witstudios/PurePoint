@@ -226,7 +226,7 @@ final class ChannelState {
                 if threadOldest == previous { break }
             }
             if threadId == parent { unreadReplyTarget = first.id }
-            return parent
+            return first.id
         }
         return first.id
     }

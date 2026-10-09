@@ -5,7 +5,6 @@ struct ProjectChannelView: View {
     var compact = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var visibleMessageIds: Set<String> = []
-    @State private var threadVisible = false
     @State private var atBottom = true
     @State private var timelineAnchor: String?
     @State private var searchVisible = false
@@ -83,7 +82,7 @@ struct ProjectChannelView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear { unreadBoundary = channel.readSequence; searchText = channel.query; channel.start() }
-        .onDisappear { visibleMessageIds = []; threadVisible = false; channel.stop() }
+        .onDisappear { visibleMessageIds = []; channel.stop() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { markVisibleMessages() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markVisibleMessages() }
         .sheet(item: $referenceSelection) { selection in ChannelReferenceView(project: project, selection: selection) }
@@ -136,7 +135,7 @@ struct ProjectChannelView: View {
             }
             .onChange(of: unreadRequest) { _, _ in
                 Task {
-                    if let target = await channel.revealFirstUnread() { withAnimation { proxy.scrollTo(target, anchor: .top) } }
+                    if let target = await channel.revealFirstUnread() { await Task.yield(); withAnimation { proxy.scrollTo(target, anchor: .top) } }
                 }
             }
             .onChange(of: jumpRequest) { _, _ in withAnimation { proxy.scrollTo("channel-bottom", anchor: .bottom) } }
@@ -188,18 +187,12 @@ struct ProjectChannelView: View {
         VStack(spacing: 0) {
             Divider()
             HStack { Text("Thread").font(.system(size: 12, weight: .semibold)); Spacer(); Button { channel.saveReplyDraft(); channel.threadId = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close thread") }.padding(12)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if channel.threadHasMore { Button("Load older replies") { Task { await channel.loadOlderReplies() } }.padding(12) }
-                        ForEach(channel.threadMessages) { message in
-                            messageRow(message).id(message.id).onScrollVisibilityChange(threshold: 0.5) { visible in observe(message, visible: visible) }
-                        }
-                    }.scrollTargetLayout()
-                }.frame(maxHeight: 220)
-                    .task(id: channel.unreadReplyTarget) { if let target = channel.unreadReplyTarget { await Task.yield(); proxy.scrollTo(target, anchor: .center) } }
-            }.onScrollVisibilityChange(threshold: 0.2) { visible in threadVisible = visible; if visible { markVisibleMessages() } }
-
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if channel.threadHasMore { Button("Load older replies") { Task { await channel.loadOlderReplies() } }.padding(12) }
+                ForEach(channel.threadMessages) { message in
+                    messageRow(message).id(message.id).onScrollVisibilityChange(threshold: 0.5) { visible in observe(message, visible: visible) }
+                }
+            }
             composer(reply: true)
         }.background(Color.secondary.opacity(0.035))
     }
@@ -230,7 +223,7 @@ struct ProjectChannelView: View {
     private func markVisibleMessages() {
         guard NSApp.isActive, scenePhase == .active, editing == nil, referenceSelection == nil, channel.query.isEmpty else { return }
         for message in channel.messages + channel.threadMessages where visibleMessageIds.contains(message.id) {
-            if message.parentId == nil || (threadVisible && channel.threadId == message.parentId) { channel.markVisible(message) }
+            if message.parentId == nil || (channel.threadId == message.parentId) { channel.markVisible(message) }
         }
     }
     private var humanAuthors: [ChannelAuthor] {
