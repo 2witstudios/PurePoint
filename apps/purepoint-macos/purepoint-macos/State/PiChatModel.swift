@@ -1,4 +1,5 @@
 // Desktop adapter for the merged Pi bridge v1 contract.
+import Combine
 import Foundation
 import SwiftUI
 
