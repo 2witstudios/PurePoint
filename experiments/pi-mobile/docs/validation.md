@@ -73,3 +73,7 @@ Owner requested a cleaner, space-efficient history interface and tap-to-dismiss 
 Conversation ScrollView now has a rectangular tap target and simultaneous tap gesture that clears composer focus, plus an accessibility Dismiss keyboard action. The gesture is scoped outside the composer. Existing interactive scroll dismissal remains.
 
 Validation: all standalone iOS source syntax checks and strict-concurrency Mac SDK domain/model typecheck pass; diff whitespace check passes. No iOS SDK build or rendered/device verification was performed. Owner: rebuild PiMobile-Device with Cmd+R, inspect drawer in light/dark and large Dynamic Type, search/select/refresh history, type and tap prose/empty space, then test text-selection long press, tool expansion and code copy while the keyboard is open. No bridge restart is needed. Owner signing/project/workspace edits are preserved.
+
+## Default run scheme — 2026-10-09
+
+Owner still encountered debugging with the usual Run action. PiMobile now defaults to Release Run with no selected debugger and PosixSpawn launcher, matching PiMobile-Device. Original Debug/LLDB launch configuration is preserved as PiMobile-Debug. Debug XCTest configuration remains available with Cmd+U. Scheme XML parses and assertions verify all three Run modes. No Xcode build or actual launch performed; owner must reload the project/scheme if Xcode keeps cached settings and verify Run > Info > Debug executable is unchecked. Owner signing/project/workspace changes remain untouched.
