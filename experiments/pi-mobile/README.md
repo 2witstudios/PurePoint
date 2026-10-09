@@ -86,7 +86,7 @@ The plist permits cleartext transport because IP-address `ws` inside Tailscale n
 
 ## Mobile conversation controls
 
-The left sidebar contains native conversation history, search, new conversation and connection settings. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs.
+The compact left sidebar contains title-only conversation history, inline search, a header new-chat action and connection settings in its Point Guard footer. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs. Tap the conversation area to dismiss the keyboard for reading; interactive scroll dismissal also remains available.
 
 The composer’s **+** menu offers **Photos** and **Files**. Images are prepared as JPEG and sent through native Pi RPC to an image-capable model. Text files and PDFs with selectable text are sent as named text; PDF binaries/layout and scanned PDF pages are not uploaded. Attachment chips show `Image` or `Text`, and can be removed before sending. Up to four files fit a 512 KiB prepared-data budget; each text attachment is at most 32 KiB and all prompt text at most 64 KiB. PDFs are limited to 30 pages. Attachments wait locally if Pi is busy; ordinary text can still use Send options → Steer / After reply.
 

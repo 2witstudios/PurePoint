@@ -101,3 +101,10 @@ Grounding: Apple's [Improving app responsiveness](https://developer.apple.com/do
 - Given physical-device testing, a dedicated shared Device scheme should run an optimized app without LLDB, while the original debug/test scheme remains available. Both should target the same app and signing configuration.
 - Given startup diagnosis, static launch logs should distinguish entering the SwiftUI App initializer from chat view appearance; they must not include credentials, endpoints, conversation data or device identifiers. These markers describe app lifecycle events, not guaranteed first rendered pixels.
 - Given connection settings appearance, loading an existing Keychain secret should not block the UI thread or overwrite a newer manual secret/address edit.
+
+### Compact history and reading interactions
+
+- Given an open history drawer, it should use a flat adaptive background, one compact Chats header with close/new-chat controls, unfilled inline search, single-line conversation titles and a quiet Point Guard settings footer. Rows retain at least 44-point tap targets; only the active conversation has a subtle rounded highlight. Per-row dates, the separate large new-chat row, filled search container, drawer shadow and footer divider are removed.
+- Given a tap on conversation content or its empty space, composer focus should clear and the keyboard should dismiss. The composer itself remains editable; simultaneous gesture handling should retain tool expansion, code-copy actions and long-press text selection. VoiceOver should expose a Dismiss keyboard action on the conversation area. Scroll dismissal remains interactive.
+
+Gesture grounding: Apple's [simultaneousGesture documentation](https://developer.apple.com/documentation/swiftui/view/simultaneousgesture(_:including:)) describes processing a parent gesture alongside child gestures. Actual native selection/control coexistence requires the owner-device check below.

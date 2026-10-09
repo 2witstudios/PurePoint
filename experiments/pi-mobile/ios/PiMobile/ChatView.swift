@@ -109,8 +109,7 @@ struct ChatView: View {
                     ZStack(alignment: .leading) {
                         Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close conversations sidebar")
                         ConversationSidebar(model: model, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
-                            .frame(width: min(340, geometry.size.width * 0.86), height: geometry.size.height)
-                            .shadow(color: .black.opacity(0.15), radius: 16, x: 6)
+                            .frame(width: min(320, geometry.size.width * 0.84), height: geometry.size.height)
                             .transition(.move(edge: .leading))
                             .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })
                     }
@@ -154,7 +153,10 @@ struct ChatView: View {
                         Color.clear.frame(height: 1).id("bottom").onAppear { following = true }.onDisappear { following = false }
                     }.padding(.horizontal, 20).padding(.vertical, 24)
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
                 .scrollDismissesKeyboard(.interactively)
+                .accessibilityAction(named: "Dismiss keyboard") { composerFocused = false }
                 .onChange(of: model.snapshot?.revision) { _, _ in if following { proxy.scrollTo("bottom", anchor: .bottom) } }
                 .onChange(of: model.snapshot?.sessionId) { _, _ in following = true; proxy.scrollTo("bottom", anchor: .bottom) }
                 if !following {

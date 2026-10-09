@@ -48,34 +48,63 @@ struct ConversationSidebar: View {
     let select: (Conversation) -> Void
     let connection: () -> Void
     @State private var search = ""
+    private var filtered: [Conversation] {
+        model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image("PurePointLogo").resizable().scaledToFit().frame(width: 30, height: 30).accessibilityHidden(true)
-                Text("Point Guard").font(.headline)
+            HStack(spacing: 4) {
+                Button(action: close) { Image(systemName: "sidebar.left").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Close conversations sidebar")
+                Text("Chats").font(.headline)
                 Spacer()
-                Button(action: close) { Image(systemName: "xmark").frame(width: 44, height: 44) }.accessibilityLabel("Close sidebar")
-            }.padding(.horizontal, 16).padding(.top, 8)
-            Button(action: newConversation) { Label("New conversation", systemImage: "square.and.pencil").frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 14) }
-                .disabled(!model.connected || model.demo || model.changingSession).padding(.horizontal, 20)
-            HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Search conversations", text: $search).autocorrectionDisabled() }
-                .padding(12).background(Color(uiColor: .tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16).padding(.bottom, 8)
-            if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 20).padding(.vertical, 8) }
-            List {
-                if model.conversations.isEmpty { Text("No conversations").foregroundStyle(.secondary).listRowBackground(Color.clear) }
-                ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
-                    Button { select(conversation) } label: {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(conversation.title).font(.subheadline).lineLimit(2).foregroundStyle(.primary)
-                            if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                    }.listRowSeparator(.hidden).listRowBackground(conversation.id == model.snapshot?.sessionId ? Color(uiColor: .tertiarySystemBackground) : Color.clear)
-                }
-            }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await model.loadConversations() }
-            Divider()
-            Button(action: connection) { Label("Connection", systemImage: "link").frame(maxWidth: .infinity, alignment: .leading).padding(20) }
+                Button(action: newConversation) { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
+                    .disabled(!model.connected || model.demo || model.changingSession)
+                    .accessibilityLabel("New conversation")
+            }.padding(.horizontal, 8).padding(.top, 4)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.subheadline).foregroundStyle(.tertiary)
+                TextField("Search", text: $search).font(.subheadline).autocorrectionDisabled()
+                    .accessibilityLabel("Search conversations")
+            }.padding(.horizontal, 20).frame(height: 44).padding(.bottom, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    if let error = model.error {
+                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                    }
+                    if filtered.isEmpty {
+                        Text(search.isEmpty ? "No conversations yet" : "No matches")
+                            .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.vertical, 16)
+                    }
+                    ForEach(filtered) { conversation in
+                        Button { select(conversation) } label: {
+                            Text(conversation.title).font(.subheadline).lineLimit(1)
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .background(conversation.id == model.snapshot?.sessionId ? Color(uiColor: .secondarySystemBackground) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel(conversation.title)
+                        .accessibilityAddTraits(conversation.id == model.snapshot?.sessionId ? .isSelected : [])
+                    }
+                }.padding(.horizontal, 8).padding(.bottom, 12)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable { await model.loadConversations() }
+            Button(action: connection) {
+                HStack(spacing: 8) {
+                    Image("PurePointLogo").resizable().scaledToFit().frame(width: 20, height: 20).accessibilityHidden(true)
+                    Text("Point Guard").font(.subheadline.weight(.medium))
+                    Spacer()
+                    Image(systemName: "gearshape").font(.subheadline).foregroundStyle(.secondary)
+                }.padding(.horizontal, 20).frame(height: 52).contentShape(Rectangle())
+            }.accessibilityLabel("Connection settings")
         }
-        .background(Color(uiColor: .secondarySystemBackground))
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .background(Color(uiColor: .systemBackground))
         .accessibilityAction(.escape) { close() }
     }
 }
