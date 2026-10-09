@@ -1,0 +1,15 @@
+{
+  "derivedFrom": "../v3/manifest.json",
+  "purpose": "Review keyboard fixes; approved v3 snapshots and remote design revision remain immutable.",
+  "screens": {
+    "channel": {
+      "sha256": "75ba53db5a1619fad1f4964609e06acca710ab2ed4baafbdccba097ab7f362a8"
+    },
+    "project": {
+      "sha256": "e17ed5937bb45836b99ab88107762e8534d90e182a3741ea3e13cdf489cc111d"
+    },
+    "worktree": {
+      "sha256": "ef86281a504ccd3b68add6040e597ab99237b6d0f87a380142f88a3b3779cad4"
+    }
+  }
+}

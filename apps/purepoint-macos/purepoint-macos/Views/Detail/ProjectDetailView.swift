@@ -37,6 +37,10 @@ struct ProjectDetailView: View {
             }
         }.task(id: project.projectRoot) {
             while !Task.isCancelled {
+                guard NSApplication.shared.isActive else {
+                    do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                    continue
+                }
                 let service = GitService()
                 var next: [String: GitReviewSummary] = [:]
                 next[project.projectRoot] = await service.reviewSummary(at: project.projectRoot, baseBranch: nil)

@@ -88,7 +88,7 @@ struct ReviewChangesView: View {
         DiffListView(diff: loading && files.isEmpty ? nil : DiffData(files: files), isLoading: loading, emptyMessage: empty, error: error, onRetry: { state.refresh() })
     }
     @ViewBuilder private func section(_ title: String, files: [FileDiff]) -> some View {
-        if !files.isEmpty { Text("\(title) · \(files.count)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 8); ForEach(files) { DiffCardView(fileDiff: $0) } }
+        if !files.isEmpty { Text("\(title) · \(files.count)").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 8); ForEach(files) { file in DiffCardView(fileDiff: file, onLoadPreview: { Task { await state.loadUntrackedPreview(file) } }) } }
     }
     private func errorView(_ message: String) -> some View { patches([], loading: false, empty: "", error: message) }
 }

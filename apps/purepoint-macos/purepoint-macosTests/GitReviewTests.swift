@@ -164,6 +164,24 @@ private enum GitReviewChecks {
             try require(slow.success && slow.stdout == "complete", "local Git must outlive remote-only 25-second deadline")
             print("Slow local Git deadline regression passed")
         }
+        let previews = try repo(); defer { try? FileManager.default.removeItem(atPath: previews) }
+        for index in 0..<40 { try write("file \(index)\n", String(format: "new%02d.txt", index), at: previews) }
+        try write(String(repeating: "x", count: 1_100_000), "aa-large.txt", at: previews)
+        try FileManager.default.createDirectory(atPath: previews + "/aa-nested", withIntermediateDirectories: true)
+        _ = try git(["init"], at: previews + "/aa-nested")
+        try write("nested\n", "file.txt", at: previews + "/aa-nested")
+        let previewReview = await service.fetchLocalReview(at: previews)
+        try require(previewReview.untrackedError == nil && previewReview.untracked.count == 42, "one bad untracked path must not discard group")
+        try require(previewReview.untracked.first { $0.filename == "aa-large.txt" }?.previewError != nil, "large untracked capture bounded")
+        try require(previewReview.untracked.first { $0.filename.hasPrefix("aa-nested") }?.previewError != nil, "nested repository placeholder")
+        let deferred = previewReview.untracked.first { $0.previewDeferred }!
+        let explicitPreview = await service.untrackedPreview(name: deferred.filename, at: previews)
+        try require(explicitPreview.hunks.first?.lines.count == 1, "deferred preview explicitly loadable")
+        let reloaded = await service.fetchLocalReview(at: previews)
+        try require(reloaded.untracked.first { $0.filename == deferred.filename }?.previewDeferred == false, "explicit preview survives polling")
+        try write("changed\n", deferred.filename, at: previews)
+        let changed = await service.untrackedPreview(name: deferred.filename, at: previews)
+        try require(changed.hunks.first?.lines.first?.content == "changed", "metadata cache invalidated after edit")
         print("Git repository checks passed")
     }
 
@@ -212,6 +230,9 @@ private enum GitReviewChecks {
         try write("unexpected output", "pr.patch", at: path)
         state.refresh(); try await settle(state)
         try require(state.prError != nil && state.prDiff?.files.count == 2, "malformed PR patch retains evidence")
+        state.selectedPR = nil; state.prDiff = nil
+        state.refresh(); try await settle(state)
+        try require(state.selectedPR == nil && state.prDiff == nil && !state.pullRequests.isEmpty, "refresh must preserve explicit PR list navigation")
         // Base changes invalidate pending PR diffs even when the subsequent lookup fails.
         try write("fail", "fail", at: path)
         state.selectPR(state.pullRequests[0])

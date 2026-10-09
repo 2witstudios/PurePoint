@@ -50,6 +50,7 @@ final class DiffState {
     private var commitTask: Task<Void, Never>?
     private var prDiffTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
+    private var initialPRSelectionMade = false
     private var lastPRRefresh = Date.distantPast
 
     func loadForWorktree(_ worktree: WorktreeModel) {
@@ -61,6 +62,7 @@ final class DiffState {
     private func load(path: String, branch: String?, base: String?) {
         stopWatching()
         self.path = path; self.branch = branch; requestedBase = base
+        initialPRSelectionMade = false
         activeTab = .branch; comparisonBase = base ?? ""; availableBases = []
         branchDiff = []; stagedDiff = []; unstagedDiff = []; untrackedDiff = []
         commits = []; selectedCommit = nil; commitDiff = []
@@ -129,6 +131,14 @@ final class DiffState {
         }
     }
 
+    func loadUntrackedPreview(_ file: FileDiff) async {
+        guard let path else { return }
+        let token = generation
+        let preview = await git.untrackedPreview(name: file.filename, at: path)
+        guard generation == token, let index = untrackedDiff.firstIndex(where: { $0.filename == file.filename }) else { return }
+        untrackedDiff[index] = preview
+    }
+
     func refresh() { refreshLocal(); refreshPRs() }
 
     private func refreshLocal() {
@@ -164,10 +174,12 @@ final class DiffState {
             do {
                 let prs = try await git.fetchPRListChecked(cwd: path, branch: branch)
                 guard !Task.isCancelled, generation == token else { return }
+                let shouldSelectInitialPR = !initialPRSelectionMade
+                initialPRSelectionMade = true
                 ghAvailable = true; pullRequests = prs; prError = nil
                 if let selected = selectedPR, let updated = prs.first(where: { $0.number == selected.number }) { selectPR(updated) }
-                else if let first = prs.first { selectPR(first) }
-                else { prDiffTask?.cancel(); selectedPR = nil; prDiff = nil; isLoadingPRDiff = false }
+                else if shouldSelectInitialPR, let first = prs.first { selectPR(first) }
+                else if prs.isEmpty || selectedPR != nil { prDiffTask?.cancel(); selectedPR = nil; prDiff = nil; isLoadingPRDiff = false }
             } catch {
                 guard !Task.isCancelled, generation == token else { return }
                 // Keep previously fetched evidence and expose auth/network/decoding failures.

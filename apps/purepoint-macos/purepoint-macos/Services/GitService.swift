@@ -28,6 +28,9 @@ nonisolated enum WorkingTreeDiffError: LocalizedError {
 actor GitService {
     static let shared = GitService()
     private var cachedGhPath: String?
+    private var untrackedCache: [String: (stamp: String, file: FileDiff, bytes: Int)] = [:]
+    private var untrackedCacheOrder: [String] = []
+    private var untrackedCacheBytes = 0
 
     init(ghPath: String? = nil) { cachedGhPath = ghPath }
 
@@ -87,12 +90,50 @@ actor GitService {
         catch { review.unstagedError = error.localizedDescription }
         do {
             let names = try checked(["ls-files", "--others", "--exclude-standard", "-z"], at: path).split(separator: "\0").map(String.init)
+            var remaining = 32
             for name in names {
-                review.untracked.append(try emptyBaselinePatch(name: name, status: "??", at: path))
+                let key = (path as NSString).appendingPathComponent(name)
+                let attributes = try? FileManager.default.attributesOfItem(atPath: key)
+                let stamp = "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.type] ?? "missing")"
+                if let cached = untrackedCache[key], cached.stamp == stamp { review.untracked.append(cached.file) }
+                else if remaining > 0 {
+                    remaining -= 1
+                    let file = untrackedPreview(name: name, at: path)
+                    review.untracked.append(file)
+                } else {
+                    var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
+                    file.previewDeferred = true
+                    review.untracked.append(file)
+                }
             }
         } catch { review.untrackedError = error.localizedDescription }
         review.error = [review.stagedError, review.unstagedError, review.untrackedError].compactMap { $0 }.joined(separator: "\n").nilIfEmpty
         return review
+    }
+
+    func untrackedPreview(name: String, at path: String) -> FileDiff {
+        let key = (path as NSString).appendingPathComponent(name)
+        let attributes = try? FileManager.default.attributesOfItem(atPath: key)
+        let stamp = "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.type] ?? "missing")"
+        if let cached = untrackedCache[key], cached.stamp == stamp { return cached.file }
+        var file: FileDiff
+        do {
+            guard attributes?[.type] as? FileAttributeType != .typeDirectory else { throw FilePreviewError.unsupported }
+            file = try emptyBaselinePatch(name: name, status: "??", at: path, outputLimit: 1_000_000)
+        } catch {
+            file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
+            file.previewError = error.localizedDescription
+        }
+        // Cache explicit/lazy previews too, with a fixed metadata-count and text budget.
+        let bytes = file.hunks.reduce(0) { total, hunk in total + hunk.lines.reduce(0) { $0 + $1.content.utf8.count } }
+        if let previous = untrackedCache.removeValue(forKey: key) { untrackedCacheBytes -= previous.bytes }
+        untrackedCacheOrder.removeAll { $0 == key }
+        while untrackedCache.count >= 128 || untrackedCacheBytes + bytes > 8_000_000 {
+            guard !untrackedCacheOrder.isEmpty else { break }
+            if let removed = untrackedCache.removeValue(forKey: untrackedCacheOrder.removeFirst()) { untrackedCacheBytes -= removed.bytes }
+        }
+        untrackedCache[key] = (stamp, file, bytes); untrackedCacheOrder.append(key); untrackedCacheBytes += bytes
+        return file
     }
 
     func reviewSummary(at path: String, baseBranch: String?) -> GitReviewSummary {
@@ -192,8 +233,9 @@ actor GitService {
         return files.sorted { $0.filename < $1.filename }
     }
 
-    private func emptyBaselinePatch(name: String, status: String, at path: String) throws -> FileDiff {
-        let result = runGit(["-c", "core.quotePath=true", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name], cwd: path)
+    private func emptyBaselinePatch(name: String, status: String, at path: String, outputLimit: Int? = nil) throws -> FileDiff {
+        let result = runGit(["-c", "core.quotePath=true", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name], cwd: path, outputLimit: outputLimit)
+        guard !result.outputExceededLimit else { throw FilePreviewError.tooLarge }
         guard result.exitCode == 0 || result.exitCode == 1 else { throw GitReviewError(message: result.stderr) }
         return parsePatch(result.stdout, filename: name, status: status)
     }

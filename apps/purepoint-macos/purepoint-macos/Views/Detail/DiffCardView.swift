@@ -3,10 +3,13 @@ import SwiftUI
 /// Card displaying a single file's diff — header with metadata + AppKit diff content body.
 struct DiffCardView: View {
     let fileDiff: FileDiff
+    var onLoadPreview: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let error = fileDiff.previewError { Text(error).font(.system(size: 11)).foregroundStyle(.orange).padding(10).frame(maxWidth: .infinity, alignment: .leading) }
+            if fileDiff.previewDeferred { Button("Load preview") { onLoadPreview?() }.buttonStyle(.borderless).padding(10).frame(maxWidth: .infinity, alignment: .leading) }
             if fileDiff.statusCode == "U" {
                 Text(fileDiff.hunks.isEmpty ? "Unresolved merge conflict. Resolve this file before committing." : "Unresolved merge conflict · working-file patch compared with \(fileDiff.conflictBaseline ?? "unavailable baseline")").font(.system(size: 11)).foregroundStyle(.orange).padding(10).frame(maxWidth: .infinity, alignment: .leading)
             }
