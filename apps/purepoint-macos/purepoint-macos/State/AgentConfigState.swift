@@ -8,8 +8,41 @@ final class AgentConfigState {
     var defaultAgent: String = "claude"
     var isLoading = false
     var error: String?
+    var codexYolo = false
+    var globalSettingsLoaded = false
+    var isSavingGlobalSettings = false
+    var globalError: String?
 
     @ObservationIgnored private let client = DaemonClient()
+
+    func loadGlobalSettings() async {
+        await sendGlobalSettings(.getGlobalAgentSettings)
+    }
+
+    func updateGlobalSettings(codexYolo: Bool, projectRoot: String?) async {
+        guard !isSavingGlobalSettings else { return }
+        isSavingGlobalSettings = true
+        await sendGlobalSettings(.updateGlobalAgentSettings(codexYolo: codexYolo))
+        if let projectRoot { await load(projectRoot: projectRoot) }
+        isSavingGlobalSettings = false
+    }
+
+    private func sendGlobalSettings(_ request: DaemonRequest) async {
+        globalError = nil
+        do {
+            switch try await client.send(request) {
+            case .globalAgentSettingsReport(let enabled):
+                codexYolo = enabled
+                globalSettingsLoaded = true
+            case .error(_, let message):
+                globalError = message
+            default:
+                globalError = "Unexpected response. Update the PurePoint daemon to use global settings."
+            }
+        } catch {
+            globalError = error.localizedDescription
+        }
+    }
 
     func load(projectRoot: String) async {
         isLoading = true

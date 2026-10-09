@@ -9,6 +9,33 @@ import Testing
 import Foundation
 @testable import PurePoint
 
+@MainActor
+struct GlobalAgentSettingsTests {
+    @Test func yoloSurvivesEditingModelAndSearch() {
+        var config = parseCodexLaunchArgs(["--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "-m", "custom", "--search"])
+        #expect(config.yolo)
+        config.model = "updated"
+        #expect(composeCodexLaunchArgs(config) == ["--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "-m", "updated", "--search"])
+        config.yolo = false
+        #expect(!composeCodexLaunchArgs(config).contains("--dangerously-bypass-approvals-and-sandbox"))
+        #expect(composeCodexLaunchArgs(config).contains("workspace-write"))
+    }
+
+    @Test func globalSettingsProtocolRoundTrip() throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(codexYolo: true))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["type"] as? String == "update_global_agent_settings")
+        #expect(json["codex_yolo"] as? Bool == true)
+        #expect(json["project_root"] == nil)
+        let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(#"{"type":"global_agent_settings_report","codex_yolo":true}"#.utf8))
+        guard case .globalAgentSettingsReport(let enabled) = response else {
+            Issue.record("Expected global settings response")
+            return
+        }
+        #expect(enabled)
+    }
+}
+
 // MARK: - PaneSplitNode Tests
 
 struct PaneSplitNodeTests {
