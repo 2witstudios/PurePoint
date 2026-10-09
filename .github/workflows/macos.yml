@@ -161,7 +161,7 @@ jobs:
           done
 
       - name: Compile app and test bundles
-        timeout-minutes: 20
+        timeout-minutes: 18
         run: |
           python3 .github/scripts/log_macos_command.py "$RUNNER_TEMP/macos-diagnostics/compile" \
             xcodebuild build-for-testing \

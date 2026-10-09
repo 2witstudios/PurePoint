@@ -19,11 +19,15 @@ def run_logged(command, folder, interval=60, stall_seconds=120):
         last_sample = 0
         while not stopped.wait(interval):
             stamp = time.strftime("%Y%m%d-%H%M%S")
-            snapshot = subprocess.run(
-                ["ps", "-axo", "pid,ppid,etime,%cpu,command"],
-                capture_output=True, text=True, timeout=10,
-            ).stdout
-            (folder / f"processes-{stamp}.txt").write_text(snapshot)
+            try:
+                snapshot = subprocess.run(
+                    ["ps", "-axo", "pid,ppid,etime,%cpu,command"],
+                    capture_output=True, text=True, timeout=10, check=True,
+                ).stdout
+                (folder / f"processes-{stamp}.txt").write_text(snapshot)
+            except (OSError, subprocess.SubprocessError) as error:
+                print(f"CI diagnostics unavailable this interval: {error}", flush=True)
+                continue
             silent = time.monotonic() - last_output
             print(f"CI heartbeat: {silent:.0f}s since Xcode output", flush=True)
             if silent < stall_seconds or time.monotonic() - last_sample < stall_seconds:
@@ -46,8 +50,8 @@ def run_logged(command, folder, interval=60, stall_seconds=120):
                         [sampler, fields[0], "3", "-file", str(folder / f"sample-{fields[0]}-{stamp}.txt")],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
                     )
-                except subprocess.TimeoutExpired:
-                    pass
+                except (OSError, subprocess.SubprocessError) as error:
+                    print(f"CI sample unavailable for {fields[0]}: {error}", flush=True)
 
     with (folder / "xcode.log").open("wb") as log:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
