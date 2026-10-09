@@ -19,7 +19,7 @@ export class Controller extends EventEmitter {
     this.busy = false;
     this.state = {};
     this.queue = [];
-    this.queueOrigins = [];
+    this.pendingEnqueue = null;
     this.nativeQueue = [];
     this.canceled = [];
     this.dialogs = new Map();
@@ -112,10 +112,10 @@ export class Controller extends EventEmitter {
         `Extension ${clip(basename(e.extensionPath || "unknown"), 200)} failed during ${clip(e.event || "unknown hook", 100)}: ${clip(e.error || "Unknown error", 3500)}`,
       );
     if (e.type === "queue_update") {
-      const previousIds = new Set(this.nativeQueue.map((item) => item.id));
-      const available = this.queueOrigins.filter(
-        (item) => !previousIds.has(item.id),
-      );
+      // Capture exactly what native clearQueue removes, after intervening
+      // dequeues and before any extension enqueue following the clear.
+      if (this.clearingQueue && e.queueCleared)
+        this.clearingQueue.origins = [...this.nativeQueue];
       const next = [];
       for (const [mode, texts] of [
         ["steer", e.steering ?? []],
@@ -135,23 +135,19 @@ export class Controller extends EventEmitter {
           overlap--;
         next.push(...previous.slice(previous.length - overlap));
         for (const text of texts.slice(overlap)) {
-          const index = available.findIndex(
-            (item) => item.mode === mode && item.text === text,
-          );
-          const origin = index < 0 ? null : available.splice(index, 1)[0];
-          next.push({
-            id: origin?.id ?? randomUUID(),
-            clientId: origin?.clientId ?? null,
-            mode,
-            text,
-          });
+          const item = { id: randomUUID(), clientId: null, mode, text };
+          next.push(item);
+          // Native metadata identifies this RPC input after transformation,
+          // excluding extension prompts that can interleave before its receipt.
+          if (
+            this.pendingEnqueue?.mode === mode &&
+            e.enqueuedMode === mode &&
+            e.inputSource === "rpc"
+          )
+            this.pendingEnqueue.item = item;
         }
       }
       this.nativeQueue = next;
-      const nextIds = new Set(next.map((item) => item.id));
-      this.queueOrigins = this.queueOrigins.filter(
-        (item) => !previousIds.has(item.id) || nextIds.has(item.id),
-      );
       this.queue = next
         .slice(0, 100)
         .map((item) => ({ ...item, text: clip(item.text) }));
@@ -436,37 +432,44 @@ export class Controller extends EventEmitter {
           "No Pi model configured. Open local Pi and configure a provider/model first.",
         );
       const queued = r.mode !== "send";
-      const originId = `${r.clientId}:${r.id}`;
-      if (queued) {
-        if (this.queueOrigins.length >= 100 || this.nativeQueue.length >= 100)
-          throw new Error("Queue is full. Wait for Pi before sending more.");
-        this.queueOrigins.push({
-          id: originId,
-          clientId: r.clientId,
-          mode: r.mode,
-          text: r.text,
-        });
-      }
+      if (queued && this.nativeQueue.length >= 100)
+        throw new Error("Queue is full. Wait for Pi before sending more.");
+      const pending = queued ? { mode: r.mode, item: null } : null;
+      this.pendingEnqueue = pending;
+      const acknowledge = (result) => {
+        // Freeze correlation at the wire response, before more events in the
+        // same stdout chunk can be decoded.
+        if (this.pendingEnqueue !== pending) return;
+        this.pendingEnqueue = null;
+        if (result.disposition === "queued" && pending?.item) {
+          pending.item.id = `${r.clientId}:${r.id}`;
+          pending.item.clientId = r.clientId;
+          this.queue = this.nativeQueue
+            .slice(0, 100)
+            .map((item) => ({ ...item, text: clip(item.text) }));
+          this.changed();
+        }
+      };
       let result;
       try {
-        result = await this.rpc.call("prompt", {
-          message: r.text,
-          ...(images.length ? { images } : {}),
-          ...(r.mode === "send"
-            ? {}
-            : { streamingBehavior: r.mode === "steer" ? "steer" : "followUp" }),
-        });
-      } catch (error) {
-        if (!this.queue.some((item) => item.id === originId))
-          this.queueOrigins = this.queueOrigins.filter(
-            (item) => item.id !== originId,
-          );
-        throw error;
-      }
-      if (result.disposition !== "queued")
-        this.queueOrigins = this.queueOrigins.filter(
-          (item) => item.id !== originId,
+        result = await this.rpc.call(
+          "prompt",
+          {
+            message: r.text,
+            ...(images.length ? { images } : {}),
+            ...(r.mode === "send"
+              ? {}
+              : {
+                  streamingBehavior: r.mode === "steer" ? "steer" : "followUp",
+                }),
+          },
+          30000,
+          acknowledge,
         );
+        acknowledge(result);
+      } finally {
+        this.pendingEnqueue = null;
+      }
       if (result.disposition === "handled") {
         // An extension may change sessions/branches without emitting agent events.
         await this.refreshFresh();
@@ -476,8 +479,20 @@ export class Controller extends EventEmitter {
     if (r.op === "stop") {
       this.checkRun(r);
       const run = this.runId;
-      const origins = [...this.queueOrigins];
-      const recovered = await this.rpc.call("clear_queue");
+      const clearing = { origins: [...this.nativeQueue] };
+      this.clearingQueue = clearing;
+      let origins;
+      const acknowledge = () => {
+        origins = clearing.origins;
+        this.clearingQueue = null;
+      };
+      let recovered;
+      try {
+        recovered = await this.rpc.call("clear_queue", {}, 30000, acknowledge);
+        if (!origins) acknowledge();
+      } finally {
+        this.clearingQueue = null;
+      }
       const texts = [
         ...(recovered.steering ?? []).map((text) => ({ mode: "steer", text })),
         ...(recovered.followUp ?? []).map((text) => ({ mode: "after", text })),
@@ -496,8 +511,7 @@ export class Controller extends EventEmitter {
           };
         }),
       );
-      this.queueOrigins = [];
-      this.nativeQueue = [];
+      this.pendingEnqueue = null;
       this.canceled = this.canceled.slice(-100);
       this.changed();
       // Native completion or extension activity can happen while queue clearing is in flight.
@@ -506,7 +520,9 @@ export class Controller extends EventEmitter {
         this.cancelDialogs();
         await this.rpc.call("abort");
       }
-      this.queue = [];
+      this.queue = this.nativeQueue
+        .slice(0, 100)
+        .map((item) => ({ ...item, text: clip(item.text) }));
       await this.refreshFresh();
       return recovered;
     }
@@ -539,7 +555,7 @@ export class Controller extends EventEmitter {
     this.editorOffer = this.transition?.editorOffer ?? null;
     this.titleOverride = this.transition?.titleOverride ?? null;
     this.queue = [];
-    this.queueOrigins = [];
+    this.pendingEnqueue = null;
     this.nativeQueue = [];
     this.notices = this.transition ? [...this.transition.notices] : [];
     this.statuses = new Map(this.transition?.statuses);

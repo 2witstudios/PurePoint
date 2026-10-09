@@ -64,7 +64,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
     var demo = false
     var busy: Bool { snapshot?.busy ?? false }
     var canSend: Bool {
-        connected && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty)
+        connected && browsing == nil && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty)
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }

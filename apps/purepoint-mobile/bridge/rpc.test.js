@@ -41,3 +41,75 @@ test("child exit rejects pending operations visibly", async () => {
   await assert.rejects(rpc.call("get_state"), /exited/);
   await rpc.close();
 });
+
+test("response callbacks freeze correlation before later events in the same stdout chunk", async () => {
+  const rpc = new Rpc(
+    process.execPath,
+    [
+      "-e",
+      `
+    process.stdin.once("data", chunk => {
+      const request = JSON.parse(chunk.toString());
+      const records = [
+        { type: "queue_update", followUp: ["Expanded input"] },
+        { type: "response", id: request.id, success: true, data: { disposition: "queued" } },
+        { type: "queue_update", followUp: ["Expanded input", "Extension side effect"] }
+      ];
+      process.stdout.write(records.map(record => JSON.stringify(record)).join("\\n") + "\\n");
+    });
+  `,
+    ],
+    process.cwd(),
+    process.env,
+  );
+  const order = [];
+  rpc.on("event", (event) => order.push(event.followUp));
+  try {
+    const result = await rpc.call(
+      "prompt",
+      { message: "/template" },
+      30000,
+      (data) => order.push(data.disposition),
+    );
+    assert.equal(result.disposition, "queued");
+    assert.deepEqual(order, [
+      ["Expanded input"],
+      "queued",
+      ["Expanded input", "Extension side effect"],
+    ]);
+  } finally {
+    await rpc.close();
+  }
+});
+
+test("uncertain prompt timeout fences later prompts until bridge restart", async () => {
+  const rpc = new Rpc(
+    process.execPath,
+    [
+      "-e",
+      `
+    process.stdin.on("data", () => {});
+  `,
+    ],
+    process.cwd(),
+    process.env,
+  );
+  let failure;
+  rpc.on("failure", (error) => {
+    failure = error;
+  });
+  try {
+    await assert.rejects(
+      rpc.call("prompt", { message: "Delayed input hook" }, 20),
+      /restart the bridge/,
+    );
+    assert.match(failure.message, /Delivery is uncertain/);
+    await assert.rejects(
+      rpc.call("prompt", { message: "Another client's input" }),
+      /restart the bridge/,
+    );
+    assert.equal(rpc.pending.size, 0);
+  } finally {
+    await rpc.close();
+  }
+});

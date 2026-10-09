@@ -99,6 +99,11 @@ extension ChatModel {
         try await wait("dialog settles") { !model.busy && model.snapshot?.dialogs.isEmpty == true }
         await model.browse(model.conversations[0])
         precondition(model.browsing?.messages.first?.text == "History is read-only.")
+        model.draft = "Draft for the live conversation"
+        precondition(!model.canSend, "Browsing history must not send into the live conversation")
+        let submissionsBeforeBrowseSend = model.submissions.count
+        model.submit(mode: "send")
+        precondition(model.submissions.count == submissionsBeforeBrowseSend)
         await model.changeSession(to: "fixture-history")
         precondition(model.snapshot?.sessionId == "fixture-history" && model.browsing == nil)
         await model.changeSession()

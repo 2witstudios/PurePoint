@@ -22,7 +22,7 @@ struct PiPointGuardChatView: View {
                 if let error = model.error {
                     InlineErrorBanner(message: error) { model.error = nil }
                 }
-                composer
+                if model.browsing == nil { composer }
             }
             .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }

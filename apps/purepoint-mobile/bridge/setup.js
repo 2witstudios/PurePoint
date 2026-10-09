@@ -43,10 +43,7 @@ export async function ensureToken(file = defaultTokenFile) {
   }
   return loadToken(file);
 }
-export const cli = path.join(
-  root,
-  "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
-);
+export const cli = path.join(root, "bridge/native.js");
 export async function discoverPuSkills(home = os.homedir()) {
   const found = [];
   const roots = [
