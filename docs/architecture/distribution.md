@@ -1,6 +1,6 @@
 # Distribution
 
-**Maturity: DECIDED**
+**Maturity: SPECIFIED**
 
 ## Context
 
@@ -42,3 +42,15 @@ Existing bridge owns one Node Pi RPC process. App-lifetime Process ownership mee
 Official Node distribution supplies Darwin arm64/x64 binaries and SHA256 manifests: [Node releases](https://nodejs.org/download/release/). Pi requires Node >=22.19 and supports script-free npm installation: [Pi upstream](https://github.com/earendil-works/pi). Pin runtime and complete transitive production dependencies; relocate packaged artifact outside checkout and prove empty-HOME/stripped-PATH launch for both advertised architectures.
 
 Apple requires nested code to be signed and hardened-runtime entitlements to follow the executable: [TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html), [JIT on Apple Silicon](https://developer.apple.com/documentation/Apple-Silicon/porting-just-in-time-compilers-to-apple-silicon). Inside-out signing and Node allow-jit must be checked on the artifact. Ad-hoc CI signature/execution proof does not establish [Developer ID/notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution); that remains protected owner evidence.
+
+## Requirements and Interfaces
+
+- Given a fresh supported Mac, should provide bundle-relative Node/Pi/bridge/pu and complete instructions/resources without external development tools.
+- Given a packaged candidate, should prove both advertised architectures under empty HOME and stripped PATH after relocation outside checkout.
+- Given an update, should stop owned managed children before replacement and preserve native auth/session/managed trust state.
+- Given ad-hoc CI success, should retain protected Developer ID/notarization and owner fresh-device acceptance as separate pending proof.
+- Bundle layout, runtime manifest, lifecycle/state/auth contracts and collision/recovery edge cases: `../product/point-guard-setup.md` PRPG r1 / PRPG-TRUST-1.
+
+## Edge Cases
+
+Missing architecture/resource/signature blocks package acceptance; no developer-path fallback in distribution. Unknown listeners are never adopted/killed. Unknown/corrupt state is never silently migrated to weaker authorization.
