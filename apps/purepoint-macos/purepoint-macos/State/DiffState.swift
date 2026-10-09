@@ -86,6 +86,7 @@ final class DiffState {
         requestedBase = base; comparisonBase = base
         generation = UUID()
         localTask?.cancel(); localTask = nil; commitTask?.cancel(); prTask?.cancel(); prTask = nil; prDiffTask?.cancel()
+        isLoadingPRDiff = false; isLoadingPRs = false
         // Old branch and commit evidence belongs to a different comparison.
         branchDiff = []; commits = []; selectedCommit = nil; commitDiff = []; isLoadingCommit = false
         refresh()

@@ -174,8 +174,12 @@ private enum GitReviewChecks {
         try write("unexpected output", "pr.patch", at: path)
         state.refresh(); try await settle(state)
         try require(state.prError != nil && state.prDiff?.files.count == 2, "malformed PR patch retains evidence")
+        // Base changes invalidate pending PR diffs even when the subsequent lookup fails.
+        try write("fail", "fail", at: path)
+        state.selectPR(state.pullRequests[0])
         state.setComparisonBase("missing-base"); try await settle(state)
         try require(state.branchError != nil && state.comparisonBase == "missing-base" && state.branchDiff.isEmpty, "explicit base failure")
+        try FileManager.default.removeItem(atPath: path + "/fail")
         state.setComparisonBase("main"); try await settle(state)
         try require(state.branchError == nil && state.branchDiff.count == 2, "base error recovers")
         let other = try repo(); defer { try? FileManager.default.removeItem(atPath: other) }
