@@ -217,3 +217,211 @@ test("branch changes discard persisted abandoned tools while preserving unpersis
     ["shared", "live", "completed-live"],
   );
 });
+
+test("hidden custom messages never enter live or refreshed transcripts", () => {
+  const p = new Projection();
+  const message = {
+    role: "custom",
+    customType: "context",
+    content: "Private context",
+    display: false,
+    timestamp: 100,
+  };
+  p.event({ type: "message_start", message });
+  p.event({ type: "message_end", message });
+  assert.deepEqual(p.messages, []);
+  p.load(
+    [
+      {
+        id: "hidden",
+        parentId: null,
+        type: "custom_message",
+        ...message,
+        timestamp: new Date(105).toISOString(),
+      },
+    ],
+    "hidden",
+  );
+  assert.deepEqual(p.messages, []);
+});
+
+test("custom persistence replaces live occurrences and removes abandoned branch messages", () => {
+  const p = new Projection();
+  const message = {
+    role: "custom",
+    customType: "note",
+    content: "Repeated note",
+    display: true,
+    timestamp: 100,
+  };
+  const entries = [
+    {
+      id: "first",
+      parentId: null,
+      type: "custom_message",
+      ...message,
+      timestamp: new Date(105).toISOString(),
+    },
+    {
+      id: "second",
+      parentId: "first",
+      type: "custom_message",
+      ...message,
+      timestamp: new Date(205).toISOString(),
+    },
+    {
+      id: "other",
+      parentId: null,
+      type: "message",
+      message: { role: "user", content: "Other branch", timestamp: 300 },
+    },
+  ];
+  p.event({ type: "message_end", message });
+  p.event({ type: "message_end", message: { ...message, timestamp: 200 } });
+  p.load(entries, "second");
+  assert.deepEqual(
+    p.messages.map((row) => row.id),
+    ["first", "second"],
+  );
+  // An identical new occurrence must survive a sync before it is persisted.
+  p.event({ type: "message_end", message: { ...message, timestamp: 400 } });
+  p.load(entries, "second");
+  assert.equal(p.messages.length, 3);
+  entries.push({
+    id: "third",
+    parentId: "second",
+    type: "custom_message",
+    ...message,
+    timestamp: new Date(450).toISOString(),
+  });
+  p.load(entries, "third");
+  assert.deepEqual(
+    p.messages.map((row) => row.id),
+    ["first", "second", "third"],
+  );
+  p.load(entries, "other");
+  assert.deepEqual(
+    p.messages.map((row) => row.text),
+    ["Other branch"],
+  );
+});
+
+test("custom messages sharing a timestamp retain their distinct contents", () => {
+  const p = new Projection();
+  for (const content of ["First", "Second"])
+    p.event({
+      type: "message_end",
+      message: {
+        role: "custom",
+        customType: "note",
+        display: true,
+        timestamp: 100,
+        content,
+      },
+    });
+  assert.deepEqual(
+    p.messages.map((row) => row.text),
+    ["First", "Second"],
+  );
+});
+
+test("native shell execution rows preserve command output and outcome in live and history", () => {
+  for (const outcome of [
+    { exitCode: 0, cancelled: false, truncated: false },
+    { exitCode: 7, cancelled: false, truncated: false },
+    {
+      exitCode: undefined,
+      cancelled: true,
+      truncated: true,
+      fullOutputPath: "/tmp/shell-output",
+    },
+  ]) {
+    const p = new Projection();
+    const message = {
+      role: "bashExecution",
+      command: "printf shell-output",
+      output: "shell-output",
+      timestamp: 42,
+      ...outcome,
+    };
+    p.event({ type: "message_end", message });
+    const live = p.messages[0];
+    assert.ok(live.text.includes(message.command));
+    assert.ok(live.text.includes(message.output));
+    if (outcome.cancelled) {
+      assert.match(live.text, /cancelled/i);
+      assert.match(live.text, /truncated/i);
+      assert.ok(live.text.includes(outcome.fullOutputPath));
+      assert.match(live.error, /cancelled/i);
+    } else {
+      assert.ok(live.text.includes(`Exit code: ${outcome.exitCode}`));
+      if (outcome.exitCode) assert.match(live.error, /7/);
+      else assert.equal(live.error, undefined);
+    }
+    p.load(
+      [{ id: "shell", parentId: null, type: "message", message }],
+      "shell",
+    );
+    assert.equal(p.messages.length, 1);
+    assert.equal(p.messages[0].text, live.text);
+  }
+});
+
+test("identical custom messages in the same millisecond remain separate occurrences", () => {
+  const p = new Projection();
+  const message = {
+    role: "custom",
+    customType: "note",
+    content: "Repeated",
+    display: true,
+    timestamp: 100,
+  };
+  for (let i = 0; i < 2; i++) {
+    p.event({ type: "message_start", message });
+    p.event({ type: "message_end", message });
+  }
+  assert.equal(p.messages.length, 2);
+  assert.notEqual(p.messages[0].id, p.messages[1].id);
+  const entries = ["a", "b"].map((id, index) => ({
+    id,
+    parentId: index ? "a" : null,
+    type: "custom_message",
+    ...message,
+    timestamp: new Date(110 + index).toISOString(),
+  }));
+  p.load(entries, "b");
+  assert.deepEqual(
+    p.messages.map((row) => row.id),
+    ["a", "b"],
+  );
+});
+
+test("shell projection bounds output without losing status and handles empty output", () => {
+  const p = new Projection();
+  const message = {
+    role: "bashExecution",
+    command: "test",
+    output: "x".repeat(100000),
+    exitCode: 3,
+    cancelled: false,
+    truncated: false,
+    timestamp: 1,
+  };
+  p.load([{ id: "shell", parentId: null, type: "message", message }], "shell");
+  assert.ok(p.messages[0].text.length < 65536);
+  assert.match(p.messages[0].text, /Display truncated/);
+  assert.match(p.messages[0].text, /Exit code: 3/);
+  p.load(
+    [
+      {
+        id: "empty",
+        parentId: null,
+        type: "message",
+        message: { ...message, output: "", exitCode: 0 },
+      },
+    ],
+    "empty",
+  );
+  assert.match(p.messages[0].text, /no output/);
+  assert.match(p.messages[0].text, /Exit code: 0/);
+});

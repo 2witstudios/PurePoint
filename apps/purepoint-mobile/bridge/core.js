@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const clip = (value, limit = 65536) => {
   const s = String(value ?? "");
   return s.length > limit ? s.slice(0, limit) + "\n[Display truncated]" : s;
@@ -83,8 +85,34 @@ function toolIds(entries) {
   }
   return ids;
 }
+// Native custom entry timestamps are assigned at persistence, independently of
+// live message timestamps (especially for queued messages). Correlate by payload.
+const customKey = (m) =>
+  createHash("sha256")
+    .update(JSON.stringify([m.customType, m.content, m.display, m.details]))
+    .digest("hex");
+const visible = (m) =>
+  m.role !== "system" && (m.role !== "custom" || m.display);
 const key = (m) => `${m.role}-${m.timestamp ?? 0}-${m.toolCallId ?? ""}`;
 function row(m, id = key(m)) {
+  if (m.role === "bashExecution") {
+    const status = m.cancelled
+      ? "Command cancelled"
+      : `Exit code: ${m.exitCode ?? "unknown"}`;
+    const truncation = m.truncated
+      ? `\n\n[Output truncated${m.fullOutputPath ? `. Full output: ${clip(m.fullOutputPath, 1000)}` : ""}]`
+      : "";
+    return {
+      id,
+      role: m.role,
+      text: `$ ${clip(m.command, 8192)}\n\n${clip(m.output || "(no output)", 48000)}\n\n${status}${truncation}`,
+      error: m.cancelled
+        ? "Command cancelled"
+        : m.exitCode != null && m.exitCode !== 0
+          ? `Command exited with code ${m.exitCode}`
+          : undefined,
+    };
+  }
   return {
     id,
     role: m.role,
@@ -102,6 +130,8 @@ export class Projection {
     this.rows = [];
     this.live = null;
     this.tools = [];
+    this.persistedCustom = new Set();
+    this.customSequence = 0;
   }
   get messages() {
     return [...this.rows, ...(this.live ? [row(this.live)] : [])].slice(-500);
@@ -110,8 +140,7 @@ export class Projection {
     const path = activeBranch(entries, leafId);
     const rows = [];
     for (const e of path) {
-      if (e.type === "message" && e.message.role !== "system")
-        rows.push(row(e.message));
+      if (e.type === "message" && visible(e.message)) rows.push(row(e.message));
       else if (e.type === "custom_message" && e.display)
         rows.push({ id: e.id, role: "custom", text: contentText(e.content) });
       else if (e.type === "compaction" || e.type === "branch_summary")
@@ -132,9 +161,25 @@ export class Projection {
     const persisted = new Set(
       entries.filter((x) => x.type === "message").map((x) => key(x.message)),
     );
+    // Match each newly persisted custom occurrence once, across every branch.
+    // Previously reconciled entries must not swallow later identical live messages.
+    const customCounts = new Map();
+    const customEntries = entries.filter((e) => e.type === "custom_message");
+    for (const e of customEntries) {
+      if (this.persistedCustom.has(e.id)) continue;
+      const identity = customKey(e);
+      customCounts.set(identity, (customCounts.get(identity) ?? 0) + 1);
+    }
+    this.persistedCustom = new Set(customEntries.map((e) => e.id));
     this.rows = [
       ...rows,
-      ...this.rows.filter((x) => !persisted.has(x.id) && x._ephemeral),
+      ...this.rows.filter((x) => {
+        if (!x._ephemeral || persisted.has(x.id)) return false;
+        const count = customCounts.get(x._customKey) ?? 0;
+        if (!count) return true;
+        customCounts.set(x._customKey, count - 1);
+        return false;
+      }),
     ].slice(-500);
     if (this.live && persisted.has(key(this.live))) this.live = null;
   }
@@ -142,6 +187,8 @@ export class Projection {
     this.rows = [];
     this.live = null;
     this.tools = [];
+    this.persistedCustom = new Set();
+    this.customSequence = 0;
   }
   event(e) {
     if (e.type === "message_start" && e.message.role === "assistant")
@@ -161,13 +208,26 @@ export class Projection {
         if (u.type === "toolcall_end") blocks[i] = u.toolCall;
       }
     }
+    // Custom messages are complete at message_end; unique occurrence IDs also
+    // preserve identical messages sent within the same millisecond.
     if (
       e.type === "message_end" ||
-      (e.type === "message_start" && e.message.role !== "assistant")
+      (e.type === "message_start" &&
+        e.message.role !== "assistant" &&
+        e.message.role !== "custom")
     ) {
       const m = e.message;
-      if (m.role !== "system") {
-        const r = { ...row(m), _ephemeral: true };
+      if (visible(m)) {
+        const r = {
+          ...row(
+            m,
+            m.role === "custom"
+              ? `custom-live-${++this.customSequence}`
+              : key(m),
+          ),
+          _ephemeral: true,
+          ...(m.role === "custom" ? { _customKey: customKey(m) } : {}),
+        };
         const i = this.rows.findIndex((x) => x.id === r.id);
         if (i >= 0) this.rows[i] = r;
         else this.rows.push(r);
