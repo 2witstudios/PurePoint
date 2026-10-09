@@ -24,7 +24,7 @@ cd /absolute/working/folder
 
 Configure/login to your native provider and select your model there. Existing `~/.pi/agent` configuration/auth, extensions, native skills/tools/providers and trusted project resources are preserved. The bridge does not inspect auth files or change provider settings. Verify `/skill:pu` and `/skill:pu-cli` where installed, and check your desired Point Guard skills using `/skill:name`. Existing `~/.agents/skills` symlinks are supported by vanilla Pi. Claude slash commands are not automatically registered as Pi commands.
 
-Create a private secret file **yourself**, outside this repository, containing a random secret of at least 32 characters. Use your password manager or other owner-controlled method. Run `chmod 600 /absolute/private/pairing-secret`. The bridge neither generates nor prints credentials. Enter that same secret once on your phone; it is saved in the device’s Keychain. The bridge reads only this explicitly supplied secret, consumes stderr without forwarding it, and strips bridge configuration variables from Pi’s environment.
+The bridge automatically generates a cryptographically random pairing secret on first start and stores it privately at `~/.config/pi-mobile/pairing-secret` (mode 600). Subsequent starts reuse it, so your phone stays paired. It never prints the secret. Optional `PI_MOBILE_TOKEN_FILE` selects a different private file; an existing invalid file fails visibly rather than being replaced. The QR transfers the secret to your phone’s Keychain without typing or copying it. Native provider credentials remain separate and unchanged.
 
 Find the Mac’s IPv4 Tailscale address with your installed Tailscale app or `tailscale ip -4`. Then run:
 
@@ -32,7 +32,6 @@ Find the Mac’s IPv4 Tailscale address with your installed Tailscale app or `ta
 cd /absolute/path/to/experiments/pi-mobile
 PI_MOBILE_HOST=100.x.y.z \
 PI_MOBILE_CWD=/absolute/working/folder \
-PI_MOBILE_TOKEN_FILE=/absolute/private/pairing-secret \
 npm start
 ```
 
@@ -55,7 +54,7 @@ For every cross-project operation, Pi should use **explicit routing**, for examp
 
 ## QR pairing
 
-On startup, the bridge creates a private offline pairing page at `~/.config/pi-mobile/pairing.html`, using the same owner-created secret file. Open it locally:
+On startup, the bridge creates a private offline pairing page at `~/.config/pi-mobile/pairing.html`, using the automatically generated or existing secret file. Open it locally:
 
 ```sh
 open ~/.config/pi-mobile/pairing.html
@@ -63,7 +62,7 @@ open ~/.config/pi-mobile/pairing.html
 
 In the iPhone app, open **Connection → Scan Mac QR code**, allow camera access, and point at the QR. The app saves the secret in Keychain and connects automatically. Both devices still need Tailscale. Manual entry remains available on devices without scanning support and in the simulator.
 
-The QR contains a remote-control credential. The page is mode 600, has no scripts or remote resources, and neither its payload nor its QR is printed to terminal logs. Close the page after pairing; delete it when no longer needed. It remains valid while the underlying secret remains valid. No credentials are generated. QR pairing supports a secret of 32–1024 bytes without embedded newlines; longer secrets still allow manual pairing.
+The QR contains a remote-control credential. The page is mode 600, has no scripts or remote resources, and neither its payload nor its QR is printed to terminal logs. Close the page after pairing; delete it when no longer needed. It remains valid while the underlying secret remains valid. The secret is generated once and reused; restarting does not rotate it. QR pairing supports a secret of 32–1024 bytes without embedded newlines; longer secrets still allow manual pairing.
 
 To recreate the page without restarting a running bridge, run `npm run pair` with the same `PI_MOBILE_HOST`, `PI_MOBILE_PORT`, `PI_MOBILE_TOKEN_FILE` and optional TLS variables as the bridge. This command does not start a listener or Pi process.
 

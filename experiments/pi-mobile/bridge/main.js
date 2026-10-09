@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { Rpc } from "./rpc.js";
 import { Controller } from "./controller.js";
 import { serve } from "./network.js";
-import { root, launchArguments, nativeSessions, loadToken } from "./setup.js";
+import { root, launchArguments, nativeSessions, ensureToken } from "./setup.js";
 import { writePairingPage, pairingPagePath } from "./pairing.js";
 async function main() {
   const fixture = process.argv.includes("--fixture");
@@ -13,7 +13,7 @@ async function main() {
     throw new Error(
       "Set PI_MOBILE_CWD to the explicit folder Pi should work in.",
     );
-  const token = await loadToken(env.PI_MOBILE_TOKEN_FILE);
+  const token = await ensureToken(env.PI_MOBILE_TOKEN_FILE);
   const host = env.PI_MOBILE_HOST;
   if (!host)
     throw new Error(

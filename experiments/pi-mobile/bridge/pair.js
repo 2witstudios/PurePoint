@@ -1,4 +1,4 @@
-import { loadToken } from "./setup.js";
+import { ensureToken } from "./setup.js";
 import { writePairingPage, pairingPagePath } from "./pairing.js";
 
 async function main() {
@@ -7,7 +7,7 @@ async function main() {
   const port = Number(process.env.PI_MOBILE_PORT ?? 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error("Invalid bridge port.");
-  const token = await loadToken(process.env.PI_MOBILE_TOKEN_FILE);
+  const token = await ensureToken(process.env.PI_MOBILE_TOKEN_FILE);
   const protocol =
     process.env.PI_MOBILE_TLS_CERT && process.env.PI_MOBILE_TLS_KEY
       ? "wss"
@@ -16,7 +16,7 @@ async function main() {
   const file = pairingPagePath;
   await writePairingPage(file, endpoint, token);
   console.log(
-    `Private pairing QR saved to ${file}. Open this file locally, then scan it in Pi → Connection. The bridge must be running. No credentials were generated.`,
+    `Private pairing QR saved to ${file}. Open this file locally, then scan it in Pi → Connection. The bridge must be running.`,
   );
 }
 main().catch(() => {

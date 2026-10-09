@@ -1,9 +1,47 @@
-import { readdir, readFile, stat, access } from "node:fs/promises";
+import {
+  readdir,
+  readFile,
+  stat,
+  access,
+  mkdir,
+  writeFile,
+  link,
+  rm,
+} from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { Projection, boundedRows } from "./core.js";
 export const root = fileURLToPath(new URL("../", import.meta.url));
+export const defaultTokenFile = path.join(
+  os.homedir(),
+  ".config/pi-mobile/pairing-secret",
+);
+export async function ensureToken(file = defaultTokenFile) {
+  try {
+    return await loadToken(file);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = file + "." + randomUUID() + ".tmp";
+  try {
+    await writeFile(temporary, randomBytes(32).toString("base64url") + "\n", {
+      mode: 0o600,
+      flag: "wx",
+    });
+    // Publish only the fully written file; never replace another start's credential.
+    try {
+      await link(temporary, file);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  return loadToken(file);
+}
 export const cli = path.join(
   root,
   "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
