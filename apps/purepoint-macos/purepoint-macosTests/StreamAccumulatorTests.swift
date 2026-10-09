@@ -244,12 +244,14 @@ struct StreamAccumulatorTests {
 
     // MARK: - Timer-based flush callback
 
-    @Test func givenDeltaWithFlushHandler_shouldCallHandlerAfterDelay() async throws {
+    @Test(.timeLimit(.minutes(1))) func givenDeltaWithFlushHandler_shouldCallHandlerAfterDelay() async throws {
         let accumulator = StreamAccumulator()
-        var handlerCalledWith: String?
+        let (notifications, continuation) = AsyncStream<String>.makeStream()
         accumulator.flushHandler = { messageId in
-            handlerCalledWith = messageId
+            continuation.yield(messageId)
+            continuation.finish()
         }
+        defer { continuation.finish(); accumulator.flushHandler = nil }
 
         var messages: [ChatMessage] = [
             ChatMessage(id: "a1", role: .assistant, isStreaming: true)
@@ -260,10 +262,9 @@ struct StreamAccumulatorTests {
             assistantMessageId: "a1", messages: &messages
         )
 
-        // Wait for the 50ms timer to fire
-        try await Task.sleep(for: .milliseconds(100))
-
-        #expect(handlerCalledWith == "a1")
+        // Await the callback itself; a loaded executor may start its timer late.
+        var iterator = notifications.makeAsyncIterator()
+        #expect(await iterator.next() == "a1")
     }
 
     @Test func givenSynchronousFlush_shouldNotCallHandler() async throws {
