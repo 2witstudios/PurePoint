@@ -1,6 +1,6 @@
 # Distribution
 
-**Maturity: CONVERGING**
+**Maturity: DECIDED**
 
 ## Context
 
@@ -12,11 +12,9 @@ PurePoint needs to ship to users as a self-contained product with no external ru
 
 ## Open Questions
 
-? [DIST-002] What is the migration path for existing users?
-Existing users may have legacy project directories and data. Should migration be automatic, an explicit command, or handled by the app?
+! [DIST-002] Preserve canonical Pi private auth/session/settings data outside the bundle and use versioned private Application Support managed/trust metadata — avoids duplicate credentials and survives updates. Legacy remote shared-token clients deliberately enroll again; never downgrade remote authorization.
 
-? [DIST-003] How should auto-update work?
-If the daemon is embedded in the app, updating the app updates the daemon too. But what if the daemon is running when the update happens? How are running processes handled during updates?
+! [DIST-003] Stop and await app-owned Point Guard children before executable replacement, then restore native session/provider/trust state — app lifetime satisfies owner scope without rewriting worker-daemon supervision. Never adopt or stop unknown processes. Protected production signing/notarization remains owner-controlled.
 
 ## Design Directions
 
