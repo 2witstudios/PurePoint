@@ -26,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Check CI routing
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
@@ -44,6 +45,8 @@ jobs:
         working-directory: apps/purepoint-mobile
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: '22.19.0'
@@ -64,6 +67,8 @@ jobs:
         working-directory: apps/purepoint-mobile
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Swift domain and recovery checks
         run: |
           swiftc PurePoint/ChatDomain.swift verification/LogicChecks.swift -o "$RUNNER_TEMP/mobile-logic"
@@ -97,6 +102,8 @@ jobs:
       DESTINATION: "platform=macOS"
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -181,6 +188,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Require every applicable check to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
