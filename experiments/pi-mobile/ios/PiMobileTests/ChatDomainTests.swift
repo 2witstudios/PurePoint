@@ -1,6 +1,32 @@
 import XCTest
 @testable import PiMobile
 final class ChatDomainTests: XCTestCase {
+    func testGivenNativeAndLiveToolsShouldGroupOnceWithoutBlankAssistantRows() {
+        let messages = [
+            ChatMessage(id: "toolResult-1-call-a", role: "toolResult", text: "Read output", activity: "read"),
+            ChatMessage(id: "assistant-2", role: "assistant", text: " "),
+            ChatMessage(id: "toolResult-3-call-b", role: "toolResult", text: "Shell output", activity: "bash")
+        ]
+        let live = [ToolActivity(id: "call-a", name: "read", state: "finished", text: "Read output"), ToolActivity(id: "call-b", name: "bash", state: "finished", text: "Shell output"), ToolActivity(id: "call-c", name: "read", state: "running", text: "Working")]
+        let rows = TranscriptRows.make(messages: messages, tools: live)
+        XCTAssertEqual(rows.count, 1)
+        guard let first = rows.first, case .activity(let tools) = first else { return XCTFail("Expected one activity group") }
+        XCTAssertEqual(tools.map(\.id), ["call-a", "call-b", "call-c"])
+        XCTAssertEqual(tools.last?.state, "running")
+    }
+    func testGivenProseBetweenToolsShouldPreserveConversationOrderAndErrors() {
+        let rows = TranscriptRows.make(messages: [
+            ChatMessage(id: "first", role: "toolResult", text: "Output", activity: "read"),
+            ChatMessage(id: "explanation", role: "assistant", text: "What I found"),
+            ChatMessage(id: "second", role: "toolResult", text: "", activity: "bash", error: "Permission denied"),
+            ChatMessage(id: "error", role: "assistant", text: "", error: "Provider failed")
+        ], tools: [])
+        XCTAssertEqual(rows.count, 4)
+        guard case .activity(let failed) = rows[2] else { return XCTFail("Expected tool group after prose") }
+        XCTAssertEqual(failed[0].state, "failed")
+        XCTAssertTrue(failed[0].text.contains("Permission denied"))
+        XCTAssertEqual(rows[3].id, "message:error")
+    }
     func testGivenPairingQRShouldAcceptNativePayloadAndRejectUnsafeOrUnsupportedCodes() {
         let payload = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://100.94.14.74:8787/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
         XCTAssertEqual(PairingCode.parse(payload)?.endpoint, "ws://100.94.14.74:8787/v1")

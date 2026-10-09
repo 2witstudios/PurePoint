@@ -60,6 +60,42 @@ struct PairingCode: Decodable {
 }
 struct ChatMessage: Codable, Identifiable { let id: String; let role: String; let text: String; var activity: String?; var error: String? }
 struct ToolActivity: Codable, Identifiable { let id: String; let name: String; let state: String; let text: String }
+enum TranscriptRow: Identifiable {
+    case message(ChatMessage)
+    case activity([ToolActivity])
+    var id: String {
+        switch self {
+        case .message(let message): return "message:" + message.id
+        case .activity(let tools): return "activity:" + (tools.first?.id ?? "empty")
+        }
+    }
+}
+enum TranscriptRows {
+    static func make(messages: [ChatMessage], tools: [ToolActivity]) -> [TranscriptRow] {
+        var rows: [TranscriptRow] = []
+        var represented = Set<String>()
+        func appendTool(_ tool: ToolActivity) {
+            if let last = rows.last, case .activity(var group) = last {
+                group.append(tool); rows[rows.count - 1] = .activity(group)
+            } else { rows.append(.activity([tool])) }
+        }
+        for message in messages {
+            if message.role == "toolResult" {
+                // The pinned bridge keys native rows as role-timestamp-toolCallId.
+                // Match the complete tool ID suffix, preserving IDs that contain hyphens.
+                let live = tools.first { message.id.hasSuffix("-" + $0.id) }
+                let id = live?.id ?? message.id
+                guard represented.insert(id).inserted else { continue }
+                let text = message.text + (message.error.map { "\n\n" + $0 } ?? "")
+                appendTool(ToolActivity(id: id, name: message.activity ?? live?.name ?? "Tool", state: message.error == nil ? (live?.state ?? "finished") : "failed", text: text))
+            } else if message.role != "assistant" || !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || message.error != nil {
+                rows.append(.message(message))
+            }
+        }
+        for tool in tools where !represented.contains(tool.id) { appendTool(tool) }
+        return rows
+    }
+}
 struct QueuedText: Codable { let mode: String; let text: String }
 struct ExtensionDialog: Codable, Identifiable {
     let id: String; let method: String; var title: String?; var message: String?; var prefill: String?; var placeholder: String?; var options: [String]?

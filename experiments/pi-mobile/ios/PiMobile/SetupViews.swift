@@ -14,25 +14,27 @@ struct ConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Your Mac.\nYour Pi.").font(.system(.largeTitle, design: .rounded).weight(.semibold))
-                        Text("Pi runs on your Mac. This phone connects over your existing Tailscale network, so work continues when you close the app.").font(.body).foregroundStyle(.secondary)
-                    }.padding(.vertical, 16)
+                    HStack(spacing: 12) {
+                        Image("PurePointLogo").resizable().scaledToFit().frame(width: 38, height: 38).accessibilityHidden(true)
+                        Text("Point Guard").font(.title2.weight(.semibold))
+                    }.padding(.vertical, 8)
                 }
                 Section {
                     Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder") }
                         .disabled(requestingCamera)
-                    TextField("ws://100.100.1.2:8787/v1", text: $endpoint).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).accessibilityLabel("Mac endpoint")
-                    SecureField("Pairing secret", text: $secret).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Pairing secret")
-                    Button("Connect") { model.pair(endpoint: endpoint, secret: secret) }
-                } header: { Text("Connect to your Mac") } footer: { Text("Use the address printed by the Mac bridge and the secret you created there. The secret is stored only in this device’s Keychain. Keep both devices connected to Tailscale.") }
+                    DisclosureGroup("Manual connection") {
+                        TextField("Mac address", text: $endpoint).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).accessibilityLabel("Mac endpoint")
+                        SecureField("Pairing secret", text: $secret).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Pairing secret")
+                        Button("Connect") { model.pair(endpoint: endpoint, secret: secret) }
+                    }
+                }
                 if let error = model.error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
                 Section {
                     HStack { Text(model.connectionStatus); Spacer(); if model.connected && !model.demo { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) } }
                     if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
                     Button("Reconnect") { model.connect() }.disabled(endpoint.isEmpty)
                 }
-                Section { Button("Explore on-device preview") { model.exploreDemo(); dismiss() } } header: { Text("Try the interface") } footer: { Text("For deterministic full-flow testing, run the fixture bridge on your Mac. In the simulator use ws://127.0.0.1:8787/v1. Setup instructions are in the standalone project’s README.") }
+                Section { Button("Preview") { model.exploreDemo(); dismiss() } }
             }
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
@@ -66,8 +68,7 @@ private struct PairingScannerView: View {
             QRScanner(onPair: onPair, onError: { error = $0 })
                 .ignoresSafeArea(edges: .bottom)
                 .safeAreaInset(edge: .bottom) {
-                    Text(error ?? "Point your camera at the pairing QR on your Mac. Both devices need Tailscale.")
-                        .font(.callout).padding(20).frame(maxWidth: .infinity).background(.regularMaterial)
+                    if let error { Text(error).font(.callout).padding(20).frame(maxWidth: .infinity).background(.regularMaterial) }
                 }
                 .navigationTitle("Pair with your Mac").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
@@ -132,7 +133,7 @@ struct ConversationView: View {
         NavigationStack {
             Group {
                 if let history = model.browsing {
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(history.messages) { MessageView(message: $0) } }.padding(20) }
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.padding(20) }
                         .safeAreaInset(edge: .bottom) {
                             Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
                                 if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId); if model.browsing == nil { dismiss() } } }
@@ -140,7 +141,7 @@ struct ConversationView: View {
                         }
                 } else {
                     List {
-                        if model.conversations.isEmpty { ContentUnavailableView("No conversations yet", systemImage: "bubble.left.and.bubble.right", description: Text("Your Pi conversations will appear here. You can browse them while Pi works.")) }
+                        if model.conversations.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right") }
                         ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
                             Button { Task { await model.browse(conversation) } } label: {
                                 VStack(alignment: .leading, spacing: 6) { Text(conversation.title).foregroundStyle(.primary).lineLimit(2); if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) } }.padding(.vertical, 6)

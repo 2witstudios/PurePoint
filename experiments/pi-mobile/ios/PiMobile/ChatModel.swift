@@ -185,7 +185,7 @@ import SwiftUI
     }
     func exploreDemo() {
         disconnect(); demo = true; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()
-        snapshot = Snapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "preview", title: "A little room to think", messages: [ChatMessage(id: "welcome", role: "assistant", text: "What would you like to work on?\n\nSend a complete thought. I’ll keep working on your Mac while you’re away.")], tools: [], queue: [], dialogs: [], notices: [])
+        snapshot = Snapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "preview", title: "Point Guard", messages: [ChatMessage(id: "welcome", role: "assistant", text: "What would you like to work on?")], tools: [], queue: [], dialogs: [], notices: [])
     }
     private func demoReply(_ text: String) async {
         guard let old = snapshot else { return }
@@ -194,6 +194,6 @@ import SwiftUI
         snapshot = Snapshot(version: 1, epoch: old.epoch, revision: old.revision + 1, busy: true, runId: "preview-run", sessionId: old.sessionId, title: old.title, messages: messages, tools: [ToolActivity(id: "demo-tool", name: "read", state: "running", text: "Reading the project notes…")], queue: [], dialogs: [], notices: [])
         try? await Task.sleep(nanoseconds: 800_000_000)
         guard demo, generation == demoGeneration else { return }
-        snapshot = Snapshot(version: 1, epoch: old.epoch, revision: old.revision + 2, busy: false, sessionId: old.sessionId, title: old.title, messages: messages + [ChatMessage(id: UUID().uuidString, role: "assistant", text: "Let’s make it concrete.\n\nThis preview exercises the native conversation layout. Connect to the fixture bridge for queue, Stop, reconnect, history and extension dialogs.\n\n```swift\nlet nextStep = \"Build something useful\"\n```")], tools: [ToolActivity(id: "demo-tool", name: "read", state: "finished", text: "Project notes read.")], queue: [], dialogs: [], notices: [])
+        snapshot = Snapshot(version: 1, epoch: old.epoch, revision: old.revision + 2, busy: false, sessionId: old.sessionId, title: old.title, messages: messages + [ChatMessage(id: UUID().uuidString, role: "assistant", text: "I’ve read the project notes. Here’s the next step.\n\n```swift\nlet nextStep = \"Build something useful\"\n```")], tools: [ToolActivity(id: "demo-tool", name: "read", state: "finished", text: "Project notes read.")], queue: [], dialogs: [], notices: [])
     }
 }

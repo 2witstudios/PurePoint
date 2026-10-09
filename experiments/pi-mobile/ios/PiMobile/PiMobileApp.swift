@@ -1,2 +1,2 @@
 import SwiftUI
-@main struct PiMobileApp: App { var body: some Scene { WindowGroup { ChatView() } } }
+@main struct PiMobileApp: App { var body: some Scene { WindowGroup { ChatView().tint(.accentColor) } } }

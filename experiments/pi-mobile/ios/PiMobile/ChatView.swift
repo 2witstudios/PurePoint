@@ -26,17 +26,20 @@ struct ChatView: View {
                 composer
             }
             .background(Color(uiColor: .systemBackground))
-            .navigationTitle("Pi")
+            .navigationTitle("Point Guard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showHistory = true; Task { await model.loadConversations() } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Conversations")
                 }
                 ToolbarItem(placement: .principal) {
-                    VStack(spacing: 2) {
-                        Text("Pi").font(.system(.headline, design: .rounded))
-                        Text(model.busy ? "Working on your Mac" : model.connected ? (model.demo ? "Preview" : "Ready when you are") : "Mac disconnected")
+                    HStack(spacing: 8) {
+                        Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                        Text("Point Guard").font(.headline)
+                        Text(model.busy ? "Working" : model.connected ? (model.demo ? "Preview" : "Connected") : "Disconnected")
                             .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }.accessibilityElement(children: .combine)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -58,7 +61,7 @@ struct ChatView: View {
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
             .task { if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
         }
-        .tint(Color(red: 0.145, green: 0.388, blue: 0.922))
+        .tint(.accentColor)
     }
     private func presentPendingDialog() { presentedDialog = model.snapshot?.dialogs.first }
     private var dialogBinding: Binding<ExtensionDialog?> {
@@ -73,19 +76,12 @@ struct ChatView: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
-                        if let title = model.snapshot?.title, title != "Pi" { Text(title).font(.callout.weight(.medium)).foregroundStyle(.secondary).textSelection(.enabled) }
                         if (model.snapshot?.messages ?? []).isEmpty {
-                            VStack(alignment: .leading, spacing: 16) {
-                                Text("A little room\nto think.").font(.system(.largeTitle, design: .rounded).weight(.semibold)).tracking(-0.7)
-                                Text(model.connected ? "Give Pi a complete thought. Your Mac takes it from here." : "Connect to Pi on your Mac to pick up the conversation.")
-                                    .font(.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            }.padding(.top, 56).padding(.bottom, 40)
+                            Image("PurePointLogo").resizable().scaledToFit().frame(width: 88, height: 88)
+                                .frame(maxWidth: .infinity).padding(.top, 64).padding(.bottom, 40).accessibilityHidden(true)
                         }
-                        ForEach(model.snapshot?.messages ?? []) { message in MessageView(message: message) }
-                        if !(model.snapshot?.tools ?? []).isEmpty {
-                            VStack(alignment: .leading, spacing: 8) { ForEach(model.snapshot?.tools ?? []) { tool in ToolView(tool: tool) } }
-                        }
-                        if model.busy { HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Pi is working…").font(.callout).foregroundStyle(.secondary) }.accessibilityElement(children: .combine) }
+                        ForEach(TranscriptRows.make(messages: model.snapshot?.messages ?? [], tools: model.snapshot?.tools ?? [])) { row in TranscriptRowView(row: row) }
+                        if model.busy { HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Working…").font(.callout).foregroundStyle(.secondary) }.accessibilityElement(children: .combine) }
                         ForEach(Array((model.snapshot?.notices ?? []).enumerated()), id: \.offset) { _, notice in Text(notice).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
                         Color.clear.frame(height: 1).id("bottom").onAppear { following = true }.onDisappear { following = false }
                     }.padding(.horizontal, 20).padding(.vertical, 24)
@@ -121,13 +117,13 @@ struct ChatView: View {
             }
             if let queue = model.snapshot?.queue, !queue.isEmpty { Text("\(queue.count) message\(queue.count == 1 ? "" : "s") queued").font(.caption).foregroundStyle(.secondary) }
             HStack(alignment: .bottom, spacing: 12) {
-                TextField("Message Pi", text: $model.draft, axis: .vertical)
+                TextField("Message Point Guard", text: $model.draft, axis: .vertical)
                     .font(.body).lineLimit(1...7).focused($composerFocused)
                     .padding(.horizontal, 16).padding(.vertical, 13)
                     .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22))
                     .accessibilityLabel("Message draft")
                 if !model.busy {
-                    Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 46, height: 46).foregroundStyle(.white).background(model.canSend ? Color.accentColor : Color.gray, in: Circle()) }.disabled(!model.canSend).accessibilityLabel("Send message")
+                    Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 46, height: 46).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()) }.disabled(!model.canSend).accessibilityLabel("Send message")
                 }
             }
             if model.busy {
@@ -149,9 +145,9 @@ struct MessageView: View {
     let message: ChatMessage
     var body: some View {
         if message.role == "user" {
-            HStack { Spacer(minLength: 32); Text(message.text).font(.body).lineSpacing(3).textSelection(.enabled).padding(.horizontal, 17).padding(.vertical, 13).foregroundStyle(.white).background(Color.accentColor, in: RoundedRectangle(cornerRadius: 22)).accessibilityLabel("You: \(message.text)") }
+            HStack { Spacer(minLength: 32); Text(message.text).font(.body).lineSpacing(3).textSelection(.enabled).padding(.horizontal, 17).padding(.vertical, 13).foregroundStyle(.primary).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22)).accessibilityLabel("You: \(message.text)") }
         } else if message.role == "toolResult" {
-            DisclosureGroup { RichText(text: message.text); if let error = message.error { Text(error).foregroundStyle(.red) } } label: { Label(message.activity ?? "Tool result", systemImage: message.error == nil ? "checkmark.circle" : "exclamationmark.circle").font(.callout).foregroundStyle(.secondary) }
+            ToolGroupView(tools: [ToolActivity(id: message.id, name: message.activity ?? "Tool", state: message.error == nil ? "finished" : "failed", text: message.text + (message.error.map { "\n\n" + $0 } ?? ""))])
         } else if message.role == "notice" {
             Label { Text(message.text).font(.footnote).textSelection(.enabled) } icon: { Image(systemName: "text.alignleft") }.foregroundStyle(.secondary)
         } else {
@@ -180,10 +176,50 @@ struct ToolView: View {
     let tool: ToolActivity
     var body: some View {
         DisclosureGroup {
-            Text(tool.text).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+            Text(tool.text.isEmpty ? "No output" : tool.text).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8).padding(.bottom, 4)
         } label: {
-            HStack(spacing: 10) { Image(systemName: tool.state == "running" ? "gearshape" : tool.state == "failed" ? "exclamationmark.circle" : "checkmark.circle"); Text(tool.name); Spacer(); Text(tool.state.capitalized).font(.caption) }.font(.callout).foregroundStyle(tool.state == "failed" ? Color.red : Color.secondary)
-        }.padding(.vertical, 4)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: tool.state == "running" ? "gearshape" : tool.state == "failed" ? "exclamationmark.circle" : "checkmark.circle").frame(width: 20)
+                Text(tool.name).font(.subheadline.weight(.medium)).frame(maxWidth: .infinity, alignment: .leading)
+                Text(tool.state == "finished" ? "Done" : tool.state.capitalized).font(.caption).foregroundStyle(.secondary)
+            }.foregroundStyle(tool.state == "failed" ? Color.red : Color.primary)
+        }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+struct TranscriptRowView: View {
+    let row: TranscriptRow
+    var body: some View {
+        switch row {
+        case .message(let message): MessageView(message: message)
+        case .activity(let tools): ToolGroupView(tools: tools)
+        }
+    }
+}
+struct ToolGroupView: View {
+    let tools: [ToolActivity]
+    @State private var expanded = false
+    private var running: Int { tools.filter { $0.state == "running" }.count }
+    private var failed: Int { tools.filter { $0.state == "failed" }.count }
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
+                    if index > 0 { Divider() }
+                    ToolView(tool: tool)
+                }
+            }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: "wrench.and.screwdriver").frame(width: 20)
+                Text("\(tools.count) tool\(tools.count == 1 ? "" : "s")").font(.subheadline.weight(.medium))
+                if running > 0 { Text("Working").font(.caption).foregroundStyle(.secondary) }
+                else if failed > 0 { Text("\(failed) failed").font(.caption).foregroundStyle(.red) }
+            }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityHint("Expand to inspect tool calls and their output")
     }
 }
 #Preview { let model = ChatModel(); model.exploreDemo(); return ChatView(model: model) }
