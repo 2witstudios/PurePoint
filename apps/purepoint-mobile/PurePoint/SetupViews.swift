@@ -295,7 +295,12 @@ struct ExtensionDialogView: View {
             Form {
                 if let message = dialog.message, !message.isEmpty { Section { Text(message).textSelection(.enabled) } }
                 if dialog.method == "select" {
-                    Section { ForEach(Array((dialog.options ?? []).enumerated()), id: \.offset) { _, option in Button(option) { answer(value: option) }.disabled(answering) } }
+                    Section { ForEach(Array((dialog.options ?? []).enumerated()), id: \.offset) { index, option in
+                        Button(option) {
+                            if let ids = dialog.optionIds, ids.indices.contains(index) { answer(optionId: ids[index]) }
+                            else { answer(value: option) }
+                        }.disabled(answering)
+                    } }
                 } else if dialog.method == "confirm" {
                     Section { Button("Allow") { answer(confirmed: true) }; Button("Decline", role: .cancel) { answer(confirmed: false) } }.disabled(answering)
                 } else {
@@ -312,7 +317,7 @@ struct ExtensionDialogView: View {
             .onAppear { text = dialog.prefill ?? "" }
         }
     }
-    private func answer(value: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) {
-        answering = true; Task { await model.answer(dialog, value: value, confirmed: confirmed, cancelled: cancelled); answering = false }
+    private func answer(value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) {
+        answering = true; Task { await model.answer(dialog, value: value, optionId: optionId, confirmed: confirmed, cancelled: cancelled); answering = false }
     }
 }

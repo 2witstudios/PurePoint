@@ -98,7 +98,12 @@ enum ConnectionAddress {
         guard let url = URL(string: input.trimmingCharacters(in: .whitespacesAndNewlines)),
               ["ws", "wss"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased(),
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, url.path == "/v1" else { return nil }
-        let parts = host.split(separator: ".").compactMap { Int($0) }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        let numericIPv4 = labels.count == 4 && labels.allSatisfy {
+            !$0.isEmpty && $0.count <= 3 && $0.utf8.allSatisfy { (48...57).contains($0) }
+                && ($0 == "0" || !$0.hasPrefix("0"))
+        }
+        let parts = numericIPv4 ? labels.compactMap { Int($0) } : []
         let tailnetIPv4 = parts.count == 4 && parts[0] == 100 && (64...127).contains(parts[1]) && parts.allSatisfy { (0...255).contains($0) }
         guard tailnetIPv4 || host == "127.0.0.1" || host == "localhost" || host == "[::1]" || host == "::1" || host.hasPrefix("fd7a:115c:a1e0:") || host.hasPrefix("[fd7a:115c:a1e0:") || host.hasSuffix(".ts.net") else { return nil }
         return url
@@ -159,7 +164,7 @@ enum TranscriptRows {
 }
 struct QueuedText: Codable, Sendable { let mode: String; let text: String }
 struct ExtensionDialog: Codable, Identifiable, Sendable {
-    let id: String; let method: String; var title: String?; var message: String?; var prefill: String?; var placeholder: String?; var options: [String]?
+    let id: String; let method: String; var title: String?; var message: String?; var prefill: String?; var placeholder: String?; var options: [String]?; var optionIds: [String]? = nil
 }
 struct EditorText: Codable, Sendable { let id: String; let text: String }
 struct CanceledText: Codable, Identifiable, Sendable { let id: String; let text: String; let sessionId: String }

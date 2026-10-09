@@ -98,12 +98,39 @@ export class Controller extends EventEmitter {
             "An extension opened too many dialogs; the extra request was canceled.",
           );
         } else {
+          const originalOptions =
+            method === "select" && Array.isArray(e.options)
+              ? e.options.slice(0, 100)
+              : [];
+          if (
+            method === "select" &&
+            (!Array.isArray(e.options) ||
+              !originalOptions.every((x) => typeof x === "string") ||
+              originalOptions.reduce(
+                (bytes, x) => bytes + Buffer.byteLength(x, "utf8"),
+                0,
+              ) >
+                256 * 1024)
+          ) {
+            this.rpc.answer({ id: e.id, cancelled: true });
+            this.notice(
+              "An extension selection exceeded the supported option budget and was canceled.",
+            );
+            return;
+          }
           const dialog = {
             ...e,
             title: clip(e.title, 1000),
             message: clip(e.message, 4000),
             prefill: clip(e.prefill, 8192),
-            options: e.options?.slice(0, 100).map((x) => clip(x, 200)),
+            options:
+              method === "select"
+                ? originalOptions.map((x) => clip(x, 200))
+                : undefined,
+            optionIds:
+              method === "select"
+                ? originalOptions.map(() => randomUUID())
+                : undefined,
           };
           const timer = e.timeout
             ? setTimeout(() => {
@@ -111,7 +138,7 @@ export class Controller extends EventEmitter {
                 this.changed();
               }, e.timeout)
             : null;
-          this.dialogs.set(e.id, { dialog, timer });
+          this.dialogs.set(e.id, { dialog, timer, originalOptions });
         }
       } else if (method === "setStatus") {
         if (e.statusText)
@@ -356,14 +383,33 @@ export class Controller extends EventEmitter {
       if (typeof r.confirmed !== "boolean")
         throw new Error("Choose Allow or Decline");
       result.confirmed = r.confirmed;
+    } else if (d.method === "select") {
+      if (r.optionId !== undefined) {
+        const index = d.optionIds.indexOf(r.optionId);
+        if (index < 0) throw new Error("Choose an offered option");
+        result.value = item.originalOptions[index];
+      } else {
+        // Older clients can answer an unchanged label only when all matching
+        // labels have that exact native value. Clipped/colliding labels fail visibly.
+        const matches = d.options.flatMap((label, index) =>
+          label === r.value ? [index] : [],
+        );
+        if (
+          typeof r.value !== "string" ||
+          !matches.length ||
+          !matches.every((index) => item.originalOptions[index] === r.value)
+        )
+          throw new Error(
+            "Choose an offered option; update the app to select truncated labels",
+          );
+        result.value = r.value;
+      }
     } else {
       if (
         typeof r.value !== "string" ||
         Buffer.byteLength(r.value, "utf8") > 65536
       )
         throw new Error("Enter an answer of at most 64 KiB");
-      if (d.method === "select" && !d.options.includes(r.value))
-        throw new Error("Choose an offered option");
       result.value = r.value;
     }
     this.rpc.answer(result);

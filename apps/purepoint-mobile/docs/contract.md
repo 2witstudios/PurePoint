@@ -116,3 +116,9 @@ Gesture grounding: Apple's [simultaneousGesture documentation](https://developer
 - Connection settings should offer real pairing/connection controls without an on-device Preview/demo entry point. Developer-only SwiftUI previews and the deterministic fake bridge remain available for implementation/testing.
 
 - Connection/loading status should occupy the existing single-line subtitle under PurePoint in the navigation header. Disconnected/connecting/connection-lost states take priority over a cached Working state; connected sessions show Connected or Working. The header opens connection settings. No connection-status row should be inserted below the composer, so reconnect transitions cannot change its height.
+
+### Review corrections
+
+- Numeric-looking public hostnames must never pass tailnet IPv4 validation. IPv4 endpoints require exactly four nonempty ASCII decimal components, no leading-zero ambiguity, octets in 0...255 and the 100.64.0.0/10 range. The same validator applies to manual addresses and scanned QR payloads.
+- Selection dialogs expose bounded display `options` and aligned opaque `optionIds`. The app answers with `optionId`; only the bridge maps that ID back to the exact original native value for that dialog. Originals are kept outside snapshots, limited to the first 100 options and a 256 KiB aggregate per dialog; unsupported oversized selections cancel visibly. Legacy label answers are accepted only when every matching display label equals its original value; clipped/ambiguous labels fail rather than change the native selection.
+- The app's Debug target configuration must enable testability, matching all three schemes' Debug TestAction and the XCTest target's @testable import. Personal local signing edits remain outside the committed project.

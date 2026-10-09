@@ -9,6 +9,11 @@ import Foundation
         precondition(ConnectionAddress.url("ws://100.100.1.2:8787/v1") != nil)
         precondition(ConnectionAddress.url("ws://0.0.0.0/v1") == nil)
         precondition(ConnectionAddress.url("ws://example.com/v1") == nil)
+        for host in ["100.64.1.2.attacker.example", "100.attacker.64.1.2", "100..64.1.2", "100.064.1.2", "100.63.1.2", "100.128.1.2", "100.64.1.256"] {
+            precondition(ConnectionAddress.url("ws://" + host + "/v1") == nil, "Reject public or malformed IPv4 hosts")
+            precondition(PairingCode.parse("{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://" + host + "/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}") == nil)
+        }
+        for host in ["100.64.0.1", "100.127.255.254"] { precondition(ConnectionAddress.url("ws://" + host + "/v1") != nil) }
         let pairing = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://100.94.14.74:8787/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
         precondition(PairingCode.parse(pairing)?.endpoint == "ws://100.94.14.74:8787/v1")
         precondition(PairingCode.parse(pairing.replacingOccurrences(of: "100.94.14.74", with: "example.com")) == nil)

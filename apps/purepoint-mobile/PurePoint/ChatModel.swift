@@ -279,8 +279,8 @@ import SwiftUI
             try await syncState(); browsing = nil
         } catch { self.error = error.localizedDescription }
     }
-    func answer(_ dialog: ExtensionDialog, value: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {
-        var fields: [String: Any] = ["dialogId": dialog.id, "cancelled": cancelled]; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
+    func answer(_ dialog: ExtensionDialog, value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {
+        var fields: [String: Any] = ["dialogId": dialog.id, "cancelled": cancelled]; if let optionId { fields["optionId"] = optionId }; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
         do { _ = try await call("answer", fields: fields) } catch { self.error = error.localizedDescription }
     }
     func exploreDemo() {

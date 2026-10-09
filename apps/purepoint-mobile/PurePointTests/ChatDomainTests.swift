@@ -70,6 +70,15 @@ final class ChatDomainTests: XCTestCase {
         XCTAssertEqual(blocks[1], .code(language: "swift", text: "let x = 1"))
         XCTAssertEqual(MarkdownBlocks.split("```\npartial").last, .code(language: "", text: "partial"))
     }
+    func testGivenNumericLookingPublicHostnameShouldRejectManualAndQRPairing() {
+        for host in ["100.64.1.2.attacker.example", "100.attacker.64.1.2", "100..64.1.2", "100.064.1.2", "100.63.1.2", "100.128.1.2", "100.64.1.256"] {
+            XCTAssertNil(ConnectionAddress.url("ws://" + host + "/v1"))
+            let qr = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://" + host + "/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
+            XCTAssertNil(PairingCode.parse(qr))
+        }
+        XCTAssertNotNil(ConnectionAddress.url("ws://100.64.0.1/v1"))
+        XCTAssertNotNil(ConnectionAddress.url("ws://100.127.255.254/v1"))
+    }
     func testGivenUnsafeEndpointShouldRejectPublicAndWildcardHosts() {
         XCTAssertNotNil(ConnectionAddress.url("ws://100.100.1.2:8787/v1"))
         XCTAssertNotNil(ConnectionAddress.url("wss://mac.example.ts.net/v1"))

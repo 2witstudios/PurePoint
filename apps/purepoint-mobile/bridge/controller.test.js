@@ -198,3 +198,65 @@ test("Stop cancels correlated extension dialogs so abort can reach idle", async 
   assert.ok(rpc.calls.indexOf("answer") < rpc.calls.indexOf("abort"));
   c.dispose();
 });
+
+test("selection IDs should preserve original values despite clipped or colliding labels", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    const prefix = "x".repeat(220);
+    const options = [prefix + "first", prefix + "second", "Short option"];
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "choose",
+      method: "select",
+      options,
+    });
+    const dialog = c.snapshot().dialogs[0];
+    assert.equal(dialog.options[0], dialog.options[1]);
+    assert.equal(dialog.optionIds.length, 3);
+    assert.notEqual(dialog.optionIds[0], dialog.optionIds[1]);
+    await assert.rejects(
+      request(c, "answer", { dialogId: "choose", value: dialog.options[0] }),
+      /option/,
+    );
+    assert.equal(rpc.answerValue, undefined);
+    await assert.rejects(
+      request(c, "answer", { dialogId: "choose", optionId: "foreign-option" }),
+      /option/,
+    );
+    await request(c, "answer", {
+      dialogId: "choose",
+      optionId: dialog.optionIds[1],
+    });
+    assert.equal(rpc.answerValue.value, options[1]);
+    assert.equal(c.snapshot().dialogs.length, 0);
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "legacy",
+      method: "select",
+      options: ["Short option"],
+    });
+    await request(c, "answer", { dialogId: "legacy", value: "Short option" });
+    assert.equal(rpc.answerValue.value, "Short option");
+  } finally {
+    c.dispose();
+  }
+});
+
+test("selection budgets should cancel oversized native values without truncating answers", () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    rpc.emit("event", {
+      type: "extension_ui_request",
+      id: "oversized",
+      method: "select",
+      options: ["x".repeat(256 * 1024 + 1)],
+    });
+    assert.deepEqual(rpc.answerValue, { id: "oversized", cancelled: true });
+    assert.equal(c.snapshot().dialogs.length, 0);
+    assert.ok(c.snapshot().notices.some((x) => x.includes("option budget")));
+  } finally {
+    c.dispose();
+  }
+});
