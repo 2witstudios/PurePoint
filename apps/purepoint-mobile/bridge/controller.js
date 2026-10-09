@@ -195,7 +195,8 @@ export class Controller extends EventEmitter {
     };
   }
   async refresh(reset = false) {
-    if (this.refreshing) return this.refreshing;
+    if (this.refreshing)
+      return reset ? this.refreshFresh(true) : this.refreshing;
     this.refreshing = (async () => {
       const activityVersion = this.activityVersion;
       const state = await this.rpc.call("get_state");
@@ -222,6 +223,12 @@ export class Controller extends EventEmitter {
     } finally {
       this.refreshing = null;
     }
+  }
+  async refreshFresh(reset = false) {
+    // A mutation needs a native read started after it completed. Syncs can coalesce.
+    // An older read's failure must not prevent this read; its caller still sees it.
+    while (this.refreshing) await this.refreshing.catch(() => {});
+    return this.refresh(reset);
   }
   validate(r) {
     if (r.version !== 1)
@@ -308,9 +315,7 @@ export class Controller extends EventEmitter {
       });
       if (result.disposition === "handled") {
         // An extension may change sessions/branches without emitting agent events.
-        // Drain any older sync before requesting post-command state.
-        if (this.refreshing) await this.refreshing;
-        await this.refresh();
+        await this.refreshFresh();
       }
       return result;
     }
@@ -348,7 +353,7 @@ export class Controller extends EventEmitter {
           await this.rpc.call("abort");
         }
         this.queue = [];
-        await this.refresh();
+        await this.refreshFresh();
         return recovered;
       } finally {
         this.stoppingRun = null;
@@ -372,9 +377,8 @@ export class Controller extends EventEmitter {
           });
     if (result.cancelled)
       throw new Error("A Pi extension canceled the conversation change.");
-    if (this.refreshing) await this.refreshing;
     // Explicitly reselecting the same session still invalidates old actions.
-    await this.refresh(true);
+    await this.refreshFresh(true);
     return { sessionId: this.state.sessionId };
   }
   resetConversation() {

@@ -367,3 +367,159 @@ test("handled commands request fresh state after an older sync finishes", async 
   assert.notEqual(c.epoch, epoch);
   c.dispose();
 });
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+test("overlapping sync requests share one native read", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  const history = deferred();
+  const started = deferred();
+  const original = rpc.call.bind(rpc);
+  rpc.call = async (op) => {
+    if (op === "get_entries") {
+      rpc.calls.push(op);
+      started.resolve();
+      return history.promise;
+    }
+    return original(op);
+  };
+  try {
+    const first = request(c, "sync");
+    await started.promise;
+    const second = request(c, "sync");
+    history.resolve({ entries: [], leafId: null });
+    const snapshots = await Promise.all([first, second]);
+    assert.deepEqual(snapshots[0], snapshots[1]);
+    assert.deepEqual(rpc.calls, ["get_state", "get_entries"]);
+  } finally {
+    c.dispose();
+  }
+});
+
+for (const op of ["stop", "new", "resume", "send"]) {
+  for (const fails of [false, true]) {
+    test(`${op} reads fresh native state after an older sync ${fails ? "fails" : "finishes"}`, async () => {
+      const rpc = new Runtime();
+      rpc.state.isStreaming = op === "stop";
+      const c = new Controller(rpc, { path: async () => "/native/one" });
+      await c.refresh();
+      const epoch = c.epoch;
+      c.editorOffer = { id: "old", text: "Old draft" };
+      const history = deferred();
+      const started = deferred();
+      const mutated = deferred();
+      const original = rpc.call.bind(rpc);
+      let holdHistory = true;
+      rpc.call = async (nativeOp) => {
+        if (nativeOp === "get_state") {
+          rpc.calls.push(nativeOp);
+          return { ...rpc.state };
+        }
+        if (nativeOp === "get_entries" && holdHistory) {
+          holdHistory = false;
+          rpc.calls.push(nativeOp);
+          started.resolve();
+          return history.promise;
+        }
+        if (
+          ["abort", "new_session", "switch_session", "prompt"].includes(
+            nativeOp,
+          )
+        ) {
+          rpc.calls.push(nativeOp);
+          rpc.state = {
+            ...rpc.state,
+            isStreaming: false,
+            sessionName: "Post-mutation title",
+            // Explicit new/resume must reset even when the session ID is unchanged.
+            sessionId: op === "send" ? "changed" : "one",
+          };
+          mutated.resolve();
+          return nativeOp === "prompt" ? { disposition: "handled" } : {};
+        }
+        return original(nativeOp);
+      };
+      try {
+        // Attach rejection handling before deliberately failing this read.
+        const sync = request(c, "sync").then(
+          (snapshot) => ({ snapshot }),
+          (error) => ({ error }),
+        );
+        await started.promise;
+        const mutation = request(c, op, {
+          epoch,
+          runId: c.runId,
+          sessionId: "one",
+          text: "/new",
+          mode: "send",
+        });
+        await mutated.promise;
+        const stateReads = rpc.calls.filter((x) => x === "get_state").length;
+        if (fails) history.reject(new Error("Older read failed"));
+        else history.resolve({ entries: [], leafId: null });
+        const old = await sync;
+        await mutation;
+        if (fails) assert.match(old.error.message, /Older read failed/);
+        else assert.equal(old.snapshot.title, "Pi");
+        const fresh = c.snapshot();
+        assert.equal(fresh.title, "Post-mutation title");
+        assert.equal(fresh.busy, false);
+        assert.equal(fresh.runId, null);
+        assert.equal(
+          rpc.calls.filter((x) => x === "get_state").length,
+          stateReads + 1,
+        );
+        if (op === "stop") {
+          assert.equal(fresh.epoch, epoch);
+          assert.equal(fresh.editor.text, "Old draft");
+          assert.equal(fresh.canceled[0].text, "recover me");
+        } else {
+          assert.notEqual(fresh.epoch, epoch);
+          assert.equal(fresh.editor, null);
+        }
+      } finally {
+        c.dispose();
+      }
+    });
+  }
+}
+
+test("explicit reset during an older refresh performs a new read and rotates epoch", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  const epoch = c.epoch;
+  const history = deferred();
+  const started = deferred();
+  const original = rpc.call.bind(rpc);
+  let holdHistory = true;
+  rpc.call = async (op) => {
+    if (op === "get_entries" && holdHistory) {
+      holdHistory = false;
+      rpc.calls.push(op);
+      started.resolve();
+      return history.promise;
+    }
+    return original(op);
+  };
+  try {
+    const older = c.refresh();
+    await started.promise;
+    const reset = c.refresh(true);
+    history.resolve({ entries: [], leafId: null });
+    await older;
+    await reset;
+    assert.notEqual(c.epoch, epoch);
+    assert.equal(rpc.calls.filter((x) => x === "get_state").length, 3);
+  } finally {
+    c.dispose();
+  }
+});
