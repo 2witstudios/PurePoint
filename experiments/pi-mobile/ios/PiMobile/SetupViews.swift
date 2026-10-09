@@ -96,7 +96,7 @@ struct ConversationSidebar: View {
             Button(action: connection) {
                 HStack(spacing: 8) {
                     Image("PurePointLogo").resizable().scaledToFit().frame(width: 20, height: 20).accessibilityHidden(true)
-                    Text("Point Guard").font(.subheadline.weight(.medium))
+                    Text("PurePoint").font(.subheadline.weight(.medium))
                     Spacer()
                     Image(systemName: "gearshape").font(.subheadline).foregroundStyle(.secondary)
                 }.padding(.horizontal, 20).frame(height: 52).contentShape(Rectangle())
@@ -122,7 +122,7 @@ struct ConnectionView: View {
                 Section {
                     HStack(spacing: 12) {
                         Image("PurePointLogo").resizable().scaledToFit().frame(width: 38, height: 38).accessibilityHidden(true)
-                        Text("Point Guard").font(.title2.weight(.semibold))
+                        Text("PurePoint").font(.title2.weight(.semibold))
                     }.padding(.vertical, 8)
                 }
                 Section {
@@ -166,7 +166,7 @@ struct ConnectionView: View {
         requestingCamera = true
         defer { requestingCamera = false }
         let allowed = await AVCaptureDevice.requestAccess(for: .video)
-        guard allowed else { model.error = "Allow camera access for Pi in iPhone Settings to scan, or enter the address and secret manually."; return }
+        guard allowed else { model.error = "Allow camera access for PurePoint in iPhone Settings to scan, or enter the address and secret manually."; return }
         guard DataScannerViewController.isAvailable else { model.error = "The camera is unavailable. Try again or use manual entry."; return }
         showScanner = true
     }

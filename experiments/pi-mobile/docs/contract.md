@@ -108,3 +108,5 @@ Grounding: Apple's [Improving app responsiveness](https://developer.apple.com/do
 - Given a tap on conversation content or its empty space, composer focus should clear and the keyboard should dismiss. The composer itself remains editable; simultaneous gesture handling should retain tool expansion, code-copy actions and long-press text selection. VoiceOver should expose a Dismiss keyboard action on the conversation area. Scroll dismissal remains interactive.
 
 Gesture grounding: Apple's [simultaneousGesture documentation](https://developer.apple.com/documentation/swiftui/view/simultaneousgesture(_:including:)) describes processing a parent gesture alongside child gestures. Actual native selection/control coexistence requires the owner-device check below.
+
+- The iPhone product and default Xcode scheme should be named PurePoint; mobile is the platform, not a separate PiMobile product. Existing Point Guard/PurePoint artwork remains. Renaming presentation and Xcode targets must preserve bundle identifiers, signing settings and existing credential/draft storage namespaces. Default PurePoint Run remains Release without LLDB; PurePoint-Debug retains breakpoints.

@@ -1,5 +1,5 @@
 import XCTest
-@testable import PiMobile
+@testable import PurePoint
 final class ChatDomainTests: XCTestCase {
     func testGivenAttachedFilesShouldComposeNativeImagesAndReadableTextWithinBudgets() throws {
         let file = ComposerAttachment(id: "file", name: "notes.txt", mimeType: "text/plain", data: Data("Project notes".utf8))

@@ -77,3 +77,9 @@ Validation: all standalone iOS source syntax checks and strict-concurrency Mac S
 ## Default run scheme — 2026-10-09
 
 Owner still encountered debugging with the usual Run action. PiMobile now defaults to Release Run with no selected debugger and PosixSpawn launcher, matching PiMobile-Device. Original Debug/LLDB launch configuration is preserved as PiMobile-Debug. Debug XCTest configuration remains available with Cmd+U. Scheme XML parses and assertions verify all three Run modes. No Xcode build or actual launch performed; owner must reload the project/scheme if Xcode keeps cached settings and verify Run > Info > Debug executable is unchecked. Owner signing/project/workspace changes remain untouched.
+
+## PurePoint mobile branding — 2026-10-09
+
+App display name, navigation/header/composer/connection/sidebar branding, preview title, Xcode project, app/test targets, executable/test-host references and shared Run schemes are now PurePoint / PurePointTests / PurePoint-Debug / PurePoint-Device. Default Run remains Release without LLDB. Source directory names, existing bundle identifiers, Keychain service, preferences and private recovery-storage namespace remain unchanged to preserve the same installed app and saved pairing/drafts. Existing PurePoint logo/artwork remains.
+
+Owner's project signing/format edits and untracked workspace were preserved in the renamed PurePoint.xcodeproj; only the naming transformation against the committed project was staged. XCTest now imports the renamed PurePoint module. Plist/project syntax, iOS source syntax and Mac SDK domain/model typecheck pass. Parsed project/scheme assertions verify target IDs, names and default non-debug launch. No iOS SDK build/device install was performed. Owner must reopen ios/PurePoint.xcodeproj, select PurePoint and Cmd+R to update the installed name.

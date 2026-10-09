@@ -1,4 +1,4 @@
-# Pi Mobile
+# PurePoint Mobile
 
 A standalone native iPhone chat for vanilla Pi running on your Mac. The bridge owns one persistent RPC process; closing, backgrounding, or disconnecting the phone does not stop Pi. Pi can use Jono’s existing Point Guard skills and `pu` CLI across projects. The app has no PurePoint API dependency.
 
@@ -68,16 +68,16 @@ To recreate the page without restarting a running bridge, run `npm run pair` wit
 
 ## iPhone / Xcode — owner-run
 
-Open **[ios/PiMobile.xcodeproj](ios/PiMobile.xcodeproj)** in Xcode 16 or later. Select the **PiMobile** scheme. The project has a standalone iPhone app target (iOS 17+) and a PiMobileTests XCTest target; no script phases or references to the PurePoint app, Cargo or installed binaries.
+Open **[ios/PurePoint.xcodeproj](ios/PurePoint.xcodeproj)** in Xcode 16 or later. Select the **PurePoint** scheme. The project has a standalone iPhone app target (iOS 17+) and a PurePointTests XCTest target; no script phases or references to the PurePoint app, Cargo or installed binaries.
 
-1. In the PiMobile target’s Signing & Capabilities, choose your team and a unique bundle identifier. Choose the matching team for the test target if needed.
+1. In the PurePoint target’s Signing & Capabilities, choose your team and a unique bundle identifier. Choose the matching team for the test target if needed.
 2. Select an iPhone simulator and press **Cmd+R** to build/run. Use **Cmd+U** for the domain tests. For a local fixture, connect to `ws://127.0.0.1:8787/v1`.
 3. For a physical iPhone, select your device, keep it on your existing tailnet, accept any local-network permission prompt, and enter the Mac’s Tailscale endpoint and your secret. Build/run with **Cmd+R**.
 4. Exercise the owner checks below before relying on remote control.
 
-For everyday physical-device testing, select **PiMobile** (the default) or **PiMobile-Device** and press **Cmd+R**. It builds Release and launches without LLDB; use **PiMobile-Debug** when you need breakpoints. Cmd+U still uses the Debug test configuration. Both schemes install the same app with the same signing and saved pairing/conversation data. No separate backend or bridge restart is needed.
+For everyday physical-device testing, select **PurePoint** (the default) or **PurePoint-Device** and press **Cmd+R**. It builds Release and launches without LLDB; use **PurePoint-Debug** when you need breakpoints. Cmd+U still uses the Debug test configuration. Both schemes install the same app with the same signing and saved pairing/conversation data. No separate backend or bridge restart is needed.
 
-If Xcode displays a blank screen with “libobjc.A.dylib is being read from process memory” or “Looking up debug dylib relative path”, compare the Device scheme or a Home Screen launch. Apple documents [debugger-related startup delays](https://developer.apple.com/forums/thread/800067) and recommends disabling Debug executable to isolate them. The shared-cache warning alone does not prove the app is stalled. Launch logs under subsystem `PiMobile`, category `Launch`, emit `SwiftUI App initialized` and `Chat view appeared`, without credentials or transcript content. A delay before the first marker occurs before this app's App initializer; a gap between markers points to app/model/view initialization. On-device results still require owner verification. If the no-debugger build also pauses, profile that launch with Instruments; don't clear pairing or native sessions.
+If Xcode displays a blank screen with “libobjc.A.dylib is being read from process memory” or “Looking up debug dylib relative path”, compare the Device scheme or a Home Screen launch. Apple documents [debugger-related startup delays](https://developer.apple.com/forums/thread/800067) and recommends disabling Debug executable to isolate them. The shared-cache warning alone does not prove the app is stalled. Launch logs under subsystem `PurePoint`, category `Launch`, emit `SwiftUI App initialized` and `Chat view appeared`, without credentials or transcript content. A delay before the first marker occurs before this app's App initializer; a gap between markers points to app/model/view initialization. On-device results still require owner verification. If the no-debugger build also pauses, profile that launch with Instruments; don't clear pairing or native sessions.
 
 
 The plist permits cleartext transport because IP-address `ws` inside Tailscale needs it; the app itself validates endpoints to tailnet/loopback hosts. Use owner TLS/wss if desired. Normal conversation screens contain no RPC controls.
@@ -86,7 +86,7 @@ The plist permits cleartext transport because IP-address `ws` inside Tailscale n
 
 ## Mobile conversation controls
 
-The compact left sidebar contains title-only conversation history, inline search, a header new-chat action and connection settings in its Point Guard footer. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs. Tap the conversation area to dismiss the keyboard for reading; interactive scroll dismissal also remains available.
+The compact left sidebar contains title-only conversation history, inline search, a header new-chat action and connection settings in its PurePoint footer. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs. Tap the conversation area to dismiss the keyboard for reading; interactive scroll dismissal also remains available.
 
 The composer’s **+** menu offers **Photos** and **Files**. Images are prepared as JPEG and sent through native Pi RPC to an image-capable model. Text files and PDFs with selectable text are sent as named text; PDF binaries/layout and scanned PDF pages are not uploaded. Attachment chips show `Image` or `Text`, and can be removed before sending. Up to four files fit a 512 KiB prepared-data budget; each text attachment is at most 32 KiB and all prompt text at most 64 KiB. PDFs are limited to 30 pages. Attachments wait locally if Pi is busy; ordinary text can still use Send options → Steer / After reply.
 
@@ -134,7 +134,7 @@ swiftc ios/PiMobile/ChatDomain.swift verification/ResponsivenessChecks.swift -o 
 /tmp/pi-mobile-responsiveness-checks
 swiftc -typecheck ios/PiMobile/ChatDomain.swift ios/PiMobile/PairingSecret.swift ios/PiMobile/ChatModel.swift
 swiftc -frontend -parse ios/PiMobile/*.swift ios/PiMobileTests/*.swift
-plutil -lint ios/PiMobile.xcodeproj/project.pbxproj ios/PiMobile/Info.plist
+plutil -lint ios/PurePoint.xcodeproj/project.pbxproj ios/PiMobile/Info.plist
 ```
 
 Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, single-controller/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK; XCTest target and iOS views still require Xcode verification.

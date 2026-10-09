@@ -34,7 +34,7 @@ struct ChatView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             .background(Color(uiColor: .systemBackground))
-            .navigationTitle("Point Guard")
+            .navigationTitle("PurePoint")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -44,7 +44,7 @@ struct ChatView: View {
                     HStack(spacing: 8) {
                         Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
-                        Text("Point Guard").font(.headline)
+                        Text("PurePoint").font(.headline)
                         Text(model.busy ? "Working" : model.connected ? (model.demo ? "Preview" : "Connected") : "Disconnected")
                             .font(.caption2).foregroundStyle(.secondary)
                         }
@@ -197,7 +197,7 @@ struct ChatView: View {
                         }
                     }
                 }
-                TextField("Message Point Guard", text: $model.draft, axis: .vertical)
+                TextField("Message PurePoint", text: $model.draft, axis: .vertical)
                     .font(.body).lineLimit(1...6).focused($composerFocused)
                     .padding(.horizontal, 4).padding(.top, 3)
                     .accessibilityLabel("Message draft")

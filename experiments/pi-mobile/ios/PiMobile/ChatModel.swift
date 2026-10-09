@@ -285,7 +285,7 @@ import SwiftUI
     }
     func exploreDemo() {
         disconnect(); demo = true; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()
-        snapshot = Snapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "preview", title: "Point Guard", messages: [ChatMessage(id: "welcome", role: "assistant", text: "What would you like to work on?")], tools: [], queue: [], dialogs: [], notices: [])
+        snapshot = Snapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "preview", title: "PurePoint", messages: [ChatMessage(id: "welcome", role: "assistant", text: "What would you like to work on?")], tools: [], queue: [], dialogs: [], notices: [])
     }
     private func demoReply(_ text: String) async {
         guard let old = snapshot else { return }
