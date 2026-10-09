@@ -91,7 +91,7 @@ async function main() {
       );
     }
     console.log(
-      `Pi Mobile ${fixture ? "fixture" : "bridge"} listening on ${tls ? "wss" : "ws"}://${host.includes(":") ? "[" + host + "]" : host}:${port}/v1. One controller; Pi stays running when the phone disconnects.`,
+      `Pi Mobile ${fixture ? "fixture" : "bridge"} listening on ${tls ? "wss" : "ws"}://${host.includes(":") ? "[" + host + "]" : host}:${port}/v1. Shared live session; Pi stays running when clients disconnect.`,
     );
   } catch (e) {
     controller.dispose();

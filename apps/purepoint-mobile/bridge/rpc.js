@@ -19,6 +19,7 @@ export class Rpc extends EventEmitter {
         if (p) {
           clearTimeout(p.timer);
           this.pending.delete(record.id);
+          if (record.success) p.onResponse?.(record.data ?? {});
           record.success
             ? p.resolve(record.data ?? {})
             : p.reject(
@@ -91,20 +92,26 @@ export class Rpc extends EventEmitter {
     this.child.stdin.write(JSON.stringify(record) + "\n");
   }
   /** @returns {Promise<any>} */
-  call(type, data = {}, timeout = 30000) {
+  call(type, data = {}, timeout = 30000, onResponse = undefined) {
     if (this.pending.size >= 32)
       return Promise.reject(new Error("Too many Pi commands in flight"));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(
-          new Error(
-            "Pi command timed out. Delivery is uncertain; inspect history before sending again.",
-          ),
+        const error = new Error(
+          type === "prompt"
+            ? "Pi prompt timed out. Delivery is uncertain; inspect native history and restart the bridge before sending again."
+            : "Pi command timed out. Delivery is uncertain; inspect history before sending again.",
         );
+        // A timed-out input hook can still enqueue later. Fence subsequent RPC
+        // prompts so that it cannot inherit another client's queue ownership.
+        if (type === "prompt") this.fail(error);
+        else {
+          this.pending.delete(id);
+          reject(error);
+        }
       }, timeout);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, onResponse });
       try {
         this.write({ ...data, type, id });
       } catch (e) {

@@ -142,6 +142,7 @@ test("native session changes, custom messages and shell output project against p
       c.statuses.set("outgoing", "Outgoing status");
       const result = await c.request({
         version: 1,
+        clientId: "test-client",
         id: crypto.randomUUID(),
         epoch,
         ...operation,
@@ -161,6 +162,7 @@ test("native session changes, custom messages and shell output project against p
       await assert.rejects(
         c.request({
           version: 1,
+          clientId: "test-client",
           id: crypto.randomUUID(),
           op: "send",
           epoch,

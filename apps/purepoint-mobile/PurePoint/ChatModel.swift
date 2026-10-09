@@ -57,11 +57,15 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
+    let clientId: String
+
     private let defaults: RecoveryPreferences
 
     init(defaults: UserDefaults = .standard) {
         let defaults = RecoveryPreferences(value: defaults)
         self.defaults = defaults
+        clientId = defaults.value.string(forKey: "pi.clientId") ?? UUID().uuidString
+        defaults.value.set(clientId, forKey: "pi.clientId")
         endpoint = defaults.value.string(forKey: "pi.endpoint") ?? ""
         drafts = defaults.value.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
         let savedCanceledIds = defaults.value.stringArray(forKey: "pi.canceledIds") ?? []
@@ -71,8 +75,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if canceledIdHistory != savedCanceledIds { saveCanceledIds() }
         recoveryTask = Task { [weak self] in
             let saved = await Task.detached(priority: .utility) {
-                let legacy = defaults.value.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
-                return (LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], LocalRecoveryStore.load("submissions", as: [Submission].self) ?? legacy ?? [])
+                return (LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], LocalRecoveryStore.load("submissions", as: [Submission].self) ?? [])
             }.value
             guard let self else { return }
             // Edits made while loading always win over saved recovery.
@@ -122,9 +125,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func saveSubmissions() {
         guard recoveryLoaded else { return }
         let value = submissions
-        let defaults = defaults
         writer.schedule(key: "submissions") { [weak self] in
-            do { try LocalRecoveryStore.save(value, name: "submissions"); defaults.value.removeObject(forKey: "pi.submissions") }
+            do { try LocalRecoveryStore.save(value, name: "submissions") }
             catch { Task { @MainActor [weak self] in
                 if self?.error?.hasPrefix("Message not sent:") != true { self?.error = "Could not save message recovery on this phone." }
             } }
@@ -151,7 +153,11 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         saveDraft(); saveAttachmentDraft(); disconnect(); self.endpoint = url.absoluteString; defaults.value.set(self.endpoint, forKey: "pi.endpoint"); snapshot = nil; draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false; wantsConnection = true; connect()
     }
     func connect() {
-        guard !demo, foreground, socket == nil, let url = ConnectionAddress.url(endpoint) else { return }
+        guard !demo, foreground, socket == nil else { return }
+        guard let url = ConnectionAddress.url(endpoint) else {
+            if !endpoint.isEmpty { error = "Enter the bridge address ending in /v1, or scan its pairing QR." }
+            return
+        }
         guard connectionTask == nil else { return }
         wantsConnection = true
         let address = endpoint
@@ -170,6 +176,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         wantsConnection = true; retryTask?.cancel(); generation += 1; let current = generation
         cursor.reset(); connectionStatus = "Connecting to your Mac…"; error = nil
         var request = URLRequest(url: url); request.setValue("Bearer " + secret, forHTTPHeaderField: "Authorization")
+        request.setValue(clientId, forHTTPHeaderField: "X-PointGuard-Client-ID")
         let task = URLSession.shared.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024; socket = task; task.resume()
         receiveTask = Task { [weak self] in
             do {
@@ -202,7 +209,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         for continuation in outstanding.values { continuation.resume(throwing: MobileError("Connection interrupted. Delivery may be uncertain. Inspect the conversation before sending again.")) }
     }
     private func connectionLost(_ reason: String) {
-        detach(); connectionStatus = "Connection lost · Pi continues on your Mac"; error = reason + " Check the Mac bridge, Tailscale, pairing secret, and whether another phone is connected."
+        detach(); connectionStatus = "Connection lost · Pi continues on your Mac"; error = reason + " Check the Mac bridge, Tailscale, pairing secret, and the bridge address and pairing secret."
         guard foreground, wantsConnection else { return }
         let delay = retryDelay; retryDelay = min(retryDelay * 2, 30)
         retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled else { return }; self?.connect() }
@@ -234,13 +241,13 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         snapshot = state
         projectingSnapshot = false
         let previousCanceled = canceledIdHistory
-        for canceled in state.canceled ?? [] where !seenCanceledIds.contains(canceled.id) {
+        for canceled in state.canceled ?? [] where canceled.clientId == clientId && !seenCanceledIds.contains(canceled.id) {
             submissions.append(Submission(id: canceled.id, text: canceled.text, sessionId: canceled.sessionId, status: "Canceled by Stop", recoverable: true))
             seenCanceledIds.insert(canceled.id)
         }
         // Refresh the current snapshot's IDs in wire order so older history
         // cannot evict them while the bridge continues including them.
-        canceledIdHistory = Self.recentCanceledIds(canceledIdHistory + (state.canceled ?? []).map(\.id))
+        canceledIdHistory = Self.recentCanceledIds(canceledIdHistory + (state.canceled ?? []).filter { $0.clientId == clientId }.map(\.id))
         seenCanceledIds = Set(canceledIdHistory)
         if previousCanceled != canceledIdHistory { saveCanceledIds() }
         if let offered = state.editor, !seenEditorIds.contains(offered.id) { seenEditorIds.insert(offered.id); editorOffer = offered.text }
@@ -269,7 +276,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
     private func call(_ op: String, fields: [String: Any] = [:], id: String = UUID().uuidString) async throws -> JSONValue {
         guard let socket else { throw MobileError("Connect to your Mac before sending.") }
-        var record = fields; record["version"] = 1; record["id"] = id; record["op"] = op
+        var record = fields; record["version"] = 1
+        record["clientId"] = clientId; record["id"] = id; record["op"] = op
         let data = try JSONSerialization.data(withJSONObject: record)
         guard let text = String(data: data, encoding: .utf8) else { throw MobileError("Could not encode the message.") }
         return try await withCheckedThrowingContinuation { continuation in
@@ -360,7 +368,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         } catch { self.error = error.localizedDescription }
     }
     func answer(_ dialog: ExtensionDialog, value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {
-        var fields: [String: Any] = ["dialogId": dialog.id, "cancelled": cancelled]; if let optionId { fields["optionId"] = optionId }; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
+        guard let state = snapshot else { return }
+        var fields: [String: Any] = ["epoch": state.epoch, "dialogId": dialog.id, "cancelled": cancelled]; if let optionId { fields["optionId"] = optionId }; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
         do { _ = try await call("answer", fields: fields) } catch { self.error = error.localizedDescription }
     }
     func exploreDemo() {

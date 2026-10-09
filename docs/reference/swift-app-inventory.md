@@ -38,7 +38,10 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | AgentConfigState.swift | Per-agent configuration loading, launch args management via daemon |
 | AgentsHubState.swift | Templates, agent defs, swarm defs, selection state |
 | AppState.swift | @Observable @MainActor — multi-project container with projects array, pendingSelectAgentId/pendingSelectWorkspaceId/pendingSelectWorktreeId, activeProjectRoot, sidebar selection, daemon error |
-| ChatState.swift | Chat UI: messages, sessions, streaming, input text, search query, conversation loading (secondary to SessionListState for Point Guard) |
+| PiChatModel.swift | App-owned Pi bridge chat: authoritative snapshots, native history, queue/Stop, extension dialogs, private draft and submission recovery |
+| PiChatDomain.swift | Desktop types and projection for the merged Pi bridge v1 contract |
+| PiPairingSecret.swift | Desktop Keychain pairing credential |
+| ChatState.swift | Legacy Claude chat UI state: messages, sessions, streaming and conversation loading; Point Guard chat uses PiChatModel |
 | DiffState.swift | Diff viewing state |
 | WorkspaceRegistry.swift | @Observable — the canonical workspace list per project. Reconciles the manifest against the stored layout so every agent occupies exactly one tab, of one pane, of exactly one workspace; the sidebar renders these and nothing else |
 | KeyBindingState.swift | Hotkey-to-key mappings, delegates to HotkeyMonitor |
@@ -152,7 +155,7 @@ Source map of the macOS desktop app (`apps/purepoint-macos/purepoint-macos/`).
 | SettingsDisplayView.swift | Appearance, font sizes |
 | SettingsGeneralView.swift | General preferences |
 | SettingsHotkeysView.swift | Hotkey customization |
-| SettingsPointGuardView.swift | Point Guard settings (launch command, skip permissions) |
+| SettingsPointGuardView.swift | Point Guard settings (Pi bridge connection and pairing secret import; Shell launch command and skip permissions) |
 | SettingsSection.swift | Reusable settings section component |
 | SettingsView.swift | Modal settings panel |
 

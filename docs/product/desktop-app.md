@@ -19,7 +19,7 @@ Desktop App
     Terminal view cache (hide/show, LRU eviction)
     Pane Grid (binary tree splits, spatial nav, daemon sync)
       Pane tab stacks (agent / file / empty surfaces per pane)
-    Point Guard (root terminal, configurable launch command, conversation sidebar)
+    Point Guard (Pi chat, rich transcript, tools, conversation sidebar; separate root shell mode)
     Workspace files sidebar (inline changes review / filesystem previews)
     Project + Worktree detail views (inline diff viewer)
   Conversation sidebar (session search, timeline grouping)
@@ -39,7 +39,7 @@ Desktop App
 
 ! [APP-003] macOS only. Native SwiftUI + AppKit bridges.
 
-! [APP-004] Point Guard: PointGuardView spawns a shell via daemon's SpawnShell request and auto-launches the configured agent. SessionListState manages the conversation sidebar. ConversationSidebarView with search and timeline grouping. Configurable launch command and skip-permissions via SettingsState (SettingsPointGuardView).
+! [APP-004] Point Guard defaults to native Pi chat using the shared Pi bridge v1 protocol. AppState retains PiChatModel across navigation; Pi owns native sessions, providers and tools. The transcript renders selectable prose, fenced code with copy, grouped expandable tool activity, notices and native extension dialogs. Conversation search, read-only browsing during a run, resume and new session use the bridge. Busy sends explicitly choose Steer or After reply; Stop clears the observed run's queue and aborts Pi without killing delegated workers. Drafts and uncertain receipts are persisted privately before transmission and never automatically replayed. Settings imports the bridge pairing secret from a local file into a desktop-specific Keychain service. Desktop and phone are simultaneous authenticated clients of one authoritative Pi session. Shared broadcasts reflect messages, tools, queues, dialogs and session changes on both devices. Mutations serialize centrally; stale session/run targets reject, and the first dialog answer wins. Stable per-device identities scope request IDs and canceled queue recovery. Disconnect removes only that view; other clients and Pi continue. Unsupported protocol versions and selection-label answers are rejected; this is the initial v1 contract. Shell mode preserves the existing daemon SpawnShell terminal, launch command, permissions and Claude/Codex/OpenCode history. Workspace split panes and ordinary terminal tabs retain their current behavior.
 
 ! [APP-005] Hotkey system: HotkeyMonitor registers OS-level shortcuts. KeyBindingState maps HotkeyAction → key equivalent. 31 actions across 5 categories (application: 3, navigation: 6, panes: 7, tabs: 14, chat: 1 — counted from `HotkeyAction.category`). Tabs: ⌘T new tab, ⌘W close tab (the `closeAgent` action; it closed the whole pane before tabs), ⇧⌘] / ⇧⌘[ next/previous, ⌘1–8 go to tab N, ⌘9 last tab, ⌥⌘D move tab to a new pane. ⌘1–9 are therefore taken; project switching (multi-project gap) should use ⌃⌘1–9. Customizable via Settings.
 

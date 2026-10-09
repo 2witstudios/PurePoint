@@ -80,7 +80,7 @@ extension ChatModel {
         precondition(hydrated.submissions.count == 50 && hydrated.draft == "Keep this draft" && hydrated.attachments.count == 1, "Saturated recovery refuses a send without losing receipts or draft files")
         precondition(hydrated.error?.contains("recovery") == true, "Saturated recovery gives actionable guidance")
         hydrated.submissions[0] = sending
-        let overflow = Snapshot(version: 1, epoch: state.epoch, revision: 2, busy: false, sessionId: state.sessionId, title: state.title, messages: [], tools: [], queue: [], dialogs: [], notices: [], canceled: [CanceledText(id: "canceled", text: "Stopped queued text", sessionId: state.sessionId)])
+        let overflow = Snapshot(version: 1, epoch: state.epoch, revision: 2, busy: false, sessionId: state.sessionId, title: state.title, messages: [], tools: [], queue: [], dialogs: [], notices: [], canceled: [CanceledText(clientId: model.clientId, id: "canceled", text: "Stopped queued text", sessionId: state.sessionId)])
         try hydrated.applyForChecks(overflow)
         precondition(hydrated.submissions.count == 50 && hydrated.submissions.first { $0.id == sending.id }?.attachments?.first?.data == file.data, "Cancellation overflow remains bounded and protects in-flight files")
         precondition(hydrated.error?.contains("Older recovery receipts") == true, "Unavoidable cancellation overflow warns about omitted recovery")
@@ -91,7 +91,7 @@ extension ChatModel {
         let cancellationModel = ChatModel(defaults: defaults)
         await cancellationModel.hydrateForChecks()
         func canceledState(_ revision: Int, _ ids: [String]) -> Snapshot {
-            Snapshot(version: 1, epoch: "cancellation-epoch", revision: revision, busy: false, sessionId: state.sessionId, title: state.title, messages: [], tools: [], queue: [], dialogs: [], notices: [], canceled: ids.map { CanceledText(id: $0, text: "Stopped", sessionId: state.sessionId) })
+            Snapshot(version: 1, epoch: "cancellation-epoch", revision: revision, busy: false, sessionId: state.sessionId, title: state.title, messages: [], tools: [], queue: [], dialogs: [], notices: [], canceled: ids.map { CanceledText(clientId: model.clientId, id: $0, text: "Stopped", sessionId: state.sessionId) })
         }
         let latestIds = ["cancel-999", "cancel-1000", "cancel-1000"]
         try cancellationModel.applyForChecks(canceledState(1, latestIds))

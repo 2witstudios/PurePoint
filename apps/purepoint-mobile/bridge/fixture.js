@@ -13,9 +13,10 @@ let stamp = 1000;
 const out = (x) => process.stdout.write(JSON.stringify(x) + "\n");
 const reply = (r, data = {}) =>
   out({ type: "response", id: r.id, command: r.type, success: true, data });
-const queueUpdate = () =>
+const queueUpdate = (boundary = {}) =>
   out({
     type: "queue_update",
+    ...boundary,
     steering: queue.filter((x) => x.mode === "steer").map((x) => x.text),
     followUp: queue.filter((x) => x.mode === "after").map((x) => x.text),
   });
@@ -168,7 +169,10 @@ const decoder = new LineDecoder((r) => {
           text: r.message,
           mode: r.streamingBehavior === "steer" ? "steer" : "after",
         });
-        queueUpdate();
+        queueUpdate({
+          enqueuedMode: r.streamingBehavior === "steer" ? "steer" : "after",
+          inputSource: "rpc",
+        });
         reply(r, { disposition: "queued" });
       } else {
         run(r.message, r.images);
@@ -181,7 +185,7 @@ const decoder = new LineDecoder((r) => {
         followUp: queue.filter((x) => x.mode === "after").map((x) => x.text),
       };
       queue = [];
-      queueUpdate();
+      queueUpdate({ queueCleared: true });
       reply(r, data);
       break;
     }

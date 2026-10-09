@@ -29,7 +29,14 @@ class Runtime extends EventEmitter {
   }
 }
 const request = (c, op, data = {}) =>
-  c.request({ version: 1, id: crypto.randomUUID(), op, ...data });
+  c.request({
+    version: 1,
+    clientId: "test-client",
+    id: crypto.randomUUID(),
+    epoch: c.epoch,
+    op,
+    ...data,
+  });
 test("stop clears queue before abort and rejects stale run targets", async () => {
   const rpc = new Runtime();
   const c = new Controller(rpc, {});
@@ -103,6 +110,7 @@ test("unknown versions and duplicate request ids cannot execute work", async () 
   );
   const r = {
     version: 1,
+    clientId: "test-client",
     id: "same",
     op: "send",
     text: "once",
@@ -236,7 +244,10 @@ test("selection IDs should preserve original values despite clipped or colliding
       method: "select",
       options: ["Short option"],
     });
-    await request(c, "answer", { dialogId: "legacy", value: "Short option" });
+    await request(c, "answer", {
+      dialogId: "legacy",
+      optionId: c.snapshot().dialogs[0].optionIds[0],
+    });
     assert.equal(rpc.answerValue.value, "Short option");
   } finally {
     c.dispose();
@@ -711,6 +722,7 @@ test("invalid or overcapacity Stop requests never cancel dialogs", async () => {
     });
     const base = {
       version: 1,
+      clientId: "test-client",
       id: "stop-invalid",
       op: "stop",
       epoch: c.epoch,
@@ -973,3 +985,194 @@ test("a failed Stop retains other queued Stop markers until their own cleanup", 
     c.dispose();
   }
 });
+
+test("identical queued prompts keep FIFO ownership when the first starts running", async () => {
+  const rpc = new Runtime();
+  const original = rpc.call.bind(rpc);
+  const queued = [];
+  rpc.call = async (op, args) => {
+    if (op !== "prompt") return original(op);
+    queued.push(args.message);
+    rpc.emit("event", {
+      type: "queue_update",
+      enqueuedMode: "after",
+      inputSource: "rpc",
+      followUp: [...queued],
+    });
+    return { disposition: "queued" };
+  };
+  const c = new Controller(rpc, {});
+  try {
+    await c.refresh();
+    rpc.emit("event", { type: "agent_start" });
+    await request(c, "send", {
+      clientId: "phone",
+      text: "Same prompt",
+      mode: "after",
+      epoch: c.epoch,
+    });
+    c.event({ type: "queue_update", followUp: ["Same prompt"] });
+    await request(c, "send", {
+      clientId: "desktop",
+      text: "Same prompt",
+      mode: "after",
+      epoch: c.epoch,
+    });
+    c.event({ type: "queue_update", followUp: ["Same prompt", "Same prompt"] });
+    const secondId = c.queue[1].id;
+    c.event({ type: "queue_update", followUp: ["Same prompt"] });
+    assert.equal(c.queue[0].id, secondId);
+    assert.equal(c.queue[0].clientId, "desktop");
+    rpc.queue = [];
+    rpc.call = async (op) =>
+      op === "clear_queue"
+        ? { followUp: ["Same prompt"], steering: [] }
+        : original(op);
+    await request(c, "stop", {
+      epoch: c.epoch,
+      runId: c.runId,
+      clientId: "phone",
+    });
+    assert.equal(c.canceled[0].clientId, "desktop");
+    assert.equal(c.canceled[0].id, secondId);
+  } finally {
+    c.dispose();
+  }
+});
+
+test("v1 requires client identity and scopes duplicate request IDs per client", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    await c.refresh();
+    await assert.rejects(
+      c.request({ version: 1, id: "missing", op: "sync" }),
+      /client identity/,
+    );
+    await request(c, "sync", { id: "same", clientId: "phone" });
+    await request(c, "sync", { id: "same", clientId: "desktop" });
+    await assert.rejects(
+      request(c, "sync", { id: "same", clientId: "phone" }),
+      /already received/,
+    );
+  } finally {
+    c.dispose();
+  }
+});
+
+for (const mode of ["steer", "after"]) {
+  const field = mode === "steer" ? "steering" : "followUp";
+  test(`${mode} native input expansion preserves recovery ownership without leaking origins`, async () => {
+    const rpc = new Runtime();
+    const original = rpc.call.bind(rpc);
+    let texts = [];
+    rpc.call = async (op, args) => {
+      if (op === "prompt") {
+        // Native input handlers, skills and templates replace the submitted text.
+        texts.push(`Expanded: ${args.message}`);
+        rpc.emit("event", {
+          type: "queue_update",
+          enqueuedMode: mode,
+          inputSource: "rpc",
+          [field]: [...texts],
+        });
+        return { disposition: "queued" };
+      }
+      if (op === "clear_queue") {
+        const recovered = { [field]: [...texts] };
+        texts = [];
+        rpc.emit("event", { type: "queue_update", queueCleared: true });
+        return recovered;
+      }
+      return original(op);
+    };
+    const c = new Controller(rpc, {});
+    try {
+      await c.refresh();
+      rpc.emit("event", { type: "agent_start" });
+      for (let index = 0; index < 105; index++) {
+        await request(c, "send", {
+          clientId: "phone",
+          mode,
+          text: `/skill:test ${index}`,
+        });
+        assert.equal(c.queue[0].clientId, "phone");
+        assert.equal(c.queue[0].text, `Expanded: /skill:test ${index}`);
+        texts = [];
+        rpc.emit("event", { type: "queue_update" });
+        assert.equal(c.nativeQueue.length, 0);
+        assert.equal(c.pendingEnqueue, null);
+      }
+      await request(c, "send", {
+        clientId: "desktop",
+        mode,
+        text: "/template final",
+      });
+      const id = c.queue[0].id;
+      await request(c, "stop", { clientId: "phone", runId: c.runId });
+      assert.deepEqual(
+        c.canceled.map(({ id, clientId, text }) => ({ id, clientId, text })),
+        [{ id, clientId: "desktop", text: "Expanded: /template final" }],
+      );
+    } finally {
+      c.dispose();
+    }
+  });
+
+  test(`${mode} Stop reconciles identical-message consumption during clear_queue`, async () => {
+    const rpc = new Runtime();
+    const original = rpc.call.bind(rpc);
+    const clearing = deferred();
+    const release = deferred();
+    let texts = [];
+    rpc.call = async (op, args) => {
+      if (op === "prompt") {
+        texts.push(args.message);
+        rpc.emit("event", {
+          type: "queue_update",
+          enqueuedMode: mode,
+          inputSource: "rpc",
+          [field]: [...texts],
+        });
+        return { disposition: "queued" };
+      }
+      if (op === "clear_queue") {
+        clearing.resolve();
+        await release.promise;
+        const recovered = { [field]: [...texts] };
+        texts = [];
+        rpc.emit("event", { type: "queue_update", queueCleared: true });
+        return recovered;
+      }
+      return original(op);
+    };
+    const c = new Controller(rpc, {});
+    try {
+      await c.refresh();
+      rpc.emit("event", { type: "agent_start" });
+      for (const clientId of ["phone", "desktop"])
+        await request(c, "send", { clientId, mode, text: "Identical" });
+      const desktopId = c.queue[1].id;
+      const stop = request(c, "stop", { clientId: "phone", runId: c.runId });
+      await clearing.promise;
+      texts.shift();
+      rpc.emit("event", {
+        type: "queue_update",
+        enqueuedMode: mode,
+        inputSource: "rpc",
+        [field]: [...texts],
+      });
+      assert.equal(c.queue[0].clientId, "desktop");
+      release.resolve();
+      await stop;
+      assert.deepEqual(
+        c.canceled.map(({ id, clientId }) => ({ id, clientId })),
+        [{ id: desktopId, clientId: "desktop" }],
+      );
+      assert.equal(c.nativeQueue.length, 0);
+    } finally {
+      release.resolve();
+      c.dispose();
+    }
+  });
+}

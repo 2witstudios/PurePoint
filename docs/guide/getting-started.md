@@ -72,7 +72,7 @@ Press `Ctrl+C` to detach without killing the agent.
 
 Open PurePoint from Applications. Add your project directory. You'll see:
 
-- **Point Guard**: The home screen — a terminal that auto-launches Claude Code (or your configured agent). Your conversation history lives in the sidebar so you can browse and resume past sessions. Configure the launch command in Settings.
+- **Point Guard**: The home screen — native Pi chat with rich responses, tool activity and conversation history. Connect your Pi bridge in Settings → Point Guard. Switch to Shell for your configured command-line agent or an ordinary terminal.
 - **Sidebar**: All worktrees and agents with live status indicators
 - **Terminal**: Click any agent to view its terminal
 - **Command palette** (`Cmd+N`): Spawn new agents or swarms

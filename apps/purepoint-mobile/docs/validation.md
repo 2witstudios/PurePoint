@@ -27,7 +27,7 @@ Test quality: isolated local fixtures, a real subprocess and a real published Pi
 
 Security review (OWASP 2021):
 
-1. Access control: authenticated upgrade, single controller, semantic allowlist, session IDs resolved server-side.
+1. Access control: authenticated upgrade, concurrent identified clients, semantic allowlist, session IDs resolved server-side.
 2. Cryptography: Tailscale transport assumptions explicit; optional verified TLS; device Keychain stores the owner secret.
 3. Injection: child executable/cwd/argument arrays; network never supplies a shell command, executable or raw session path.
 4. Design: no automatic uncertain replay; run/epoch checks guard Stop and session mutations.
@@ -111,3 +111,9 @@ Selection regression ran red before implementation. Dialog snapshots now carry o
 Debug testability finding referred to a local target-level NO override. Corrected it in the owner worktree. Parsed committed and working projects both assert app target Debug ENABLE_TESTABILITY=YES; all three schemes' TestAction use Debug. The committed project already had YES, so no signing/project-only changes were pushed. Xcode XCTest compilation/execution remains owner-run.
 
 Verification: 30/30 Node bridge tests, checkJs, standalone domain and responsiveness checks, strict-concurrency Mac SDK domain/model typecheck, all iOS Swift source parsing and project/plist checks pass. No iOS SDK build/device run or live bridge restart performed. New selection IDs activate after an idle Mac bridge restart; updated phone remains compatible with older bridge dialogs through unchanged label answers. Owner signing and Release testability overrides remain local.
+
+## Shared desktop/phone architecture — 2026-10-09
+
+The initial v1 contract supports simultaneous authenticated clients of one native Pi session. Both native models persist a device ID, send it on connection/requests, use /v1 only, include epoch on dialog answers, and restore canceled queue items only for their own device. Label-only selection and legacy receipt preference migration were removed. Pairing payloads/QRs and the endpoint use v1, without compatibility or endpoint conversion layers.
+
+All 85 bridge tests passed, including real two-client WebSocket/RPC streaming, identical queued text ownership, first-answer-wins dialogs, competing session changes, stale Stop, independent reconnect, identity validation and unsupported version/path rejection. TypeScript passed. The standalone shared Swift fixture checks compile the actual phone and desktop models together, with isolated storage and no Keychain writes. Owner-run Xcode build and visual/device acceptance remain required; no live bridge/session was restarted.

@@ -37,7 +37,7 @@ Most agents live inside a worktree. A **root agent** runs in the project root wi
 
 ### Point Guard
 
-The Point Guard screen is a root terminal for interactive work. It auto-launches your configured coding agent and shows conversation history in the sidebar. This is where you direct work, delegate tasks, and coordinate agents.
+Point Guard is a native Pi chat for directing work, delegating tasks and coordinating agents. Rich responses and tool activity appear in the transcript, with native Pi conversation history in the sidebar. Its Shell mode retains the configurable root terminal for interactive command-line work.
 
 ## Agent def
 

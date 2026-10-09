@@ -27,6 +27,7 @@ test("given images should forward validated native content once and reject inval
   const send = (images, mode = "send") =>
     c.request({
       version: 1,
+      clientId: "test-client",
       id: crypto.randomUUID(),
       op: "send",
       epoch: c.epoch,

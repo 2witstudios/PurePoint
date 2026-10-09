@@ -298,7 +298,7 @@ struct ExtensionDialogView: View {
                     Section { ForEach(Array((dialog.options ?? []).enumerated()), id: \.offset) { index, option in
                         Button(option) {
                             if let ids = dialog.optionIds, ids.indices.contains(index) { answer(optionId: ids[index]) }
-                            else { answer(value: option) }
+                            else { model.error = "This dialog has no option ID. Refresh the conversation." }
                         }.disabled(answering)
                     } }
                 } else if dialog.method == "confirm" {
