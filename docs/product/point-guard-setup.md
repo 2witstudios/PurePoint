@@ -26,7 +26,7 @@ Pinned remote HTTPS/WSS reuses [Node HTTPS](https://nodejs.org/api/https.html) a
 ! [PGSET-002] App owns exclusive runtime lifetime and stops/awaits only its children before update replacement — no daemon rewrite or process adoption.
 ! [PGSET-003] Native provider auth uses catalog capabilities and guarded asynchronous SDK interaction — no unsupported OAuth promise or stale credential overwrite.
 ! [PGSET-004] Remote chat requires pinned WSS and per-device opaque credentials; QR v2 enrolls once — Tailscale/shared token cannot authorize devices or caller-selected identities.
-! [PGSET-005] Local HTTP admin and local desktop chat are separate loopback listeners; separate private admin-token and desktop-token are provisioned — paired credentials never gain setup/provider/device-admin rights. Desktop stable client identity is bound to its local credential, not an arbitrary incoming header.
+! [PGSET-005] Local HTTP admin and local desktop chat are separate loopback listeners; separate private admin-token and desktop-chat-token are provisioned — paired credentials never gain setup/provider/device-admin rights. Desktop stable client identity is bound to its local credential, not an arbitrary incoming header.
 ! [PGSET-006] Preserve native session/auth and versioned trust outside the bundle, invalidate ephemeral enrollment on restart — update restores durable state without replaying uncertain prompts.
 
 ## Requirements
@@ -49,9 +49,9 @@ Pinned remote HTTPS/WSS reuses [Node HTTPS](https://nodejs.org/api/https.html) a
 
 packaged ∧ nativeAuth ∧ durableState ∧ appOwned ∧ pinnedHost ∧ individualTrust ∧ boundedReconnect ∧ noReplay ∧ independentReview ∧ exactHeadCI. ProductionActivation ⇒ ownerAcceptance ∧ protectedSigning.
 
-## Interfaces — PRPG contract r1 / PRPG-TRUST-1
+## Interfaces — PRPG contract r2 / PRPG-TRUST-1
 
-The following producer proposals are reconciled with these normative clarifications: admin-token never authorizes chat; desktop-token authorizes only loopback native chat; remote device credential only remote chat. Descriptor includes nativeChatURL, desktopClientId, hostId and certificateSHA256 in addition to adminURL/remote chatURL. runtime.configure, runtime.restart and successful auth return restartRequired; native app performs idle-only owned stop/relaunch preserving state. Runtime persists desktopClientId bound to desktop-token; optional POINT_GUARD_CLIENT_ID bootstraps first creation, cannot change existing identity silently. Remote listener absence while Tailscale unavailable must not prevent local chat/provider setup; pairing reports actionable missing reachability. Stop/relaunch must await exit before replacement. TLS helper/trust store belongs to trust producer; runtime alone wires main/setup.
+The following producer proposals are reconciled with these normative clarifications: admin-token never authorizes chat; desktop-chat-token authorizes only loopback native chat; remote device credential only remote chat. Descriptor includes nativeChatURL, desktopClientId, hostId and certificateSHA256 in addition to adminURL/remote chatURL. runtime.configure, runtime.restart and successful auth return restartRequired; native app performs idle-only owned stop/relaunch preserving state. Runtime persists desktopClientId bound to desktop-chat-token; optional POINT_GUARD_CLIENT_ID bootstraps first creation, cannot change existing identity silently. Remote listener absence while Tailscale unavailable must not prevent local chat/provider setup; pairing reports actionable missing reachability. Stop/relaunch must await exit before replacement. TLS helper/trust store belongs to trust producer; runtime alone wires main/setup.
 
 # PRPG-1 contract proposal r1 (not reconciled)
 Producer wt-qcjdczac baseline c0d14120ef0f62d7a8f7790bf022e7ebe7b2d856; integration SHA none yet.
@@ -130,3 +130,14 @@ Admin adapter runtime handler: pairing.create {endpoint,ttlSeconds?} -> trust.cr
 ## Edge Cases
 
 Refuse insecure/malformed/unknown-schema existing state instead of resetting identity or credentials. No descriptor adoption unless it belongs to the exact owned child and startup instance. App update/restart cannot erase trust, auth, session selection or local recovery receipts. No credential in public readiness stdout. Local fixture shared-token transport is explicit loopback test-only; never production fallback. Reconnect never resends prompts. Certificate expiry or missing tailnet is recoverable UI failure, not silent pin rotation or public bind.
+
+### Reconciled r2 producer integration signatures
+
+- openTrustStore({directory:STATE_DIR/trust}) provisions/loads stable TLS and returns hostId, certificateSHA256, tls, close and trust methods.
+- Remote serve(controller,{host,port,trust,tls:trust.tls}); local serve(controller,{host:'127.0.0.1',port:0,localClient:{token,clientId}}). Local token is desktop-chat-token; admin HTTP uses admin-token only.
+- trust.createEnrollment({endpoint,ttlSeconds?}) returns {enrollmentId,payload:<exact JSON QR string>,expiresAt}. trust.enrollmentStatus(enrollmentId) returns status pending/consumed/expired/revoked/unknown.
+- devices.list returns {devices:trust.listDevices()}; devices.revoke/rotate take deviceId. pairing.revoke takes enrollmentId. Rotation invalidates selected credential and requires deliberate re-enrollment; no replacement credential exposed to admin UI.
+- admin.json includes desktopClientId, nativeChatURL, optional chatURL, hostId, certificateSHA256. runtime.json preserves desktopClientId. No Tailscale is required to start desktop chat/setup; remote must use explicit tailnet address.
+- runtime.configure/restart and auth.status complete return restartRequired:true. Native process owner applies only idle stop/await/relaunch. Sanitized error.json exposes code/message/recovery, never SDK raw credential-bearing errors.
+
+Earlier proposal wording about localAdmin/same bootstrap token/in-process replacement is superseded by these r2 signatures.
