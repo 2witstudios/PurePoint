@@ -14,6 +14,8 @@ nonisolated struct FileDiff: Identifiable, Sendable {
     let hunks: [Hunk]
     var oldFilename: String? = nil
     var isBinary: Bool = false
+    /// Conflict working-file patches compare against stage 2, or empty if ours deleted the path.
+    var conflictBaseline: String? = nil
 
     var id: String { filename }
 }

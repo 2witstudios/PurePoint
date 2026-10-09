@@ -126,6 +126,26 @@ private enum GitReviewChecks {
         try require(conflicted.staged.first { $0.filename == "conflict.txt" }?.statusCode == "U", "explicit staged conflict")
         try require(conflicted.unstaged.first { $0.filename == "conflict.txt" }?.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "working conflict patch against ours")
         try require(conflicted.uniquePathCount == 3, "conflict path counted once")
+        _ = try git(["reset", "--hard", "HEAD"], at: conflict)
+        _ = try git(["checkout", "-b", "ours-deleted"], at: conflict)
+        _ = try git(["rm", "conflict.txt"], at: conflict); try commit("ours deletes", at: conflict)
+        do { _ = try git(["merge", "side"], at: conflict); throw Failure(message: "merge unexpectedly succeeded") }
+        catch let failure as Failure { try require(failure.message.contains("CONFLICT"), "real ours-deleted merge") }
+        let noOurs = await service.fetchLocalReview(at: conflict)
+        let surviving = noOurs.unstaged.first { $0.filename == "conflict.txt" }
+        try require(noOurs.error == nil && surviving?.statusCode == "U" && surviving?.added == 1, "ours-deleted surviving file patch")
+        try require(surviving?.conflictBaseline == "empty (ours deleted)" && surviving?.hunks.first?.lines.last?.content == "side", "explicit empty baseline and actual surviving content")
+        try Data([0, 1, 255]).write(to: URL(fileURLWithPath: conflict + "/conflict.txt"))
+        let noOursBinary = await service.fetchLocalReview(at: conflict)
+        try require(noOursBinary.unstaged.first { $0.filename == "conflict.txt" }?.isBinary == true, "ours-deleted binary evidence")
+        _ = try git(["reset", "--hard", "HEAD"], at: conflict)
+        _ = try git(["checkout", "side"], at: conflict)
+        do { _ = try git(["merge", "ours-deleted"], at: conflict); throw Failure(message: "merge unexpectedly succeeded") }
+        catch let failure as Failure { try require(failure.message.contains("CONFLICT"), "real theirs-deleted merge") }
+        try FileManager.default.removeItem(atPath: conflict + "/conflict.txt")
+        let oursOnly = await service.fetchLocalReview(at: conflict)
+        let removed = oursOnly.unstaged.first { $0.filename == "conflict.txt" }
+        try require(oursOnly.error == nil && removed?.removed == 1 && removed?.conflictBaseline == "ours (index stage 2)", "theirs-deleted working deletion uses existing ours baseline")
         print("Git repository checks passed")
     }
 

@@ -70,9 +70,7 @@ actor GitService {
         do {
             let names = try checked(["ls-files", "--others", "--exclude-standard", "-z"], at: path).split(separator: "\0").map(String.init)
             for name in names {
-                let result = runGit(["-c", "core.quotePath=true", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name], cwd: path)
-                guard result.exitCode == 0 || result.exitCode == 1 else { throw GitReviewError(message: result.stderr) }
-                review.untracked.append(parsePatch(result.stdout, filename: name, status: "??"))
+                review.untracked.append(try emptyBaselinePatch(name: name, status: "??", at: path))
             }
         } catch { review.untrackedError = error.localizedDescription }
         review.error = [review.stagedError, review.unstagedError, review.untrackedError].compactMap { $0 }.joined(separator: "\n").nilIfEmpty
@@ -149,12 +147,37 @@ actor GitService {
             throw GitReviewError(message: "Git paths changed while patches loaded. Refresh to retry.")
         }
         var files = zip(ordinary, sections).map { entry, patch in
-            parsePatch(patch, filename: entry.name, status: conflicts.contains(entry.name) ? "U" : entry.status, oldFilename: entry.old)
+            var file = parsePatch(patch, filename: entry.name, status: conflicts.contains(entry.name) ? "U" : entry.status, oldFilename: entry.old)
+            if conflicts.contains(entry.name) && revisions.isEmpty { file.conflictBaseline = "ours (index stage 2)" }
+            return file
         }
         for name in conflicts where !files.contains(where: { $0.filename == name }) {
-            files.append(FileDiff(filename: name, statusCode: "U", added: 0, removed: 0, hunks: []))
+            var file = FileDiff(filename: name, statusCode: "U", added: 0, removed: 0, hunks: [])
+            if revisions.isEmpty && !root {
+                let stages = try checked(["ls-files", "--unmerged", "-z", "--", name], at: path).split(separator: "\0")
+                let hasOurs = stages.contains { entry in
+                    entry.split(separator: "\t", maxSplits: 1).first?.split(separator: " ").last == "2"
+                }
+                file.conflictBaseline = hasOurs ? "ours (index stage 2)" : "empty (ours deleted)"
+                // Modify/delete conflicts can have no stage 2. --ours then emits no
+                // patch, though the surviving working file has reviewable content.
+                let fullPath = (path as NSString).appendingPathComponent(name)
+                let exists = FileManager.default.fileExists(atPath: fullPath)
+                    || (try? FileManager.default.destinationOfSymbolicLink(atPath: fullPath)) != nil
+                if !hasOurs && exists {
+                    file = try emptyBaselinePatch(name: name, status: "U", at: path)
+                    file.conflictBaseline = "empty (ours deleted)"
+                }
+            }
+            files.append(file)
         }
         return files.sorted { $0.filename < $1.filename }
+    }
+
+    private func emptyBaselinePatch(name: String, status: String, at path: String) throws -> FileDiff {
+        let result = runGit(["-c", "core.quotePath=true", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name], cwd: path)
+        guard result.exitCode == 0 || result.exitCode == 1 else { throw GitReviewError(message: result.stderr) }
+        return parsePatch(result.stdout, filename: name, status: status)
     }
 
     private func parsePatch(_ patch: String, filename: String, status: String, oldFilename: String? = nil) -> FileDiff {
