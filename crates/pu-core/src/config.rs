@@ -81,19 +81,18 @@ fn apply_global_agent_settings(config: &mut Config, settings: &GlobalAgentSettin
             .map(str::to_owned)
             .collect();
         // Wrapper flags belong to the wrapper, not to Codex.
-        let prefix_len = tokens
-            .iter()
-            .position(|token| {
-                Path::new(token)
-                    .file_name()
-                    .is_some_and(|name| name == "codex")
-            })
-            .map(|index| index + 1)
-            .unwrap_or(1)
-            .min(tokens.len());
-        let mut command = tokens[..prefix_len].to_vec();
-        command.extend(without_codex_permissions(tokens[prefix_len..].to_vec()));
-        agent.command = command.join(" ");
+        if let Some(codex_index) = tokens.iter().position(|token| {
+            Path::new(token)
+                .file_name()
+                .is_some_and(|name| name == "codex")
+        }) {
+            let prefix_len = codex_index + 1;
+            let mut command = tokens[..prefix_len].to_vec();
+            command.extend(without_codex_permissions(tokens[prefix_len..].to_vec()));
+            agent.command = command.join(" ");
+        }
+        // Without an explicit Codex executable, the whole command belongs to
+        // an opaque wrapper. Only launch_args can safely be normalized.
         let mut args = without_codex_permissions(crate::types::resolved_launch_args(
             "codex",
             agent.launch_args.as_deref(),
@@ -346,6 +345,19 @@ mod tests {
         std::fs::create_dir(home.0.path().join(".pu/agent-settings.yaml.tmp")).unwrap();
         assert!(save_global_agent_settings(false).is_err());
         assert!(load_global_agent_settings().unwrap().codex_yolo);
+    }
+
+    #[test]
+    fn global_yolo_preserves_encapsulated_wrapper_command() {
+        let mut config = Config::default();
+        let command = "codex-wrapper  -a account --sandbox wrapper-profile";
+        config.agents.get_mut("codex").unwrap().command = command.into();
+        apply_global_agent_settings(&mut config, &GlobalAgentSettings { codex_yolo: true });
+        assert_eq!(config.agents["codex"].command, command);
+        assert_eq!(
+            config.agents["codex"].launch_args.as_ref().unwrap(),
+            &["--dangerously-bypass-approvals-and-sandbox", "--no-daemon"]
+        );
     }
 
     #[test]
