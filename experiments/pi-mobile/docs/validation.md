@@ -1,6 +1,6 @@
 # Validation evidence — 2026-10-08
 
-- `npm test`: 26/26 passed. Covers core projection/framing, real child RPC, queue/reconnect/controller races and Stop dialog cancellation, native read-only history, authenticated network, full fixture flow, private QR page/payload behavior and isolated published vanilla Pi 1.1.0.
+- `npm test`: 28/28 passed. Covers core projection/framing, real child RPC, queue/reconnect/controller races and Stop dialog cancellation, native read-only history, authenticated network, full fixture flow, private QR page/payload behavior, image validation/transport/reconnect and isolated published vanilla Pi 1.1.0.
 - `npm run check`: passed (`tsc --noEmit`, checkJs).
 - `npm audit`: zero vulnerabilities after pinning ws 8.22.0.
 - Local vanilla CLI `--version`: 1.1.0. Upstream checkout: ce950d78f424dcaf9f5d6a03ce80ab141130eb1d. Registry package and lockfile verified locally; no global install/link.
@@ -39,3 +39,11 @@ Security review (OWASP 2021):
 10. SSRF: app endpoints constrained to tailnet/loopback; no server-side arbitrary URL fetch operation.
 
 Documentation covers interface, setup, constraints and recovery. No blocking finding remains in the safely verified bridge/domain scope; this is a self-review, not an independent review or evidence of iOS/device validation.
+
+## Composer / sidebar / attachments verification — 2026-10-09
+
+- Bridge tests: 28/28 and checkJs pass. Attachment validation was run red before implementation. New coverage checks native image forwarding, malformed/oversized MIME/base64 rejection, idle-only uploads, image-model capability, a real fixture WebSocket-to-RPC image boundary, and reconnect without image replay.
+- Real native Pi/OpenRouter/Haiku Latest image prompt passed: `Pi Mobile image transport works.`, stop reason `stop`, no error. Used an ephemeral `--no-session --no-tools` child and a synthetic non-secret PNG fixture; no owner conversation or workers were touched.
+- Swift Foundation payload checks pass: image encoding, named text incorporation, attachment/prompt budgets. Existing grouping, drafts and pairing checks pass. XCTest payload/recovery cases are included but not executed here (Command Line Tools SDK has no XCTest module).
+- Composer is inset and rounded without the old full-width material strip; history is a left drawer; tools are inline with no filled card or tool icons; resume uses an explicit primary button style with inverse foreground. Owner screenshot informed this change. iOS build, rendering/gestures/keyboard, photo/file import and physical-device attachment delivery are still owner checks.
+- At completion of code checks, the phone remained connected to the previous running bridge. Image capability activation requires an idle bridge restart; it was not interrupted blindly.

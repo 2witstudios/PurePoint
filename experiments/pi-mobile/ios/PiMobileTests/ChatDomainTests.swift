@@ -1,6 +1,20 @@
 import XCTest
 @testable import PiMobile
 final class ChatDomainTests: XCTestCase {
+    func testGivenAttachedFilesShouldComposeNativeImagesAndReadableTextWithinBudgets() throws {
+        let file = ComposerAttachment(id: "file", name: "notes.txt", mimeType: "text/plain", data: Data("Project notes".utf8))
+        let photo = ComposerAttachment(id: "photo", name: "photo.jpg", mimeType: "image/jpeg", data: Data([255,216,255,1]))
+        let content = try ComposerPayload.make(text: "Read these", attachments: [file,photo])
+        XCTAssertTrue(content.message.contains("Project notes"))
+        XCTAssertTrue(content.message.contains("notes.txt"))
+        XCTAssertEqual(content.images.count, 1)
+        XCTAssertEqual(content.images[0]["data"], photo.data.base64EncodedString())
+        XCTAssertThrowsError(try ComposerPayload.make(text: "", attachments: Array(repeating: photo, count: 5)))
+        XCTAssertThrowsError(try ComposerPayload.make(text: String(repeating: "x", count: 65537), attachments: []))
+        let saved = Submission(id: "one", text: "Draft", sessionId: "session", status: "Delivery uncertain", recoverable: true, attachments: [photo])
+        let recovered = try JSONDecoder().decode(Submission.self, from: JSONEncoder().encode(saved))
+        XCTAssertEqual(recovered.attachments?.first?.data, photo.data)
+    }
     func testGivenNativeAndLiveToolsShouldGroupOnceWithoutBlankAssistantRows() {
         let messages = [
             ChatMessage(id: "toolResult-1-call-a", role: "toolResult", text: "Read output", activity: "read"),

@@ -45,10 +45,12 @@ function settled(aborted = false) {
     out({ type: "agent_settled", aborted });
   }
 }
-function run(text) {
+function run(text, images = []) {
   busy = true;
   out({ type: "agent_start" });
-  finish(message("user", text));
+  finish(
+    message("user", images.length ? [{ type: "text", text }, ...images] : text),
+  );
   const methods = {
     "/fixture-dialog": "editor",
     "/fixture-confirm": "confirm",
@@ -169,7 +171,7 @@ const decoder = new LineDecoder((r) => {
         queueUpdate();
         reply(r, { disposition: "queued" });
       } else {
-        run(r.message);
+        run(r.message, r.images);
         reply(r, { disposition: "started" });
       }
       break;

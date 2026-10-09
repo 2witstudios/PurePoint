@@ -7,6 +7,7 @@ import SwiftUI
     @Published var connectionStatus = "Not connected"
     @Published var error: String?
     @Published var draft = "" { didSet { saveDraft() } }
+    @Published var attachments: [ComposerAttachment] = [] { didSet { saveAttachmentDraft() } }
     @Published var submissions: [Submission] = [] { didSet { saveSubmissions() } }
     @Published var conversations: [Conversation] = []
     @Published var browsing: History?
@@ -19,6 +20,7 @@ import SwiftUI
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
     private var drafts = UserDefaults.standard.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
+    private var attachmentDrafts = LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:]
     private var cursor = SnapshotCursor()
     private var seenEditorIds = Set<String>()
     private var seenCanceledIds = Set(UserDefaults.standard.stringArray(forKey: "pi.canceledIds") ?? [])
@@ -28,23 +30,38 @@ import SwiftUI
     private var retryDelay: UInt64 = 2
     var demo = false
     var busy: Bool { snapshot?.busy ?? false }
-    var canSend: Bool { connected && snapshot?.error == nil && (!demo || !busy) && !changingSession && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canSend: Bool { connected && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: "pi.submissions"), let saved = try? JSONDecoder().decode([Submission].self, from: data) {
+        let legacy = UserDefaults.standard.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
+        if let saved = LocalRecoveryStore.load("submissions", as: [Submission].self) ?? legacy {
             submissions = saved.map { item in var item = item; if item.status == "Sending" { item.status = "Delivery uncertain"; item.recoverable = true }; return item }
         }
         draft = drafts[draftKey] ?? ""
+        attachments = attachmentDrafts[draftKey] ?? []
     }
     private func saveDraft() { drafts[draftKey] = String(draft.prefix(65536)); if drafts.count > 100 { drafts.removeValue(forKey: drafts.keys.first ?? "") }; UserDefaults.standard.set(drafts, forKey: "pi.drafts") }
-    private func saveSubmissions() { if let data = try? JSONEncoder().encode(Array(submissions.suffix(50))) { UserDefaults.standard.set(data, forKey: "pi.submissions") } }
+    private func saveSubmissions() {
+        do { try LocalRecoveryStore.save(Array(submissions.suffix(50)), name: "submissions"); UserDefaults.standard.removeObject(forKey: "pi.submissions") }
+        catch { self.error = "Could not save message recovery on this phone." }
+    }
+    private func saveAttachmentDraft() {
+        attachmentDrafts[draftKey] = attachments
+        while attachmentDrafts.count > 10, let key = attachmentDrafts.keys.first(where: { $0 != draftKey }) { attachmentDrafts.removeValue(forKey: key) }
+        do { try LocalRecoveryStore.save(attachmentDrafts, name: "attachment-drafts") }
+        catch { self.error = "Could not save attachments on this phone. Keep the app open until sending." }
+    }
+    func addAttachment(_ file: ComposerAttachment) {
+        guard attachments.count < 4, attachments.reduce(file.data.count, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Attach up to four files, totaling 512 KiB after preparation."; return }
+        attachments.append(file)
+    }
     func pair(endpoint: String, secret: String) {
         guard let url = ConnectionAddress.url(endpoint) else { error = "Enter a Tailscale address ending in /v1, such as ws://100.100.1.2:8787/v1."; return }
         guard secret.count >= 32 else { error = "Enter the pairing secret from your Mac (at least 32 characters)."; return }
         do { try PairingSecret.save(secret, endpoint: url.absoluteString) } catch { self.error = error.localizedDescription; return }
-        saveDraft(); disconnect(); self.endpoint = url.absoluteString; UserDefaults.standard.set(self.endpoint, forKey: "pi.endpoint"); snapshot = nil; draft = drafts[draftKey] ?? ""; demo = false; wantsConnection = true; connect()
+        saveDraft(); saveAttachmentDraft(); disconnect(); self.endpoint = url.absoluteString; UserDefaults.standard.set(self.endpoint, forKey: "pi.endpoint"); snapshot = nil; draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false; wantsConnection = true; connect()
     }
     func connect() {
         guard !demo, foreground, socket == nil, let url = ConnectionAddress.url(endpoint) else { return }
@@ -101,6 +118,7 @@ import SwiftUI
         guard cursor.accept(epoch: state.epoch, revision: state.revision) else { return }
         let previous = snapshot?.sessionId
         let localDraft = draft
+        let localAttachments = attachments
         let oldKey = draftKey
         if previous != state.sessionId { saveDraft() }
         snapshot = state
@@ -115,6 +133,9 @@ import SwiftUI
             var next = DraftState(text: drafts[draftKey] ?? "")
             if previous == nil && !localDraft.isEmpty && next.text != localDraft { next.restore(localDraft); drafts.removeValue(forKey: oldKey) }
             draft = next.text
+            var nextAttachments = attachmentDrafts[draftKey] ?? []
+            if previous == nil { for file in localAttachments where !nextAttachments.contains(where: { $0.id == file.id }) { nextAttachments.append(file) } }
+            attachments = nextAttachments
         }
         if let failure = state.error { error = failure }
     }
@@ -139,20 +160,27 @@ import SwiftUI
     func submit(mode: String) {
         guard canSend, let state = snapshot else { return }
         let text = draft
-        guard text.utf8.count <= 65536 else { error = "Message is too long. Keep it under 64 KiB."; return }
+        let files = attachments
+        let content: ComposerPayload
+        do { content = try ComposerPayload.make(text: text, attachments: files) } catch { self.error = error.localizedDescription; return }
+        guard content.images.isEmpty || demo || state.capabilities?.contains("images") == true else { error = "Restart the updated Mac bridge before sending images."; return }
         let id = UUID().uuidString
-        submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false)); draft = ""
+        submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files)); draft = ""; attachments = []
         Task {
             do {
-                if demo { await demoReply(text); updateSubmission(id, status: "Accepted", recoverable: false); return }
-                let data = try await call("send", fields: ["epoch": state.epoch, "text": text, "mode": mode], id: id)
+                if demo { await demoReply(content.message); updateSubmission(id, status: "Accepted", recoverable: false); return }
+                let data = try await call("send", fields: ["epoch": state.epoch, "text": content.message, "mode": mode, "images": content.images], id: id)
                 let disposition = data["disposition"].text ?? "accepted"
                 updateSubmission(id, status: disposition == "queued" ? "Queued" : disposition == "handled" ? "Handled by extension" : "Accepted", recoverable: false)
             } catch { updateSubmission(id, status: error.localizedDescription, recoverable: true); self.error = error.localizedDescription }
         }
     }
     private func updateSubmission(_ id: String, status: String, recoverable: Bool) { if let i = submissions.firstIndex(where: { $0.id == id }) { submissions[i].status = status; submissions[i].recoverable = recoverable } }
-    func restore(_ submission: Submission) { var state = DraftState(text: draft); state.restore(submission.text); draft = state.text; submissions.removeAll { $0.id == submission.id } }
+    func restore(_ submission: Submission) {
+        let files = (submission.attachments ?? []).filter { file in !attachments.contains(where: { $0.id == file.id }) }
+        guard attachments.count + files.count <= 4, (attachments + files).reduce(0, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Remove a draft attachment before restoring these files."; return }
+        var state = DraftState(text: draft); state.restore(submission.text); draft = state.text; attachments += files; submissions.removeAll { $0.id == submission.id }
+    }
     func dismissSubmission(_ id: String) { submissions.removeAll { $0.id == id } }
     func useEditorOffer() { guard let offer = editorOffer else { return }; var state = DraftState(text: draft); state.restore(offer); draft = state.text; editorOffer = nil }
     func stop() async -> Bool {

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { Projection, clip, boundedRows } from "./core.js";
+import { validateImages } from "./attachments.js";
 export class Controller extends EventEmitter {
   constructor(rpc, sessions) {
     super();
@@ -145,6 +146,7 @@ export class Controller extends EventEmitter {
     return {
       type: "snapshot",
       version: 1,
+      capabilities: ["images"],
       epoch: this.epoch,
       revision: this.revision,
       runId: this.runId,
@@ -239,6 +241,17 @@ export class Controller extends EventEmitter {
   async mutate(r) {
     this.checkEpoch(r);
     if (r.op === "send") {
+      const images = validateImages(r.images);
+      if (images.length && (this.busy || r.mode !== "send"))
+        throw new Error("Send image attachments when Pi is idle.");
+      if (
+        images.length &&
+        Array.isArray(this.state.model?.input) &&
+        !this.state.model.input.includes("image")
+      )
+        throw new Error(
+          "The selected Pi model does not support images. Select an image-capable model.",
+        );
       if (
         typeof r.text !== "string" ||
         !r.text.trim() ||
@@ -255,6 +268,7 @@ export class Controller extends EventEmitter {
         );
       return await this.rpc.call("prompt", {
         message: r.text,
+        ...(images.length ? { images } : {}),
         ...(r.mode === "send"
           ? {}
           : { streamingBehavior: r.mode === "steer" ? "steer" : "followUp" }),

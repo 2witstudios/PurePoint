@@ -6,6 +6,11 @@ import { Controller } from "./controller.js";
 import { serve } from "./network.js";
 import { fileURLToPath } from "node:url";
 const fixtureToken = "fixture-only-not-production-000000000000";
+const fixtureImage = {
+  type: "image",
+  mimeType: "image/png",
+  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTz0AAAAASUVORK5CYII=",
+};
 function phone(url) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
@@ -114,6 +119,52 @@ test("full fixture flow reconnects without replay, recovers queue on Stop and an
     assert.ok(
       state.messages.some((m) => m.text === "Extension received: true"),
     );
+  } finally {
+    if (p?.ws.readyState === WebSocket.OPEN) await p.close();
+    await server.shutdown();
+    c.dispose();
+    await rpc.close();
+  }
+});
+test("given an image upload should reach the RPC child and survive reconnect without replay", async () => {
+  const rpc = new Rpc(
+    process.execPath,
+    [fileURLToPath(new URL("./fixture.js", import.meta.url))],
+    process.cwd(),
+    process.env,
+  );
+  const c = new Controller(rpc, { list: async () => [] });
+  await c.refresh();
+  const server = await serve(c, {
+    host: "127.0.0.1",
+    port: 0,
+    token: fixtureToken,
+  });
+  let p;
+  try {
+    const url = `ws://127.0.0.1:${server.address().port}/v1`;
+    p = await phone(url);
+    const first = await p.call("sync");
+    await p.call("send", {
+      epoch: first.epoch,
+      text: "/fixture-slow",
+      mode: "send",
+      images: [fixtureImage],
+    });
+    const native = await rpc.call("get_entries");
+    assert.deepEqual(
+      native.entries.find((e) => e.message?.role === "user").message.content[1],
+      fixtureImage,
+    );
+    await p.close();
+    p = await phone(url);
+    const state = await p.call("sync");
+    assert.equal(state.messages.filter((m) => m.role === "user").length, 1);
+    assert.match(
+      state.messages.find((m) => m.role === "user").text,
+      /\[Image\]/,
+    );
+    await p.call("stop", { epoch: state.epoch, runId: state.runId });
   } finally {
     if (p?.ws.readyState === WebSocket.OPEN) await p.close();
     await server.shutdown();

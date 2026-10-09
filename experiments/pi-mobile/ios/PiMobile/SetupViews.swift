@@ -2,6 +2,83 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import VisionKit
+import PhotosUI
+import UniformTypeIdentifiers
+import PDFKit
+import ImageIO
+
+enum AttachmentImport {
+    static func image(_ data: Data, name: String) throws -> ComposerAttachment {
+        guard data.count <= 20 * 1024 * 1024, let source = CGImageSourceCreateWithData(data as CFData, nil) else { throw ComposerError("Choose an image smaller than 20 MB.") }
+        for dimension in [1600, 1200, 800] {
+            let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: dimension]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { throw ComposerError("This image could not be opened.") }
+            for quality in [0.8, 0.6, 0.4] {
+                if let encoded = UIImage(cgImage: image).jpegData(compressionQuality: CGFloat(quality)), encoded.count <= 256 * 1024 {
+                    return ComposerAttachment(id: UUID().uuidString, name: name, mimeType: "image/jpeg", data: encoded)
+                }
+            }
+        }
+        throw ComposerError("This image could not be prepared. Choose a smaller image.")
+    }
+    static func file(_ url: URL) throws -> ComposerAttachment {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
+        guard (values.fileSize ?? Int.max) <= 20 * 1024 * 1024 else { throw ComposerError("Choose a file smaller than 20 MB.") }
+        let name = String(url.lastPathComponent.prefix(120))
+        if values.contentType?.conforms(to: .image) == true { return try image(Data(contentsOf: url), name: name) }
+        let text: String
+        if values.contentType?.conforms(to: .pdf) == true {
+            guard let document = PDFDocument(url: url), document.pageCount <= 30, let extracted = document.string, !extracted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ComposerError("Choose a PDF with selectable text and up to 30 pages. For scanned pages, attach images instead.") }
+            text = extracted
+        } else {
+            guard (values.fileSize ?? Int.max) <= 32 * 1024, let decoded = String(data: try Data(contentsOf: url), encoding: .utf8), !decoded.contains("\0") else { throw ComposerError("Choose a UTF-8 text file smaller than 32 KiB.") }
+            text = decoded
+        }
+        guard text.utf8.count <= 32 * 1024 else { throw ComposerError("The extracted text exceeds 32 KiB. Choose a shorter document.") }
+        return ComposerAttachment(id: UUID().uuidString, name: name, mimeType: "text/plain", data: Data(text.utf8))
+    }
+}
+
+struct ConversationSidebar: View {
+    @ObservedObject var model: ChatModel
+    let close: () -> Void
+    let newConversation: () -> Void
+    let select: (Conversation) -> Void
+    let connection: () -> Void
+    @State private var search = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image("PurePointLogo").resizable().scaledToFit().frame(width: 30, height: 30).accessibilityHidden(true)
+                Text("Point Guard").font(.headline)
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark").frame(width: 44, height: 44) }.accessibilityLabel("Close sidebar")
+            }.padding(.horizontal, 16).padding(.top, 8)
+            Button(action: newConversation) { Label("New conversation", systemImage: "square.and.pencil").frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 14) }
+                .disabled(!model.connected || model.demo || model.changingSession).padding(.horizontal, 20)
+            HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("Search conversations", text: $search).autocorrectionDisabled() }
+                .padding(12).background(Color(uiColor: .tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal, 16).padding(.bottom, 8)
+            if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 20).padding(.vertical, 8) }
+            List {
+                if model.conversations.isEmpty { Text("No conversations").foregroundStyle(.secondary).listRowBackground(Color.clear) }
+                ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
+                    Button { select(conversation) } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(conversation.title).font(.subheadline).lineLimit(2).foregroundStyle(.primary)
+                            if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                    }.listRowSeparator(.hidden).listRowBackground(conversation.id == model.snapshot?.sessionId ? Color(uiColor: .tertiarySystemBackground) : Color.clear)
+                }
+            }.listStyle(.plain).scrollContentBackground(.hidden).refreshable { await model.loadConversations() }
+            Divider()
+            Button(action: connection) { Label("Connection", systemImage: "link").frame(maxWidth: .infinity, alignment: .leading).padding(20) }
+        }
+        .background(Color(uiColor: .secondarySystemBackground))
+        .accessibilityAction(.escape) { close() }
+    }
+}
 
 struct ConnectionView: View {
     @ObservedObject var model: ChatModel
@@ -137,7 +214,7 @@ struct ConversationView: View {
                         .safeAreaInset(edge: .bottom) {
                             Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
                                 if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId); if model.browsing == nil { dismiss() } } }
-                            }.buttonStyle(.borderedProminent).disabled(!model.connected || model.demo || model.changingSession).padding().frame(maxWidth: .infinity).background(.bar)
+                            }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession).padding().frame(maxWidth: .infinity).background(Color(uiColor: .systemBackground))
                         }
                 } else {
                     List {
@@ -161,6 +238,16 @@ struct ConversationView: View {
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be recoverable. Delegated workers keep running.") }
         }
+    }
+}
+struct NeutralPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.body.weight(.semibold))
+            .foregroundStyle(Color(uiColor: .systemBackground))
+            .padding(.horizontal, 18).padding(.vertical, 14).frame(maxWidth: .infinity)
+            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16))
+            .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
     }
 }
 struct ExtensionDialogView: View {

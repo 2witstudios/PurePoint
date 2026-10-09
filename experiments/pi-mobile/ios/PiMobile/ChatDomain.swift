@@ -5,6 +5,55 @@ struct DraftState: Equatable {
     mutating func takeSubmission() -> String { let value = text; text = ""; return value }
     mutating func restore(_ value: String) { guard !value.isEmpty else { return }; text = text.isEmpty ? value : text + "\n\n" + value }
 }
+struct ComposerAttachment: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let mimeType: String
+    let data: Data
+    var isImage: Bool { mimeType.hasPrefix("image/") }
+}
+struct ComposerPayload {
+    let message: String
+    let images: [[String: String]]
+    static func make(text: String, attachments: [ComposerAttachment]) throws -> Self {
+        guard attachments.count <= 4, attachments.reduce(0, { $0 + $1.data.count }) <= 512 * 1024 else { throw ComposerError("Attach up to four files, totaling 512 KiB after preparation.") }
+        var message = text
+        var images: [[String: String]] = []
+        for file in attachments {
+            if file.isImage { images.append(["type": "image", "mimeType": file.mimeType, "data": file.data.base64EncodedString()]) }
+            else {
+                guard let contents = String(data: file.data, encoding: .utf8) else { throw ComposerError("This file is not UTF-8 text.") }
+                let name = String(file.name.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ").prefix(120))
+                message += "\n\n--- Attachment: \(name) ---\n\(contents)\n--- End attachment ---"
+            }
+        }
+        if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !images.isEmpty { message = "Please review the attached images." }
+        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, message.utf8.count <= 65536 else { throw ComposerError("Message and attached text must fit within 64 KiB.") }
+        return Self(message: message, images: images)
+    }
+}
+struct ComposerError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+enum LocalRecoveryStore {
+    private static func url(_ name: String) throws -> URL {
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("PiMobile", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return base.appendingPathComponent(name + ".json")
+    }
+    static func load<T: Decodable>(_ name: String, as type: T.Type) -> T? {
+        guard let file = try? url(name), let data = try? Data(contentsOf: file), data.count <= 40 * 1024 * 1024 else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+    static func save<T: Encodable>(_ value: T, name: String) throws {
+        let data = try JSONEncoder().encode(value)
+        let file = try url(name)
+        try data.write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+}
 struct SnapshotCursor {
     private var epoch = ""
     private var revision = -1
@@ -104,12 +153,12 @@ struct EditorText: Codable { let id: String; let text: String }
 struct CanceledText: Codable, Identifiable { let id: String; let text: String; let sessionId: String }
 struct Snapshot: Codable {
     let version: Int; let epoch: String; let revision: Int; let busy: Bool; var runId: String?; let sessionId: String; let title: String
-    let messages: [ChatMessage]; let tools: [ToolActivity]; let queue: [QueuedText]; let dialogs: [ExtensionDialog]; let notices: [String]; var error: String?; var editor: EditorText? = nil; var canceled: [CanceledText]? = nil
+    let messages: [ChatMessage]; let tools: [ToolActivity]; let queue: [QueuedText]; let dialogs: [ExtensionDialog]; let notices: [String]; var error: String?; var editor: EditorText? = nil; var canceled: [CanceledText]? = nil; var capabilities: [String]? = nil
 }
 struct Conversation: Codable, Identifiable { let id: String; let title: String; var date: String? }
 struct History: Codable { let sessionId: String; let title: String; let messages: [ChatMessage] }
 struct Submission: Codable, Identifiable {
-    let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool
+    let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool; var attachments: [ComposerAttachment]? = nil
 }
 // Receipts are deliberately independent of transcript rows: acceptance does not imply completion.
 enum JSONValue: Codable {

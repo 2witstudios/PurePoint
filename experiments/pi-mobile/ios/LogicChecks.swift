@@ -23,6 +23,13 @@ import Foundation
         let separated = TranscriptRows.make(messages: [nativeTools[0], ChatMessage(id: "prose", role: "assistant", text: "What I found"), nativeTools[2]], tools: [])
         precondition(separated.count == 3)
         precondition(TranscriptRows.make(messages: [ChatMessage(id: "error", role: "assistant", text: "", error: "Failed")], tools: []).count == 1)
+        let file = ComposerAttachment(id: "file", name: "notes.txt", mimeType: "text/plain", data: Data("Project notes".utf8))
+        let photo = ComposerAttachment(id: "photo", name: "photo.jpg", mimeType: "image/jpeg", data: Data([255,216,255,1]))
+        let content = try! ComposerPayload.make(text: "Read these", attachments: [file, photo])
+        precondition(content.message.contains("Project notes") && content.message.contains("notes.txt"))
+        precondition(content.images.count == 1 && content.images[0]["mimeType"] == "image/jpeg")
+        precondition((try? ComposerPayload.make(text: "", attachments: Array(repeating: photo, count: 5))) == nil)
+        precondition((try? ComposerPayload.make(text: String(repeating: "x", count: 65537), attachments: [])) == nil)
         print("Pi Mobile standalone domain checks passed")
     }
 }

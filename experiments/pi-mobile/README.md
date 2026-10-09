@@ -79,6 +79,16 @@ The plist permits cleartext transport because IP-address `ws` inside Tailscale n
 
 **No Xcode app build, XCTest run in Xcode, signing, simulator launch, screenshots, or physical-device run was performed by this agent.** Those remain owner-controlled. Safe standalone checks below do not establish iOS SDK compilation, actual keyboard behavior, visual rendering or real-device networking.
 
+## Mobile conversation controls
+
+The left sidebar contains native conversation history, search, new conversation and connection settings. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs.
+
+The composer’s **+** menu offers **Photos** and **Files**. Images are prepared as JPEG and sent through native Pi RPC to an image-capable model. Text files and PDFs with selectable text are sent as named text; PDF binaries/layout and scanned PDF pages are not uploaded. Attachment chips show `Image` or `Text`, and can be removed before sending. Up to four files fit a 512 KiB prepared-data budget; each text attachment is at most 32 KiB and all prompt text at most 64 KiB. PDFs are limited to 30 pages. Attachments wait locally if Pi is busy; ordinary text can still use Send options → Steer / After reply.
+
+Attachment drafts and uncertain submissions are saved privately on the phone, without automatic replay. Photos/files added after submission remain in the composer. The Mac bridge must run this updated version before sending images; the phone checks its capabilities. Restart the bridge only after Pi is idle, with `PI_MOBILE_SESSION` set to the current native session ID/path if you want to resume the same conversation.
+
+Owner check: rebuild in Xcode, inspect composer/keyboard transitions and sidebar gestures in both appearances, select a photo/text/PDF, remove a chip, send to Haiku, and test background/reconnect during acceptance. Native image history currently displays `[Image]` rather than a downloaded thumbnail.
+
 ## Deterministic fixture and preview
 
 No provider/API calls or native session writes are made by fixture mode. It uses a real RPC child and the same bridge/controller/network path:

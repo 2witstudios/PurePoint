@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @StateObject private var model: ChatModel
@@ -7,10 +9,16 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showConnection = false
     @State private var showHistory = false
+    @State private var showSidebar = false
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var importingAttachment = false
     @State private var confirmNew = false
     @State private var presentedDialog: ExtensionDialog?
     @State private var following = true
     @FocusState private var composerFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack {
@@ -23,14 +31,14 @@ struct ChatView: View {
                     }.padding(16).background(Color(uiColor: .secondarySystemBackground))
                 }
                 transcript
-                composer
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             .background(Color(uiColor: .systemBackground))
             .navigationTitle("Point Guard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { showHistory = true; Task { await model.loadConversations() } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Conversations")
+                    Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open conversations sidebar")
                 }
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
@@ -43,8 +51,7 @@ struct ChatView: View {
                     }.accessibilityElement(children: .combine)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { if model.busy { confirmNew = true } else { Task { await model.changeSession() } } } label: { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
-                    Button { showConnection = true } label: { Image(systemName: model.connected ? "link" : "link.badge.plus") }.accessibilityLabel("Connection settings")
+                    Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
                 }
             }
             .confirmationDialog("Stop Pi before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
@@ -55,13 +62,73 @@ struct ChatView: View {
             .sheet(isPresented: $showHistory, onDismiss: presentPendingDialog) { ConversationView(model: model) }
             .sheet(item: dialogBinding) { dialog in ExtensionDialogView(model: model, dialog: dialog) }
             .onChange(of: model.snapshot?.dialogs.first?.id) { _, _ in
-                if model.snapshot?.dialogs.first != nil && (showHistory || showConnection) { showHistory = false; showConnection = false }
+                if showSidebar { closeSidebar() }
+                if model.snapshot?.dialogs.first != nil && (showPhotos || showFiles) {
+                    showPhotos = false; showFiles = false
+                    Task { try? await Task.sleep(nanoseconds: 400_000_000); presentPendingDialog() }
+                } else if model.snapshot?.dialogs.first != nil && (showHistory || showConnection) { showHistory = false; showConnection = false }
                 else { presentPendingDialog() }
             }
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
             .task { if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
+            .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
+            .onChange(of: selectedPhoto) { _, item in
+                guard let item else { return }
+                Task {
+                    importingAttachment = true
+                    defer { importingAttachment = false; selectedPhoto = nil }
+                    do {
+                        guard let data = try await item.loadTransferable(type: Data.self) else { throw ComposerError("This photo could not be opened.") }
+                        let file = try await Task.detached(priority: .userInitiated) { try AttachmentImport.image(data, name: "Photo.jpg") }.value
+                        model.addAttachment(file)
+                    } catch { model.error = error.localizedDescription }
+                }
+            }
+            .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf], allowsMultipleSelection: false) { result in
+                Task {
+                    importingAttachment = true
+                    defer { importingAttachment = false }
+                    do {
+                        guard let url = try result.get().first else { return }
+                        let file = try await Task.detached(priority: .userInitiated) { try AttachmentImport.file(url) }.value
+                        model.addAttachment(file)
+                    } catch {
+                        let failure = error as NSError
+                        if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError { model.error = error.localizedDescription }
+                    }
+                }
+            }
         }
         .tint(.accentColor)
+        .allowsHitTesting(!showSidebar)
+        .accessibilityHidden(showSidebar)
+        .overlay(alignment: .leading) {
+            if showSidebar {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close conversations sidebar")
+                        ConversationSidebar(model: model, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
+                            .frame(width: min(340, geometry.size.width * 0.86), height: geometry.size.height)
+                            .shadow(color: .black.opacity(0.15), radius: 16, x: 6)
+                            .transition(.move(edge: .leading))
+                            .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })
+                    }
+                }
+            }
+        }
+        .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
+            if !showSidebar && value.startLocation.x < 24 && value.translation.width > 70 && abs(value.translation.width) > abs(value.translation.height) { openSidebar() }
+        })
+    }
+    private func openSidebar() { composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { await model.loadConversations() } }
+    private func closeSidebar() { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = false } }
+    private func newConversation() { closeSidebar(); if model.busy { confirmNew = true } else { Task { await model.changeSession() } } }
+    private func selectConversation(_ conversation: Conversation) {
+        closeSidebar()
+        Task {
+            if model.busy || model.demo { await model.browse(conversation); showHistory = model.browsing != nil }
+            else { await model.changeSession(to: conversation.id) }
+        }
     }
     private func presentPendingDialog() { presentedDialog = model.snapshot?.dialogs.first }
     private var dialogBinding: Binding<ExtensionDialog?> {
@@ -106,6 +173,7 @@ struct ChatView: View {
                     ForEach(model.recoverable) { item in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(item.text).font(.callout).lineLimit(3).textSelection(.enabled)
+                            if let files = item.attachments, !files.isEmpty { Text(files.map(\.name).joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
                             Text(item.status).font(.caption).foregroundStyle(.secondary)
                             HStack { Button("Restore to draft") { model.restore(item) }; Spacer(); Button("Dismiss") { model.dismissSubmission(item.id) } }.font(.footnote)
                         }.padding(.vertical, 8)
@@ -116,31 +184,62 @@ struct ChatView: View {
                 Text(receipt.status == "Queued" ? "Queued · waiting for Pi" : receipt.status).font(.caption).foregroundStyle(.secondary)
             }
             if let queue = model.snapshot?.queue, !queue.isEmpty { Text("\(queue.count) message\(queue.count == 1 ? "" : "s") queued").font(.caption).foregroundStyle(.secondary) }
-            HStack(alignment: .bottom, spacing: 12) {
-                TextField("Message Point Guard", text: $model.draft, axis: .vertical)
-                    .font(.body).lineLimit(1...7).focused($composerFocused)
-                    .padding(.horizontal, 16).padding(.vertical, 13)
-                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22))
-                    .accessibilityLabel("Message draft")
-                if !model.busy {
-                    Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 46, height: 46).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()) }.disabled(!model.canSend).accessibilityLabel("Send message")
+            VStack(alignment: .leading, spacing: 10) {
+                if !model.attachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(model.attachments) { file in
+                                AttachmentChip(file: file) { model.attachments.removeAll { $0.id == file.id } }
+                            }
+                        }
+                    }
                 }
-            }
-            if model.busy {
+                TextField("Message Point Guard", text: $model.draft, axis: .vertical)
+                    .font(.body).lineLimit(1...6).focused($composerFocused)
+                    .padding(.horizontal, 4).padding(.top, 3)
+                    .accessibilityLabel("Message draft")
                 HStack(spacing: 12) {
-                    Button("Steer") { model.submit(mode: "steer") }.buttonStyle(.bordered).disabled(!model.canSend)
-                    Button("After reply") { model.submit(mode: "after") }.buttonStyle(.bordered).disabled(!model.canSend)
+                    Menu {
+                        Button("Photos", systemImage: "photo") { composerFocused = false; showPhotos = true }
+                        Button("Files", systemImage: "doc") { composerFocused = false; showFiles = true }
+                    } label: {
+                        Group { if importingAttachment { ProgressView() } else { Image(systemName: "plus").font(.title3) } }.frame(width: 44, height: 44)
+                    }.disabled(importingAttachment || model.attachments.count >= 4).accessibilityLabel("Add attachment")
                     Spacer(minLength: 0)
-                    Button { Task { _ = await model.stop() } } label: { Label("Stop", systemImage: "stop.fill") }.buttonStyle(.bordered).tint(.secondary).disabled(!model.connected || model.demo)
-                }.font(.callout)
+                    if model.busy {
+                        Menu {
+                            Button("Steer") { model.submit(mode: "steer"); following = true }
+                            Button("After reply") { model.submit(mode: "after"); following = true }
+                        } label: { Text("Send options").font(.callout.weight(.medium)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
+                        Button { Task { _ = await model.stop() } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
+                    } else {
+                        Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend && !importingAttachment ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.canSend || importingAttachment).accessibilityLabel("Send message")
+                    }
+                }
+                if model.busy && !model.attachments.isEmpty { Text("Attachments are ready for your next message.").font(.caption).foregroundStyle(.secondary) }
             }
+            .padding(12)
+            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 26))
+            .overlay { RoundedRectangle(cornerRadius: 26).stroke(Color(uiColor: .separator).opacity(0.3), lineWidth: 0.5) }
             if !model.connected { Button(model.connectionStatus) { showConnection = true }.font(.footnote).foregroundStyle(.secondary) }
         }
-        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
-        .background(.bar)
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
     }
 }
 
+struct AttachmentChip: View {
+    let file: ComposerAttachment
+    let remove: () -> Void
+    var body: some View {
+        HStack(spacing: 8) {
+            if file.isImage, let image = UIImage(data: file.data) {
+                Image(uiImage: image).resizable().scaledToFill().frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
+            } else { Image(systemName: "doc.text").frame(width: 28, height: 36).accessibilityHidden(true) }
+            VStack(alignment: .leading, spacing: 2) { Text(file.name).font(.caption.weight(.medium)).lineLimit(1); Text(file.isImage ? "Image" : "Text").font(.caption2).foregroundStyle(.secondary) }.frame(maxWidth: 140, alignment: .leading)
+            Button(action: remove) { Image(systemName: "xmark").font(.caption).frame(width: 44, height: 44) }.accessibilityLabel("Remove \(file.name)")
+        }.padding(8).background(Color(uiColor: .tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
 struct MessageView: View {
     let message: ChatMessage
     var body: some View {
@@ -179,10 +278,9 @@ struct ToolView: View {
             Text(tool.text.isEmpty ? "No output" : tool.text).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8).padding(.bottom, 4)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: tool.state == "running" ? "gearshape" : tool.state == "failed" ? "exclamationmark.circle" : "checkmark.circle").frame(width: 20)
                 Text(tool.name).font(.subheadline.weight(.medium)).frame(maxWidth: .infinity, alignment: .leading)
                 Text(tool.state == "finished" ? "Done" : tool.state.capitalized).font(.caption).foregroundStyle(.secondary)
-            }.foregroundStyle(tool.state == "failed" ? Color.red : Color.primary)
+            }.foregroundStyle(tool.state == "failed" ? Color.red : Color.secondary)
         }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -210,14 +308,12 @@ struct ToolGroupView: View {
             }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: "wrench.and.screwdriver").frame(width: 20)
-                Text("\(tools.count) tool\(tools.count == 1 ? "" : "s")").font(.subheadline.weight(.medium))
+                Text("\(tools.count) tool call\(tools.count == 1 ? "" : "s")").font(.footnote.weight(.medium))
                 if running > 0 { Text("Working").font(.caption).foregroundStyle(.secondary) }
                 else if failed > 0 { Text("\(failed) failed").font(.caption).foregroundStyle(.red) }
-            }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
+            }.foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.vertical, 4).frame(minHeight: 44)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityHint("Expand to inspect tool calls and their output")
     }
