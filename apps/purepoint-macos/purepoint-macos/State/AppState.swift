@@ -19,6 +19,7 @@ final class AppState {
     var pendingFocusAgentId: String?
 
     @ObservationIgnored lazy var pointGuardChat = PiChatModel()
+    @ObservationIgnored lazy var pointGuardService = PointGuardServiceModel()
     var pointGuardShellId: String?
 
     var agentsHubState = AgentsHubState()
@@ -160,6 +161,7 @@ final class AppState {
     /// Synchronously suspend all agents and shut down daemon.
     /// Must complete before the process exits — uses DispatchSemaphore to block.
     func shutdownWithSuspend() {
+        pointGuardService.stopForTermination()
         persistSelectedAgent()
         registry?.saveAll()
 

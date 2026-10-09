@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct purepoint_macosApp: App {
+    @NSApplicationDelegateAdaptor(PointGuardApplicationDelegate.self) private var applicationDelegate
     @State private var appState = AppState()
     @State private var settingsState = SettingsState()
     @State private var viewCache = TerminalViewCache()
@@ -41,6 +42,8 @@ struct purepoint_macosApp: App {
                     hotkeyMonitor.start()
                     CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
+                    appState.pointGuardService.start(chat: appState.pointGuardChat)
+                    applicationDelegate.pointGuardService = appState.pointGuardService
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     appState.shutdownWithSuspend()
@@ -410,5 +413,28 @@ struct purepoint_macosApp: App {
         if panel.runModal() == .OK, let url = panel.url {
             appState.openProject(url.path)
         }
+    }
+}
+
+/// Wait for the app-owned bridge before quit/update can replace its executable.
+@MainActor final class PointGuardApplicationDelegate: NSObject, NSApplicationDelegate {
+    weak var pointGuardService: PointGuardServiceModel?
+    private var terminationPending = false
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let service = pointGuardService else { return .terminateNow }
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
+        Task {
+            do {
+                try await service.stop()
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                service.error = error.localizedDescription
+                terminationPending = false
+                sender.reply(toApplicationShouldTerminate: false)
+            }
+        }
+        return .terminateLater
     }
 }
