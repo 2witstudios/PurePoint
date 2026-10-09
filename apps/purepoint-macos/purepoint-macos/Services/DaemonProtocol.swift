@@ -342,6 +342,8 @@ nonisolated enum DaemonRequest: Encodable {
         sequence: [TriggerActionPayload], variables: [String: String], scope: String)
     case deleteTrigger(projectRoot: String, name: String, scope: String)
     case getConfig(projectRoot: String)
+    case getGlobalAgentSettings
+    case updateGlobalAgentSettings(codexYolo: Bool)
     case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: [String]?)
     case shutdown
 
@@ -532,6 +534,11 @@ nonisolated enum DaemonRequest: Encodable {
         case .getConfig(let projectRoot):
             try container.encode("get_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
+        case .getGlobalAgentSettings:
+            try container.encode("get_global_agent_settings", forKey: .key("type"))
+        case .updateGlobalAgentSettings(let codexYolo):
+            try container.encode("update_global_agent_settings", forKey: .key("type"))
+            try container.encode(codexYolo, forKey: .key("codex_yolo"))
         case .updateAgentConfig(let projectRoot, let agentName, let launchArgs):
             try container.encode("update_agent_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -574,6 +581,7 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerList(triggers: [TriggerInfoPayload])
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
+    case globalAgentSettingsReport(codexYolo: Bool)
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -671,6 +679,9 @@ nonisolated enum DaemonResponse: Decodable {
         case "config_report":
             let p = try ConfigReportPayload(from: decoder)
             self = .configReport(defaultAgent: p.defaultAgent, agents: p.agents)
+        case "global_agent_settings_report":
+            let p = try GlobalAgentSettingsPayload(from: decoder)
+            self = .globalAgentSettingsReport(codexYolo: p.codexYolo)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -784,6 +795,13 @@ nonisolated struct SwarmDefInfo: Decodable {
 }
 
 // MARK: - Response payload helpers
+
+private nonisolated struct GlobalAgentSettingsPayload: Decodable {
+    let codexYolo: Bool
+    enum CodingKeys: String, CodingKey {
+        case codexYolo = "codex_yolo"
+    }
+}
 
 private nonisolated struct ConfigReportPayload: Decodable {
     let defaultAgent: String

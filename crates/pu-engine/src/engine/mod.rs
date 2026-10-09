@@ -354,6 +354,10 @@ impl Engine {
                     .await
             }
             Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
+            Request::GetGlobalAgentSettings => self.handle_global_agent_settings(None).await,
+            Request::UpdateGlobalAgentSettings { codex_yolo } => {
+                self.handle_global_agent_settings(Some(codex_yolo)).await
+            }
             Request::UpdateAgentConfig {
                 project_root,
                 agent_name,
@@ -752,6 +756,29 @@ impl Engine {
             }
 
             Response::InitResult { created: true }
+        })
+        .await
+        .unwrap_or_else(|e| Response::Error {
+            code: "INTERNAL_ERROR".into(),
+            message: format!("task join error: {e}"),
+        })
+    }
+
+    async fn handle_global_agent_settings(&self, codex_yolo: Option<bool>) -> Response {
+        tokio::task::spawn_blocking(move || {
+            let result = match codex_yolo {
+                Some(enabled) => config::save_global_agent_settings(enabled),
+                None => config::load_global_agent_settings(),
+            };
+            match result {
+                Ok(settings) => Response::GlobalAgentSettingsReport {
+                    codex_yolo: settings.codex_yolo,
+                },
+                Err(e) => Response::Error {
+                    code: e.code().into(),
+                    message: e.to_string(),
+                },
+            }
         })
         .await
         .unwrap_or_else(|e| Response::Error {

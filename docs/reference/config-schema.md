@@ -17,6 +17,26 @@ agents:
       - "--dangerously-skip-permissions"
 ```
 
+## Machine-wide Codex permissions
+
+Settings → Agents → **YOLO for all projects** stores this preference in
+`~/.pu/agent-settings.yaml`:
+
+```yaml
+codexYolo: true
+```
+
+The default is `false`. When enabled, the daemon resolves Codex configuration
+with `--dangerously-bypass-approvals-and-sandbox --no-daemon`, replacing sandbox
+and approval options in `command` and `launchArgs`. Wrapper prefixes and other
+arguments, including model and search, are preserved.
+For an encapsulated wrapper with no explicit `codex` executable token, the full
+command is preserved and only `launchArgs` are normalized. Claude and OpenCode are
+unaffected. This preference applies on every spawn and resume, including projects
+created later, without rewriting project files or requiring a sync action.
+Running agents need a restart. Turning it off restores each project's own
+configuration. Malformed global settings produce a config error.
+
 ## Fields
 
 | Field | Type | Default | Description |

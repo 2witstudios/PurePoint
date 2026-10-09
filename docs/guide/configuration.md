@@ -38,6 +38,16 @@ pu spawn "fix bug" --agent codex
 
 ## Customizing launch args
 
+To enable Codex's YOLO mode across every project on this Mac, open **Settings →
+Agents** and enable **YOLO for all projects**. New and resumed Codex agents will
+run with full access and no command approvals. Restart running agents to apply
+the change. New projects inherit it automatically, so no sync step is needed.
+Turning it off restores project settings. The switch is available even without
+a project open, and the preference is stored in `~/.pu/agent-settings.yaml`.
+
+For a project-specific choice, use **Customize Launch Settings → YOLO for this
+project** in the Codex section instead.
+
 Each agent type has default launch arguments. Override them in `config.yaml`:
 
 ```yaml

@@ -97,6 +97,8 @@ struct ClaudeConfig {
 }
 
 struct CodexConfig {
+    var yolo: Bool = false
+    var noDaemon: Bool = false
     var approvalMode: CodexApprovalPolicy = .onRequest
     var sandboxMode: CodexSandboxMode = .workspaceWrite
     var model: String = ""
@@ -189,6 +191,10 @@ func parseCodexLaunchArgs(_ args: [String]) -> CodexConfig {
     }
     while i < args.count {
         switch args[i] {
+        case "--yolo", "--dangerously-bypass-approvals-and-sandbox":
+            config.yolo = true
+        case "--no-daemon":
+            config.noDaemon = true
         case "--full-auto", "--approval-mode=full-auto":
             break  // handled above
         case "-a", "--ask-for-approval":
@@ -219,7 +225,12 @@ func parseCodexLaunchArgs(_ args: [String]) -> CodexConfig {
 func composeCodexLaunchArgs(_ config: CodexConfig) -> [String] {
     var args: [String] = []
     // Always emit long-form flags — Codex no longer accepts the --full-auto shortcut.
-    args += ["-s", config.sandboxMode.cliValue, "-a", config.approvalMode.cliValue]
+    if config.yolo {
+        args.append("--dangerously-bypass-approvals-and-sandbox")
+    } else {
+        args += ["-s", config.sandboxMode.cliValue, "-a", config.approvalMode.cliValue]
+    }
+    if config.yolo || config.noDaemon { args.append("--no-daemon") }
     if !config.model.isEmpty {
         args += ["-m", config.model]
     }
@@ -262,15 +273,41 @@ struct SettingsAgentsView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        if let projectRoot = appState.activeProjectRoot {
-            SettingsAgentsContentView(projectRoot: projectRoot)
-        } else {
-            ContentUnavailableView(
-                "No Project Open",
-                systemImage: "folder.badge.questionmark",
-                description: Text("Open a project to configure agent launch settings.")
-            )
+        let state = appState.agentConfigState
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("YOLO for all projects", isOn: Binding(
+                        get: { state.codexYolo },
+                        set: { enabled in
+                            Task { await state.updateGlobalSettings(codexYolo: enabled, projectRoot: appState.activeProjectRoot) }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(!state.globalSettingsLoaded || state.isSavingGlobalSettings)
+                    Text("Codex gets full access with no command approvals in every project on this Mac. Applies to new and resumed sessions; restart running agents to apply it.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    if let error = state.globalError {
+                        Text(error).font(.system(size: 12)).foregroundStyle(.red)
+                        Button("Retry") { Task { await state.loadGlobalSettings() } }
+                    }
+                }
+            } label: {
+                Label("Machine Settings", systemImage: "desktopcomputer")
+            }
+            .groupBoxStyle(SettingsGroupBoxStyle())
+            if let projectRoot = appState.activeProjectRoot {
+                SettingsAgentsContentView(projectRoot: projectRoot)
+            } else {
+                ContentUnavailableView(
+                    "No Project Open",
+                    systemImage: "folder.badge.questionmark",
+                    description: Text("Open a project to configure agent launch settings.")
+                )
+            }
         }
+        .task { await state.loadGlobalSettings() }
     }
 }
 
@@ -303,12 +340,24 @@ struct SettingsAgentsContentView: View {
                     )
                 }
 
-                if let codex = state.agentConfig(named: "codex") {
-                    CodexAgentGroupBox(
-                        projectRoot: projectRoot,
-                        payload: codex,
-                        state: state
-                    )
+                if state.globalSettingsLoaded && !state.isSavingGlobalSettings,
+                   let codex = state.agentConfig(named: "codex") {
+                    if state.codexYolo {
+                        GroupBox {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("YOLO is enabled for all projects. Turn it off above to use this project's settings.")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                                resolvedArgsView(codex.resolvedLaunchArgs)
+                            }
+                        } label: { Label("Codex", systemImage: "terminal") }
+                        .groupBoxStyle(SettingsGroupBoxStyle())
+                    } else {
+                        CodexAgentGroupBox(
+                            projectRoot: projectRoot,
+                            payload: codex,
+                            state: state
+                        )
+                    }
                 }
 
                 if let opencode = state.agentConfig(named: "opencode") {
@@ -519,21 +568,21 @@ struct CodexAgentGroupBox: View {
                     "Customize Launch Settings",
                     isOn: Binding(
                         get: { !useDefaults },
-                        set: { useDefaults = !$0 }
+                        set: { customize in
+                            useDefaults = !customize
+                            if customize {
+                                commitChanges()
+                            } else {
+                                Task {
+                                    await state.updateLaunchArgs(
+                                        projectRoot: projectRoot, agentName: "codex", launchArgs: nil)
+                                }
+                            }
+                        }
                     )
                 )
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .onChange(of: useDefaults) {
-                    if useDefaults {
-                        Task {
-                            await state.updateLaunchArgs(
-                                projectRoot: projectRoot, agentName: "codex", launchArgs: nil)
-                        }
-                    } else {
-                        commitChanges()
-                    }
-                }
 
                 if useDefaults {
                     Text("Using recommended settings: workspace-write sandbox, approval on request")
@@ -541,6 +590,16 @@ struct CodexAgentGroupBox: View {
                         .foregroundStyle(.tertiary)
                     resolvedArgsView(payload.resolvedLaunchArgs)
                 } else {
+                    Toggle("YOLO for this project", isOn: Binding(
+                        get: { config.yolo },
+                        set: { enabled in
+                            config.yolo = enabled
+                            commitChanges()
+                        }
+                    ))
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+
                     LabeledContent("Approval Mode") {
                         Picker("", selection: $config.approvalMode) {
                             ForEach(CodexApprovalPolicy.allCases, id: \.self) { mode in
@@ -551,6 +610,7 @@ struct CodexAgentGroupBox: View {
                         .frame(width: 180)
                         .onChange(of: config.approvalMode) { commitChanges() }
                     }
+                    .disabled(config.yolo)
 
                     LabeledContent("Sandbox Mode") {
                         Picker("", selection: $config.sandboxMode) {
@@ -562,6 +622,7 @@ struct CodexAgentGroupBox: View {
                         .frame(width: 180)
                         .onChange(of: config.sandboxMode) { commitChanges() }
                     }
+                    .disabled(config.yolo)
 
                     LabeledContent("Model") {
                         TextField("Model name", text: $config.model)

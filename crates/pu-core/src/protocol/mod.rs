@@ -254,6 +254,10 @@ pub enum Request {
         name: String,
     },
     // Config
+    GetGlobalAgentSettings,
+    UpdateGlobalAgentSettings {
+        codex_yolo: bool,
+    },
     GetConfig {
         project_root: String,
     },
@@ -459,6 +463,9 @@ pub enum Response {
         #[serde(default)]
         agent_name: Option<String>,
         created_at: DateTime<Utc>,
+    },
+    GlobalAgentSettingsReport {
+        codex_yolo: bool,
     },
     ConfigReport {
         default_agent: String,

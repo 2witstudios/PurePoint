@@ -266,6 +266,9 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::GateResult { passed, output } => {
             execution::print_gate_result(*passed, output);
         }
+        Response::GlobalAgentSettingsReport { codex_yolo } => {
+            println!("Codex YOLO for all projects: {codex_yolo}");
+        }
         Response::ConfigReport {
             default_agent,
             agents,
