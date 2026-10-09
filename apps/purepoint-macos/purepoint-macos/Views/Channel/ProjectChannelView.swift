@@ -4,6 +4,7 @@ struct ProjectChannelView: View {
     let project: ProjectState
     var compact = false
     @State private var atBottom = true
+    @State private var timelineAnchor: String?
     @State private var searchVisible = false
     @State private var searchText = ""
     @State private var editing: ChannelMessage?
@@ -11,6 +12,11 @@ struct ProjectChannelView: View {
     @State private var unreadBoundary: UInt64?
     @State private var jumpRequest = 0
     @State private var unreadRequest = 0
+    @State private var composerHeight: CGFloat = 60
+    @State private var replyHeight: CGFloat = 60
+    @State private var showingMembers = false
+    @State private var referenceSelection: ChannelReferenceSelection?
+    @FocusState private var searchFocused: Bool
     private var channel: ChannelState { project.channel }
 
     var body: some View {
@@ -23,8 +29,16 @@ struct ProjectChannelView: View {
                     if !compact { Text("A shared place to keep each other up to date").font(.system(size: 11)).foregroundStyle(.secondary) }
                 }
                 Spacer()
-                Button { searchVisible.toggle() } label: { Image(systemName: "magnifyingglass") }
-                    .buttonStyle(.borderless).help("Search messages")
+                Button { showingMembers.toggle() } label: { Image(systemName: "person.2") }.buttonStyle(.borderless).help("Channel members")
+                    .popover(isPresented: $showingMembers) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Project members").font(.headline)
+                            ForEach(project.allAgents) { agent in HStack { Image(systemName: "cpu"); Text(agent.displayName); Spacer(); Text(agent.agentType).foregroundStyle(.secondary) } }
+                            ForEach(humanAuthors, id: \.id) { author in HStack { Image(systemName: "person"); Text(author.name) } }
+                        }.font(.system(size: 12)).padding(18).frame(minWidth: 260)
+                    }
+                Button { searchVisible = true; searchFocused = true } label: { Image(systemName: "magnifyingglass") }
+                    .buttonStyle(.borderless).help("Search messages").keyboardShortcut("f", modifiers: .command)
                 Menu {
                     Button("Mark as read") { channel.markRead(); unreadBoundary = nil }
                     Button("Refresh") { Task { await channel.refresh() } }
@@ -38,9 +52,10 @@ struct ProjectChannelView: View {
                     Button { channel.markRead(); unreadBoundary = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Mark as read")
                 }.font(.system(size: 11, weight: .medium)).foregroundStyle(Color.accentColor).padding(.horizontal, 16).padding(.vertical, 8).background(Color.accentColor.opacity(0.08))
             }
-            if searchVisible {
+            if searchVisible || !channel.query.isEmpty {
                 TextField("Search messages, people, branches…", text: $searchText)
-                    .textFieldStyle(.roundedBorder).padding(12)
+                    .textFieldStyle(.roundedBorder).focused($searchFocused).padding(12)
+                    .onExitCommand { channel.query = ""; searchText = ""; searchVisible = false; Task { await channel.search() } }
                     .onSubmit { channel.query = searchText; Task { await channel.search() } }
                 if !channel.query.isEmpty {
                     Button("Clear search") { channel.query = ""; searchText = ""; Task { await channel.search() } }.buttonStyle(.plain).padding(.bottom, 8)
@@ -52,6 +67,7 @@ struct ProjectChannelView: View {
                     Text(error).font(.system(size: 12)).textSelection(.enabled)
                     Spacer()
                     Button("Refresh") { Task { await channel.refresh() } }
+                    if channel.mutationError != nil { Button("Dismiss") { channel.mutationError = nil } }
                 }.foregroundStyle(.secondary).padding(12).background(Color.orange.opacity(0.08))
             }
             if channel.isLoading && channel.messages.isEmpty {
@@ -59,14 +75,13 @@ struct ProjectChannelView: View {
             } else {
                 timeline
             }
-            if let id = channel.threadId { thread(id) }
             Divider()
             composer(reply: false)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear { unreadBoundary = channel.readSequence; searchText = channel.query; channel.start() }
         .onDisappear { channel.stop() }
-        .onChange(of: channel.latestSequence) { _, _ in if atBottom && channel.query.isEmpty { channel.markRead() } }
+        .sheet(item: $referenceSelection) { selection in ChannelReferenceView(project: project, selection: selection) }
         .sheet(item: $editing) { message in
             VStack(alignment: .leading, spacing: 14) {
                 Text("Edit message").font(.headline)
@@ -96,22 +111,28 @@ struct ProjectChannelView: View {
                         if previous == nil || day(previous!.createdAt) != day(message.createdAt) {
                             HStack { Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1); Text(day(message.createdAt)).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary); Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1) }.padding(.horizontal, 20).padding(.vertical, 16)
                         }
-                        messageRow(message, grouped: grouped(message, previous)).id(message.id)
+                        messageRow(message, grouped: grouped(message, previous)).id(message.id).onAppear { channel.markVisible(message) }
+                        if !channel.query.isEmpty {
+                            ForEach(channel.messages.filter { $0.parentId == message.id }) { reply in
+                                messageRow(reply).padding(.leading, 46).background(Color.accentColor.opacity(0.035))
+                            }
+                        }
+                        if channel.threadId == message.id { thread(message.id).padding(.leading, 58).padding(.trailing, 20) }
                     }
                     Color.clear.frame(height: 1).id("channel-bottom")
-                        .onAppear { atBottom = true; channel.markRead() }
+                        .onAppear { atBottom = true }
                         .onDisappear { atBottom = false }
-                }.padding(.bottom, 12)
+                }.padding(.bottom, 12).scrollTargetLayout()
             }
+            .scrollPosition(id: $timelineAnchor)
             .overlay(alignment: .bottom) {
                 if !atBottom && channel.query.isEmpty {
                     Button { jumpRequest += 1 } label: { Label(channel.unreadCount > 0 ? "\(channel.unreadCount) new · Jump to latest" : "Jump to latest", systemImage: "arrow.down") }.buttonStyle(.borderedProminent).controlSize(.small).padding(12)
                 }
             }
             .onChange(of: unreadRequest) { _, _ in
-                if let first = channel.messages.first(where: { $0.sequence > channel.readSequence && $0.author.id != channel.selfAuthorId }) {
-                    withAnimation { proxy.scrollTo(first.parentId ?? first.id, anchor: .top) }
-                    if let parent = first.parentId { Task { await channel.openThread(parent) } }
+                Task {
+                    if let target = await channel.revealFirstUnread() { withAnimation { proxy.scrollTo(target, anchor: .top) } }
                 }
             }
             .onChange(of: jumpRequest) { _, _ in withAnimation { proxy.scrollTo("channel-bottom", anchor: .bottom) } }
@@ -119,6 +140,12 @@ struct ProjectChannelView: View {
         }
     }
     private func messageRow(_ message: ChannelMessage, grouped: Bool = false) -> some View {
+        ChannelHoverRow(canReply: message.parentId == nil, canEdit: message.author.id == channel.selfAuthorId,
+            reply: { Task { await channel.openThread(message.id) } },
+            react: { Task { await channel.react(message) } },
+            copy: { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message.text, forType: .string) },
+            unread: { channel.markUnread(message); unreadBoundary = message.sequence - 1 },
+            edit: { editText = message.text; editing = message }) {
         HStack(alignment: .top, spacing: 11) {
             if grouped { Text(time(message.createdAt)).font(.system(size: 9)).foregroundStyle(.tertiary).frame(width: 34).padding(.top, 3) }
             else { avatar(message.author) }
@@ -135,7 +162,9 @@ struct ProjectChannelView: View {
                 if message.editedAt != nil { Text("edited").font(.system(size: 10)).foregroundStyle(.tertiary) }
                 if !message.references.isEmpty {
                     HStack { ForEach(Array(message.references.enumerated()), id: \.offset) { _, ref in
-                        Label(ref.label ?? (ref.kind == "pr" ? "PR #\(ref.value)" : String(ref.value.prefix(8))), systemImage: ref.kind == "pr" ? "arrow.triangle.pull" : "point.3.connected.trianglepath.dotted").font(.system(size: 11, design: .monospaced)).padding(.horizontal, 7).padding(.vertical, 4).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4)).textSelection(.enabled)
+                        Button { referenceSelection = ChannelReferenceSelection(message: message, reference: ref) } label: {
+                            Label(ref.label ?? (ref.kind == "pr" ? "PR #\(ref.value)" : String(ref.value.prefix(8))), systemImage: ref.kind == "pr" ? "arrow.triangle.pull" : "point.3.connected.trianglepath.dotted").font(.system(size: 11, design: .monospaced)).padding(.horizontal, 7).padding(.vertical, 4).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                        }.buttonStyle(.plain).help("Open reference changes")
                     } }
                 }
                 HStack(spacing: 10) {
@@ -147,13 +176,9 @@ struct ProjectChannelView: View {
                     }
                 }
             }
-            Menu {
-                if message.parentId == nil { Button("Reply in thread") { Task { await channel.openThread(message.id) } } }
-                Button("React 👍") { Task { await channel.react(message) } }
-                Button("Copy text") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message.text, forType: .string) }
-                if message.author.id == channel.selfAuthorId { Button("Edit message") { editText = message.text; editing = message } }
-            } label: { Image(systemName: "ellipsis").foregroundStyle(.secondary) }.menuStyle(.borderlessButton).frame(width: 18).help("Message actions")
+            Color.clear.frame(width: 18)
         }.padding(.horizontal, 20).padding(.top, grouped ? 3 : 12).padding(.bottom, grouped ? 3 : 6)
+    }
     }
     private func thread(_ id: String) -> some View {
         VStack(spacing: 0) {
@@ -163,7 +188,7 @@ struct ProjectChannelView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if let parent = channel.messages.first(where: { $0.id == id }) { messageRow(parent) }
                     if channel.threadHasMore { Button("Load older replies") { Task { await channel.loadOlderReplies() } }.padding(12) }
-                    ForEach(channel.threadMessages) { messageRow($0) }
+                    ForEach(channel.threadMessages) { message in messageRow(message).onAppear { channel.markVisible(message) } }
                 }
             }.frame(maxHeight: 220)
             composer(reply: true)
@@ -175,18 +200,24 @@ struct ProjectChannelView: View {
         return VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .topLeading) {
                 if binding.wrappedValue.isEmpty { Text(reply ? "Reply to thread…" : "Message #\(project.projectName)").font(.system(size: 13)).foregroundStyle(.tertiary).padding(.leading, 12).padding(.top, 10).allowsHitTesting(false) }
-                ChannelComposer(text: binding, placeholder: reply ? "Reply" : "Message channel") { Task { await channel.send(reply: reply) } }.frame(height: 60)
+                ChannelComposer(text: binding, placeholder: reply ? "Reply" : "Message channel", mentions: project.allAgents.map(\.displayName) + humanAuthors.map(\.name), onHeightChanged: { height in if reply { replyHeight = height } else { composerHeight = height } }) { Task { await channel.send(reply: reply) } }.frame(height: reply ? replyHeight : composerHeight)
             }
             HStack(spacing: 10) {
                 Menu {
                     ForEach(project.allAgents) { agent in Button("@\(agent.displayName)") { binding.wrappedValue += "@\(agent.displayName) " } }
                 } label: { Text("@").font(.system(size: 15, weight: .medium)) }.menuStyle(.borderlessButton).frame(width: 25).help("Mention someone")
+                Button { binding.wrappedValue += "`code`" } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }.buttonStyle(.plain).help("Insert inline code")
                 Text("Enter to send · Shift Enter for a new line").font(.system(size: 10)).foregroundStyle(.tertiary)
                 Spacer()
                 Button { Task { await channel.send(reply: reply) } } label: { if channel.isSending { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)) } }.buttonStyle(.borderedProminent).controlSize(.small).disabled(channel.isSending || binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).help("Send message")
             }.padding(.horizontal, 10).padding(.bottom, 8)
         }.background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2))).padding(.horizontal, 16).padding(.vertical, 12)
         .onChange(of: channel.replyDraft) { _, _ in if reply { channel.saveReplyDraft() } }
+    }
+    private var humanAuthors: [ChannelAuthor] {
+        var values: [String: ChannelAuthor] = [:]
+        for message in channel.messages where message.author.kind == "human" { values[message.author.id] = message.author }
+        return values.values.sorted { $0.name < $1.name }
     }
     private func avatar(_ author: ChannelAuthor) -> some View {
         Text(author.name.split(separator: " ").prefix(2).compactMap { $0.first }.map(String.init).joined()).font(.system(size: 11, weight: .semibold)).foregroundStyle(author.kind == "agent" ? Color.accentColor : Color.primary).frame(width: 34, height: 34).background(author.kind == "agent" ? Color.accentColor.opacity(0.13) : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))

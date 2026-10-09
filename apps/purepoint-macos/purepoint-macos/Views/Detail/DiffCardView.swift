@@ -7,6 +7,11 @@ struct DiffCardView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if fileDiff.statusCode == "U" {
+                Text(fileDiff.hunks.isEmpty ? "Unresolved merge conflict. Resolve this file before committing." : "Unresolved merge conflict · working-file patch compared with \(fileDiff.conflictBaseline ?? "unavailable baseline")").font(.system(size: 11)).foregroundStyle(.orange).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if fileDiff.isBinary { Text("Binary file changed").font(.system(size: 11)).foregroundStyle(.secondary).padding(10).frame(maxWidth: .infinity, alignment: .leading) }
+            if let old = fileDiff.oldFilename { Text("Renamed from \(old)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).padding(10).frame(maxWidth: .infinity, alignment: .leading) }
             if !fileDiff.hunks.isEmpty {
                 DiffContentRepresentable(hunks: fileDiff.hunks)
                     .frame(minHeight: 20)
@@ -104,6 +109,7 @@ struct DiffCardView: View {
 
     private var statusLabel: String {
         switch fileDiff.statusCode {
+        case "U": "Conflict"
         case "M": "Modified"
         case "A": "Added"
         case "D": "Deleted"

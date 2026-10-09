@@ -46,6 +46,8 @@ import Foundation
         precondition(ChannelState(projectRoot: "/project", defaults: defaults).draft == "keep this draft")
         await state.refresh()
         precondition(state.unreadCount == 250, "must count history beyond latest page")
+        state.markVisible(message(200))
+        precondition(state.unreadCount == 249 && state.readSequence == 0, "viewing latest must not clear older messages or collapsed replies")
         await state.loadOlder()
         precondition(beforeCursors == [200], "parent context must not move pagination cursor")
         revision = 2; edited = true
@@ -56,8 +58,32 @@ import Foundation
         precondition(state.threadMessages.count == 1 && state.threadMessages.first?.sequence == 250)
         await state.send()
         precondition(sends == 1 && state.draft == "keep this draft" && state.error != nil, "uncertain send must retain draft and never replay")
+        await state.refresh(); precondition(state.mutationError != nil, "poll must not erase uncertain delivery warning")
         state.query = ""; state.markRead(); precondition(state.unreadCount == 0)
         precondition(ChannelState(projectRoot: "/project", defaults: defaults).readSequence == 250)
+        var continuation: CheckedContinuation<DaemonResponse, Never>?
+        var capturedParent: String?
+        let switching = ChannelState(projectRoot: "/thread-switch", defaults: defaults) { request in
+            switch request {
+            case .channelRead:
+                return .channelHistory(ChannelHistory(messages: [], revision: 1, latestSequence: 0, hasMore: false, oldestSequence: nil, unchanged: false, selfAuthorId: "human:501", replyCounts: [:]))
+            case .channelSend(_, _, let parent, _):
+                capturedParent = parent
+                return await withCheckedContinuation { continuation = $0 }
+            default: fatalError("unexpected mutation")
+            }
+        }
+        await switching.openThread("A")
+        switching.replyDraft = "same text"; switching.saveReplyDraft()
+        let delivery = Task { await switching.send(reply: true) }
+        while continuation == nil { await Task.yield() }
+        await switching.openThread("B")
+        switching.replyDraft = "same text"; switching.saveReplyDraft()
+        continuation!.resume(returning: .channelMessage(ChannelMutation(message: message(1), revision: 2)))
+        await delivery.value
+        precondition(capturedParent == "A" && switching.replyDraft == "same text", "reply must preserve newly selected thread draft")
+        precondition(defaults.string(forKey: "channel./thread-switch.reply.A") == nil)
+        precondition(defaults.string(forKey: "channel./thread-switch.reply.B") == "same text")
         print("PASS channel wire, old-history refresh, parent cursors, thread search isolation, unread catch-up, durable draft/read and uncertain send")
     }
 }

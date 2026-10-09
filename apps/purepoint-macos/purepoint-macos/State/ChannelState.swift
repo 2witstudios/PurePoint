@@ -7,7 +7,9 @@ final class ChannelState {
     var messages: [ChannelMessage] = []
     var replyCounts: [String: UInt64] = [:]
     var selfAuthorId = ""
-    var error: String?
+    var readError: String?
+    var mutationError: String?
+    var error: String? { mutationError ?? readError }
     var isLoading = false
     var isSending = false
     var hasMore = false
@@ -22,6 +24,8 @@ final class ChannelState {
     @ObservationIgnored private let sendRequest: (DaemonRequest) async throws -> DaemonResponse
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var polling: Task<Void, Never>?
+    @ObservationIgnored private var refreshing = false
+    @ObservationIgnored private var refreshAgain = false
     @ObservationIgnored private var revision: UInt64?
     @ObservationIgnored private var oldest: UInt64?
     @ObservationIgnored private var generation = 0
@@ -30,8 +34,10 @@ final class ChannelState {
     @ObservationIgnored private var loadedBefore: [UInt64] = []
     @ObservationIgnored private var threadOldest: UInt64?
     private var unreadAuthors: [UInt64: String] = [:]
+    private var unreadMessages: [UInt64: ChannelMessage] = [:]
+    private var seenSequences: Set<UInt64> = []
     @ObservationIgnored private var unreadScannedThrough: UInt64 = 0
-    var unreadCount: Int { unreadAuthors.filter { $0.key > readSequence && $0.value != selfAuthorId }.count }
+    var unreadCount: Int { unreadAuthors.filter { $0.key > readSequence && $0.value != selfAuthorId && !seenSequences.contains($0.key) }.count }
     var topLevelMessages: [ChannelMessage] { messages.filter { $0.parentId == nil } }
 
     init(projectRoot: String, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonClient().send($0) }) {
@@ -41,6 +47,7 @@ final class ChannelState {
         let prefix = "channel.\(projectRoot)."
         draft = defaults.string(forKey: prefix + "draft") ?? ""
         readSequence = UInt64(defaults.string(forKey: prefix + "read") ?? "0") ?? 0
+        seenSequences = Set((defaults.stringArray(forKey: prefix + "seen") ?? []).compactMap(UInt64.init))
     }
     private func key(_ suffix: String) -> String { "channel.\(projectRoot).\(suffix)" }
     func start() {
@@ -75,6 +82,12 @@ final class ChannelState {
         await refresh()
     }
     func refresh() async {
+        guard !refreshing else { refreshAgain = true; return }
+        refreshing = true
+        defer {
+            refreshing = false
+            if refreshAgain { refreshAgain = false; Task { await refresh() } }
+        }
         let token = generation
         isLoading = messages.isEmpty
         defer { isLoading = false }
@@ -102,8 +115,8 @@ final class ChannelState {
                 if let threadId { try await refreshThread(threadId, token: token) }
             }
             try await scanUnread(token: token)
-            error = nil
-        } catch is CancellationError {} catch { if token == generation { self.error = error.localizedDescription } }
+            readError = nil
+        } catch is CancellationError {} catch { if token == generation { self.readError = error.localizedDescription } }
     }
     private func scanUnread(token: Int) async throws {
         var cursor = max(readSequence, unreadScannedThrough)
@@ -112,11 +125,12 @@ final class ChannelState {
             guard token == generation, !Task.isCancelled else { return }
             let created = page.messages.filter { $0.sequence > cursor }
             guard let last = created.map(\.sequence).max() else { break }
-            for message in created { unreadAuthors[message.sequence] = message.author.id }
+            for message in created { unreadAuthors[message.sequence] = message.author.id; unreadMessages[message.sequence] = message }
             cursor = last
             unreadScannedThrough = cursor
             if !page.hasMore { break }
         }
+        advanceReadCursor()
     }
     func loadOlder() async {
         guard let cursor = oldest, hasMore else { return }
@@ -126,12 +140,13 @@ final class ChannelState {
             guard token == generation else { return }
             loadedBefore.append(cursor); messages = deduplicated(messages + page.messages)
             replyCounts.merge(page.replyCounts) { _, new in new }; oldest = page.oldestSequence; hasMore = page.hasMore
-        } catch { self.error = error.localizedDescription }
+        } catch { self.readError = error.localizedDescription }
     }
     func openThread(_ id: String) async {
-        threadId = id; threadMessages = []; threadOldest = nil
+        saveReplyDraft()
+        threadId = id; threadMessages = []; threadOldest = nil; threadHasMore = false
         replyDraft = defaults.string(forKey: key("reply.\(id)")) ?? ""
-        do { try await refreshThread(id, token: generation) } catch { self.error = error.localizedDescription }
+        do { try await refreshThread(id, token: generation) } catch { self.readError = error.localizedDescription }
     }
     private func refreshThread(_ id: String, token: Int) async throws {
         let page = try await history(parent: id)
@@ -155,32 +170,74 @@ final class ChannelState {
             guard threadId == id else { return }
             threadMessages = deduplicated(threadMessages + page.messages.filter { $0.parentId == id })
             threadOldest = page.oldestSequence; threadHasMore = page.hasMore
-        } catch { self.error = error.localizedDescription }
+        } catch { self.readError = error.localizedDescription }
     }
     func saveReplyDraft() { if let threadId { defaults.set(replyDraft, forKey: key("reply.\(threadId)")) } }
+    func markVisible(_ message: ChannelMessage) {
+        guard query.isEmpty else { return }
+        seenSequences.insert(message.sequence)
+        advanceReadCursor()
+    }
+    private func advanceReadCursor() {
+        while readSequence < unreadScannedThrough {
+            let next = readSequence + 1
+            guard let author = unreadAuthors[next], author == selfAuthorId || seenSequences.contains(next) else { break }
+            readSequence = next
+            seenSequences.remove(next); unreadAuthors.removeValue(forKey: next); unreadMessages.removeValue(forKey: next)
+        }
+        defaults.set(String(readSequence), forKey: key("read"))
+        defaults.set(seenSequences.map(String.init), forKey: key("seen"))
+    }
+    func firstUnread() -> ChannelMessage? {
+        unreadMessages.values.filter { $0.sequence > readSequence && $0.author.id != selfAuthorId && !seenSequences.contains($0.sequence) }.min { $0.sequence < $1.sequence }
+    }
+    func revealFirstUnread() async -> String? {
+        guard let first = firstUnread() else { return nil }
+        while !messages.contains(where: { $0.id == first.id }), hasMore {
+            let previous = oldest
+            await loadOlder()
+            if oldest == previous { break }
+        }
+        if let parent = first.parentId { await openThread(parent); return parent }
+        return first.id
+    }
+    func markUnread(_ message: ChannelMessage) {
+        readSequence = min(readSequence, message.sequence - 1)
+        seenSequences = seenSequences.filter { $0 < message.sequence }
+        unreadScannedThrough = min(unreadScannedThrough, readSequence)
+        defaults.set(String(readSequence), forKey: key("read"))
+        defaults.set(seenSequences.map(String.init), forKey: key("seen"))
+        Task { await refresh() }
+    }
     func markRead() {
         guard query.isEmpty else { return }
-        readSequence = latestSequence; unreadAuthors = unreadAuthors.filter { $0.key > readSequence }; defaults.set(String(readSequence), forKey: key("read"))
+        readSequence = latestSequence; unreadAuthors = [:]; unreadMessages = [:]; seenSequences = []
+        defaults.set(String(readSequence), forKey: key("read")); defaults.removeObject(forKey: key("seen"))
     }
     func send(reply: Bool = false) async {
+        let targetParent = reply ? threadId : nil
         let text = reply ? replyDraft : draft
         guard !isSending, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         isSending = true; defer { isSending = false }
         do {
-            try await mutate(.channelSend(projectRoot: projectRoot, text: text, parentId: reply ? threadId : nil))
-            if reply { if replyDraft == text { replyDraft = ""; saveReplyDraft() } }
+            try await mutate(.channelSend(projectRoot: projectRoot, text: text, parentId: targetParent))
+            if reply, let targetParent {
+                let savedKey = key("reply.\(targetParent)")
+                if defaults.string(forKey: savedKey) == text { defaults.removeObject(forKey: savedKey) }
+                if threadId == targetParent && replyDraft == text { replyDraft = ""; saveReplyDraft() }
+            }
             else if draft == text { draft = "" }
-            revision = nil; await refresh()
-        } catch { self.error = "Send was not confirmed. Check the channel before trying again. \(error.localizedDescription)" }
+            mutationError = nil; revision = nil; await refresh()
+        } catch { self.mutationError = "Send was not confirmed. Check the channel before trying again. \(error.localizedDescription)" }
     }
     func edit(_ message: ChannelMessage, text: String) async {
-        do { try await mutate(.channelEdit(projectRoot: projectRoot, messageId: message.id, text: text)); revision = nil; await refresh() }
-        catch { self.error = error.localizedDescription }
+        do { try await mutate(.channelEdit(projectRoot: projectRoot, messageId: message.id, text: text)); mutationError = nil; revision = nil; await refresh() }
+        catch { self.mutationError = error.localizedDescription }
     }
     func react(_ message: ChannelMessage) async {
         let active = !message.reactions.contains { $0.emoji == "👍" && $0.authorIds.contains(selfAuthorId) }
-        do { try await mutate(.channelReact(projectRoot: projectRoot, messageId: message.id, active: active)); revision = nil; await refresh() }
-        catch { self.error = error.localizedDescription }
+        do { try await mutate(.channelReact(projectRoot: projectRoot, messageId: message.id, active: active)); mutationError = nil; revision = nil; await refresh() }
+        catch { self.mutationError = error.localizedDescription }
     }
     private func mutate(_ request: DaemonRequest) async throws {
         let response = try await sendRequest(request)

@@ -27,12 +27,12 @@ struct ReviewChangesView: View {
         case .branch:
             patches(state.branchDiff, loading: state.isLoadingBranch, empty: "No changes since \(state.comparisonBase)", error: state.branchError)
         case .unstaged:
-            if let error = state.localError { errorView(error) }
-            else if state.isLoadingUnstaged && state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { patches([], loading: false, empty: "Working tree is clean", error: nil) }
+            if state.isLoadingUnstaged && state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else if state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { patches([], loading: false, empty: "Working tree is clean", error: state.localError) }
             else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
+                        if let error = state.localError { Text(error).font(.system(size: 12)).foregroundStyle(.orange).textSelection(.enabled); Button("Retry") { state.refresh() } }
                         section("Staged", files: state.stagedDiff)
                         section("Unstaged", files: state.unstagedDiff)
                         section("Untracked", files: state.untrackedDiff)
