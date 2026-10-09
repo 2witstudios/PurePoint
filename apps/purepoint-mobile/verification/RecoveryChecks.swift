@@ -2,7 +2,11 @@ import Foundation
 
 // Exercise preferences through UserDefaults lookup while keeping every write volatile.
 final class RecoveryDefaults: UserDefaults, @unchecked Sendable {
+    private let writeLock = NSLock()
+    private var canceledWrites = 0
+    var canceledWriteCount: Int { writeLock.lock(); defer { writeLock.unlock() }; return canceledWrites }
     override func set(_ value: Any?, forKey key: String) {
+        if key == "pi.canceledIds" { writeLock.lock(); canceledWrites += 1; writeLock.unlock() }
         var values = volatileDomain(forName: UserDefaults.argumentDomain)
         values[key] = value
         setVolatileDomain(values, forName: UserDefaults.argumentDomain)
@@ -81,6 +85,47 @@ extension ChatModel {
         precondition(hydrated.submissions.count == 50 && hydrated.submissions.first { $0.id == sending.id }?.attachments?.first?.data == file.data, "Cancellation overflow remains bounded and protects in-flight files")
         precondition(hydrated.error?.contains("Older recovery receipts") == true, "Unavoidable cancellation overflow warns about omitted recovery")
         await hydrated.flushForChecks()
-        print("Recovery checks passed: draft migration/restart, live/hydrated retention, receipt updates, persistence and saturation.")
+        try LocalRecoveryStore.save([Submission](), name: "submissions")
+        let originalIds = (0..<1000).map { "cancel-\($0)" }
+        defaults.set(originalIds, forKey: "pi.canceledIds")
+        let cancellationModel = ChatModel(defaults: defaults)
+        await cancellationModel.hydrateForChecks()
+        func canceledState(_ revision: Int, _ ids: [String]) -> Snapshot {
+            Snapshot(version: 1, epoch: "cancellation-epoch", revision: revision, busy: false, sessionId: state.sessionId, title: state.title, messages: [], tools: [], queue: [], dialogs: [], notices: [], canceled: ids.map { CanceledText(id: $0, text: "Stopped", sessionId: state.sessionId) })
+        }
+        let latestIds = ["cancel-999", "cancel-1000", "cancel-1000"]
+        try cancellationModel.applyForChecks(canceledState(1, latestIds))
+        precondition(cancellationModel.submissions.map(\.id) == ["cancel-1000"], "Known and duplicate cancellation IDs create no duplicate recovery")
+        cancellationModel.dismissSubmission("cancel-1000")
+        await cancellationModel.flushForChecks()
+        precondition(defaults.stringArray(forKey: "pi.canceledIds") == (1...1000).map { "cancel-\($0)" }, "Saturated cancellation history persists its changed content in chronological order")
+        let cancellationRestart = ChatModel(defaults: defaults)
+        await cancellationRestart.hydrateForChecks()
+        try cancellationRestart.applyForChecks(canceledState(1, latestIds))
+        precondition(cancellationRestart.submissions.isEmpty, "Dismissed cancellation stays dismissed after restart and repeated snapshot")
+        let newerIds = (1001...1100).map { "cancel-\($0)" }
+        try cancellationRestart.applyForChecks(canceledState(2, newerIds))
+        cancellationRestart.submissions = []
+        let newestIds = (1101...1200).map { "cancel-\($0)" }
+        try cancellationRestart.applyForChecks(canceledState(3, newestIds))
+        cancellationRestart.submissions = []
+        try cancellationRestart.applyForChecks(canceledState(4, newestIds + newestIds))
+        precondition(cancellationRestart.submissions.isEmpty, "Overcapacity updates retain current snapshot IDs without duplicate re-adds")
+        await cancellationRestart.flushForChecks()
+        precondition(defaults.stringArray(forKey: "pi.canceledIds") == (201...1200).map { "cancel-\($0)" }, "Multiple saturated updates retain exactly the newest 1000 IDs")
+        defaults.set(originalIds + ["cancel-500", "cancel-1000", "cancel-1000"], forKey: "pi.canceledIds")
+        let legacyRestart = ChatModel(defaults: defaults)
+        await legacyRestart.hydrateForChecks()
+        await legacyRestart.flushForChecks()
+        let normalized = defaults.stringArray(forKey: "pi.canceledIds") ?? []
+        precondition(normalized.count == 1000 && Set(normalized).count == 1000 && normalized.suffix(2) == ["cancel-500", "cancel-1000"], "Legacy arrays normalize duplicates and size while preserving available recent order")
+        try legacyRestart.applyForChecks(canceledState(1, ["cancel-600"]))
+        await legacyRestart.flushForChecks()
+        precondition(defaults.stringArray(forKey: "pi.canceledIds") == normalized.filter { $0 != "cancel-600" } + ["cancel-600"], "Changed recency order persists even when membership and count stay the same")
+        let writes = defaults.canceledWriteCount
+        try legacyRestart.applyForChecks(canceledState(2, ["cancel-600", "cancel-600"]))
+        await legacyRestart.flushForChecks()
+        precondition(defaults.canceledWriteCount == writes && legacyRestart.submissions.isEmpty, "Unchanged cancellation history neither writes preferences nor re-adds recovery")
+        print("Recovery checks passed: drafts, bounded receipts, chronological cancellation retention/restart and unchanged-snapshot deduplication.")
     }
 }

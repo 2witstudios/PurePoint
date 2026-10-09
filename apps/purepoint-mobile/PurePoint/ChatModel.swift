@@ -45,6 +45,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var projectingSnapshot = false
     private var cursor = SnapshotCursor()
     private var seenEditorIds = Set<String>()
+    private var canceledIdHistory: [String] = []
     private var seenCanceledIds = Set<String>()
     private var generation = 0
     private var foreground = true
@@ -63,8 +64,11 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         self.defaults = defaults
         endpoint = defaults.value.string(forKey: "pi.endpoint") ?? ""
         drafts = defaults.value.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
-        seenCanceledIds = Set(defaults.value.stringArray(forKey: "pi.canceledIds") ?? [])
+        let savedCanceledIds = defaults.value.stringArray(forKey: "pi.canceledIds") ?? []
+        canceledIdHistory = Self.recentCanceledIds(savedCanceledIds)
+        seenCanceledIds = Set(canceledIdHistory)
         draft = drafts[draftKey] ?? ""
+        if canceledIdHistory != savedCanceledIds { saveCanceledIds() }
         recoveryTask = Task { [weak self] in
             let saved = await Task.detached(priority: .utility) {
                 let legacy = defaults.value.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
@@ -83,6 +87,15 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
             self.recoveryLoaded = true
             self.saveSubmissions(); self.saveAttachmentDraft()
         }
+    }
+    private static func recentCanceledIds(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        return Array(ids.reversed().filter { seen.insert($0).inserted }.prefix(1000).reversed())
+    }
+    private func saveCanceledIds() {
+        let ids = canceledIdHistory
+        let defaults = defaults
+        writer.schedule(key: "canceled") { defaults.value.set(ids, forKey: "pi.canceledIds") }
     }
     private func saveDraft() {
         drafts[draftKey] = String(draft.prefix(65536))
@@ -218,17 +231,16 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if let rows { projectingSnapshot = true; transcriptRows = rows }
         snapshot = state
         projectingSnapshot = false
-        let previousCanceled = seenCanceledIds.count
+        let previousCanceled = canceledIdHistory
         for canceled in state.canceled ?? [] where !seenCanceledIds.contains(canceled.id) {
             submissions.append(Submission(id: canceled.id, text: canceled.text, sessionId: canceled.sessionId, status: "Canceled by Stop", recoverable: true))
             seenCanceledIds.insert(canceled.id)
         }
-        if seenCanceledIds.count > 1000 { seenCanceledIds = Set(seenCanceledIds.suffix(1000)) }
-        if previousCanceled != seenCanceledIds.count {
-            let ids = Array(seenCanceledIds)
-            let defaults = defaults
-            writer.schedule(key: "canceled") { defaults.value.set(ids, forKey: "pi.canceledIds") }
-        }
+        // Refresh the current snapshot's IDs in wire order so older history
+        // cannot evict them while the bridge continues including them.
+        canceledIdHistory = Self.recentCanceledIds(canceledIdHistory + (state.canceled ?? []).map(\.id))
+        seenCanceledIds = Set(canceledIdHistory)
+        if previousCanceled != canceledIdHistory { saveCanceledIds() }
         if let offered = state.editor, !seenEditorIds.contains(offered.id) { seenEditorIds.insert(offered.id); editorOffer = offered.text }
         if previous != state.sessionId {
             var next = DraftState(text: drafts[draftKey] ?? "")
