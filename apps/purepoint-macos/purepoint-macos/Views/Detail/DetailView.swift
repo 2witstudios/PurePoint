@@ -34,7 +34,13 @@ struct DetailView: View {
         // is why selecting its row drops the user straight into the terminal.
         case .workspace(let id):
             if registry.workspace(id: id) != nil {
-                PaneGridView(workspaceId: id)
+                if let rootPath = appState.fileRoot(forWorkspace: id, registry: registry) {
+                    WorkspaceFilesLayout(rootPath: rootPath) {
+                        PaneGridView(workspaceId: id)
+                    }
+                } else {
+                    PaneGridView(workspaceId: id)
+                }
             } else {
                 placeholderView(icon: "rectangle.split.2x2", title: "Workspace not found")
             }

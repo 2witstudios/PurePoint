@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 struct FileNode: Identifiable {
     let id: String  // relative path from worktree root
@@ -10,6 +11,7 @@ struct FileNode: Identifiable {
 
 // MARK: - FileTreeNode (NSOutlineView reference-type wrapper)
 
+@Observable
 class FileTreeNode {
     let name: String
     let absolutePath: String
