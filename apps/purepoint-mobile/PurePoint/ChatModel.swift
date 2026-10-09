@@ -1,6 +1,9 @@
 import Foundation
 import SwiftUI
 
+// UserDefaults is thread-safe; the immutable reference is shared with the utility writer.
+private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefaults }
+
 @MainActor final class ChatModel: ObservableObject {
     @Published var snapshot: Snapshot? { didSet { if !projectingSnapshot, let snapshot { transcriptRows = TranscriptRows.make(messages: snapshot.messages, tools: snapshot.tools) } else if snapshot == nil { transcriptRows = [] } } }
     private(set) var transcriptRows: [TranscriptRow] = []
@@ -9,27 +12,40 @@ import SwiftUI
     @Published var error: String?
     @Published var draft = "" { didSet { saveDraft() } }
     @Published var attachments: [ComposerAttachment] = [] { didSet { saveAttachmentDraft() } }
-    @Published var submissions: [Submission] = [] { didSet { saveSubmissions() } }
+    @Published var submissions: [Submission] = [] {
+        didSet {
+            if !normalizingSubmissions {
+                if submissions.filter({ $0.recoverable || $0.status == "Sending" }).count > 50 {
+                    error = "Message recovery is full. Older recovery receipts could not be retained; inspect native history before sending again. Restore or dismiss saved recovery to make room."
+                }
+                normalizingSubmissions = true
+                submissions = Self.retainedSubmissions(submissions)
+                normalizingSubmissions = false
+                saveSubmissions()
+            }
+        }
+    }
     @Published var conversations: [Conversation] = []
     @Published var browsing: History?
     @Published var editorOffer: String?
     @Published var changingSession = false
-    @Published var endpoint = UserDefaults.standard.string(forKey: "pi.endpoint") ?? ""
+    @Published var endpoint = ""
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
-    private var drafts = UserDefaults.standard.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
+    private var drafts: [String: String] = [:]
     private var attachmentDrafts: [String: [ComposerAttachment]] = [:]
     private let writer = CoalescedWriter()
     private var recoveryTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
     private var recoveryLoaded = false
+    private var normalizingSubmissions = false
     private var projectingSnapshot = false
     private var cursor = SnapshotCursor()
     private var seenEditorIds = Set<String>()
-    private var seenCanceledIds = Set(UserDefaults.standard.stringArray(forKey: "pi.canceledIds") ?? [])
+    private var seenCanceledIds = Set<String>()
     private var generation = 0
     private var foreground = true
     private var wantsConnection = false
@@ -40,11 +56,18 @@ import SwiftUI
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
-    init() {
+    private let defaults: RecoveryPreferences
+
+    init(defaults: UserDefaults = .standard) {
+        let defaults = RecoveryPreferences(value: defaults)
+        self.defaults = defaults
+        endpoint = defaults.value.string(forKey: "pi.endpoint") ?? ""
+        drafts = defaults.value.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
+        seenCanceledIds = Set(defaults.value.stringArray(forKey: "pi.canceledIds") ?? [])
         draft = drafts[draftKey] ?? ""
         recoveryTask = Task { [weak self] in
             let saved = await Task.detached(priority: .utility) {
-                let legacy = UserDefaults.standard.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
+                let legacy = defaults.value.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
                 return (LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], LocalRecoveryStore.load("submissions", as: [Submission].self) ?? legacy ?? [])
             }.value
             guard let self else { return }
@@ -65,13 +88,30 @@ import SwiftUI
         drafts[draftKey] = String(draft.prefix(65536))
         if drafts.count > 100 { drafts.removeValue(forKey: drafts.keys.first(where: { $0 != draftKey }) ?? "") }
         let value = drafts
-        writer.schedule(key: "drafts") { UserDefaults.standard.set(value, forKey: "pi.drafts") }
+        let defaults = defaults
+        writer.schedule(key: "drafts") { defaults.value.set(value, forKey: "pi.drafts") }
+    }
+    private static func retainedSubmissions(_ items: [Submission]) -> [Submission] {
+        // In-flight sends outrank recovery, which outranks settled receipts. Within
+        // each priority retain the newest, then preserve chronological display order.
+        func priority(_ item: Submission) -> Int { item.status == "Sending" ? 2 : item.recoverable ? 1 : 0 }
+        let kept = Set(items.indices.sorted {
+            let left = priority(items[$0]), right = priority(items[$1])
+            return left == right ? $0 > $1 : left > right
+        }.prefix(50))
+        return items.enumerated().compactMap { index, item in
+            guard kept.contains(index) else { return nil }
+            var item = item
+            if !item.recoverable && item.status != "Sending" { item.attachments = nil }
+            return item
+        }
     }
     private func saveSubmissions() {
         guard recoveryLoaded else { return }
-        let value = Array(submissions.suffix(50))
+        let value = submissions
+        let defaults = defaults
         writer.schedule(key: "submissions") { [weak self] in
-            do { try LocalRecoveryStore.save(value, name: "submissions"); UserDefaults.standard.removeObject(forKey: "pi.submissions") }
+            do { try LocalRecoveryStore.save(value, name: "submissions"); defaults.value.removeObject(forKey: "pi.submissions") }
             catch { Task { @MainActor [weak self] in self?.error = "Could not save message recovery on this phone." } }
         }
     }
@@ -93,7 +133,7 @@ import SwiftUI
         guard let url = ConnectionAddress.url(endpoint) else { error = "Enter a Tailscale address ending in /v1, such as ws://100.100.1.2:8787/v1."; return }
         guard secret.count >= 32 else { error = "Enter the pairing secret from your Mac (at least 32 characters)."; return }
         do { try PairingSecret.save(secret, endpoint: url.absoluteString) } catch { self.error = error.localizedDescription; return }
-        saveDraft(); saveAttachmentDraft(); disconnect(); self.endpoint = url.absoluteString; UserDefaults.standard.set(self.endpoint, forKey: "pi.endpoint"); snapshot = nil; draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false; wantsConnection = true; connect()
+        saveDraft(); saveAttachmentDraft(); disconnect(); self.endpoint = url.absoluteString; defaults.value.set(self.endpoint, forKey: "pi.endpoint"); snapshot = nil; draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false; wantsConnection = true; connect()
     }
     func connect() {
         guard !demo, foreground, socket == nil, let url = ConnectionAddress.url(endpoint) else { return }
@@ -186,7 +226,8 @@ import SwiftUI
         if seenCanceledIds.count > 1000 { seenCanceledIds = Set(seenCanceledIds.suffix(1000)) }
         if previousCanceled != seenCanceledIds.count {
             let ids = Array(seenCanceledIds)
-            writer.schedule(key: "canceled") { UserDefaults.standard.set(ids, forKey: "pi.canceledIds") }
+            let defaults = defaults
+            writer.schedule(key: "canceled") { defaults.value.set(ids, forKey: "pi.canceledIds") }
         }
         if let offered = state.editor, !seenEditorIds.contains(offered.id) { seenEditorIds.insert(offered.id); editorOffer = offered.text }
         if previous != state.sessionId {
@@ -194,7 +235,10 @@ import SwiftUI
             if previous == nil && !localDraft.isEmpty && next.text != localDraft { next.restore(localDraft); drafts.removeValue(forKey: oldKey) }
             draft = next.text
             var nextAttachments = attachmentDrafts[draftKey] ?? []
-            if previous == nil { for file in localAttachments where !nextAttachments.contains(where: { $0.id == file.id }) { nextAttachments.append(file) } }
+            if previous == nil {
+                for file in localAttachments where !nextAttachments.contains(where: { $0.id == file.id }) { nextAttachments.append(file) }
+                attachmentDrafts.removeValue(forKey: oldKey)
+            }
             attachments = nextAttachments
         }
         if let failure = state.error { error = failure }
@@ -229,6 +273,10 @@ import SwiftUI
     }
     func submit(mode: String) {
         guard canSend, let state = snapshot else { return }
+        guard submissions.filter({ $0.recoverable || $0.status == "Sending" }).count < 50 else {
+            error = "Message recovery is full. Restore or dismiss a saved recovery before sending another message."
+            return
+        }
         let text = draft
         let files = attachments
         let content: ComposerPayload
@@ -247,7 +295,12 @@ import SwiftUI
             } catch { updateSubmission(id, status: error.localizedDescription, recoverable: true); self.error = error.localizedDescription }
         }
     }
-    private func updateSubmission(_ id: String, status: String, recoverable: Bool) { if let i = submissions.firstIndex(where: { $0.id == id }) { submissions[i].status = status; submissions[i].recoverable = recoverable } }
+    private func updateSubmission(_ id: String, status: String, recoverable: Bool) {
+        if let i = submissions.firstIndex(where: { $0.id == id }) {
+            var item = submissions[i]; item.status = status; item.recoverable = recoverable
+            submissions[i] = item
+        }
+    }
     func restore(_ submission: Submission) {
         let files = (submission.attachments ?? []).filter { file in !attachments.contains(where: { $0.id == file.id }) }
         guard attachments.count + files.count <= 4, (attachments + files).reduce(0, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Remove a draft attachment before restoring these files."; return }
