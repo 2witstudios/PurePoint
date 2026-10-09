@@ -116,8 +116,8 @@ struct ChatView: View {
                     }
                 }.font(.footnote).padding(.bottom, 2)
             }
-            if let receipt = model.submissions.last, !receipt.recoverable {
-                Text(receipt.status == "Queued" ? "Queued · waiting for Pi" : receipt.status == "Accepted" ? "Accepted · completion appears in the conversation" : receipt.status).font(.caption).foregroundStyle(.secondary)
+            if let receipt = model.submissions.last, !receipt.recoverable, receipt.status != "Accepted" {
+                Text(receipt.status == "Queued" ? "Queued · waiting for Pi" : receipt.status).font(.caption).foregroundStyle(.secondary)
             }
             if let queue = model.snapshot?.queue, !queue.isEmpty { Text("\(queue.count) message\(queue.count == 1 ? "" : "s") queued").font(.caption).foregroundStyle(.secondary) }
             HStack(alignment: .bottom, spacing: 12) {
