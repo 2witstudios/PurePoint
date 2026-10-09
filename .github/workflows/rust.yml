@@ -54,6 +54,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # Install the same audit version from verified release binaries, avoiding
+      # Docker Hub's unauthenticated image-pull limit.
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
-          command: check advisories licenses bans sources
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check advisories licenses bans sources
