@@ -32,15 +32,17 @@ Payload types:
 - `ChannelMessage`: `id: String`, `sequence: UInt64`, `parent_id: String?`, `author: ChannelAuthor`, `text: String`, `created_at: ISO8601 String`, `edited_at: String?`, `references: [ChannelReference]`, `reactions: [ChannelReaction]`.
 
 Requests:
-- `channel_read`: `project_root`, optional `after: UInt64`, optional `before: UInt64`, `limit` default 100/max 200, optional `query`, optional `known_revision: UInt64`. Reads return oldest-to-newest within the selected window; no cursor selects latest window. Revision optimization only applies to unfiltered latest reads.
+- `channel_read`: `project_root`, optional `after: UInt64`, optional `before: UInt64`, `limit` default 100/max 200, optional `query`, optional `parent_id`, optional `agent_id`, optional `known_revision: UInt64`. Reads return oldest-to-newest within the selected window; no cursor selects latest window. Revision optimization only applies to unfiltered latest reads.
 - `channel_send`: `project_root`, optional `agent_id`, `text`, optional `parent_id`, `references` default [].
 - `channel_edit`: `project_root`, optional `agent_id`, `message_id`, `text`.
 - `channel_react`: `project_root`, optional `agent_id`, `message_id`, `emoji` default thumbs-up, `active: Bool`.
 
 Responses:
-- `channel_history`: `messages`, `revision: UInt64`, `latest_sequence: UInt64`, `has_more: Bool`, `oldest_sequence: UInt64?`, `unchanged: Bool`.
+- `channel_history`: `messages`, `revision: UInt64`, `latest_sequence: UInt64`, `has_more: Bool`, `oldest_sequence: UInt64?`, `unchanged: Bool`, `self_author_id: String`, `reply_counts: {messageID: UInt64}`.
 - `channel_message`: `message`, `revision: UInt64`.
 - Use existing `error` responses for invalid identities, parents/references, missing messages, oversized input, unsupported store versions, I/O errors and edit ownership violations.
+
+Pagination: reject simultaneous after/before. Search matches text, author name, branch/worktree and reference labels/values case-insensitively. parent_id selects that top-level message’s replies only. oldest_sequence derives only from the primary matched window; injected parent context is deduplicated by ID and never changes cursors or has_more. reply_counts covers returned top-level parents across the full store. known_revision only skips unfiltered latest reads. On revision changes the UI refreshes its loaded pages and open thread pages, preserving cursors and scroll anchors. self_author_id resolves the requesting agent_id or local human through the same producer path as writes.
 
 Agent sender IDs are local claimed identities checked against that project's manifest, not credentials; existing IPC socket permissions are the trust boundary. Never take an arbitrary author display name from clients. Human author ID must be the same between local CLI and app. Local clients sharing the same OS account can claim registered agent IDs; this is documented and not remote authentication.
 
@@ -48,7 +50,7 @@ Limits: text 1–16,000 UTF-8 bytes (whitespace-only rejected); references at mo
 
 ## CLI
 
-`pu channel send <text> [--reply-to ID] [--commit SHA] [--pr NUMBER] [--json]`; `pu channel read [--since SEQUENCE] [--before SEQUENCE] [--limit N] [--search TEXT] [--json]`; `pu channel edit ID <text> [--json]`; `pu channel react ID [--remove] [--json]`. Resolve project via explicit `--project-root`, `PU_PROJECT_ROOT`, or Git common directory so subdirectories and linked worktrees route correctly. Identity uses `PU_AGENT_ID` when present, otherwise local human. Commands must not prompt or inject input into agents.
+`pu channel send <text> [--reply-to ID] [--commit SHA] [--pr NUMBER] [--json]`; `pu channel read [--since SEQUENCE] [--before SEQUENCE] [--limit N] [--search TEXT] [--thread ID] [--json]`; `pu channel edit ID <text> [--json]`; `pu channel react ID [--remove] [--json]`. Resolve project via explicit `--project-root`, `PU_PROJECT_ROOT`, or Git common directory so subdirectories and linked worktrees route correctly. Identity uses `PU_AGENT_ID` when present, otherwise local human. Commands must not prompt or inject input into agents.
 
 ## Given/should requirements
 
