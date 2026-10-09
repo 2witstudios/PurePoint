@@ -181,6 +181,9 @@ actor GitService {
     func fetchPRDiffChecked(cwd: String, prNumber: Int) throws -> DiffData {
         let result = runGh(["pr", "diff", String(prNumber)], cwd: cwd)
         guard result.success else { throw GitReviewError(message: result.stderr.nilIfEmpty ?? "GitHub PR diff failed") }
+        guard result.stdout.isEmpty || result.stdout.hasPrefix("diff --git ") else {
+            throw GitReviewError(message: "GitHub returned an unrecognized patch; refresh to retry.")
+        }
         // Split only actual file headers, never matching text inside a hunk.
         let sections = result.stdout.components(separatedBy: "\ndiff --git ")
         let files = sections.compactMap { section -> FileDiff? in
@@ -198,6 +201,9 @@ actor GitService {
             let status = patch.contains("\nnew file mode") ? "A" : patch.contains("\ndeleted file mode") ? "D" : rename != nil ? "R" : "M"
             return parsePatch(patch, filename: name, status: status,
                               oldFilename: metadata.first { $0.hasPrefix("rename from ") }.map { decodeGitPath(String($0.dropFirst(12))) })
+        }
+        guard result.stdout.isEmpty || !files.isEmpty else {
+            throw GitReviewError(message: "GitHub patch paths could not be read; refresh to retry.")
         }
         return DiffData(files: files)
     }
@@ -342,5 +348,5 @@ actor GitService {
 }
 
 private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+    nonisolated var nilIfEmpty: String? { isEmpty ? nil : self }
 }
