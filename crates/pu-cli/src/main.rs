@@ -16,6 +16,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Read and post to the shared project channel (does not wake agents)
+    Channel {
+        #[arg(long, global = true)]
+        project_root: Option<String>,
+        #[command(subcommand)]
+        action: commands::channel::ChannelAction,
+    },
     /// Initialize a PurePoint workspace
     Init {
         /// Output as JSON
@@ -868,6 +875,10 @@ async fn main() {
             event,
             project_root,
         } => commands::gate::run(&socket, &event, project_root).await,
+        Commands::Channel {
+            project_root,
+            action,
+        } => commands::channel::run(&socket, project_root, action).await,
         Commands::Pulse { json } => commands::pulse::run(&socket, json).await,
         Commands::Diff {
             worktree,
@@ -937,6 +948,45 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_channel_commands_should_parse_routing_and_reject_invalid_cursors() {
+        let cli = Cli::try_parse_from([
+            "pu",
+            "channel",
+            "send",
+            "hello",
+            "--reply-to",
+            "msg-1",
+            "--commit",
+            "abcdef0",
+            "--pr",
+            "42",
+            "--project-root",
+            "/project",
+            "--json",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Commands::Channel { project_root: Some(root), action: commands::channel::ChannelAction::Send { json: true, .. } } if root == "/project")
+        );
+        for args in [
+            vec!["pu", "channel", "read", "--since", "1", "--before", "5"],
+            vec!["pu", "channel", "read", "--limit", "201"],
+            vec!["pu", "channel", "read", "--limit", "0"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        for args in [
+            vec![
+                "pu", "channel", "read", "--search", "hello", "--thread", "msg-1",
+            ],
+            vec!["pu", "channel", "edit", "msg-1", "changed"],
+            vec!["pu", "channel", "react", "msg-1", "--remove"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+    }
 
     fn parse_tab(args: &[&str]) -> Result<TabAction, clap::Error> {
         let argv = ["pu", "grid", "tab"].iter().chain(args).copied();

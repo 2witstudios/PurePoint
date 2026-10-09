@@ -427,3 +427,63 @@ Gate evaluation timeouts: 60 seconds per command, 5 minutes total.
 - **Managed mode**: `--managed` flag (for macOS app); exits when parent process dies
 - **Connection limit**: at most 1024 concurrent connections; further connections get one `BUSY` error line and are closed
 - **Signals**: SIGTERM and SIGINT trigger graceful shutdown
+
+## Project channel
+
+The additive channel operations retain protocol version **6**: existing request
+and response payloads are unchanged. Older daemons return their existing parse
+error for unknown channel operations; clients must surface that error.
+The authoritative fields and cursor rules are in
+[`project-channel.md`](../product/project-channel.md). Channel payloads use
+snake_case throughout, including nested authors and messages.
+
+`channel_read` defaults to 100 primary messages (1–200 allowed). `after` returns
+ the **earliest next page**, while `before` or no cursor returns the latest
+matching window. Parent context is added after selecting the primary page;
+`oldest_sequence` and `has_more` never count that context. A query and parent
+filter combine when both are supplied. Thread clients should omit their timeline
+search query unless they intend to search the thread. `reply_counts` covers each
+returned top-level parent across the full store. `self_author_id` identifies the
+requesting producer even on empty/unchanged history. `known_revision` skips only
+cursor-free reads with neither query nor parent filter.
+
+Human producers are resolved by the daemon as `human:<effective Unix UID>`;
+CLI and app clients on the daemon's account therefore share an identity.
+Display names come from `/usr/bin/id -un <UID>`, with `Developer <UID>` as fallback,
+not client-provided names or username environment variables. Agent IDs are
+manifest membership claims, not credentials. Stored author snapshots survive
+agent/worktree removal; removed agents cannot submit new operations as that ID.
+
+The version-1 `.pu/channel.json` store uses a persistent `channel.json.lock`,
+exclusive read/update locks, a unique fsynced temporary file, atomic rename and
+parent-directory fsync. Corrupt data and unsupported versions return errors.
+Reaction activation/removal is idempotent and changes revision only on mutation.
+Edits change text and edited timestamp, preserving IDs and creation sequences.
+
+Commit reference values are 7–64 ASCII hexadecimal bytes; PR values are positive
+unsigned 64-bit decimal numbers (at most 20 bytes). Up to 8 references are allowed,
+with optional labels at most 256 UTF-8 bytes and no control characters.
+Reaction strings are 1–64 UTF-8 bytes, nonblank and without control characters.
+Errors use `CHANNEL_INVALID`, `CHANNEL_NOT_FOUND`, `CHANNEL_OWNERSHIP`,
+`CHANNEL_VERSION`, `CHANNEL_CORRUPT`, `CHANNEL_IO`, or `CHANNEL_INTERNAL` in the
+existing error envelope.
+
+### CLI
+
+```
+pu channel send 'Ready for review' --commit abcdef0 --pr 42 --json
+pu channel send 'Reply' --reply-to msg-ID
+pu channel read --since 42 --limit 100 --json
+pu channel read --before 42 --search review
+pu channel read --thread msg-ID
+pu channel edit msg-ID 'Updated text'
+pu channel react msg-ID
+pu channel react msg-ID --remove
+```
+
+`--project-root PATH` is accepted before or after the channel subcommand and
+wins over `PU_PROJECT_ROOT`; otherwise Git common-directory discovery routes
+root subdirectories and linked worktrees to the primary checkout. `PU_AGENT_ID`
+selects a registered agent producer when present; otherwise the daemon uses its
+local human producer. Commands do not prompt, inject terminal input, trigger
+work or start agents. A missing daemon is reported without starting it.

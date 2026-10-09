@@ -1,6 +1,7 @@
 pub mod agent_def;
 pub mod attach;
 pub mod bench;
+pub mod channel;
 pub mod clean;
 pub mod diff;
 pub mod gate;
