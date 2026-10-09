@@ -61,6 +61,9 @@ nonisolated struct GitLocalReview: Sendable {
     var unstaged: [FileDiff] = []
     var untracked: [FileDiff] = []
     var error: String?
+    var stagedError: String?
+    var unstagedError: String?
+    var untrackedError: String?
     var uniquePathCount: Int { Set((staged + unstaged + untracked).map(\.filename)).count }
 }
 

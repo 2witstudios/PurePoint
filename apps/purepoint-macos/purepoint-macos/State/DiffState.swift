@@ -148,7 +148,9 @@ final class DiffState {
                     else { commitTask?.cancel(); self.selectedCommit = nil; commitDiff = []; isLoadingCommit = false }
                 }
             }
-            if local.error == nil { stagedDiff = local.staged; unstagedDiff = local.unstaged; untrackedDiff = local.untracked }
+            if local.stagedError == nil { stagedDiff = local.staged }
+            if local.unstagedError == nil { unstagedDiff = local.unstaged }
+            if local.untrackedError == nil { untrackedDiff = local.untracked }
             isLoadingBranch = false; isLoadingUnstaged = false; localTask = nil
         }
     }

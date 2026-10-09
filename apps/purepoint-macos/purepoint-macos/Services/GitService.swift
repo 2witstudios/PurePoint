@@ -63,16 +63,19 @@ actor GitService {
 
     func fetchLocalReview(at path: String) -> GitLocalReview {
         var review = GitLocalReview()
+        do { review.staged = try patches(["--cached"], at: path) }
+        catch { review.stagedError = error.localizedDescription }
+        do { review.unstaged = try patches([], at: path) }
+        catch { review.unstagedError = error.localizedDescription }
         do {
-            review.staged = try patches(["--cached"], at: path)
-            review.unstaged = try patches([], at: path)
             let names = try checked(["ls-files", "--others", "--exclude-standard", "-z"], at: path).split(separator: "\0").map(String.init)
             for name in names {
                 let result = runGit(["-c", "core.quotePath=true", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name], cwd: path)
                 guard result.exitCode == 0 || result.exitCode == 1 else { throw GitReviewError(message: result.stderr) }
                 review.untracked.append(parsePatch(result.stdout, filename: name, status: "??"))
             }
-        } catch { review.error = error.localizedDescription }
+        } catch { review.untrackedError = error.localizedDescription }
+        review.error = [review.stagedError, review.unstagedError, review.untrackedError].compactMap { $0 }.joined(separator: "\n").nilIfEmpty
         return review
     }
 
@@ -116,7 +119,9 @@ actor GitService {
 
     private func patches(_ revisions: [String], at path: String, root: Bool = false) throws -> [FileDiff] {
         let command = root ? ["diff-tree", "--root", "--no-commit-id", "-r"] : ["diff"]
-        let common = ["--no-color", "--no-ext-diff", "--no-textconv", "--find-renames"]
+        // Unmerged index stages cannot be expressed as a staged patch. In the
+        // working-file group use stage 2 (ours) as the disclosed conflict baseline.
+        let common = ["--no-color", "--no-ext-diff", "--no-textconv", "--find-renames"] + (revisions.isEmpty && !root ? ["--ours"] : [])
         let names = try checked(command + common + ["--name-status", "-z"] + revisions + ["--"], at: path).components(separatedBy: "\0")
         var entries: [(name: String, status: String, old: String?)] = [], i = 0
         while i + 1 < names.count && !names[i].isEmpty {
@@ -138,12 +143,18 @@ actor GitService {
             } else if !section.isEmpty { section += line + "\n" }
         }
         if !section.isEmpty { sections.append(section) }
-        guard entries.count == sections.count else {
+        let conflicts = Set(entries.filter { $0.status == "U" }.map(\.name))
+        let ordinary = entries.filter { $0.status != "U" }
+        guard ordinary.count == sections.count else {
             throw GitReviewError(message: "Git paths changed while patches loaded. Refresh to retry.")
         }
-        return zip(entries, sections).map { entry, patch in
-            parsePatch(patch, filename: entry.name, status: entry.status, oldFilename: entry.old)
+        var files = zip(ordinary, sections).map { entry, patch in
+            parsePatch(patch, filename: entry.name, status: conflicts.contains(entry.name) ? "U" : entry.status, oldFilename: entry.old)
         }
+        for name in conflicts where !files.contains(where: { $0.filename == name }) {
+            files.append(FileDiff(filename: name, statusCode: "U", added: 0, removed: 0, hunks: []))
+        }
+        return files.sorted { $0.filename < $1.filename }
     }
 
     private func parsePatch(_ patch: String, filename: String, status: String, oldFilename: String? = nil) -> FileDiff {

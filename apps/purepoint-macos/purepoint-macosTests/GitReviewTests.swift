@@ -110,6 +110,22 @@ private enum GitReviewChecks {
         _ = try git(["branch", "--set-upstream-to=main"], at: path)
         let fallback = await service.fetchBranchReview(at: path, baseBranch: nil)
         try require(fallback.comparisonBase == "main" && fallback.error == nil, "upstream fallback")
+        let conflict = try repo(); defer { try? FileManager.default.removeItem(atPath: conflict) }
+        try write("base\n", "conflict.txt", at: conflict); try write("unchanged\n", "ordinary.txt", at: conflict)
+        try commit("base", at: conflict); _ = try git(["checkout", "-b", "side"], at: conflict)
+        try write("side\n", "conflict.txt", at: conflict); try commit("side", at: conflict)
+        _ = try git(["checkout", "main"], at: conflict)
+        try write("ours\n", "conflict.txt", at: conflict); try commit("ours", at: conflict)
+        // The merge must fail and leave real index stages 1/2/3.
+        do { _ = try git(["merge", "side"], at: conflict); throw Failure(message: "merge unexpectedly succeeded") }
+        catch let failure as Failure { try require(failure.message.contains("CONFLICT"), "real unresolved merge") }
+        try write("staged ordinary\n", "ordinary.txt", at: conflict); _ = try git(["add", "ordinary.txt"], at: conflict)
+        try write("unstaged ordinary\n", "ordinary.txt", at: conflict); try write("new file\n", "untracked.txt", at: conflict)
+        let conflicted = await service.fetchLocalReview(at: conflict)
+        try require(conflicted.error == nil && conflicted.staged.count == 2 && conflicted.unstaged.count == 2 && conflicted.untracked.count == 1, "unresolved merge retains all local groups")
+        try require(conflicted.staged.first { $0.filename == "conflict.txt" }?.statusCode == "U", "explicit staged conflict")
+        try require(conflicted.unstaged.first { $0.filename == "conflict.txt" }?.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "working conflict patch against ours")
+        try require(conflicted.uniquePathCount == 3, "conflict path counted once")
         print("Git repository checks passed")
     }
 
