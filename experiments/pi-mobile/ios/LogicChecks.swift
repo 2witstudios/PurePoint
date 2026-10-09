@@ -9,6 +9,12 @@ import Foundation
         precondition(ConnectionAddress.url("ws://100.100.1.2:8787/v1") != nil)
         precondition(ConnectionAddress.url("ws://0.0.0.0/v1") == nil)
         precondition(ConnectionAddress.url("ws://example.com/v1") == nil)
+        let pairing = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://100.94.14.74:8787/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
+        precondition(PairingCode.parse(pairing)?.endpoint == "ws://100.94.14.74:8787/v1")
+        precondition(PairingCode.parse(pairing.replacingOccurrences(of: "100.94.14.74", with: "example.com")) == nil)
+        precondition(PairingCode.parse(pairing.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")) == nil)
+        precondition(PairingCode.parse(pairing.replacingOccurrences(of: "fixture-pairing-secret-0123456789abcdef", with: "short")) == nil)
+        precondition(PairingCode.parse("not a pairing code") == nil)
         print("Pi Mobile standalone domain checks passed")
     }
 }

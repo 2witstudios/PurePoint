@@ -1,6 +1,15 @@
 import XCTest
 @testable import PiMobile
 final class ChatDomainTests: XCTestCase {
+    func testGivenPairingQRShouldAcceptNativePayloadAndRejectUnsafeOrUnsupportedCodes() {
+        let payload = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://100.94.14.74:8787/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
+        XCTAssertEqual(PairingCode.parse(payload)?.endpoint, "ws://100.94.14.74:8787/v1")
+        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "100.94.14.74", with: "example.com")))
+        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")))
+        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "fixture-pairing-secret-0123456789abcdef", with: "short")))
+        XCTAssertNil(PairingCode.parse(String(repeating: "x", count: 8193)))
+        XCTAssertNil(PairingCode.parse("https://example.com"))
+    }
     func testGivenLaterTypingShouldPreserveItWhenRestoringSubmission() {
         var draft = DraftState(text: "First instruction")
         let submitted = draft.takeSubmission()

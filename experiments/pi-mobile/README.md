@@ -53,6 +53,20 @@ The launcher discovers installed pu/pu-cli skill files from user skill roots and
 
 For every cross-project operation, Pi should use **explicit routing**, for example `PU_PROJECT_ROOT=/absolute/project pu status --json`, or run `pu` from that project’s absolute root. The installed CLI resolves this environment variable before cwd and has **no general `--project-root` flag**. The appended [Point Guard context](docs/point-guard.md) explains this without restricting native tools/providers. Check `pu <command> --help` for current command flags.
 
+## QR pairing
+
+On startup, the bridge creates a private offline pairing page at `~/.config/pi-mobile/pairing.html`, using the same owner-created secret file. Open it locally:
+
+```sh
+open ~/.config/pi-mobile/pairing.html
+```
+
+In the iPhone app, open **Connection → Scan Mac QR code**, allow camera access, and point at the QR. The app saves the secret in Keychain and connects automatically. Both devices still need Tailscale. Manual entry remains available on devices without scanning support and in the simulator.
+
+The QR contains a remote-control credential. The page is mode 600, has no scripts or remote resources, and neither its payload nor its QR is printed to terminal logs. Close the page after pairing; delete it when no longer needed. It remains valid while the underlying secret remains valid. No credentials are generated. QR pairing supports a secret of 32–1024 bytes without embedded newlines; longer secrets still allow manual pairing.
+
+To recreate the page without restarting a running bridge, run `npm run pair` with the same `PI_MOBILE_HOST`, `PI_MOBILE_PORT`, `PI_MOBILE_TOKEN_FILE` and optional TLS variables as the bridge. This command does not start a listener or Pi process.
+
 ## iPhone / Xcode — owner-run
 
 Open **[ios/PiMobile.xcodeproj](ios/PiMobile.xcodeproj)** in Xcode 16 or later. Select the **PiMobile** scheme. The project has a standalone iPhone app target (iOS 17+) and a PiMobileTests XCTest target; no script phases or references to the PurePoint app, Cargo or installed binaries.

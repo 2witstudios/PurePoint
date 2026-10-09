@@ -55,3 +55,14 @@ One controller, one active session. No bridge crash durability for request recei
 | Child fails / wire unsupported | Visible setup/error state; no silent restart or uncertain resend                            |
 
 `core.js` exposes independent framing and branch/live projection helpers. `rpc.js` owns process transport and correlated commands. `controller.js` owns semantic operations and bounded in-memory projection/recovery; it depends on injected RPC/session interfaces. `setup.js` adapts native resource/session discovery; `network.js` authenticates and transports semantic records; `main.js` composes them. Swift ChatDomain is Foundation-only; ChatModel owns phone transport/draft recovery, PairingSecret owns Keychain IO, and SwiftUI views own presentation. Neither core/client calls PurePoint APIs. Public wire operations and limits are specified above; tests are colocated with each bridge boundary and the Swift domain target.
+
+# QR pairing addition — 2026-10-08
+
+The standalone bridge emits an offline SVG QR in a private local HTML file, using the existing owner-supplied credential. The phone uses Apple's VisionKit DataScanner, checks support/availability and requests camera permission. Research: [Apple scanner contract](https://developer.apple.com/documentation/visionkit/scanning-data-with-the-camera), [node-qrcode SVG API](https://github.com/soldair/node-qrcode). Local generator dependency is pinned to qrcode 1.5.4.
+
+- Given a valid bridge address and private owner secret, startup should save a mode-600 offline QR page and print only its path. Failure should leave manual pairing and the running bridge available.
+- Given a supported camera and permission, Scan Mac QR code should read a QR, validate it, store its secret through existing Keychain pairing, and connect once. Cancel should leave the existing connection and draft intact.
+- Given an unsupported device, denied permission, malformed QR, oversized payload, public endpoint or unsupported version, the app should show useful guidance without sending credentials or changing its pairing.
+- Given logs and local page contents, the plaintext secret should appear in neither. The page should contain no remote resources; its QR itself contains the secret and must remain private.
+
+Payload: UTF-8 JSON with `type: "pi-mobile-pairing"`, `version: 1`, `endpoint` and `secret`. Maximum scan payload 8192 bytes; secrets 32–1024 bytes with no embedded CR/LF. The same tailnet/loopback endpoint policy applies. No custom URL scheme, relay, camera-photo storage, credential minting, or protocol change. Reusable QR validity follows the owner's existing credential; it is not an expiring one-time enrollment token.

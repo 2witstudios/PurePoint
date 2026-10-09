@@ -43,6 +43,21 @@ enum ConnectionAddress {
         return url
     }
 }
+struct PairingCode: Decodable {
+    let type: String
+    let version: Int
+    let endpoint: String
+    let secret: String
+    static func parse(_ text: String) -> PairingCode? {
+        guard text.utf8.count <= 8192,
+              let code = try? JSONDecoder().decode(Self.self, from: Data(text.utf8)),
+              code.type == "pi-mobile-pairing", code.version == 1,
+              ConnectionAddress.url(code.endpoint) != nil,
+              code.secret.count >= 32, code.secret.utf8.count <= 1024,
+              !code.secret.contains("\n"), !code.secret.contains("\r") else { return nil }
+        return code
+    }
+}
 struct ChatMessage: Codable, Identifiable { let id: String; let role: String; let text: String; var activity: String?; var error: String? }
 struct ToolActivity: Codable, Identifiable { let id: String; let name: String; let state: String; let text: String }
 struct QueuedText: Codable { let mode: String; let text: String }

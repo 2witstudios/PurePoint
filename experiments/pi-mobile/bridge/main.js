@@ -4,6 +4,7 @@ import { Rpc } from "./rpc.js";
 import { Controller } from "./controller.js";
 import { serve } from "./network.js";
 import { root, launchArguments, nativeSessions, loadToken } from "./setup.js";
+import { writePairingPage, pairingPagePath } from "./pairing.js";
 async function main() {
   const fixture = process.argv.includes("--fixture");
   const env = process.env;
@@ -78,6 +79,17 @@ async function main() {
           }
         : null;
     server = await serve(controller, { host, port, token, tls });
+    const endpoint = `${tls ? "wss" : "ws"}://${host.includes(":") ? "[" + host + "]" : host}:${port}/v1`;
+    try {
+      await writePairingPage(pairingPagePath, endpoint, token);
+      console.log(
+        `Open ${pairingPagePath} locally, then use Scan Mac QR code in the iPhone app. This private page contains your pairing secret; close it when done.`,
+      );
+    } catch {
+      console.log(
+        "Pairing QR could not be saved. Manual pairing remains available; QR requires a writable ~/.config/pi-mobile directory and a secret of 32–1024 bytes without newlines.",
+      );
+    }
     console.log(
       `Pi Mobile ${fixture ? "fixture" : "bridge"} listening on ${tls ? "wss" : "ws"}://${host.includes(":") ? "[" + host + "]" : host}:${port}/v1. One controller; Pi stays running when the phone disconnects.`,
     );

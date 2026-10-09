@@ -8,11 +8,13 @@
   "scripts": {
     "start": "node bridge/main.js",
     "fixture": "node bridge/main.js --fixture",
+    "pair": "node bridge/pair.js",
     "test": "node --test bridge/*.test.js",
     "check": "tsc --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.1.0",
+    "qrcode": "1.5.4",
     "ws": "8.22.0"
   },
   "devDependencies": {
