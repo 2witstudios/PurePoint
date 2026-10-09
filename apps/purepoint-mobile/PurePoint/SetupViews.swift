@@ -140,7 +140,6 @@ struct ConnectionView: View {
                     if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
                     Button("Reconnect") { model.connect() }.disabled(endpoint.isEmpty)
                 }
-                Section { Button("Preview") { model.exploreDemo(); dismiss() } }
             }
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }

@@ -105,7 +105,7 @@ PI_MOBILE_TOKEN_FILE=/absolute/private/pairing-secret \
 npm run fixture
 ```
 
-Use your Tailscale IP instead of loopback for an actual phone. In the app, **Explore on-device preview** is a separate layout-only demo; Xcode’s preview also uses it. The RPC fixture supports:
+Use your Tailscale IP instead of loopback for an actual phone. The app opens real connection settings; there is no on-device preview option. Xcode’s development preview uses an isolated layout demo. The RPC fixture supports:
 
 | Message              | Exercise                                                                |
 | -------------------- | ----------------------------------------------------------------------- |

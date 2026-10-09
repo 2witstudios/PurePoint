@@ -112,3 +112,5 @@ Gesture grounding: Apple's [simultaneousGesture documentation](https://developer
 - The iPhone product and default Xcode scheme should be named PurePoint; mobile is the platform, not a separate PiMobile product. Existing Point Guard/PurePoint artwork remains. Renaming presentation and Xcode targets must preserve bundle identifiers, signing settings and existing credential/draft storage namespaces. Default PurePoint Run remains Release without LLDB; PurePoint-Debug retains breakpoints.
 
 - The standalone mobile module lives at apps/purepoint-mobile, alongside apps/purepoint-macos. PurePoint.xcodeproj and the app/test source folders are at the module root; bridge and dedicated docs/verification remain within that module. The owner's relocation instruction supersedes the original experiments-only path restriction.
+
+- Connection settings should offer real pairing/connection controls without an on-device Preview/demo entry point. Developer-only SwiftUI previews and the deterministic fake bridge remain available for implementation/testing.
