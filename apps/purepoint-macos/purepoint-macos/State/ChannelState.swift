@@ -20,10 +20,13 @@ final class ChannelState {
     var threadId: String?
     var threadMessages: [ChannelMessage] = []
     var threadHasMore = false
+    var unreadReplyTarget: String?
     var replyDraft = ""
     @ObservationIgnored private let sendRequest: (DaemonRequest) async throws -> DaemonResponse
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var polling: Task<Void, Never>?
+    @ObservationIgnored private var reading = false
+    @ObservationIgnored private var readWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var refreshing = false
     @ObservationIgnored private var refreshAgain = false
     @ObservationIgnored private var revision: UInt64?
@@ -81,6 +84,14 @@ final class ChannelState {
         generation += 1; loadedBefore = []; oldest = nil; revision = nil
         await refresh()
     }
+    private func acquireRead() async {
+        if reading { await withCheckedContinuation { readWaiters.append($0) } }
+        else { reading = true }
+    }
+    private func releaseRead() {
+        if readWaiters.isEmpty { reading = false }
+        else { readWaiters.removeFirst().resume() }
+    }
     func refresh() async {
         guard !refreshing else { refreshAgain = true; return }
         refreshing = true
@@ -88,6 +99,9 @@ final class ChannelState {
             refreshing = false
             if refreshAgain { refreshAgain = false; Task { await refresh() } }
         }
+        await acquireRead()
+        defer { releaseRead() }
+        guard !Task.isCancelled else { return }
         let token = generation
         isLoading = messages.isEmpty
         defer { isLoading = false }
@@ -133,6 +147,8 @@ final class ChannelState {
         advanceReadCursor()
     }
     func loadOlder() async {
+        await acquireRead(); defer { releaseRead() }
+        guard !Task.isCancelled else { return }
         guard let cursor = oldest, hasMore else { return }
         let token = generation
         do {
@@ -144,8 +160,10 @@ final class ChannelState {
     }
     func openThread(_ id: String) async {
         saveReplyDraft()
-        threadId = id; threadMessages = []; threadOldest = nil; threadHasMore = false
+        threadId = id; threadMessages = []; threadOldest = nil; threadHasMore = false; unreadReplyTarget = nil
         replyDraft = defaults.string(forKey: key("reply.\(id)")) ?? ""
+        await acquireRead(); defer { releaseRead() }
+        guard threadId == id, !Task.isCancelled else { return }
         do { try await refreshThread(id, token: generation) } catch { self.readError = error.localizedDescription }
     }
     private func refreshThread(_ id: String, token: Int) async throws {
@@ -164,6 +182,8 @@ final class ChannelState {
         threadMessages = deduplicated(all); threadOldest = cursor; threadHasMore = more
     }
     func loadOlderReplies() async {
+        await acquireRead(); defer { releaseRead() }
+        guard !Task.isCancelled else { return }
         guard let id = threadId, let cursor = threadOldest, threadHasMore else { return }
         do {
             let page = try await history(before: cursor, parent: id)
@@ -198,10 +218,20 @@ final class ChannelState {
             await loadOlder()
             if oldest == previous { break }
         }
-        if let parent = first.parentId { await openThread(parent); return parent }
+        if let parent = first.parentId {
+            await openThread(parent)
+            while threadId == parent, !threadMessages.contains(where: { $0.id == first.id }), threadHasMore {
+                let previous = threadOldest
+                await loadOlderReplies()
+                if threadOldest == previous { break }
+            }
+            if threadId == parent { unreadReplyTarget = first.id }
+            return parent
+        }
         return first.id
     }
     func markUnread(_ message: ChannelMessage) {
+        generation += 1
         readSequence = min(readSequence, message.sequence - 1)
         seenSequences = seenSequences.filter { $0 < message.sequence }
         unreadScannedThrough = min(unreadScannedThrough, readSequence)
@@ -218,6 +248,7 @@ final class ChannelState {
         let targetParent = reply ? threadId : nil
         let text = reply ? replyDraft : draft
         guard !isSending, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if reply { saveReplyDraft() }
         isSending = true; defer { isSending = false }
         do {
             try await mutate(.channelSend(projectRoot: projectRoot, text: text, parentId: targetParent))

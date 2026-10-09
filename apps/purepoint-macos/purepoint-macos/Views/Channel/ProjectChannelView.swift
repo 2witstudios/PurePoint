@@ -3,6 +3,9 @@ import SwiftUI
 struct ProjectChannelView: View {
     let project: ProjectState
     var compact = false
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visibleMessageIds: Set<String> = []
+    @State private var threadVisible = false
     @State private var atBottom = true
     @State private var timelineAnchor: String?
     @State private var searchVisible = false
@@ -80,7 +83,9 @@ struct ProjectChannelView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear { unreadBoundary = channel.readSequence; searchText = channel.query; channel.start() }
-        .onDisappear { channel.stop() }
+        .onDisappear { visibleMessageIds = []; threadVisible = false; channel.stop() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { markVisibleMessages() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markVisibleMessages() }
         .sheet(item: $referenceSelection) { selection in ChannelReferenceView(project: project, selection: selection) }
         .sheet(item: $editing) { message in
             VStack(alignment: .leading, spacing: 14) {
@@ -111,7 +116,7 @@ struct ProjectChannelView: View {
                         if previous == nil || day(previous!.createdAt) != day(message.createdAt) {
                             HStack { Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1); Text(day(message.createdAt)).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary); Rectangle().fill(Color.secondary.opacity(0.15)).frame(height: 1) }.padding(.horizontal, 20).padding(.vertical, 16)
                         }
-                        messageRow(message, grouped: grouped(message, previous)).id(message.id).onAppear { channel.markVisible(message) }
+                        messageRow(message, grouped: grouped(message, previous)).id(message.id).onScrollVisibilityChange(threshold: 0.5) { visible in observe(message, visible: visible) }
                         if !channel.query.isEmpty {
                             ForEach(channel.messages.filter { $0.parentId == message.id }) { reply in
                                 messageRow(reply).padding(.leading, 46).background(Color.accentColor.opacity(0.035))
@@ -120,8 +125,7 @@ struct ProjectChannelView: View {
                         if channel.threadId == message.id { thread(message.id).padding(.leading, 58).padding(.trailing, 20) }
                     }
                     Color.clear.frame(height: 1).id("channel-bottom")
-                        .onAppear { atBottom = true }
-                        .onDisappear { atBottom = false }
+                        .onScrollVisibilityChange(threshold: 0.5) { atBottom = $0 }
                 }.padding(.bottom, 12).scrollTargetLayout()
             }
             .scrollPosition(id: $timelineAnchor)
@@ -184,13 +188,18 @@ struct ProjectChannelView: View {
         VStack(spacing: 0) {
             Divider()
             HStack { Text("Thread").font(.system(size: 12, weight: .semibold)); Spacer(); Button { channel.saveReplyDraft(); channel.threadId = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Close thread") }.padding(12)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let parent = channel.messages.first(where: { $0.id == id }) { messageRow(parent) }
-                    if channel.threadHasMore { Button("Load older replies") { Task { await channel.loadOlderReplies() } }.padding(12) }
-                    ForEach(channel.threadMessages) { message in messageRow(message).onAppear { channel.markVisible(message) } }
-                }
-            }.frame(maxHeight: 220)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if channel.threadHasMore { Button("Load older replies") { Task { await channel.loadOlderReplies() } }.padding(12) }
+                        ForEach(channel.threadMessages) { message in
+                            messageRow(message).id(message.id).onScrollVisibilityChange(threshold: 0.5) { visible in observe(message, visible: visible) }
+                        }
+                    }.scrollTargetLayout()
+                }.frame(maxHeight: 220)
+                    .task(id: channel.unreadReplyTarget) { if let target = channel.unreadReplyTarget { await Task.yield(); proxy.scrollTo(target, anchor: .center) } }
+            }.onScrollVisibilityChange(threshold: 0.2) { visible in threadVisible = visible; if visible { markVisibleMessages() } }
+
             composer(reply: true)
         }.background(Color.secondary.opacity(0.035))
     }
@@ -213,6 +222,16 @@ struct ProjectChannelView: View {
             }.padding(.horizontal, 10).padding(.bottom, 8)
         }.background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2))).padding(.horizontal, 16).padding(.vertical, 12)
         .onChange(of: channel.replyDraft) { _, _ in if reply { channel.saveReplyDraft() } }
+    }
+    private func observe(_ message: ChannelMessage, visible: Bool) {
+        if visible { visibleMessageIds.insert(message.id) } else { visibleMessageIds.remove(message.id) }
+        if visible { markVisibleMessages() }
+    }
+    private func markVisibleMessages() {
+        guard NSApp.isActive, scenePhase == .active, editing == nil, referenceSelection == nil, channel.query.isEmpty else { return }
+        for message in channel.messages + channel.threadMessages where visibleMessageIds.contains(message.id) {
+            if message.parentId == nil || (threadVisible && channel.threadId == message.parentId) { channel.markVisible(message) }
+        }
     }
     private var humanAuthors: [ChannelAuthor] {
         var values: [String: ChannelAuthor] = [:]
