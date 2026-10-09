@@ -18,6 +18,7 @@ final class AppState {
     var pendingSelectWorkspaceId: String?
     var pendingFocusAgentId: String?
 
+    @ObservationIgnored lazy var pointGuardChat = PiChatModel()
     var pointGuardShellId: String?
 
     var agentsHubState = AgentsHubState()

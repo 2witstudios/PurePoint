@@ -60,13 +60,13 @@ From the CLI, `pu grid show` lists each pane's tabs, `pu grid tab new --agent <i
 
 ## Point Guard
 
-Point Guard is where you direct the work. It's a terminal that auto-launches your configured coding agent (Claude Code by default). From here you can:
+Point Guard opens a native Pi chat with selectable rich responses, copyable code and expandable tool activity. Search and resume native Pi conversations from the sidebar. Keep typing while Pi works; use **Send after reply** or **Steer current work** for busy sends. **Stop** cancels the Pi run and queued messages while delegated PurePoint workers continue. Uncertain or canceled sends have explicit Restore/Dismiss actions and are never resent automatically.
 
-- Spawn agents and delegate tasks
-- Start new projects
-- Direct and coordinate ongoing work
+Start the [Pi bridge](../../../apps/purepoint-mobile/README.md#mac-setup), then open **Settings → Point Guard**. Enter its address ending in `/v1` (use the Tailscale address if that is where it listens) and the pairing secret file, normally `~/.config/pi-mobile/pairing-secret`. Connect imports the secret into desktop Keychain. Desktop and phone can stay connected simultaneously: both see the same live conversation, tools, queue and session changes, and both can send or Stop. The bridge serializes actions; the first dialog answer wins. Canceled queued text returns to its originating device. Disconnecting one client leaves Pi and the other clients running. Both apps and the bridge use the initial v1 contract at `/v1`.
 
-Your conversation history lives in the sidebar — search past sessions and resume where you left off. Configure the launch command and permissions in Settings. Supports Claude, Codex, and OpenCode.
+Pi is a global assistant: name the project when directing work. The current workspace is shown as context; selecting it does not silently change Pi's working folder.
+
+Choose **Shell** above the chat for the existing terminal and Claude/Codex/OpenCode conversation history. Configure the shell launch command and permissions in Settings; an empty command opens an ordinary shell. Agent workspaces retain their split panes, shell tabs and file tabs.
 
 ## Diff viewer
 
@@ -94,7 +94,7 @@ Browse schedules in month, week, day, or list view. See upcoming scheduled runs 
 Access via the settings panel:
 
 - **General**: Restore projects on launch, launch at login, command palette order. Use the up/down arrows to reorder built-in agents and custom commands from the Agents Hub in `Cmd+N`. The first entry is selected by default. Changes persist across launches; Reset restores the default order.
-- **Point Guard**: Configure launch command and skip-permissions for the root terminal
+- **Point Guard**: Connect Pi chat to the bridge; configure launch command and skip-permissions for Shell mode
 - **Agents**: Per-agent configuration (launch arguments for Claude, Codex, OpenCode)
 - **Hotkeys**: Rebind all keyboard shortcuts with live key recording and conflict detection
 - **Display**: Appearance preferences, terminal font size, grid gap

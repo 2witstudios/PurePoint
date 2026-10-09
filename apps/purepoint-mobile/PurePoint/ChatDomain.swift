@@ -162,12 +162,12 @@ enum TranscriptRows {
         return rows
     }
 }
-struct QueuedText: Codable, Sendable { let mode: String; let text: String }
+struct QueuedText: Codable, Sendable { let id: String; let clientId: String?; let mode: String; let text: String }
 struct ExtensionDialog: Codable, Identifiable, Sendable {
     let id: String; let method: String; var title: String?; var message: String?; var prefill: String?; var placeholder: String?; var options: [String]?; var optionIds: [String]? = nil
 }
 struct EditorText: Codable, Sendable { let id: String; let text: String }
-struct CanceledText: Codable, Identifiable, Sendable { let id: String; let text: String; let sessionId: String }
+struct CanceledText: Codable, Identifiable, Sendable { let clientId: String?; let id: String; let text: String; let sessionId: String }
 struct Snapshot: Codable, Sendable {
     let version: Int; let epoch: String; let revision: Int; let busy: Bool; var runId: String?; let sessionId: String; let title: String
     let messages: [ChatMessage]; let tools: [ToolActivity]; let queue: [QueuedText]; let dialogs: [ExtensionDialog]; let notices: [String]; var error: String?; var editor: EditorText? = nil; var canceled: [CanceledText]? = nil; var capabilities: [String]? = nil

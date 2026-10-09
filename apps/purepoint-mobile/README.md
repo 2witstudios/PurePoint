@@ -37,7 +37,9 @@ npm start
 
 Use the printed address, such as `ws://100.x.y.z:8787/v1`, in the app’s Connection screen. A literal `100.x.y.z` is an example; replace it with the actual IP. Public, LAN and wildcard binds are refused. Tailnet traffic is encrypted by Tailscale; no port forwarding/public exposure is assumed. Optional `PI_MOBILE_TLS_CERT` and `PI_MOBILE_TLS_KEY` enable `wss` with an owner-provided certificate trusted by iOS. Certificate verification is never bypassed. A `.ts.net` endpoint is also accepted by the app; the listener still binds to an explicit Tailscale IP.
 
-Only **one controller** connects at a time. A second phone gets an HTTP 409 rejection; disconnect the first phone or wait for its heartbeat to time out. Heartbeats detect dead sockets. The bridge’s Ctrl-C closes Pi gracefully; losing a phone connection does not. This is a foreground Mac process, without launchd or wake guarantees.
+**Desktop and phone connect simultaneously to one live Pi session.** Each authenticated client receives the same revisioned messages, tool activity, queue, dialogs and session changes. Both can send or Stop; the bridge serializes mutations, rejects stale session/run targets, and accepts the first dialog answer. Canceled queued text is recovered only on the device that submitted it. Drafts and delivery receipts remain local. Disconnecting one client leaves other clients and Pi running. Up to 32 clients are allowed; heartbeats and per-client backlog limits isolate disconnected or slow devices. The bridge’s Ctrl-C closes Pi gracefully. This is a foreground Mac process, without launchd or wake guarantees.
+
+The shared protocol is **v1**, at `/v1`. Phone and desktop implement the same initial contract; there are no compatibility endpoints, wire fallbacks or migration layers.
 
 Optional environment settings:
 
@@ -138,7 +140,7 @@ swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
 plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
 ```
 
-Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, single-controller/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK.
+Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, concurrent clients/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK.
 
 GitHub Actions runs bridge tests and typechecking, standalone Swift logic/responsiveness/recovery checks, and iOS simulator XCTest for mobile changes. The required `Build & Test` check reports on every PR and requires all applicable component jobs to pass; unrelated changes skip component jobs without leaving the required status pending. macOS/Rust changes retain the desktop build and test job. Physical-device and visual acceptance remain owner checks.
 
@@ -147,6 +149,7 @@ Owner acceptance checks:
 - In light/dark and large Dynamic Type, read/select prose, expand tools and copy code; inspect VoiceOver control labels, landscape and small-screen spacing.
 - Type a multiline/IME draft. Send only with the button; keep typing during acceptance/streaming. Confirm later typing stays intact.
 - Queue Steer and After reply during `/fixture-slow`. Stop; restore the canceled text. Confirm a stale Stop cannot affect later work.
+- Keep desktop and phone connected: send from either, confirm matching messages/tools, race dialog answers/session changes, queue from both and Stop from the other device. Each receives only its own canceled draft recovery.
 - Background/force-close/disconnect the phone while work runs. Reconnect: no resend, one authoritative message per turn, partial output/tools visible. Unacknowledged submissions remain recoverable with an uncertain-delivery explanation.
 - Browse history during work. Resuming/new requires an explicit Stop decision while busy. Verify real native tree/compaction sessions display only the active branch and summary markers.
 - Exercise all fixture dialogs, dismiss one, reconnect during one, and test an extension editor offer with an existing draft.

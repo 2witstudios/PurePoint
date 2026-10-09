@@ -29,7 +29,14 @@ class Runtime extends EventEmitter {
   }
 }
 const request = (c, op, data = {}) =>
-  c.request({ version: 1, id: crypto.randomUUID(), op, ...data });
+  c.request({
+    version: 1,
+    clientId: "test-client",
+    id: crypto.randomUUID(),
+    epoch: c.epoch,
+    op,
+    ...data,
+  });
 test("stop clears queue before abort and rejects stale run targets", async () => {
   const rpc = new Runtime();
   const c = new Controller(rpc, {});
@@ -103,6 +110,7 @@ test("unknown versions and duplicate request ids cannot execute work", async () 
   );
   const r = {
     version: 1,
+    clientId: "test-client",
     id: "same",
     op: "send",
     text: "once",
@@ -236,7 +244,10 @@ test("selection IDs should preserve original values despite clipped or colliding
       method: "select",
       options: ["Short option"],
     });
-    await request(c, "answer", { dialogId: "legacy", value: "Short option" });
+    await request(c, "answer", {
+      dialogId: "legacy",
+      optionId: c.snapshot().dialogs[0].optionIds[0],
+    });
     assert.equal(rpc.answerValue.value, "Short option");
   } finally {
     c.dispose();
@@ -711,6 +722,7 @@ test("invalid or overcapacity Stop requests never cancel dialogs", async () => {
     });
     const base = {
       version: 1,
+      clientId: "test-client",
       id: "stop-invalid",
       op: "stop",
       epoch: c.epoch,
@@ -970,6 +982,70 @@ test("a failed Stop retains other queued Stop markers until their own cleanup", 
     firstClear.resolve({});
     secondClear.resolve({});
     await Promise.allSettled(stops);
+    c.dispose();
+  }
+});
+
+test("identical queued prompts keep FIFO ownership when the first starts running", async () => {
+  const rpc = new Runtime();
+  const original = rpc.call.bind(rpc);
+  rpc.call = async (op) =>
+    op === "prompt" ? { disposition: "queued" } : original(op);
+  const c = new Controller(rpc, {});
+  try {
+    await c.refresh();
+    rpc.emit("event", { type: "agent_start" });
+    await request(c, "send", {
+      clientId: "phone",
+      text: "Same prompt",
+      mode: "after",
+      epoch: c.epoch,
+    });
+    c.event({ type: "queue_update", followUp: ["Same prompt"] });
+    await request(c, "send", {
+      clientId: "desktop",
+      text: "Same prompt",
+      mode: "after",
+      epoch: c.epoch,
+    });
+    c.event({ type: "queue_update", followUp: ["Same prompt", "Same prompt"] });
+    const secondId = c.queue[1].id;
+    c.event({ type: "queue_update", followUp: ["Same prompt"] });
+    assert.equal(c.queue[0].id, secondId);
+    assert.equal(c.queue[0].clientId, "desktop");
+    rpc.queue = [];
+    rpc.call = async (op) =>
+      op === "clear_queue"
+        ? { followUp: ["Same prompt"], steering: [] }
+        : original(op);
+    await request(c, "stop", {
+      epoch: c.epoch,
+      runId: c.runId,
+      clientId: "phone",
+    });
+    assert.equal(c.canceled[0].clientId, "desktop");
+    assert.equal(c.canceled[0].id, secondId);
+  } finally {
+    c.dispose();
+  }
+});
+
+test("v1 requires client identity and scopes duplicate request IDs per client", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    await c.refresh();
+    await assert.rejects(
+      c.request({ version: 1, id: "missing", op: "sync" }),
+      /client identity/,
+    );
+    await request(c, "sync", { id: "same", clientId: "phone" });
+    await request(c, "sync", { id: "same", clientId: "desktop" });
+    await assert.rejects(
+      request(c, "sync", { id: "same", clientId: "phone" }),
+      /already received/,
+    );
+  } finally {
     c.dispose();
   }
 });

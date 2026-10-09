@@ -7,11 +7,40 @@ struct PointGuardView: View {
     @Environment(SettingsState.self) private var settingsState
     @State private var sessionList = SessionListState()
     @State private var showSidebar = true
+    @AppStorage("PP_pointGuardShowShell") private var showShell = false
     @State private var shellAgentId: String?
     @State private var selectedSessionId: String?
     @State private var shellError: String?
 
     var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("Point Guard mode", selection: $showShell) {
+                    Text("Chat").tag(false)
+                    Text("Shell").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+                Spacer()
+                Text("Point Guard")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            Divider()
+            if showShell {
+                shellContent
+            } else {
+                PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar)
+            }
+        }
+        .task { appState.pointGuardChat.connect() }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
+            showSidebar.toggle()
+        }
+    }
+
+    private var shellContent: some View {
         HSplitView {
             if showSidebar {
                 ConversationSidebarView(
@@ -76,9 +105,6 @@ struct PointGuardView: View {
         }
         .task {
             await spawnShell()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
-            showSidebar.toggle()
         }
     }
 

@@ -19,6 +19,8 @@ export class Controller extends EventEmitter {
     this.busy = false;
     this.state = {};
     this.queue = [];
+    this.queueOrigins = [];
+    this.nativeQueue = [];
     this.canceled = [];
     this.dialogs = new Map();
     this.notices = [];
@@ -109,17 +111,51 @@ export class Controller extends EventEmitter {
       this.notice(
         `Extension ${clip(basename(e.extensionPath || "unknown"), 200)} failed during ${clip(e.event || "unknown hook", 100)}: ${clip(e.error || "Unknown error", 3500)}`,
       );
-    if (e.type === "queue_update")
-      this.queue = [
-        ...(e.steering ?? []).map((text) => ({
-          mode: "steer",
-          text: clip(text),
-        })),
-        ...(e.followUp ?? []).map((text) => ({
-          mode: "after",
-          text: clip(text),
-        })),
-      ].slice(0, 100);
+    if (e.type === "queue_update") {
+      const previousIds = new Set(this.nativeQueue.map((item) => item.id));
+      const available = this.queueOrigins.filter(
+        (item) => !previousIds.has(item.id),
+      );
+      const next = [];
+      for (const [mode, texts] of [
+        ["steer", e.steering ?? []],
+        ["after", e.followUp ?? []],
+      ]) {
+        const previous = this.nativeQueue.filter((item) => item.mode === mode);
+        // Pi dequeues from the front and appends at the back. Preserve the
+        // surviving suffix, so identical prompts from different clients retain
+        // their correct owners after the first occurrence starts running.
+        let overlap = Math.min(previous.length, texts.length);
+        while (
+          overlap > 0 &&
+          !previous
+            .slice(previous.length - overlap)
+            .every((item, index) => item.text === texts[index])
+        )
+          overlap--;
+        next.push(...previous.slice(previous.length - overlap));
+        for (const text of texts.slice(overlap)) {
+          const index = available.findIndex(
+            (item) => item.mode === mode && item.text === text,
+          );
+          const origin = index < 0 ? null : available.splice(index, 1)[0];
+          next.push({
+            id: origin?.id ?? randomUUID(),
+            clientId: origin?.clientId ?? null,
+            mode,
+            text,
+          });
+        }
+      }
+      this.nativeQueue = next;
+      const nextIds = new Set(next.map((item) => item.id));
+      this.queueOrigins = this.queueOrigins.filter(
+        (item) => !previousIds.has(item.id) || nextIds.has(item.id),
+      );
+      this.queue = next
+        .slice(0, 100)
+        .map((item) => ({ ...item, text: clip(item.text) }));
+    }
     if (e.type === "extension_ui_request") {
       const method = e.method;
       if (["confirm", "select", "input", "editor"].includes(method)) {
@@ -286,19 +322,28 @@ export class Controller extends EventEmitter {
       throw new Error(
         "Unsupported bridge protocol version. Update the app and bridge together.",
       );
+    if (
+      typeof r.clientId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,100}$/.test(r.clientId)
+    )
+      throw new Error("Request requires a client identity");
     if (typeof r.id !== "string" || r.id.length > 100 || !r.id)
       throw new Error("Request requires a unique ID");
-    if (this.seen.has(r.id))
+    const requestKey = `${r.clientId}:${r.id}`;
+    if (this.seen.has(requestKey))
       throw new Error(
         "Request already received. Inspect history; it will not be replayed.",
       );
-    this.seen.add(r.id);
+    this.seen.add(requestKey);
     if (this.seen.size > 2000)
       this.seen.delete(this.seen.values().next().value);
   }
   async request(r) {
     this.validate(r);
-    if (r.op === "answer") return this.answer(r);
+    if (r.op === "answer") {
+      this.checkEpoch(r);
+      return this.answer(r);
+    }
     if (r.op === "sync") return this.refresh();
     if (r.op === "sessions")
       return {
@@ -321,7 +366,7 @@ export class Controller extends EventEmitter {
     this.pendingMutations++;
     try {
       if (r.op === "stop") {
-        this.stops.set(r.id, r.runId);
+        this.stops.set(`${r.clientId}:${r.id}`, r.runId);
         this.cancelDialogs();
       }
       const operation = this.serial.then(async () => {
@@ -346,7 +391,7 @@ export class Controller extends EventEmitter {
       return await operation;
     } finally {
       this.pendingMutations--;
-      this.stops.delete(r.id);
+      this.stops.delete(`${r.clientId}:${r.id}`);
     }
   }
   checkEpoch(r) {
@@ -390,13 +435,38 @@ export class Controller extends EventEmitter {
         throw new Error(
           "No Pi model configured. Open local Pi and configure a provider/model first.",
         );
-      const result = await this.rpc.call("prompt", {
-        message: r.text,
-        ...(images.length ? { images } : {}),
-        ...(r.mode === "send"
-          ? {}
-          : { streamingBehavior: r.mode === "steer" ? "steer" : "followUp" }),
-      });
+      const queued = r.mode !== "send";
+      const originId = `${r.clientId}:${r.id}`;
+      if (queued) {
+        if (this.queueOrigins.length >= 100 || this.nativeQueue.length >= 100)
+          throw new Error("Queue is full. Wait for Pi before sending more.");
+        this.queueOrigins.push({
+          id: originId,
+          clientId: r.clientId,
+          mode: r.mode,
+          text: r.text,
+        });
+      }
+      let result;
+      try {
+        result = await this.rpc.call("prompt", {
+          message: r.text,
+          ...(images.length ? { images } : {}),
+          ...(r.mode === "send"
+            ? {}
+            : { streamingBehavior: r.mode === "steer" ? "steer" : "followUp" }),
+        });
+      } catch (error) {
+        if (!this.queue.some((item) => item.id === originId))
+          this.queueOrigins = this.queueOrigins.filter(
+            (item) => item.id !== originId,
+          );
+        throw error;
+      }
+      if (result.disposition !== "queued")
+        this.queueOrigins = this.queueOrigins.filter(
+          (item) => item.id !== originId,
+        );
       if (result.disposition === "handled") {
         // An extension may change sessions/branches without emitting agent events.
         await this.refreshFresh();
@@ -406,18 +476,28 @@ export class Controller extends EventEmitter {
     if (r.op === "stop") {
       this.checkRun(r);
       const run = this.runId;
+      const origins = [...this.queueOrigins];
       const recovered = await this.rpc.call("clear_queue");
       const texts = [
-        ...(recovered.steering ?? []),
-        ...(recovered.followUp ?? []),
+        ...(recovered.steering ?? []).map((text) => ({ mode: "steer", text })),
+        ...(recovered.followUp ?? []).map((text) => ({ mode: "after", text })),
       ];
       this.canceled.push(
-        ...texts.map((text, index) => ({
-          id: `${r.id}:${index}`,
-          text: clip(text),
-          sessionId: this.state.sessionId,
-        })),
+        ...texts.map(({ mode, text }, index) => {
+          const position = origins.findIndex(
+            (origin) => origin.mode === mode && origin.text === text,
+          );
+          const origin = position < 0 ? null : origins.splice(position, 1)[0];
+          return {
+            id: origin?.id ?? `${r.clientId}:${r.id}:${index}`,
+            clientId: origin?.clientId ?? null,
+            text: clip(text),
+            sessionId: this.state.sessionId,
+          };
+        }),
       );
+      this.queueOrigins = [];
+      this.nativeQueue = [];
       this.canceled = this.canceled.slice(-100);
       this.changed();
       // Native completion or extension activity can happen while queue clearing is in flight.
@@ -459,6 +539,8 @@ export class Controller extends EventEmitter {
     this.editorOffer = this.transition?.editorOffer ?? null;
     this.titleOverride = this.transition?.titleOverride ?? null;
     this.queue = [];
+    this.queueOrigins = [];
+    this.nativeQueue = [];
     this.notices = this.transition ? [...this.transition.notices] : [];
     this.statuses = new Map(this.transition?.statuses);
     this.widgets = new Map(this.transition?.widgets);
@@ -483,26 +565,9 @@ export class Controller extends EventEmitter {
         throw new Error("Choose Allow or Decline");
       result.confirmed = r.confirmed;
     } else if (d.method === "select") {
-      if (r.optionId !== undefined) {
-        const index = d.optionIds.indexOf(r.optionId);
-        if (index < 0) throw new Error("Choose an offered option");
-        result.value = item.originalOptions[index];
-      } else {
-        // Older clients can answer an unchanged label only when all matching
-        // labels have that exact native value. Clipped/colliding labels fail visibly.
-        const matches = d.options.flatMap((label, index) =>
-          label === r.value ? [index] : [],
-        );
-        if (
-          typeof r.value !== "string" ||
-          !matches.length ||
-          !matches.every((index) => item.originalOptions[index] === r.value)
-        )
-          throw new Error(
-            "Choose an offered option; update the app to select truncated labels",
-          );
-        result.value = r.value;
-      }
+      const index = d.optionIds.indexOf(r.optionId);
+      if (index < 0) throw new Error("Choose an offered option ID");
+      result.value = item.originalOptions[index];
     } else {
       if (
         typeof r.value !== "string" ||
