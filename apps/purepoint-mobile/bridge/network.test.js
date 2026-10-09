@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { serve, allowedHost } from "./network.js";
 const token = "test-only-token-not-a-real-credential-0000";
-function connect(url, auth = token, clientId = crypto.randomUUID()) {
+function connect(url, auth = token, clientId = "desktop") {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
       headers: {
@@ -28,7 +28,7 @@ test("tailnet bind policy rejects wildcard and public hosts", () => {
 test("authenticated concurrent clients share broadcasts and disconnect independently", async () => {
   const c = new EventEmitter();
   c.request = async (r) => ({ received: r.op });
-  const server = await serve(c, { host: "127.0.0.1", port: 0, token });
+  const server = await serve(c, { host: "127.0.0.1", port: 0, localAdmin: { token, clientId: "desktop" } });
   try {
     const url = `ws://127.0.0.1:${server.address().port}/v1`;
     await assert.rejects(connect(url, "wrong"));
@@ -74,19 +74,19 @@ test("v1 rejects unsupported paths, missing device headers and identity spoofing
     dispatched++;
     return {};
   };
-  const server = await serve(c, { host: "127.0.0.1", port: 0, token });
+  const server = await serve(c, { host: "127.0.0.1", port: 0, localAdmin: { token, clientId: "desktop" } });
   try {
     const base = `ws://127.0.0.1:${server.address().port}`;
     await assert.rejects(connect(base + "/unsupported"));
     await assert.rejects(connect(base + "/v1", token, ""));
-    const ws = await connect(base + "/v1", token, "phone");
+    const ws = await connect(base + "/v1", token, "desktop");
     const receipt = new Promise((resolve) =>
       ws.once("message", (bytes) => resolve(JSON.parse(bytes.toString()))),
     );
     ws.send(
       JSON.stringify({
         version: 1,
-        clientId: "desktop",
+        clientId: "phone",
         id: "spoof",
         op: "sync",
       }),
@@ -102,7 +102,7 @@ test("v1 rejects unsupported paths, missing device headers and identity spoofing
 test("concurrent clients are bounded and share one broadcaster without listener leaks", async () => {
   const c = new EventEmitter();
   c.request = async () => ({});
-  const server = await serve(c, { host: "127.0.0.1", port: 0, token });
+  const server = await serve(c, { host: "127.0.0.1", port: 0, localAdmin: { token, clientId: "desktop" } });
   const clients = [];
   try {
     const url = `ws://127.0.0.1:${server.address().port}/v1`;
