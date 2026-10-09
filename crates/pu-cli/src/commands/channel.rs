@@ -65,11 +65,6 @@ fn resolve_root(
         ));
     }
     let common = PathBuf::from(String::from_utf8_lossy(&git.stdout).trim());
-    if common.file_name().is_some_and(|name| name == ".git") {
-        return Ok(std::fs::canonicalize(common.parent().expect("git parent"))?
-            .to_string_lossy()
-            .into_owned());
-    }
     // The primary checkout can use a separate metadata directory. Its own
     // gitdir equals common-dir, so show-toplevel is safe for that checkout.
     let own = std::process::Command::new("git")
@@ -101,11 +96,13 @@ fn resolve_root(
             .split(|b| *b == 0)
             .find_map(|field| field.strip_prefix(b"worktree "))
         {
-            return Ok(std::fs::canonicalize(Path::new(
-                &String::from_utf8_lossy(root).into_owned(),
-            ))?
-            .to_string_lossy()
-            .into_owned());
+            let candidate =
+                std::fs::canonicalize(Path::new(&String::from_utf8_lossy(root).into_owned()))?;
+            let manifest = pu_core::manifest::read_manifest(&candidate).map_err(|error| CliError::Other(format!("Git cannot identify an initialized primary project ({error}); use --project-root or PU_PROJECT_ROOT")))?;
+            if std::fs::canonicalize(&manifest.project_root)? != candidate {
+                return Err(CliError::Other("Git primary checkout does not match its project manifest; use --project-root or PU_PROJECT_ROOT".into()));
+            }
+            return Ok(candidate.to_string_lossy().into_owned());
         }
     }
     Err(CliError::Other(
@@ -125,6 +122,15 @@ pub async fn run(
         &std::env::current_dir()?,
     )?;
     let agent_id = std::env::var("PU_AGENT_ID").ok();
+    run_with_context(socket, project_root, agent_id, action).await
+}
+
+async fn run_with_context(
+    socket: &Path,
+    project_root: String,
+    agent_id: Option<String>,
+    action: ChannelAction,
+) -> Result<(), CliError> {
     let (request, json) = match action {
         ChannelAction::Send {
             text,

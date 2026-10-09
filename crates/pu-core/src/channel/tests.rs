@@ -445,3 +445,68 @@ fn given_invalid_inputs_should_reject_without_mutation() {
     assert!(store.react(&author.id, &parent.id, "", true).is_err());
     assert_eq!(store.read(&ReadOptions::default()).unwrap().revision, 2);
 }
+
+#[test]
+#[ignore = "invoked as a subprocess by the cross-process locking proof"]
+fn channel_process_writer() {
+    let root = std::env::var("PU_CHANNEL_TEST_ROOT").expect("isolated test root");
+    let writer = std::env::var("PU_CHANNEL_TEST_WRITER").expect("writer ID");
+    let author = ChannelAuthor {
+        id: format!("human:{writer}"),
+        name: format!("Writer {writer}"),
+        kind: "human".into(),
+        agent_type: None,
+        worktree_id: None,
+        branch: None,
+    };
+    let store = ChannelStore::new(Path::new(&root));
+    for i in 0..20 {
+        store
+            .send(author.clone(), format!("{writer}/{i}"), None, vec![])
+            .unwrap();
+    }
+}
+#[test]
+fn given_concurrent_processes_should_serialize_durable_updates() {
+    let (dir, _) = setup();
+    let executable = std::env::current_exe().unwrap();
+    let children: Vec<_> = (0..4)
+        .map(|writer| {
+            std::process::Command::new(&executable)
+                .args([
+                    "--exact",
+                    "channel::tests::channel_process_writer",
+                    "--ignored",
+                ])
+                .env("PU_CHANNEL_TEST_ROOT", dir.path())
+                .env("PU_CHANNEL_TEST_WRITER", writer.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let history = ChannelStore::new(dir.path())
+        .read(&ReadOptions::default())
+        .unwrap();
+    assert_eq!(history.messages.len(), 80);
+    assert_eq!(history.latest_sequence, 80);
+    assert_eq!(history.revision, 80);
+    assert_eq!(
+        history
+            .messages
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect::<HashSet<_>>()
+            .len(),
+        80
+    );
+}
