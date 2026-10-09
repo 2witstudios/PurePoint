@@ -1,136 +1,202 @@
 import Foundation
 import Observation
+import AppKit
 
 nonisolated enum DiffTab: String, CaseIterable {
-    case unstaged = "Unstaged Changes"
+    case branch = "Branch Changes"
+    case unstaged = "Uncommitted"
+    case commits = "Commits"
     case prDiffs = "PR Diffs"
 }
 
 @Observable
 @MainActor
 final class DiffState {
-    var activeTab: DiffTab = .unstaged
-    var unstagedDiff: DiffData?
+    var activeTab: DiffTab = .branch
+    var branchDiff: [FileDiff] = []
+    var stagedDiff: [FileDiff] = []
+    var unstagedDiff: [FileDiff] = []
+    var untrackedDiff: [FileDiff] = []
+    var commits: [GitCommitInfo] = []
+    var selectedCommit: GitCommitInfo?
+    var commitDiff: [FileDiff] = []
+    var comparisonBase = ""
+    var availableBases: [String] = []
+    var branchError: String?
+    var localError: String?
+    var prError: String?
+    var isLoadingBranch = false
     var isLoadingUnstaged = false
+    var isLoadingCommit = false
     var pullRequests: [PullRequestInfo] = []
     var selectedPR: PullRequestInfo?
     var prDiff: DiffData?
     var isLoadingPRs = false
     var isLoadingPRDiff = false
-    var error: String?
     var ghAvailable = true
+    var error: String? { branchError ?? localError ?? prError }
+    var localFileCount: Int { Set((stagedDiff + unstagedDiff + untrackedDiff).map(\.filename)).count }
+
+    private let git: GitService
+    init(gitService: GitService = .shared) { git = gitService }
 
     private var watcher: WorktreeWatcher?
-    private var currentWorktreePath: String?
-    private var currentProjectRoot: String?
-    private var unstagedTask: Task<Void, Never>?
+    private var path: String?
+    private var branch: String?
+    private var requestedBase: String?
+    private var generation = UUID()
+    private var localTask: Task<Void, Never>?
     private var prTask: Task<Void, Never>?
-
-    // MARK: - Load for Worktree
+    private var commitTask: Task<Void, Never>?
+    private var prDiffTask: Task<Void, Never>?
+    private var pollingTask: Task<Void, Never>?
+    private var initialPRSelectionMade = false
+    private var lastPRRefresh = Date.distantPast
 
     func loadForWorktree(_ worktree: WorktreeModel) {
-        let path = worktree.path
-        let branch = worktree.branch
-        currentWorktreePath = path
-        currentProjectRoot = nil
-
-        unstagedTask?.cancel()
-        prTask?.cancel()
-        unstagedTask = Task { await fetchUnstaged(path: path) }
-        prTask = Task { await fetchPRs(cwd: path, branch: branch) }
-
-        startWatching(path: path)
+        load(path: worktree.path, branch: worktree.branch, base: worktree.baseBranch)
     }
+    func loadForProject(root: String) { load(path: root, branch: nil, base: nil) }
+    func loadForProject(projectRoot: String) { loadForProject(root: projectRoot) }
 
-    // MARK: - Load for Project
-
-    func loadForProject(projectRoot: String) {
-        currentProjectRoot = projectRoot
-        currentWorktreePath = nil
-
-        unstagedTask?.cancel()
-        prTask?.cancel()
-        unstagedTask = Task { await fetchUnstaged(path: projectRoot) }
-        prTask = Task { await fetchPRs(cwd: projectRoot, branch: nil) }
-
-        startWatching(path: projectRoot)
-    }
-
-    // MARK: - PR Selection
-
-    func selectPR(_ pr: PullRequestInfo) {
-        selectedPR = pr
-        let cwd = currentWorktreePath ?? currentProjectRoot ?? ""
-        guard !cwd.isEmpty else { return }
-
-        isLoadingPRDiff = true
-        prDiff = nil
-
-        Task {
-            let diff = await GitService.shared.fetchPRDiff(cwd: cwd, prNumber: pr.number)
-            guard !Task.isCancelled else { return }
-            self.prDiff = diff
-            self.isLoadingPRDiff = false
+    private func load(path: String, branch: String?, base: String?) {
+        stopWatching()
+        self.path = path; self.branch = branch; requestedBase = base
+        initialPRSelectionMade = false
+        activeTab = .branch; comparisonBase = base ?? ""; availableBases = []
+        branchDiff = []; stagedDiff = []; unstagedDiff = []; untrackedDiff = []
+        commits = []; selectedCommit = nil; commitDiff = []
+        pullRequests = []; selectedPR = nil; prDiff = nil
+        branchError = nil; localError = nil; prError = nil
+        refresh()
+        watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
+            Task { @MainActor in self?.refreshLocal() }
+        }
+        pollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self else { return }
+                // Recursive file changes need polling. Hidden/background app work is bounded.
+                guard NSApplication.shared.isActive else { continue }
+                self.refreshLocal()
+                if Date().timeIntervalSince(self.lastPRRefresh) >= 30 { self.refreshPRs() }
+            }
         }
     }
 
-    // MARK: - Refresh
-
-    func refresh() {
-        let path = currentWorktreePath ?? currentProjectRoot
-        guard let path else { return }
-        unstagedTask?.cancel()
-        unstagedTask = Task { await fetchUnstaged(path: path) }
-        // Don't re-fetch PRs on refresh — they don't change on file save
+    func setComparisonBase(_ base: String) {
+        requestedBase = base; comparisonBase = base
+        generation = UUID()
+        localTask?.cancel(); localTask = nil; commitTask?.cancel(); prTask?.cancel(); prTask = nil; prDiffTask?.cancel()
+        isLoadingPRDiff = false; isLoadingPRs = false
+        // Old branch and commit evidence belongs to a different comparison.
+        branchDiff = []; commits = []; selectedCommit = nil; commitDiff = []; isLoadingCommit = false
+        refresh()
     }
 
-    // MARK: - Watcher
-
-    func startWatching(path: String) {
-        watcher?.stop()
-        watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
-            let captured = self
-            Task { @MainActor in
-                captured?.refresh()
+    func selectCommit(_ commit: GitCommitInfo) {
+        guard let path else { return }
+        if selectedCommit?.sha != commit.sha { commitDiff = [] }
+        selectedCommit = commit; commitTask?.cancel(); isLoadingCommit = true
+        let token = generation
+        commitTask = Task {
+            do {
+                let files = try await git.fetchCommitDiff(at: path, sha: commit.sha)
+                guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
+                commitDiff = files
+            } catch {
+                guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
+                branchError = error.localizedDescription
             }
+            isLoadingCommit = false
+        }
+    }
+
+    func selectPR(_ pr: PullRequestInfo) {
+        guard let path else { return }
+        let changed = selectedPR?.number != pr.number
+        selectedPR = pr; prDiffTask?.cancel(); isLoadingPRDiff = true
+        if changed { prDiff = nil }
+        let token = generation
+        prDiffTask = Task {
+            do {
+                let diff = try await git.fetchPRDiffChecked(cwd: path, prNumber: pr.number)
+                guard !Task.isCancelled, generation == token, selectedPR?.number == pr.number else { return }
+                prDiff = diff; prError = nil
+            } catch {
+                guard !Task.isCancelled, generation == token, selectedPR?.number == pr.number else { return }
+                prError = error.localizedDescription
+            }
+            isLoadingPRDiff = false
+        }
+    }
+
+    func loadUntrackedPreview(_ file: FileDiff) async {
+        guard let path else { return }
+        let token = generation
+        let preview = await git.untrackedPreview(name: file.filename, at: path)
+        guard generation == token, let index = untrackedDiff.firstIndex(where: { $0.filename == file.filename }) else { return }
+        untrackedDiff[index] = preview
+    }
+
+    func refresh() { refreshLocal(); refreshPRs() }
+
+    private func refreshLocal() {
+        guard let path, localTask == nil else { return }
+        let token = generation, base = requestedBase
+        isLoadingBranch = true; isLoadingUnstaged = true
+        localTask = Task {
+            let branchReview = await git.fetchBranchReview(at: path, baseBranch: base)
+            let local = await git.fetchLocalReview(at: path)
+            guard !Task.isCancelled, generation == token else { return }
+            comparisonBase = branchReview.comparisonBase
+            availableBases = branchReview.availableBases
+            branchError = branchReview.error; localError = local.error
+            if branchReview.error == nil {
+                branchDiff = branchReview.files; commits = branchReview.commits
+                if let selectedCommit {
+                    if commits.contains(where: { $0.sha == selectedCommit.sha }) { selectCommit(selectedCommit) }
+                    else { commitTask?.cancel(); self.selectedCommit = nil; commitDiff = []; isLoadingCommit = false }
+                }
+            }
+            if local.stagedError == nil { stagedDiff = local.staged }
+            if local.unstagedError == nil { unstagedDiff = local.unstaged }
+            if local.untrackedError == nil { untrackedDiff = local.untracked }
+            isLoadingBranch = false; isLoadingUnstaged = false; localTask = nil
+        }
+    }
+
+    private func refreshPRs() {
+        guard let path, prTask == nil else { return }
+        let token = generation, branch = branch
+        lastPRRefresh = Date(); isLoadingPRs = true
+        prTask = Task {
+            do {
+                let prs = try await git.fetchPRListChecked(cwd: path, branch: branch)
+                guard !Task.isCancelled, generation == token else { return }
+                let shouldSelectInitialPR = !initialPRSelectionMade
+                initialPRSelectionMade = true
+                ghAvailable = true; pullRequests = prs; prError = nil
+                if let selected = selectedPR, let updated = prs.first(where: { $0.number == selected.number }) { selectPR(updated) }
+                else if shouldSelectInitialPR, let first = prs.first { selectPR(first) }
+                else if prs.isEmpty || selectedPR != nil { prDiffTask?.cancel(); selectedPR = nil; prDiff = nil; isLoadingPRDiff = false }
+            } catch {
+                guard !Task.isCancelled, generation == token else { return }
+                // Keep previously fetched evidence and expose auth/network/decoding failures.
+                prError = error.localizedDescription; ghAvailable = false
+            }
+            isLoadingPRs = false; prTask = nil
         }
     }
 
     func stopWatching() {
-        watcher?.stop()
-        watcher = nil
-        unstagedTask?.cancel()
-        prTask?.cancel()
-    }
-
-    // MARK: - Private
-
-    private func fetchUnstaged(path: String) async {
-        isLoadingUnstaged = true
-        error = nil
-        let diff = await GitService.shared.fetchUnstagedDiff(worktreePath: path)
-        guard !Task.isCancelled else { return }
-        self.unstagedDiff = diff
-        self.isLoadingUnstaged = false
-    }
-
-    private func fetchPRs(cwd: String, branch: String?) async {
-        isLoadingPRs = true
-        let available = await GitService.shared.isGhAvailable(cwd: cwd)
-        guard !Task.isCancelled else { return }
-        self.ghAvailable = available
-
-        if available {
-            let prs = await GitService.shared.fetchPRList(cwd: cwd, branch: branch)
-            guard !Task.isCancelled else { return }
-            self.pullRequests = prs
-            // Auto-select first PR if none selected
-            if selectedPR == nil, let first = prs.first {
-                selectPR(first)
-            }
-        } else {
-            self.pullRequests = []
-        }
-        self.isLoadingPRs = false
+        generation = UUID()
+        path = nil
+        watcher?.stop(); watcher = nil
+        localTask?.cancel(); localTask = nil; prTask?.cancel(); prTask = nil
+        commitTask?.cancel(); commitTask = nil; prDiffTask?.cancel(); prDiffTask = nil
+        pollingTask?.cancel(); pollingTask = nil
+        isLoadingBranch = false; isLoadingUnstaged = false; isLoadingCommit = false
+        isLoadingPRs = false; isLoadingPRDiff = false
     }
 }

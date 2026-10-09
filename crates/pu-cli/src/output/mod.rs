@@ -43,6 +43,9 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         return Ok(());
     }
     match response {
+        Response::ChannelHistory { .. } | Response::ChannelMessage { .. } => {
+            print!("{}", crate::commands::channel::format_response(response));
+        }
         Response::HealthReport {
             pid,
             uptime_seconds,

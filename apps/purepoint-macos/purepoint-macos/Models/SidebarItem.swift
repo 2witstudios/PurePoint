@@ -29,6 +29,7 @@ enum SidebarSelection: Hashable {
     case nav(SidebarNavItem)
     case workspace(String)
     case worktree(String)
+    case channel(String)
     case project(String)  // projectRoot path
 }
 
@@ -36,6 +37,7 @@ enum SidebarSelection: Hashable {
 
 class SidebarNode {
     enum Kind {
+        case channel(ProjectState)
         case project(ProjectState)
         case worktree(WorktreeModel)
         case workspace(Workspace)
@@ -51,6 +53,7 @@ class SidebarNode {
 
     var id: String {
         switch kind {
+        case .channel(let p): return "channel:\(p.projectRoot)"
         case .project(let p): return p.projectRoot
         case .worktree(let w): return w.id
         case .workspace(let w): return w.id

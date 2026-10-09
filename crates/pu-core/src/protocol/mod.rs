@@ -6,6 +6,7 @@ mod targets;
 #[cfg(test)]
 mod tests;
 
+pub use crate::channel::{ChannelAuthor, ChannelMessage, ChannelReaction, ChannelReference};
 pub use grid::*;
 pub use payloads::*;
 pub use targets::*;
@@ -20,6 +21,49 @@ pub const PROTOCOL_VERSION: u32 = 6;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    ChannelRead {
+        project_root: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        after: Option<u64>,
+        #[serde(default)]
+        before: Option<u64>,
+        #[serde(default = "default_channel_limit")]
+        limit: usize,
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        parent_id: Option<String>,
+        #[serde(default)]
+        known_revision: Option<u64>,
+    },
+    ChannelSend {
+        project_root: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        text: String,
+        #[serde(default)]
+        parent_id: Option<String>,
+        #[serde(default)]
+        references: Vec<ChannelReference>,
+    },
+    ChannelEdit {
+        project_root: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        message_id: String,
+        text: String,
+    },
+    ChannelReact {
+        project_root: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        message_id: String,
+        #[serde(default = "default_channel_emoji")]
+        emoji: String,
+        active: bool,
+    },
     Health,
     Init {
         project_root: String,
@@ -308,6 +352,13 @@ pub enum Request {
     },
 }
 
+pub fn default_channel_limit() -> usize {
+    100
+}
+pub fn default_channel_emoji() -> String {
+    "👍".into()
+}
+
 fn default_tail() -> usize {
     500
 }
@@ -319,6 +370,20 @@ fn default_enabled() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    ChannelHistory {
+        messages: Vec<ChannelMessage>,
+        revision: u64,
+        latest_sequence: u64,
+        has_more: bool,
+        oldest_sequence: Option<u64>,
+        unchanged: bool,
+        self_author_id: String,
+        reply_counts: std::collections::BTreeMap<String, u64>,
+    },
+    ChannelMessage {
+        message: ChannelMessage,
+        revision: u64,
+    },
     HealthReport {
         pid: u32,
         uptime_seconds: u64,

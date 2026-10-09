@@ -2,10 +2,12 @@ import SwiftUI
 
 struct WorktreeDetailView: View {
     let worktree: WorktreeModel
+    var project: ProjectState?
+    @State private var showChannel = false
     @State private var diffState = DiffState()
     @State private var fileTreeState = FileTreeState()
     @State private var editorState = EditorState()
-    @State private var showFileTree = true
+    @State private var showFileTree = false
     @State private var sidebarRatio: CGFloat = 0.22
     @State private var saveError: String?
 
@@ -13,6 +15,7 @@ struct WorktreeDetailView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            HStack(spacing: 0) {
             DraggableSplit(
                 axis: .vertical,
                 ratio: showFileTree ? sidebarRatio : 0,
@@ -30,6 +33,11 @@ struct WorktreeDetailView: View {
                     Divider()
                     editorContent
                 }
+            }
+            if showChannel, let project {
+                Divider()
+                ProjectChannelView(project: project, compact: true).frame(minWidth: 280, idealWidth: 340, maxWidth: 400)
+            }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -57,6 +65,7 @@ struct WorktreeDetailView: View {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showFileTree = true
+                        editorState.showChanges = false
                     }
                 } label: {
                     Image(systemName: "sidebar.left")
@@ -98,6 +107,8 @@ struct WorktreeDetailView: View {
             }
 
             Spacer()
+            Button { showFileTree.toggle(); editorState.showChanges = !showFileTree } label: { Label("Files", systemImage: "doc.text") }.buttonStyle(.borderless)
+            if project != nil { Button { showChannel.toggle() } label: { Label("Channel", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(.borderless) }
 
             Button {
                 editorState.showChanges.toggle()
@@ -158,96 +169,7 @@ struct WorktreeDetailView: View {
         }
     }
 
-    // MARK: - Changes Content (existing diff views)
-
-    private var changesContent: some View {
-        VStack(spacing: 0) {
-            diffTabBar
-            Divider()
-            diffContent
-        }
-    }
-
-    private var diffTabBar: some View {
-        Picker("", selection: $diffState.activeTab) {
-            Text("Unstaged Changes")
-                .tag(DiffTab.unstaged)
-            Text("PR Diffs")
-                .tag(DiffTab.prDiffs)
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-
-    @ViewBuilder
-    private var diffContent: some View {
-        switch diffState.activeTab {
-        case .unstaged:
-            DiffListView(
-                diff: diffState.unstagedDiff,
-                isLoading: diffState.isLoadingUnstaged,
-                emptyMessage: "No unstaged changes",
-                error: diffState.error,
-                onRetry: { diffState.refresh() }
-            )
-
-        case .prDiffs:
-            if !diffState.ghAvailable {
-                GHUnavailableView()
-            } else if diffState.isLoadingPRs && diffState.pullRequests.isEmpty {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if diffState.pullRequests.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "arrow.triangle.pull")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.secondary)
-                    Text("No open pull requests for this branch")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                prContent
-            }
-        }
-    }
-
-    // MARK: - PR Content
-
-    private var prContent: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Picker("Pull Request", selection: prBinding) {
-                    ForEach(diffState.pullRequests) { pr in
-                        Text("#\(pr.number) \(pr.title)")
-                            .tag(pr.number)
-                    }
-                }
-                .labelsHidden()
-
-                if let pr = diffState.selectedPR, let url = URL(string: pr.url) {
-                    Link(destination: url) {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.system(size: 12))
-                    }
-                    .help("Open in browser")
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            DiffListView(
-                diff: diffState.prDiff,
-                isLoading: diffState.isLoadingPRDiff,
-                emptyMessage: "No changes in PR",
-                error: nil
-            )
-        }
-    }
+    private var changesContent: some View { ReviewChangesView(state: diffState) }
 
     // MARK: - Placeholders
 

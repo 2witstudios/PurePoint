@@ -46,7 +46,8 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                 path: entry.path,
                 branch: entry.branch,
                 status: entry.status,
-                agents: agents
+                agents: agents,
+                baseBranch: entry.baseBranch
             )
         }
     }

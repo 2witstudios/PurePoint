@@ -12,6 +12,12 @@ nonisolated struct FileDiff: Identifiable, Sendable {
     let added: Int
     let removed: Int
     let hunks: [Hunk]
+    var oldFilename: String? = nil
+    var isBinary: Bool = false
+    var previewError: String? = nil
+    var previewDeferred: Bool = false
+    /// Conflict working-file patches compare against stage 2, or empty if ours deleted the path.
+    var conflictBaseline: String? = nil
 
     var id: String { filename }
 }
@@ -30,4 +36,42 @@ nonisolated struct DiffLine: Sendable, Equatable {
 
 nonisolated enum LineType: Sendable, Equatable {
     case context, addition, deletion
+}
+
+nonisolated struct GitCommitInfo: Identifiable, Sendable, Equatable {
+    let sha: String
+    let subject: String
+    let author: String
+    let date: String
+    var id: String { sha }
+}
+
+nonisolated struct GitReviewSummary: Sendable {
+    let commitCount: Int
+    let localFileCount: Int
+    let error: String?
+}
+
+nonisolated struct GitBranchReview: Sendable {
+    var comparisonBase = ""
+    var availableBases: [String] = []
+    var files: [FileDiff] = []
+    var commits: [GitCommitInfo] = []
+    var error: String?
+}
+
+nonisolated struct GitLocalReview: Sendable {
+    var staged: [FileDiff] = []
+    var unstaged: [FileDiff] = []
+    var untracked: [FileDiff] = []
+    var error: String?
+    var stagedError: String?
+    var unstagedError: String?
+    var untrackedError: String?
+    var uniquePathCount: Int { Set((staged + unstaged + untracked).map(\.filename)).count }
+}
+
+nonisolated struct GitReviewError: Error, LocalizedError, Sendable {
+    let message: String
+    var errorDescription: String? { message }
 }

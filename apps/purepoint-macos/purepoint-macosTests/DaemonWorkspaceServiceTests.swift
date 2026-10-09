@@ -12,7 +12,7 @@ struct DaemonWorkspaceServiceTests {
     @Test func testParseWorktreesValid() throws {
         let entries = try decodeWorktrees(
             """
-            [{"id":"wt-1","name":"feature-auth","path":"/tmp/project/.pu/worktrees/wt-1","branch":"pu/feature-auth","status":"active","agents":{"ag-1":{"id":"ag-1","name":"claude-1","agentType":"claude","status":"running","prompt":"add auth","startedAt":"2026-01-01T00:00:00Z"}},"createdAt":"2026-01-01T00:00:00Z"}]
+            [{"id":"wt-1","name":"feature-auth","path":"/tmp/project/.pu/worktrees/wt-1","branch":"pu/feature-auth","baseBranch":"release/next","status":"active","agents":{"ag-1":{"id":"ag-1","name":"claude-1","agentType":"claude","status":"running","prompt":"add auth","startedAt":"2026-01-01T00:00:00Z"}},"createdAt":"2026-01-01T00:00:00Z"}]
             """)
 
         let models = DaemonWorkspaceService.parseWorktrees(entries)
@@ -20,6 +20,7 @@ struct DaemonWorkspaceServiceTests {
         #expect(models[0].id == "wt-1")
         #expect(models[0].name == "feature-auth")
         #expect(models[0].branch == "pu/feature-auth")
+        #expect(models[0].baseBranch == "release/next")
         #expect(models[0].status == "active")
         #expect(models[0].agents.count == 1)
         #expect(models[0].agents[0].id == "ag-1")

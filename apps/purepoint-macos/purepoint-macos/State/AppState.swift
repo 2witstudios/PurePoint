@@ -98,7 +98,7 @@ final class AppState {
             if let root = projectState(forWorktreeId: id)?.projectRoot {
                 activeProjectRoot = root
             }
-        case .project(let root):
+        case .project(let root), .channel(let root):
             activeProjectRoot = root
         case nil, .nav:
             break  // keep last known project

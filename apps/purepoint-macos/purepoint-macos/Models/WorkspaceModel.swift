@@ -7,9 +7,10 @@ nonisolated struct WorktreeModel: Identifiable, Equatable, Sendable {
     let branch: String
     let status: String
     var agents: [AgentModel]
+    var baseBranch: String? = nil
 
     static func == (lhs: WorktreeModel, rhs: WorktreeModel) -> Bool {
-        lhs.id == rhs.id && lhs.status == rhs.status && lhs.branch == rhs.branch && lhs.agents == rhs.agents
+        lhs.id == rhs.id && lhs.status == rhs.status && lhs.branch == rhs.branch && lhs.agents == rhs.agents && lhs.baseBranch == rhs.baseBranch
     }
 }
 

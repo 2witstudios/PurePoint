@@ -1,4 +1,5 @@
 mod agent_lifecycle;
+mod channel;
 mod definitions;
 mod helpers;
 mod pty_operations;
@@ -338,6 +339,10 @@ impl Engine {
         }
 
         match request {
+            request @ (Request::ChannelRead { .. }
+            | Request::ChannelSend { .. }
+            | Request::ChannelEdit { .. }
+            | Request::ChannelReact { .. }) => channel::handle(request).await,
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => self.handle_init(&project_root).await,
             Request::Rename {

@@ -159,27 +159,44 @@ jobs:
           PKGEOF
           done
 
-      - name: Build
+      - name: Compile app and test bundles
+        timeout-minutes: 18
         run: |
-          xcodebuild build \
+          python3 .github/scripts/log_macos_command.py "$RUNNER_TEMP/macos-diagnostics/compile" \
+            xcodebuild build-for-testing \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -destination "$DESTINATION" \
+            -derivedDataPath "$RUNNER_TEMP/purepoint-derived" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            DEVELOPMENT_TEAM="" \
-            | xcbeautify
+            DEVELOPMENT_TEAM=""
 
-      - name: Test
+      - name: Execute compiled tests
+        timeout-minutes: 8
         run: |
-          xcodebuild test \
+          python3 .github/scripts/log_macos_command.py "$RUNNER_TEMP/macos-diagnostics/test" \
+            xcodebuild test-without-building \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -destination "$DESTINATION" \
+            -derivedDataPath "$RUNNER_TEMP/purepoint-derived" \
+            -resultBundlePath "$RUNNER_TEMP/macos-diagnostics/tests.xcresult" \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 300 \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            DEVELOPMENT_TEAM="" \
-            | xcbeautify
+            DEVELOPMENT_TEAM=""
+
+      - name: Retain macOS failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-diagnostics
+          path: ${{ runner.temp }}/macos-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
 
   build-and-test:
     name: Build & Test

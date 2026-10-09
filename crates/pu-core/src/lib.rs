@@ -12,3 +12,5 @@ pub mod template;
 pub mod trigger_def;
 pub mod types;
 pub mod validation;
+
+pub mod channel;

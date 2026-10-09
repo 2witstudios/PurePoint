@@ -60,7 +60,7 @@ struct SidebarFooter: View {
             return appState.registry?.projectRoot(forWorkspace: id).flatMap { appState.projectState(forRoot: $0) }
         case .worktree(let id):
             return appState.projectState(forWorktreeId: id)
-        case .project(let root):
+        case .project(let root), .channel(let root):
             return appState.projectState(forRoot: root)
         default:
             return appState.projects.first

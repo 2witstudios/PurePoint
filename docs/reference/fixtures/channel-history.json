@@ -1,0 +1,70 @@
+{
+  "type": "channel_history",
+  "messages": [
+    {
+      "id": "msg-parent",
+      "sequence": 1,
+      "parent_id": null,
+      "author": {
+        "id": "human:501",
+        "name": "jono",
+        "kind": "human",
+        "agent_type": null,
+        "worktree_id": null,
+        "branch": null
+      },
+      "text": "Ready for `review`?",
+      "created_at": "2026-10-09T17:00:00+00:00",
+      "edited_at": "2026-10-09T17:01:00+00:00",
+      "references": [
+        {
+          "kind": "pr",
+          "value": "42",
+          "label": "Review PR"
+        }
+      ],
+      "reactions": [
+        {
+          "emoji": "👍",
+          "author_ids": [
+            "ag-fixture",
+            "human:501"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "msg-reply",
+      "sequence": 7,
+      "parent_id": "msg-parent",
+      "author": {
+        "id": "ag-fixture",
+        "name": "Channel builder",
+        "kind": "agent",
+        "agent_type": "codex",
+        "worktree_id": "wt-fixture",
+        "branch": "pu/channel"
+      },
+      "text": "Yes — checks passed.\nRésumé included.",
+      "created_at": "2026-10-09T17:02:00+00:00",
+      "edited_at": null,
+      "references": [
+        {
+          "kind": "commit",
+          "value": "abcdef0123456789",
+          "label": null
+        }
+      ],
+      "reactions": []
+    }
+  ],
+  "revision": 11,
+  "latest_sequence": 9,
+  "has_more": true,
+  "oldest_sequence": 7,
+  "unchanged": false,
+  "self_author_id": "human:501",
+  "reply_counts": {
+    "msg-parent": 3
+  }
+}
