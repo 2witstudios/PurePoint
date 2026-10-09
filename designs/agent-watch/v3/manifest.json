@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-10-09T17:19:34.237562+00:00",
+  "driveId": "nmyzsuuo4kc1u4y2e9vsndft",
+  "parentId": "d8640hxjytxpcbfwfns6klu2",
+  "screens": {
+    "project": {
+      "pageId": "wdabqps5xv7o8s1326q4f1uf",
+      "url": "https://pagespace.ai/dashboard/nmyzsuuo4kc1u4y2e9vsndft/wdabqps5xv7o8s1326q4f1uf",
+      "sha256": "1819793fe7396b1538fefc9755750fa8a3b2ce208482661a275ed134430b7dba",
+      "readbackVerified": true,
+      "revision": 1,
+      "stateHash": "8876743ee53b69f95e3017cb886d6eac508da282f12682193172b7d6793753c8"
+    },
+    "worktree": {
+      "pageId": "toovv5ea7b8ckgpknr4n7mqm",
+      "url": "https://pagespace.ai/dashboard/nmyzsuuo4kc1u4y2e9vsndft/toovv5ea7b8ckgpknr4n7mqm",
+      "sha256": "db4cdee28349f1a741456714d0fdd56a59a54558d5a854eeef0b4982071fd88e",
+      "readbackVerified": true,
+      "revision": 1,
+      "stateHash": "23bf873dd3a2ba63416b92f32a57a0b0f1aae1fde16b9148d95cce840d15e930"
+    },
+    "channel": {
+      "pageId": "titpzeae2wj2msf00asnof68",
+      "url": "https://pagespace.ai/dashboard/nmyzsuuo4kc1u4y2e9vsndft/titpzeae2wj2msf00asnof68",
+      "sha256": "48985e330ece535536149d3098f4d80ced5df346a82a1b9bd593799690e79b0a",
+      "readbackVerified": true,
+      "revision": 1,
+      "stateHash": "18061a70505ac87e368aa2f5b736c90eed5351d86189b6b8d985d848f8bf27e5"
+    }
+  }
+}
