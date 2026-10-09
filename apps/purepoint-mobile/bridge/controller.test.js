@@ -583,3 +583,70 @@ for (const [name, prefill] of [
     }
   });
 }
+
+test("extension hook errors appear in snapshots without stopping continued execution", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    await c.refresh();
+    rpc.emit("event", { type: "agent_start" });
+    const before = c.snapshot();
+    rpc.emit("event", {
+      type: "extension_error",
+      extensionPath: "/Users/owner/.pi/agent/extensions/check.ts",
+      event: "tool_call",
+      error: "Hook threw: missing configuration",
+    });
+    const snapshot = c.snapshot();
+    assert.ok(
+      snapshot.notices.some(
+        (x) =>
+          x ===
+          "Extension check.ts failed during tool_call: Hook threw: missing configuration",
+      ),
+    );
+    assert.equal(snapshot.busy, before.busy);
+    assert.equal(snapshot.runId, before.runId);
+    assert.equal(snapshot.epoch, before.epoch);
+    assert.equal(snapshot.error, null);
+    assert.ok(snapshot.revision > before.revision);
+    assert.equal(
+      snapshot.notices.some((x) => x.includes("/Users/owner")),
+      false,
+    );
+    const result = await request(c, "send", {
+      epoch: c.epoch,
+      text: "Continue working",
+      mode: "steer",
+    });
+    assert.equal(result.disposition, "started");
+    assert.equal(c.error, null);
+    assert.equal(c.runId, before.runId);
+  } finally {
+    c.dispose();
+  }
+});
+
+test("extension error diagnostics bound source, hook, error and retained history", () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  try {
+    for (let i = 0; i < 20; i++) {
+      rpc.emit("event", {
+        type: "extension_error",
+        extensionPath: `/private/owner/${"s".repeat(5000)}.ts`,
+        event: "hook".repeat(2000),
+        error: `${i}: ${"😀".repeat(100000)}`,
+      });
+    }
+    const snapshot = c.snapshot();
+    assert.equal(snapshot.notices.length, 12);
+    assert.ok(snapshot.notices.every((x) => x.length <= 4000));
+    assert.ok(snapshot.notices.every((x) => x.includes("[Display truncated]")));
+    assert.ok(snapshot.notices[0].includes(": 8: "));
+    assert.ok(snapshot.notices.at(-1).includes(": 19: "));
+    assert.equal(snapshot.error, null);
+  } finally {
+    c.dispose();
+  }
+});

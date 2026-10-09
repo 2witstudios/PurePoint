@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import { Projection, clip, boundedRows } from "./core.js";
 import { validateImages } from "./attachments.js";
 export class Controller extends EventEmitter {
@@ -76,6 +77,10 @@ export class Controller extends EventEmitter {
       this.notice("Pi is summarizing earlier context.");
     if (e.type === "auto_retry_start")
       this.notice("Pi is retrying the provider request.");
+    if (e.type === "extension_error")
+      this.notice(
+        `Extension ${clip(basename(e.extensionPath || "unknown"), 200)} failed during ${clip(e.event || "unknown hook", 100)}: ${clip(e.error || "Unknown error", 3500)}`,
+      );
     if (e.type === "queue_update")
       this.queue = [
         ...(e.steering ?? []).map((text) => ({
