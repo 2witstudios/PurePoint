@@ -97,3 +97,7 @@ Import bounds: four attachments, total prepared bytes 512 KiB; images source ≤
 - Given unchanged message content while typing or receiving a status update, SwiftUI should skip the existing row body. Markdown parsing and attachment image preparation should run off the UI actor; newer Markdown tasks must cancel stale view updates.
 
 Grounding: Apple's [Improving app responsiveness](https://developer.apple.com/documentation/xcode/improving-app-responsiveness) recommends keeping synchronous non-UI work off the main thread and verifying hangs with device profiling. These changes address observed code paths; their device latency benefit remains to be measured on the owner's phone.
+
+- Given physical-device testing, a dedicated shared Device scheme should run an optimized app without LLDB, while the original debug/test scheme remains available. Both should target the same app and signing configuration.
+- Given startup diagnosis, static launch logs should distinguish entering the SwiftUI App initializer from chat view appearance; they must not include credentials, endpoints, conversation data or device identifiers. These markers describe app lifecycle events, not guaranteed first rendered pixels.
+- Given connection settings appearance, loading an existing Keychain secret should not block the UI thread or overwrite a newer manual secret/address edit.

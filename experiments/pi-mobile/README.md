@@ -75,6 +75,11 @@ Open **[ios/PiMobile.xcodeproj](ios/PiMobile.xcodeproj)** in Xcode 16 or later. 
 3. For a physical iPhone, select your device, keep it on your existing tailnet, accept any local-network permission prompt, and enter the Mac’s Tailscale endpoint and your secret. Build/run with **Cmd+R**.
 4. Exercise the owner checks below before relying on remote control.
 
+For everyday physical-device testing, select the **PiMobile-Device** scheme and press **Cmd+R**. It builds Release and launches without LLDB; use **PiMobile** when you need breakpoints or Cmd+U. Both schemes install the same app with the same signing and saved pairing/conversation data. No separate backend or bridge restart is needed.
+
+If Xcode displays a blank screen with “libobjc.A.dylib is being read from process memory” or “Looking up debug dylib relative path”, compare the Device scheme or a Home Screen launch. Apple documents [debugger-related startup delays](https://developer.apple.com/forums/thread/800067) and recommends disabling Debug executable to isolate them. The shared-cache warning alone does not prove the app is stalled. Launch logs under subsystem `PiMobile`, category `Launch`, emit `SwiftUI App initialized` and `Chat view appeared`, without credentials or transcript content. A delay before the first marker occurs before this app's App initializer; a gap between markers points to app/model/view initialization. On-device results still require owner verification. If the no-debugger build also pauses, profile that launch with Instruments; don't clear pairing or native sessions.
+
+
 The plist permits cleartext transport because IP-address `ws` inside Tailscale needs it; the app itself validates endpoints to tailnet/loopback hosts. Use owner TLS/wss if desired. Normal conversation screens contain no RPC controls.
 
 **No Xcode app build, XCTest run in Xcode, signing, simulator launch, screenshots, or physical-device run was performed by this agent.** Those remain owner-controlled. Safe standalone checks below do not establish iOS SDK compilation, actual keyboard behavior, visual rendering or real-device networking.

@@ -115,7 +115,14 @@ struct ConnectionView: View {
             }
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .onAppear { endpoint = model.endpoint; secret = PairingSecret.read(endpoint: endpoint) }
+            .task {
+                let address = model.endpoint
+                endpoint = address
+                guard !address.isEmpty else { return }
+                let saved = await Task.detached(priority: .userInitiated) { PairingSecret.read(endpoint: address) }.value
+                guard !Task.isCancelled, endpoint == address, secret.isEmpty else { return }
+                secret = saved
+            }
             .onChange(of: model.connected) { _, connected in if connected && !model.demo { dismiss() } }
             .sheet(isPresented: $showScanner) {
                 PairingScannerView { code in

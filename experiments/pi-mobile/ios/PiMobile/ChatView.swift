@@ -70,6 +70,7 @@ struct ChatView: View {
                 else { presentPendingDialog() }
             }
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
+            .onAppear { LaunchLog.logger.notice("Chat view appeared") }
             .task { if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
             .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
             .onChange(of: selectedPhoto) { _, item in
