@@ -564,16 +564,16 @@ actor GitService {
             return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1)
         }
 
-        // Read stdout and stderr concurrently to avoid pipe buffer deadlock.
-        // If we wait for exit first, a process that fills the pipe buffer blocks
-        // forever because nobody is draining it.
+        // Drain on dedicated threads: cooperative tasks may occupy every shared
+        // Dispatch worker while waiting below, starving queued pipe readers.
+        // Both streams must keep draining before waiting for process exit.
         nonisolated(unsafe) var stdoutData = Data()
         nonisolated(unsafe) var stderrData = Data()
         nonisolated(unsafe) var outputExceededLimit = false
         let group = DispatchGroup()
 
         group.enter()
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             if let outputLimit {
                 // Fixed-size reads bound capture before decoding. Keep draining
                 // after termination so a full pipe cannot prevent process exit.
@@ -595,7 +595,7 @@ actor GitService {
             group.leave()
         }
         group.enter()
-        DispatchQueue.global().async {
+        Thread.detachNewThread {
             stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
             group.leave()
         }

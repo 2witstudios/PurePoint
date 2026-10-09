@@ -259,6 +259,29 @@ private enum GitReviewChecks {
         }
         throw Failure(message: "state refresh timed out")
     }
+
+    static func concurrentProcessChecks() async throws {
+        try await withThrowingTaskGroup(of: (Bool, Int, Int).self) { group in
+            for _ in 0..<32 {
+                group.addTask {
+                    let service = GitService()
+                    // Both pipes exceed their kernel buffers and must drain while
+                    // many separate service actors occupy cooperative workers.
+                    let result = await service.runGit([
+                        "-c", "alias.pipe-check=!i=0; while [ $i -lt 10000 ]; do printf 'stdout line\\n'; printf 'stderr line\\n' >&2; i=$((i+1)); done", "pipe-check",
+                    ], cwd: NSTemporaryDirectory())
+                    return (result.success, result.stdout.components(separatedBy: "\n").count,
+                            result.stderr.components(separatedBy: "\n").count)
+                }
+            }
+            for try await (success, stdoutLines, stderrLines) in group {
+                try require(success, "concurrent Git process completed")
+                try require(stdoutLines == 10001, "all stdout drained")
+                try require(stderrLines == 10001, "all stderr drained")
+            }
+        }
+        print("Concurrent Git pipe checks passed")
+    }
 }
 
 #if GIT_REVIEW_HARNESS
@@ -266,11 +289,13 @@ private enum GitReviewChecks {
     @MainActor static func main() async throws {
         try await GitReviewChecks.repositoryChecks()
         try await GitReviewChecks.stateChecks()
+        try await GitReviewChecks.concurrentProcessChecks()
     }
 }
 #else
 struct GitReviewTests {
     @Test func realRepositories() async throws { try await GitReviewChecks.repositoryChecks() }
     @Test @MainActor func selectionsAndRemoteRefresh() async throws { try await GitReviewChecks.stateChecks() }
+    @Test func concurrentGitPipesComplete() async throws { try await GitReviewChecks.concurrentProcessChecks() }
 }
 #endif
