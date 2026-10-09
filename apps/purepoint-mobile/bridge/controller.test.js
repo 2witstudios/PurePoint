@@ -523,3 +523,63 @@ test("explicit reset during an older refresh performs a new read and rotates epo
     c.dispose();
   }
 });
+
+for (const [name, prefill] of [
+  ["9003-character document", "x".repeat(9000) + "end"],
+  ["64 KiB ASCII document", "x".repeat(65536)],
+  ["64 KiB Unicode document", "😀".repeat(16383) + "éé"],
+]) {
+  test(`editor preserves an unchanged ${name}`, async () => {
+    const rpc = new Runtime();
+    const c = new Controller(rpc, {});
+    try {
+      rpc.emit("event", {
+        type: "extension_ui_request",
+        id: "edit",
+        method: "editor",
+        title: "Edit document",
+        prefill,
+      });
+      const dialog = c.snapshot().dialogs[0];
+      assert.equal(dialog.prefill, prefill);
+      await request(c, "answer", {
+        dialogId: dialog.id,
+        value: dialog.prefill,
+      });
+      assert.deepEqual(rpc.answerValue, { id: "edit", value: prefill });
+    } finally {
+      c.dispose();
+    }
+  });
+}
+
+for (const [name, prefill] of [
+  ["ASCII", "x".repeat(65537)],
+  ["Unicode", "😀".repeat(16384) + "a"],
+]) {
+  test(`editor cancels ${name} prefills above the UTF-8 answer budget visibly`, () => {
+    const rpc = new Runtime();
+    const c = new Controller(rpc, {});
+    try {
+      const revision = c.snapshot().revision;
+      rpc.emit("event", {
+        type: "extension_ui_request",
+        id: "oversized-editor",
+        method: "editor",
+        prefill,
+      });
+      assert.deepEqual(rpc.answerValue, {
+        id: "oversized-editor",
+        cancelled: true,
+      });
+      const snapshot = c.snapshot();
+      assert.equal(snapshot.dialogs.length, 0);
+      assert.ok(
+        snapshot.notices.some((x) => /editor.*64 KiB.*canceled/i.test(x)),
+      );
+      assert.ok(snapshot.revision > revision);
+    } finally {
+      c.dispose();
+    }
+  });
+}

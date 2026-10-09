@@ -98,6 +98,22 @@ export class Controller extends EventEmitter {
             "An extension opened too many dialogs; the extra request was canceled.",
           );
         } else {
+          // Editor answers replace the document: never truncate its initial value.
+          const prefill =
+            method === "editor" && typeof e.prefill === "string"
+              ? e.prefill
+              : clip(e.prefill, 8192);
+          if (
+            method === "editor" &&
+            Buffer.byteLength(prefill, "utf8") > 65536
+          ) {
+            this.rpc.answer({ id: e.id, cancelled: true });
+            this.notice(
+              "An extension editor exceeded the 64 KiB text budget and was canceled.",
+            );
+            this.changed();
+            return;
+          }
           const originalOptions =
             method === "select" && Array.isArray(e.options)
               ? e.options.slice(0, 100)
@@ -122,7 +138,7 @@ export class Controller extends EventEmitter {
             ...e,
             title: clip(e.title, 1000),
             message: clip(e.message, 4000),
-            prefill: clip(e.prefill, 8192),
+            prefill,
             options:
               method === "select"
                 ? originalOptions.map((x) => clip(x, 200))
