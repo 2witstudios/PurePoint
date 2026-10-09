@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-test("native session list and read-only branch history never rewrite the Pi file", async () => {
+test("native session list and read-only branch history skip corrupt/partial records without rewriting the Pi file", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pi-native-history-"));
   try {
     const sessionDir = path.join(dir, "agent/sessions/--project--");
@@ -57,7 +57,10 @@ test("native session list and read-only branch history never rewrite the Pi file
         },
       },
     ];
-    const original = records.map((x) => JSON.stringify(x)).join("\n") + "\n";
+    const lines = records.map((x) => JSON.stringify(x));
+    lines.splice(2, 0, "{malformed record", "   ");
+    lines.push('{"type":"message","id":"unfinished"');
+    const original = lines.join("\n");
     await writeFile(file, original);
     const code = `import {nativeSessions} from './bridge/setup.js';const sessions=await nativeSessions();const list=await sessions.list();if(list.length!==1)throw Error('session discovery');const history=await sessions.history('native-session');console.log(JSON.stringify(history));`;
     const result = await promisify(execFile)(
@@ -78,6 +81,10 @@ test("native session list and read-only branch history never rewrite the Pi file
       false,
     );
     assert.equal(history.messages.at(-1).text, "Current branch");
+    assert.ok(history.messages.some((x) => x.text === "Original"));
+    assert.ok(
+      history.messages.some((x) => x.text.includes("A prior exploration")),
+    );
     assert.equal(await readFile(file, "utf8"), original);
   } finally {
     await rm(dir, { recursive: true, force: true });

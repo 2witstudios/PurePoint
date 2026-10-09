@@ -9,6 +9,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { randomBytes, randomUUID } from "node:crypto";
+import { validateHeaderValue } from "node:http";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -153,7 +154,14 @@ export async function nativeSessions() {
       const records = (await readFile(info.path, "utf8"))
         .split("\n")
         .filter((x) => x.trim())
-        .map((x) => JSON.parse(x));
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line)];
+          } catch {
+            // Match native JSONL loading, including a writer's partial final record.
+            return [];
+          }
+        });
       // inMemory applies native migrations/leaf semantics without changing the on-disk file.
       const manager = SessionManager.inMemory(info.cwd, undefined, records);
       const p = new Projection();
@@ -179,5 +187,12 @@ export async function loadToken(file) {
   const token = (await readFile(file, "utf8")).trim();
   if (token.length < 32)
     throw new Error("Pairing secret must contain at least 32 characters.");
+  try {
+    validateHeaderValue("Authorization", `Bearer ${token}`);
+  } catch {
+    throw new Error(
+      "Pairing secret must be a legal single-line HTTP header value. Remove embedded newlines/control characters or use a new private secret file via PI_MOBILE_TOKEN_FILE.",
+    );
+  }
   return token;
 }
