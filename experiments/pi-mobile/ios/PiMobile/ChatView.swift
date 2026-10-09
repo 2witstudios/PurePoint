@@ -147,7 +147,7 @@ struct ChatView: View {
                             Image("PurePointLogo").resizable().scaledToFit().frame(width: 88, height: 88)
                                 .frame(maxWidth: .infinity).padding(.top, 64).padding(.bottom, 40).accessibilityHidden(true)
                         }
-                        ForEach(TranscriptRows.make(messages: model.snapshot?.messages ?? [], tools: model.snapshot?.tools ?? [])) { row in TranscriptRowView(row: row) }
+                        ForEach(model.transcriptRows) { row in TranscriptRowView(row: row).equatable() }
                         if model.busy { HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Working…").font(.callout).foregroundStyle(.secondary) }.accessibilityElement(children: .combine) }
                         ForEach(Array((model.snapshot?.notices ?? []).enumerated()), id: \.offset) { _, notice in Text(notice).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
                         Color.clear.frame(height: 1).id("bottom").onAppear { following = true }.onDisappear { following = false }
@@ -230,14 +230,20 @@ struct ChatView: View {
 struct AttachmentChip: View {
     let file: ComposerAttachment
     let remove: () -> Void
+    @State private var thumbnail: UIImage?
     var body: some View {
         HStack(spacing: 8) {
-            if file.isImage, let image = UIImage(data: file.data) {
+            if file.isImage, let image = thumbnail {
                 Image(uiImage: image).resizable().scaledToFill().frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
             } else { Image(systemName: "doc.text").frame(width: 28, height: 36).accessibilityHidden(true) }
             VStack(alignment: .leading, spacing: 2) { Text(file.name).font(.caption.weight(.medium)).lineLimit(1); Text(file.isImage ? "Image" : "Text").font(.caption2).foregroundStyle(.secondary) }.frame(maxWidth: 140, alignment: .leading)
             Button(action: remove) { Image(systemName: "xmark").font(.caption).frame(width: 44, height: 44) }.accessibilityLabel("Remove \(file.name)")
         }.padding(8).background(Color(uiColor: .tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .task(id: file.id) {
+            guard file.isImage else { return }
+            let data = file.data
+            thumbnail = await Task.detached(priority: .utility) { UIImage(data: data)?.preparingForDisplay() }.value
+        }
     }
 }
 struct MessageView: View {
@@ -250,17 +256,20 @@ struct MessageView: View {
         } else if message.role == "notice" {
             Label { Text(message.text).font(.footnote).textSelection(.enabled) } icon: { Image(systemName: "text.alignleft") }.foregroundStyle(.secondary)
         } else {
-            VStack(alignment: .leading, spacing: 12) { RichText(text: message.text); if let error = message.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) } }
+            VStack(alignment: .leading, spacing: 12) { RichText(text: message.text).equatable(); if let error = message.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) } }
         }
     }
 }
-struct RichText: View {
+struct RichText: View, Equatable {
     let text: String
+    @State private var rendered: [RenderedMarkdownBlock]?
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            ForEach(Array(MarkdownBlocks.split(text).enumerated()), id: \.offset) { _, block in
+            if rendered == nil { Text(text).font(.body).lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+            ForEach(Array((rendered ?? []).enumerated()), id: \.offset) { _, block in
                 switch block {
-                case .prose(let prose): Text((try? AttributedString(markdown: prose, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(prose)).font(.body).lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                case .prose(let prose): Text(prose).font(.body).lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 case .code(let language, let code):
                     VStack(alignment: .leading, spacing: 10) {
                         HStack { Text(language.isEmpty ? "Code" : language).font(.caption).foregroundStyle(.secondary); Spacer(); Button { UIPasteboard.general.string = code; UIAccessibility.post(notification: .announcement, argument: "Code copied") } label: { Label("Copy", systemImage: "doc.on.doc").font(.caption) }.accessibilityLabel("Copy code") }
@@ -268,6 +277,12 @@ struct RichText: View {
                     }.padding(14).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+        }
+        .task(id: text) {
+            let source = text
+            let blocks = await Task.detached(priority: .userInitiated) { MarkdownBlocks.render(source) }.value
+            guard !Task.isCancelled else { return }
+            rendered = blocks
         }
     }
 }
@@ -284,7 +299,7 @@ struct ToolView: View {
         }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-struct TranscriptRowView: View {
+struct TranscriptRowView: View, Equatable {
     let row: TranscriptRow
     var body: some View {
         switch row {

@@ -44,7 +44,7 @@ enum LocalRecoveryStore {
         return base.appendingPathComponent(name + ".json")
     }
     static func load<T: Decodable>(_ name: String, as type: T.Type) -> T? {
-        guard let file = try? url(name), let data = try? Data(contentsOf: file), data.count <= 40 * 1024 * 1024 else { return nil }
+        guard let file = try? url(name), let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 40 * 1024 * 1024, let data = try? Data(contentsOf: file), data.count <= 40 * 1024 * 1024 else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
     static func save<T: Encodable>(_ value: T, name: String) throws {
@@ -68,7 +68,19 @@ enum MarkdownBlock: Equatable, Identifiable {
     case code(language: String, text: String)
     var id: String { switch self { case .prose(let text): return "p:" + text; case .code(let language, let text): return "c:" + language + text } }
 }
+enum RenderedMarkdownBlock: Sendable {
+    case prose(AttributedString)
+    case code(language: String, text: String)
+}
 enum MarkdownBlocks {
+    static func render(_ text: String) -> [RenderedMarkdownBlock] {
+        split(text).map { block in
+            switch block {
+            case .prose(let prose): return .prose((try? AttributedString(markdown: prose, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(prose))
+            case .code(let language, let code): return .code(language: language, text: code)
+            }
+        }
+    }
     static func split(_ text: String) -> [MarkdownBlock] {
         var result: [MarkdownBlock] = [], buffer: [String] = [], language: String? = nil
         func flush() { let text = buffer.joined(separator: "\n"); if !text.isEmpty { if let language { result.append(.code(language: language, text: text)) } else { result.append(.prose(text)) } }; buffer = [] }
@@ -107,9 +119,9 @@ struct PairingCode: Decodable {
         return code
     }
 }
-struct ChatMessage: Codable, Identifiable { let id: String; let role: String; let text: String; var activity: String?; var error: String? }
-struct ToolActivity: Codable, Identifiable { let id: String; let name: String; let state: String; let text: String }
-enum TranscriptRow: Identifiable {
+struct ChatMessage: Codable, Identifiable, Equatable, Sendable { let id: String; let role: String; let text: String; var activity: String?; var error: String? }
+struct ToolActivity: Codable, Identifiable, Equatable, Sendable { let id: String; let name: String; let state: String; let text: String }
+enum TranscriptRow: Identifiable, Equatable, Sendable {
     case message(ChatMessage)
     case activity([ToolActivity])
     var id: String {
@@ -145,23 +157,23 @@ enum TranscriptRows {
         return rows
     }
 }
-struct QueuedText: Codable { let mode: String; let text: String }
-struct ExtensionDialog: Codable, Identifiable {
+struct QueuedText: Codable, Sendable { let mode: String; let text: String }
+struct ExtensionDialog: Codable, Identifiable, Sendable {
     let id: String; let method: String; var title: String?; var message: String?; var prefill: String?; var placeholder: String?; var options: [String]?
 }
-struct EditorText: Codable { let id: String; let text: String }
-struct CanceledText: Codable, Identifiable { let id: String; let text: String; let sessionId: String }
-struct Snapshot: Codable {
+struct EditorText: Codable, Sendable { let id: String; let text: String }
+struct CanceledText: Codable, Identifiable, Sendable { let id: String; let text: String; let sessionId: String }
+struct Snapshot: Codable, Sendable {
     let version: Int; let epoch: String; let revision: Int; let busy: Bool; var runId: String?; let sessionId: String; let title: String
     let messages: [ChatMessage]; let tools: [ToolActivity]; let queue: [QueuedText]; let dialogs: [ExtensionDialog]; let notices: [String]; var error: String?; var editor: EditorText? = nil; var canceled: [CanceledText]? = nil; var capabilities: [String]? = nil
 }
-struct Conversation: Codable, Identifiable { let id: String; let title: String; var date: String? }
-struct History: Codable { let sessionId: String; let title: String; let messages: [ChatMessage] }
-struct Submission: Codable, Identifiable {
+struct Conversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String? }
+struct History: Codable, Sendable { let sessionId: String; let title: String; let messages: [ChatMessage] }
+struct Submission: Codable, Identifiable, Sendable {
     let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool; var attachments: [ComposerAttachment]? = nil
 }
 // Receipts are deliberately independent of transcript rows: acceptance does not imply completion.
-enum JSONValue: Codable {
+enum JSONValue: Codable, Sendable {
     case object([String: JSONValue]), array([JSONValue]), string(String), number(Double), bool(Bool), null
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -181,4 +193,44 @@ enum JSONValue: Codable {
     var strings: [String] { if case .array(let x) = self { return x.compactMap(\.text) }; return [] }
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(self)) }
 }
-struct WireEnvelope: Decodable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String? }
+struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String? }
+
+// A serial utility queue keeps encoding/file IO away from keyboard and rendering.
+// Coalescing replaces older pending values; serial execution prevents stale writes.
+final class CoalescedWriter: @unchecked Sendable {
+    private let queue: DispatchQueue
+    private let delay: TimeInterval
+    private var pending: [String: @Sendable () -> Void] = [:]
+    init(queue: DispatchQueue = DispatchQueue(label: "pi.mobile.persistence", qos: .utility), delay: TimeInterval = 0.25) {
+        self.queue = queue; self.delay = delay
+    }
+    func schedule(key: String, work: @escaping @Sendable () -> Void) {
+        queue.async {
+            let alreadyScheduled = self.pending[key] != nil
+            self.pending[key] = work
+            if !alreadyScheduled {
+                self.queue.asyncAfter(deadline: .now() + self.delay) { self.pending.removeValue(forKey: key)?() }
+            }
+        }
+    }
+    func flush(completion: @escaping @Sendable () -> Void = {}) {
+        queue.async {
+            let work = self.pending; self.pending.removeAll()
+            for action in work.values { action() }
+            completion()
+        }
+    }
+}
+enum IncomingRecord: Sendable {
+    case snapshot(Snapshot, [TranscriptRow])
+    case envelope(WireEnvelope)
+    static func decode(_ data: Data) throws -> Self {
+        struct Header: Decodable { let type: String }
+        let decoder = JSONDecoder()
+        if try decoder.decode(Header.self, from: data).type == "snapshot" {
+            let state = try decoder.decode(Snapshot.self, from: data)
+            return .snapshot(state, TranscriptRows.make(messages: state.messages, tools: state.tools))
+        }
+        return .envelope(try decoder.decode(WireEnvelope.self, from: data))
+    }
+}

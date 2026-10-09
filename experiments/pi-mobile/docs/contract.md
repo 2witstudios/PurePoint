@@ -88,3 +88,12 @@ Pinned upstream RPC types and implementation at `ce950d78f424dcaf9f5d6a03ce80ab1
 - Given submission/connection loss, original text and attachment bytes should remain in local recovery; newer typing/attachments should remain unchanged. Uncertain inputs must never auto-resend. Draft attachments persist per endpoint/session in a private app-support JSON file (10 cached drafts), recovery receipts persist separately (50 receipts). These are draft/recovery data, not a second conversation database. Older text-only receipts migrate from UserDefaults. Native image history remains Pi's authoritative storage and mobile history displays image placeholders.
 
 Import bounds: four attachments, total prepared bytes 512 KiB; images source ≤20 MiB, thumbnail ≤1600px, prepared JPEG ≤256 KiB each; UTF-8 file/extracted PDF text ≤32 KiB, PDF ≤30 pages; combined prompt text ≤64 KiB. Files are read under a scoped URL grant and are not written into a project on the Mac.
+
+### Interaction responsiveness
+
+- Given cold launch, saved attachment/recovery JSON and the connection Keychain read should load off the UI actor. Editing while recovery loads should keep the newer local attachment draft. Connecting waits for recovery hydration without blocking the composer.
+- Given rapid typing or attachment edits, persistence should coalesce for 250 ms on a serial utility queue; the latest pending value per storage key wins. Backgrounding flushes pending writes asynchronously. Sending flushes recovery before network transmission, while the composer remains editable.
+- Given streamed snapshots, decoding and native/live transcript grouping should run off the UI actor, in receive order. A connection-generation check after background work should prevent a disconnected socket from applying stale results.
+- Given unchanged message content while typing or receiving a status update, SwiftUI should skip the existing row body. Markdown parsing and attachment image preparation should run off the UI actor; newer Markdown tasks must cancel stale view updates.
+
+Grounding: Apple's [Improving app responsiveness](https://developer.apple.com/documentation/xcode/improving-app-responsiveness) recommends keeping synchronous non-UI work off the main thread and verifying hangs with device profiling. These changes address observed code paths; their device latency benefit remains to be measured on the owner's phone.

@@ -2,7 +2,8 @@ import Foundation
 import SwiftUI
 
 @MainActor final class ChatModel: ObservableObject {
-    @Published var snapshot: Snapshot?
+    @Published var snapshot: Snapshot? { didSet { if !projectingSnapshot, let snapshot { transcriptRows = TranscriptRows.make(messages: snapshot.messages, tools: snapshot.tools) } else if snapshot == nil { transcriptRows = [] } } }
+    private(set) var transcriptRows: [TranscriptRow] = []
     @Published var connected = false
     @Published var connectionStatus = "Not connected"
     @Published var error: String?
@@ -20,7 +21,12 @@ import SwiftUI
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
     private var drafts = UserDefaults.standard.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
-    private var attachmentDrafts = LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:]
+    private var attachmentDrafts: [String: [ComposerAttachment]] = [:]
+    private let writer = CoalescedWriter()
+    private var recoveryTask: Task<Void, Never>?
+    private var connectionTask: Task<Void, Never>?
+    private var recoveryLoaded = false
+    private var projectingSnapshot = false
     private var cursor = SnapshotCursor()
     private var seenEditorIds = Set<String>()
     private var seenCanceledIds = Set(UserDefaults.standard.stringArray(forKey: "pi.canceledIds") ?? [])
@@ -35,23 +41,49 @@ import SwiftUI
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
     init() {
-        let legacy = UserDefaults.standard.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
-        if let saved = LocalRecoveryStore.load("submissions", as: [Submission].self) ?? legacy {
-            submissions = saved.map { item in var item = item; if item.status == "Sending" { item.status = "Delivery uncertain"; item.recoverable = true }; return item }
-        }
         draft = drafts[draftKey] ?? ""
-        attachments = attachmentDrafts[draftKey] ?? []
+        recoveryTask = Task { [weak self] in
+            let saved = await Task.detached(priority: .utility) {
+                let legacy = UserDefaults.standard.data(forKey: "pi.submissions").flatMap { try? JSONDecoder().decode([Submission].self, from: $0) }
+                return (LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], LocalRecoveryStore.load("submissions", as: [Submission].self) ?? legacy ?? [])
+            }.value
+            guard let self else { return }
+            // Edits made while loading always win over saved recovery.
+            self.attachmentDrafts = saved.0.merging(self.attachmentDrafts) { _, current in current }
+            let currentIds = Set(self.submissions.map(\.id))
+            self.submissions = saved.1.filter { !currentIds.contains($0.id) }.map { item in
+                var item = item
+                if item.status == "Sending" { item.status = "Delivery uncertain"; item.recoverable = true }
+                return item
+            } + self.submissions
+            self.attachments = self.attachmentDrafts[self.draftKey] ?? self.attachments
+            self.recoveryLoaded = true
+            self.saveSubmissions(); self.saveAttachmentDraft()
+        }
     }
-    private func saveDraft() { drafts[draftKey] = String(draft.prefix(65536)); if drafts.count > 100 { drafts.removeValue(forKey: drafts.keys.first ?? "") }; UserDefaults.standard.set(drafts, forKey: "pi.drafts") }
+    private func saveDraft() {
+        drafts[draftKey] = String(draft.prefix(65536))
+        if drafts.count > 100 { drafts.removeValue(forKey: drafts.keys.first(where: { $0 != draftKey }) ?? "") }
+        let value = drafts
+        writer.schedule(key: "drafts") { UserDefaults.standard.set(value, forKey: "pi.drafts") }
+    }
     private func saveSubmissions() {
-        do { try LocalRecoveryStore.save(Array(submissions.suffix(50)), name: "submissions"); UserDefaults.standard.removeObject(forKey: "pi.submissions") }
-        catch { self.error = "Could not save message recovery on this phone." }
+        guard recoveryLoaded else { return }
+        let value = Array(submissions.suffix(50))
+        writer.schedule(key: "submissions") { [weak self] in
+            do { try LocalRecoveryStore.save(value, name: "submissions"); UserDefaults.standard.removeObject(forKey: "pi.submissions") }
+            catch { Task { @MainActor [weak self] in self?.error = "Could not save message recovery on this phone." } }
+        }
     }
     private func saveAttachmentDraft() {
         attachmentDrafts[draftKey] = attachments
         while attachmentDrafts.count > 10, let key = attachmentDrafts.keys.first(where: { $0 != draftKey }) { attachmentDrafts.removeValue(forKey: key) }
-        do { try LocalRecoveryStore.save(attachmentDrafts, name: "attachment-drafts") }
-        catch { self.error = "Could not save attachments on this phone. Keep the app open until sending." }
+        guard recoveryLoaded else { return }
+        let value = attachmentDrafts
+        writer.schedule(key: "attachments") { [weak self] in
+            do { try LocalRecoveryStore.save(value, name: "attachment-drafts") }
+            catch { Task { @MainActor [weak self] in self?.error = "Could not save attachments on this phone. Keep the app open until sending." } }
+        }
     }
     func addAttachment(_ file: ComposerAttachment) {
         guard attachments.count < 4, attachments.reduce(file.data.count, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Attach up to four files, totaling 512 KiB after preparation."; return }
@@ -65,7 +97,20 @@ import SwiftUI
     }
     func connect() {
         guard !demo, foreground, socket == nil, let url = ConnectionAddress.url(endpoint) else { return }
-        let secret = PairingSecret.read(endpoint: endpoint)
+        guard connectionTask == nil else { return }
+        wantsConnection = true
+        let address = endpoint
+        connectionStatus = "Connecting to your Mac…"
+        connectionTask = Task { [weak self] in
+            await self?.recoveryTask?.value
+            let secret = await Task.detached(priority: .userInitiated) { PairingSecret.read(endpoint: address) }.value
+            guard !Task.isCancelled, let self else { return }
+            self.connectionTask = nil
+            guard self.foreground, self.wantsConnection, self.endpoint == address, self.socket == nil else { return }
+            self.startConnection(url: url, secret: secret)
+        }
+    }
+    private func startConnection(url: URL, secret: String) {
         guard !secret.isEmpty else { error = "Add the pairing secret in Connection settings."; return }
         wantsConnection = true; retryTask?.cancel(); generation += 1; let current = generation
         cursor.reset(); connectionStatus = "Connecting to your Mac…"; error = nil
@@ -78,20 +123,26 @@ import SwiftUI
                     guard let self, current == self.generation else { return }
                     let data: Data
                     switch message { case .string(let text): data = Data(text.utf8); case .data(let bytes): data = bytes; @unknown default: throw MobileError("Unsupported message from bridge.") }
-                    try self.receive(data)
+                    let record = try await Task.detached(priority: .userInitiated) { try IncomingRecord.decode(data) }.value
+                    guard current == self.generation else { return }
+                    try self.receive(record)
                 }
             } catch { guard let self, current == self.generation else { return }; self.connectionLost(error.localizedDescription) }
         }
         Task { [weak self] in
             guard let self else { return }
-            do { let data = try await self.call("sync"); guard current == self.generation else { return }; let state = try data.decode(Snapshot.self); try self.apply(state); self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryDelay = 2 }
+            do {
+                try await self.syncState()
+                guard current == self.generation else { return }
+                self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryDelay = 2
+            }
             catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }
     }
-    func setForeground(_ active: Bool) { foreground = active; if active { if wantsConnection || !endpoint.isEmpty { connect() } } else { detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac" } }
+    func setForeground(_ active: Bool) { foreground = active; if active { if wantsConnection || !endpoint.isEmpty { connect() } } else { writer.flush(); detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac" } }
     func disconnect() { wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected" }
     private func detach() {
-        generation += 1; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
+        generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
         let outstanding = pending; pending = [:]; for timeout in timeouts.values { timeout.cancel() }; timeouts = [:]
         for continuation in outstanding.values { continuation.resume(throwing: MobileError("Connection interrupted. Delivery may be uncertain. Inspect the conversation before sending again.")) }
     }
@@ -101,10 +152,13 @@ import SwiftUI
         let delay = retryDelay; retryDelay = min(retryDelay * 2, 30)
         retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled else { return }; self?.connect() }
     }
-    private func receive(_ data: Data) throws {
-        let record = try JSONDecoder().decode(WireEnvelope.self, from: data)
+    private func receive(_ incoming: IncomingRecord) throws {
+        let record: WireEnvelope
+        switch incoming {
+        case .snapshot(let state, let rows): try apply(state, rows: rows); return
+        case .envelope(let envelope): record = envelope
+        }
         switch record.type {
-        case "snapshot": try apply(JSONDecoder().decode(Snapshot.self, from: data))
         case "receipt":
             guard let id = record.id, let continuation = pending.removeValue(forKey: id) else { return }
             timeouts.removeValue(forKey: id)?.cancel()
@@ -113,7 +167,7 @@ import SwiftUI
         default: throw MobileError("Unsupported bridge response. Update the app and bridge together.")
         }
     }
-    private func apply(_ state: Snapshot) throws {
+    private func apply(_ state: Snapshot, rows: [TranscriptRow]? = nil) throws {
         guard state.version == 1 else { throw MobileError("Unsupported bridge version. Update the app and bridge together.") }
         guard cursor.accept(epoch: state.epoch, revision: state.revision) else { return }
         let previous = snapshot?.sessionId
@@ -121,13 +175,19 @@ import SwiftUI
         let localAttachments = attachments
         let oldKey = draftKey
         if previous != state.sessionId { saveDraft() }
+        if let rows { projectingSnapshot = true; transcriptRows = rows }
         snapshot = state
+        projectingSnapshot = false
+        let previousCanceled = seenCanceledIds.count
         for canceled in state.canceled ?? [] where !seenCanceledIds.contains(canceled.id) {
             submissions.append(Submission(id: canceled.id, text: canceled.text, sessionId: canceled.sessionId, status: "Canceled by Stop", recoverable: true))
             seenCanceledIds.insert(canceled.id)
         }
         if seenCanceledIds.count > 1000 { seenCanceledIds = Set(seenCanceledIds.suffix(1000)) }
-        UserDefaults.standard.set(Array(seenCanceledIds), forKey: "pi.canceledIds")
+        if previousCanceled != seenCanceledIds.count {
+            let ids = Array(seenCanceledIds)
+            writer.schedule(key: "canceled") { UserDefaults.standard.set(ids, forKey: "pi.canceledIds") }
+        }
         if let offered = state.editor, !seenEditorIds.contains(offered.id) { seenEditorIds.insert(offered.id); editorOffer = offered.text }
         if previous != state.sessionId {
             var next = DraftState(text: drafts[draftKey] ?? "")
@@ -138,6 +198,16 @@ import SwiftUI
             attachments = nextAttachments
         }
         if let failure = state.error { error = failure }
+    }
+    private func syncState() async throws {
+        let current = generation
+        let data = try await call("sync")
+        let (state, rows) = try await Task.detached(priority: .userInitiated) {
+            let state = try data.decode(Snapshot.self)
+            return (state, TranscriptRows.make(messages: state.messages, tools: state.tools))
+        }.value
+        guard current == generation else { throw MobileError("Connection changed while refreshing. Reconnect before continuing.") }
+        try apply(state, rows: rows)
     }
     private func call(_ op: String, fields: [String: Any] = [:], id: String = UUID().uuidString) async throws -> JSONValue {
         guard let socket else { throw MobileError("Connect to your Mac before sending.") }
@@ -167,6 +237,8 @@ import SwiftUI
         let id = UUID().uuidString
         submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files)); draft = ""; attachments = []
         Task {
+            // Persist the recoverable submission before transmission, without blocking typing.
+            await withCheckedContinuation { continuation in writer.flush { continuation.resume() } }
             do {
                 if demo { await demoReply(content.message); updateSubmission(id, status: "Accepted", recoverable: false); return }
                 let data = try await call("send", fields: ["epoch": state.epoch, "text": content.message, "mode": mode, "images": content.images], id: id)
@@ -187,16 +259,16 @@ import SwiftUI
         guard let state = snapshot, let run = state.runId else { return !busy }
         do {
             _ = try await call("stop", fields: ["epoch": state.epoch, "runId": run])
-            let fresh = try await call("sync"); try apply(fresh.decode(Snapshot.self)); return true
+            try await syncState(); return true
         } catch { self.error = error.localizedDescription; return false }
     }
     func loadConversations() async {
         if demo { conversations = [Conversation(id: "previous", title: "A previous thought", date: nil)]; return }
-        do { conversations = try await call("sessions")["sessions"].decode([Conversation].self) } catch { self.error = error.localizedDescription }
+        do { let value = try await call("sessions")["sessions"]; conversations = try await Task.detached(priority: .userInitiated) { try value.decode([Conversation].self) }.value } catch { self.error = error.localizedDescription }
     }
     func browse(_ conversation: Conversation) async {
         if demo { browsing = History(sessionId: conversation.id, title: conversation.title, messages: [ChatMessage(id: "old", role: "assistant", text: "There is room here for a fresh idea.")]); return }
-        do { browsing = try await call("history", fields: ["sessionId": conversation.id]).decode(History.self) } catch { self.error = error.localizedDescription }
+        do { let value = try await call("history", fields: ["sessionId": conversation.id]); browsing = try await Task.detached(priority: .userInitiated) { try value.decode(History.self) }.value } catch { self.error = error.localizedDescription }
     }
     func changeSession(to id: String? = nil, stopFirst: Bool = false) async {
         guard !changingSession, let state = snapshot else { return }; changingSession = true; defer { changingSession = false }
@@ -204,7 +276,7 @@ import SwiftUI
         do {
             var fields: [String: Any] = ["epoch": state.epoch]; if let id { fields["sessionId"] = id }
             _ = try await call(id == nil ? "new" : "resume", fields: fields)
-            let fresh = try await call("sync"); try apply(fresh.decode(Snapshot.self)); browsing = nil
+            try await syncState(); browsing = nil
         } catch { self.error = error.localizedDescription }
     }
     func answer(_ dialog: ExtensionDialog, value: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {

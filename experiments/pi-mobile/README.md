@@ -125,6 +125,8 @@ npm run check
 npm audit
 swiftc ios/PiMobile/ChatDomain.swift ios/LogicChecks.swift -o /tmp/pi-mobile-logic-checks
 /tmp/pi-mobile-logic-checks
+swiftc ios/PiMobile/ChatDomain.swift verification/ResponsivenessChecks.swift -o /tmp/pi-mobile-responsiveness-checks
+/tmp/pi-mobile-responsiveness-checks
 swiftc -typecheck ios/PiMobile/ChatDomain.swift ios/PiMobile/PairingSecret.swift ios/PiMobile/ChatModel.swift
 swiftc -frontend -parse ios/PiMobile/*.swift ios/PiMobileTests/*.swift
 plutil -lint ios/PiMobile.xcodeproj/project.pbxproj ios/PiMobile/Info.plist
