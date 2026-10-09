@@ -425,3 +425,303 @@ test("shell projection bounds output without losing status and handles empty out
   assert.match(p.messages[0].text, /no output/);
   assert.match(p.messages[0].text, /Exit code: 0/);
 });
+
+const nativeMessage = (id, message, parentId = null) => ({
+  id,
+  parentId,
+  type: "message",
+  message,
+});
+const complete = (p, message) => {
+  p.event({ type: "message_start", message });
+  p.event({ type: "message_end", message });
+};
+
+for (const contents of [
+  ["First", "Second"],
+  ["Identical", "Identical"],
+]) {
+  test(`same-millisecond user occurrences retain ${contents[0] === contents[1] ? "identical" : "distinct"} messages through start/end and native refresh`, () => {
+    const p = new Projection();
+    const messages = contents.map((text) => ({
+      role: "user",
+      timestamp: 100,
+      content: [{ type: "text", text }],
+    }));
+    for (const message of messages) complete(p, message);
+    assert.deepEqual(
+      p.messages.map((r) => r.text),
+      contents,
+    );
+    assert.equal(new Set(p.messages.map((r) => r.id)).size, 2);
+    const entries = messages.map((message, i) =>
+      nativeMessage(`native-${i}`, message, i ? "native-0" : null),
+    );
+    p.load(entries, "native-1");
+    assert.deepEqual(
+      p.messages.map((r) => r.id),
+      ["native-0", "native-1"],
+    );
+    p.load(entries, "native-1");
+    assert.deepEqual(
+      p.messages.map((r) => r.text),
+      contents,
+    );
+  });
+}
+
+test("partial persistence and repeated refreshes consume each identical live occurrence only once", () => {
+  const p = new Projection();
+  const message = { role: "user", timestamp: 100, content: "Repeated" };
+  complete(p, message);
+  complete(p, message);
+  const entries = [nativeMessage("first", message)];
+  p.load(entries, "first");
+  assert.equal(p.messages.length, 2);
+  assert.equal(p.messages[0].id, "first");
+  const secondId = p.messages[1].id;
+  p.load(entries, "first");
+  assert.equal(p.messages[1].id, secondId);
+  complete(p, message);
+  const thirdId = p.messages[2].id;
+  p.load(entries, "first");
+  assert.equal(p.messages.length, 3);
+  entries.push(nativeMessage("second", message, "first"));
+  p.load(entries, "second");
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["first", "second", thirdId],
+  );
+  entries.push(nativeMessage("third", message, "second"));
+  p.load(entries, "third");
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["first", "second", "third"],
+  );
+});
+
+test("same-millisecond assistant partial/final occurrences remain separate from persisted predecessors", () => {
+  const p = new Projection();
+  const first = {
+    role: "assistant",
+    timestamp: 10,
+    content: [{ type: "text", text: "First" }],
+    stopReason: "stop",
+  };
+  complete(p, first);
+  const entries = [nativeMessage("first", first)];
+  p.load(entries, "first");
+  p.event({
+    type: "message_start",
+    message: { role: "assistant", timestamp: 10, content: [] },
+  });
+  p.event({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "Second partial",
+    },
+  });
+  const partialId = p.messages[1].id;
+  assert.notEqual(partialId, "first");
+  p.load(entries, "first");
+  p.load(entries, "first");
+  assert.deepEqual(
+    p.messages.map((r) => r.text),
+    ["First", "Second partial"],
+  );
+  assert.equal(p.messages[1].id, partialId);
+  const second = {
+    ...first,
+    content: [{ type: "text", text: "Second final" }],
+  };
+  p.event({ type: "message_end", message: second });
+  assert.deepEqual(
+    p.messages.map((r) => r.text),
+    ["First", "Second final"],
+  );
+  assert.equal(p.messages[1].id, partialId);
+  entries.push(nativeMessage("second", second, "first"));
+  p.load(entries, "second");
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["first", "second"],
+  );
+});
+
+test("an identical new assistant occurrence survives old native entries and branch changes", () => {
+  const p = new Projection();
+  const message = {
+    role: "assistant",
+    timestamp: 10,
+    content: [{ type: "text", text: "Repeated" }],
+  };
+  const entries = [
+    nativeMessage("old", message),
+    nativeMessage("other", {
+      role: "user",
+      timestamp: 11,
+      content: "Other branch",
+    }),
+  ];
+  complete(p, message);
+  p.load(entries, "old");
+  p.event({ type: "message_start", message: { ...message, content: [] } });
+  p.event({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "Repeated",
+    },
+  });
+  p.load(entries, "other");
+  assert.deepEqual(
+    p.messages.map((r) => r.text),
+    ["Other branch", "Repeated"],
+  );
+  p.event({ type: "message_end", message });
+  p.load(entries, "other");
+  assert.deepEqual(
+    p.messages.map((r) => r.text),
+    ["Other branch", "Repeated"],
+  );
+  entries.push(nativeMessage("new", message, "other"));
+  p.load(entries, "new");
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["other", "new"],
+  );
+  p.load(entries, "old");
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["old"],
+  );
+});
+
+test("tool and shell occurrences use unique entry IDs while tool IDs keep the client correlation suffix", () => {
+  for (const message of [
+    {
+      role: "toolResult",
+      timestamp: 100,
+      toolCallId: "call-123",
+      toolName: "read",
+      content: "Repeated",
+    },
+    {
+      role: "bashExecution",
+      timestamp: 100,
+      command: "printf hi",
+      output: "hi",
+      exitCode: 0,
+    },
+  ]) {
+    const p = new Projection();
+    complete(p, message);
+    complete(p, message);
+    assert.equal(p.messages.length, 2);
+    assert.equal(new Set(p.messages.map((r) => r.id)).size, 2);
+    if (message.role === "toolResult")
+      assert.ok(p.messages.every((r) => r.id.endsWith("-call-123")));
+    const entries = [
+      nativeMessage("first", message),
+      nativeMessage("second", message, "first"),
+    ];
+    p.load(entries, "second");
+    assert.equal(p.messages.length, 2);
+    assert.equal(new Set(p.messages.map((r) => r.id)).size, 2);
+    if (message.role === "toolResult")
+      assert.deepEqual(
+        p.messages.map((r) => r.id),
+        ["first-call-123", "second-call-123"],
+      );
+    else
+      assert.deepEqual(
+        p.messages.map((r) => r.id),
+        ["first", "second"],
+      );
+  }
+});
+
+test("full native payload matching does not conflate messages with the same clipped display text", () => {
+  const p = new Projection();
+  const prefix = "x".repeat(70000);
+  const first = { role: "user", timestamp: 100, content: prefix + "first" };
+  const second = { ...first, content: prefix + "second" };
+  complete(p, first);
+  complete(p, second);
+  const secondId = p.messages[1].id;
+  p.load([nativeMessage("first", first)], "first");
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["first", secondId],
+  );
+});
+
+for (const texts of [
+  ["First", "Second"],
+  ["Identical", "Identical"],
+]) {
+  test(`interleaved same-timestamp user starts/ends pair ${texts[0] === texts[1] ? "identical" : "distinct"} occurrences`, () => {
+    const p = new Projection();
+    const messages = texts.map((content) => ({
+      role: "user",
+      timestamp: 10,
+      content,
+    }));
+    for (const message of messages) p.event({ type: "message_start", message });
+    const ids = p.messages.map((r) => r.id);
+    for (const message of messages) p.event({ type: "message_end", message });
+    assert.deepEqual(
+      p.messages.map((r) => r.text),
+      texts,
+    );
+    assert.deepEqual(
+      p.messages.map((r) => r.id),
+      ids,
+    );
+    assert.equal(new Set(ids).size, 2);
+    const entries = messages.map((m, i) =>
+      nativeMessage(`native-${i}`, m, i ? "native-0" : null),
+    );
+    p.load(entries, "native-1");
+    assert.deepEqual(
+      p.messages.map((r) => r.id),
+      ["native-0", "native-1"],
+    );
+  });
+}
+
+test("native persistence between a user start and end does not create a second occurrence", () => {
+  const p = new Projection();
+  const message = {
+    role: "user",
+    timestamp: 10,
+    content: "Started then persisted",
+  };
+  p.event({ type: "message_start", message });
+  p.load([nativeMessage("native", message)], "native");
+  p.event({ type: "message_end", message });
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["native"],
+  );
+});
+
+test("native-only colliding timestamps use entry IDs and repeated live occurrences retain the row bound", () => {
+  const message = { role: "user", timestamp: 10, content: "Repeated" };
+  const p = new Projection();
+  p.load(
+    [nativeMessage("one", message), nativeMessage("two", message, "one")],
+    "two",
+  );
+  assert.deepEqual(
+    p.messages.map((r) => r.id),
+    ["one", "two"],
+  );
+  p.reset();
+  for (let i = 0; i < 600; i++) complete(p, message);
+  assert.equal(p.messages.length, 500);
+  assert.equal(new Set(p.messages.map((r) => r.id)).size, 500);
+});

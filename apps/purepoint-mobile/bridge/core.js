@@ -93,8 +93,13 @@ const customKey = (m) =>
     .digest("hex");
 const visible = (m) =>
   m.role !== "system" && (m.role !== "custom" || m.display);
-const key = (m) => `${m.role}-${m.timestamp ?? 0}-${m.toolCallId ?? ""}`;
-function row(m, id = key(m)) {
+const eventKey = (m) => `${m.role}-${m.timestamp ?? 0}-${m.toolCallId ?? ""}`;
+const messageKey = (m) =>
+  createHash("sha256").update(JSON.stringify(m)).digest("hex");
+// The client correlates tool results using the full toolCallId suffix.
+const messageId = (m, id) =>
+  m.role === "toolResult" ? `${id}-${m.toolCallId}` : id;
+function row(m, id) {
   if (m.role === "bashExecution") {
     const status = m.cancelled
       ? "Command cancelled"
@@ -132,15 +137,23 @@ export class Projection {
     this.tools = [];
     this.persistedCustom = new Set();
     this.customSequence = 0;
+    this.persistedMessages = new Set();
+    this.messageSequence = 0;
+    this.started = [];
+    this.liveId = null;
   }
   get messages() {
-    return [...this.rows, ...(this.live ? [row(this.live)] : [])].slice(-500);
+    return [
+      ...this.rows,
+      ...(this.live ? [row(this.live, this.liveId)] : []),
+    ].slice(-500);
   }
   load(entries, leafId) {
     const path = activeBranch(entries, leafId);
     const rows = [];
     for (const e of path) {
-      if (e.type === "message" && visible(e.message)) rows.push(row(e.message));
+      if (e.type === "message" && visible(e.message))
+        rows.push(row(e.message, messageId(e.message, e.id)));
       else if (e.type === "custom_message" && e.display)
         rows.push({ id: e.id, role: "custom", text: contentText(e.content) });
       else if (e.type === "compaction" || e.type === "branch_summary")
@@ -158,9 +171,16 @@ export class Projection {
     this.tools = this.tools.filter(
       (tool) => selectedTools.has(tool.id) || !persistedTools.has(tool.id),
     );
-    const persisted = new Set(
-      entries.filter((x) => x.type === "message").map((x) => key(x.message)),
-    );
+    // Each newly seen native entry consumes at most one live occurrence. Full
+    // payloads, rather than timestamps or clipped display text, distinguish them.
+    const messageCounts = new Map();
+    const messageEntries = entries.filter((e) => e.type === "message");
+    for (const e of messageEntries) {
+      if (this.persistedMessages.has(e.id)) continue;
+      const identity = messageKey(e.message);
+      messageCounts.set(identity, (messageCounts.get(identity) ?? 0) + 1);
+    }
+    this.persistedMessages = new Set(messageEntries.map((e) => e.id));
     // Match each newly persisted custom occurrence once, across every branch.
     // Previously reconciled entries must not swallow later identical live messages.
     const customCounts = new Map();
@@ -174,14 +194,19 @@ export class Projection {
     this.rows = [
       ...rows,
       ...this.rows.filter((x) => {
-        if (!x._ephemeral || persisted.has(x.id)) return false;
-        const count = customCounts.get(x._customKey) ?? 0;
+        if (!x._ephemeral) return false;
+        const counts = x._customKey ? customCounts : messageCounts;
+        const identity = x._customKey ?? x._messageKey;
+        const count = counts.get(identity) ?? 0;
         if (!count) return true;
-        customCounts.set(x._customKey, count - 1);
+        counts.set(identity, count - 1);
+        const started = this.started.find((item) => item.id === x.id);
+        if (started) started.persisted = true;
         return false;
       }),
     ].slice(-500);
-    if (this.live && persisted.has(key(this.live))) this.live = null;
+    // A streaming assistant has no final native payload yet. Never discard it
+    // because a different, completed occurrence shares its timestamp/content.
   }
   reset() {
     this.rows = [];
@@ -189,10 +214,39 @@ export class Projection {
     this.tools = [];
     this.persistedCustom = new Set();
     this.customSequence = 0;
+    this.persistedMessages = new Set();
+    this.messageSequence = 0;
+    this.started = [];
+    this.liveId = null;
   }
   event(e) {
-    if (e.type === "message_start" && e.message.role === "assistant")
-      this.live = structuredClone(e.message);
+    if (
+      e.type === "message_start" &&
+      visible(e.message) &&
+      e.message.role !== "custom"
+    ) {
+      const m = e.message;
+      const id = messageId(m, `message-live-${++this.messageSequence}`);
+      const identity = messageKey(m);
+      this.started.push({
+        id,
+        eventKey: eventKey(m),
+        identity,
+        persisted: false,
+      });
+      this.started = this.started.slice(-500);
+      if (m.role === "assistant") {
+        this.live = structuredClone(m);
+        this.liveId = id;
+      } else {
+        this.rows.push({
+          ...row(m, id),
+          _ephemeral: true,
+          _messageKey: identity,
+        });
+        this.rows = this.rows.slice(-500);
+      }
+    }
     if (e.type === "message_update" && this.live) {
       const u = e.assistantMessageEvent;
       const i = u.contentIndex;
@@ -210,29 +264,43 @@ export class Projection {
     }
     // Custom messages are complete at message_end; unique occurrence IDs also
     // preserve identical messages sent within the same millisecond.
-    if (
-      e.type === "message_end" ||
-      (e.type === "message_start" &&
-        e.message.role !== "assistant" &&
-        e.message.role !== "custom")
-    ) {
+    if (e.type === "message_end") {
       const m = e.message;
       if (visible(m)) {
-        const r = {
-          ...row(
-            m,
-            m.role === "custom"
-              ? `custom-live-${++this.customSequence}`
-              : key(m),
-          ),
-          _ephemeral: true,
-          ...(m.role === "custom" ? { _customKey: customKey(m) } : {}),
-        };
-        const i = this.rows.findIndex((x) => x.id === r.id);
-        if (i >= 0) this.rows[i] = r;
-        else this.rows.push(r);
-        this.rows = this.rows.slice(-500);
-        if (this.live && key(this.live) === r.id) this.live = null;
+        const identity = m.role === "custom" ? customKey(m) : messageKey(m);
+        // Prefer matching payloads for interleaved starts; identical occurrences
+        // pair in order. Assistant final content can differ from its start.
+        let index = this.started.findIndex(
+          (item) => item.eventKey === eventKey(m) && item.identity === identity,
+        );
+        if (index < 0)
+          index = this.started.findIndex(
+            (item) => item.eventKey === eventKey(m),
+          );
+        const started = index < 0 ? null : this.started.splice(index, 1)[0];
+        if (started?.id === this.liveId) {
+          this.live = null;
+          this.liveId = null;
+        }
+        if (!started?.persisted) {
+          const r = {
+            ...row(
+              m,
+              m.role === "custom"
+                ? `custom-live-${++this.customSequence}`
+                : (started?.id ??
+                    messageId(m, `message-live-${++this.messageSequence}`)),
+            ),
+            _ephemeral: true,
+            ...(m.role === "custom"
+              ? { _customKey: identity }
+              : { _messageKey: identity }),
+          };
+          const i = this.rows.findIndex((x) => x.id === r.id);
+          if (i >= 0) this.rows[i] = r;
+          else this.rows.push(r);
+          this.rows = this.rows.slice(-500);
+        }
       }
     }
     if (e.type.startsWith("tool_execution_")) {
