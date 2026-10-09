@@ -132,12 +132,15 @@ swiftc PurePoint/ChatDomain.swift verification/LogicChecks.swift -o /tmp/pi-mobi
 /tmp/pi-mobile-logic-checks
 swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o /tmp/pi-mobile-responsiveness-checks
 /tmp/pi-mobile-responsiveness-checks
+sh verification/check-recovery.sh
 swiftc -typecheck PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
 swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
 plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
 ```
 
-Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, single-controller/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK; XCTest target and iOS views still require Xcode verification.
+Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, single-controller/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK.
+
+GitHub Actions runs bridge tests and typechecking, standalone Swift logic/responsiveness/recovery checks, and iOS simulator XCTest for mobile changes. The required `Build & Test` check reports on every PR and requires all applicable component jobs to pass; unrelated changes skip component jobs without leaving the required status pending. macOS/Rust changes retain the desktop build and test job. Physical-device and visual acceptance remain owner checks.
 
 Owner acceptance checks:
 
