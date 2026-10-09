@@ -82,6 +82,14 @@ actor GitService {
         for record in status.stdout.split(separator: "\0") {
             guard record.count >= 4 else { continue }
             let name = String(record.dropFirst(3))
+            // Before the first commit there is no HEAD content to delete. A staged
+            // path subsequently removed/renamed contributes no working-tree file.
+            if !hasHead
+                && !FileManager.default.fileExists(
+                    atPath: (worktreePath as NSString).appendingPathComponent(name))
+            {
+                continue
+            }
             let x = record.first!
             let y = record.dropFirst().first!
             let code = x == "?" ? "??" : String(y == " " ? x : y)

@@ -169,4 +169,20 @@ struct WorkingTreeDiffTests {
         #expect(preview.content == "untracked copy\n")
     }
 
+    @Test func givenStagedPathDeletedOrRenamedBeforeFirstCommitShouldOnlyShowExistingFiles() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try "deleted\n".write(toFile: root + "/deleted.txt", atomically: true, encoding: .utf8)
+        try "renamed\n".write(toFile: root + "/old.txt", atomically: true, encoding: .utf8)
+        try git(["add", "."], at: root)
+        try FileManager.default.removeItem(atPath: root + "/deleted.txt")
+        try FileManager.default.moveItem(atPath: root + "/old.txt", toPath: root + "/new.txt")
+        let files = try await GitService.shared.fetchWorkingTreeChanges(worktreePath: root)
+        #expect(files.map(\.filename) == ["new.txt"])
+        let diff = try await GitService.shared.fetchWorkingTreeFileDiff(
+            worktreePath: root, file: try #require(files.first))
+        #expect(diff.hunks.flatMap(\.lines).map(\.content) == ["renamed"])
+        #expect(diff.added == 1)
+    }
+
 }
