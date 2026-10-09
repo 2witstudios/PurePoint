@@ -1,6 +1,6 @@
 # Distribution
 
-**Maturity: EXPLORING**
+**Maturity: CONVERGING**
 
 ## Context
 
@@ -28,3 +28,19 @@ If the daemon is embedded in the app, updating the app updates the daemon too. B
 ## Research Notes
 
 DIST-003 partially answered: updating the app updates the daemon because it's embedded. Running daemon during update: the app sends Shutdown before quit. If the daemon was started by CLI in standalone mode, the update only affects the bundled copy — the standalone binary in PATH is managed separately (e.g. cargo install).
+
+### [DIST-002] Point Guard state migration
+**Researched: 2026-10-09**
+
+Baseline bridge/setup.js discovers developer-home skills and main.js requires an explicit repository cwd. Its Pi 1.1.0 adapter reads native sessions and credentials. App-only preferences would diverge from CLI Pi; copying native auth/session data into a bundle would lose updates. Preserve canonical private ~/.pi/agent auth/settings/models/sessions and place managed runtime/identity metadata outside the bundle in private Application Support. Legacy remote shared-token pairing cannot safely identify individual devices; require deliberate QR v2 enrollment while preserving transcript/draft recovery. Bundle versioned Point Guard instructions and complete pu skills/reference support with explicit bundle-relative CLI/runtime paths.
+
+Candidate: preserve native Pi storage and version managed/trust state, failing closed on malformed/unknown schema. Alternative explicit all-state import adds copies/secret migration risk; retained only as future user-requested migration.
+
+### [DIST-003] App-lifetime bridge and updates
+**Researched: 2026-10-09**
+
+Existing bridge owns one Node Pi RPC process. App-lifetime Process ownership meets the approved lifetime boundary; launchd would add persistent supervision outside scope. Keep state and TLS identity outside the bundle, stop and await only owned children before replacement, and never adopt/kill an unknown listener. Candidate: app-owned process with exclusive private startup lock and bounded recovery. Alternative launchd deferred.
+
+Official Node distribution supplies Darwin arm64/x64 binaries and SHA256 manifests: [Node releases](https://nodejs.org/download/release/). Pi requires Node >=22.19 and supports script-free npm installation: [Pi upstream](https://github.com/earendil-works/pi). Pin runtime and complete transitive production dependencies; relocate packaged artifact outside checkout and prove empty-HOME/stripped-PATH launch for both advertised architectures.
+
+Apple requires nested code to be signed and hardened-runtime entitlements to follow the executable: [TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html), [JIT on Apple Silicon](https://developer.apple.com/documentation/Apple-Silicon/porting-just-in-time-compilers-to-apple-silicon). Inside-out signing and Node allow-jit must be checked on the artifact. Ad-hoc CI signature/execution proof does not establish [Developer ID/notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution); that remains protected owner evidence.
