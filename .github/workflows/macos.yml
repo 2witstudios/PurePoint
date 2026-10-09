@@ -100,7 +100,6 @@ jobs:
       SCHEME: purepoint-macos
       PROJECT: apps/purepoint-macos/purepoint-macos.xcodeproj
       DESTINATION: "platform=macOS"
-      DERIVED_DATA: ${{ runner.temp }}/purepoint-derived
     steps:
       - uses: actions/checkout@v7
         with:
@@ -168,7 +167,7 @@ jobs:
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -destination "$DESTINATION" \
-            -derivedDataPath "$DERIVED_DATA" \
+            -derivedDataPath "$RUNNER_TEMP/purepoint-derived" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM=""
@@ -181,7 +180,7 @@ jobs:
             -project "$PROJECT" \
             -scheme "$SCHEME" \
             -destination "$DESTINATION" \
-            -derivedDataPath "$DERIVED_DATA" \
+            -derivedDataPath "$RUNNER_TEMP/purepoint-derived" \
             -resultBundlePath "$RUNNER_TEMP/macos-diagnostics/tests.xcresult" \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 \
