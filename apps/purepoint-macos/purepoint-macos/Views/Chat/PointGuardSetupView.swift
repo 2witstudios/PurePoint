@@ -19,6 +19,7 @@ struct PointGuardSetupView: View {
                 Label(service.phase, systemImage: service.ready ? "checkmark.circle" : "circle")
                 Spacer()
                 if service.ready {
+                    Button("Stop Pi") { Task { do { try await service.stop() } catch { service.error = error.localizedDescription } } }.disabled(chat.busy)
                     Button("Restart Pi") { Task { await service.restart(chat: chat) } }.disabled(chat.busy)
                 } else {
                     Button("Start / Retry") { service.start(chat: chat) }
@@ -95,6 +96,7 @@ struct PointGuardSetupView: View {
                                 Text(device["name"].text ?? "Phone")
                                 Spacer()
                                 if case .null = device["revokedAt"] {
+                                    Button("Require re-pair") { if let id = device["deviceId"].text { Task { await service.rotateDevice(id) } } }
                                     Button("Revoke") { if let id = device["deviceId"].text { Task { await service.revokeDevice(id) } } }
                                 } else { Text("Revoked").foregroundStyle(.secondary) }
                             }
@@ -104,7 +106,11 @@ struct PointGuardSetupView: View {
             }
         }
         .task { service.start(chat: chat); if service.ready { await service.refresh() } }
-        .onChange(of: provider) { _, _ in model = ""; response = ""; Task { await service.cancelLogin() } }
+         .onChange(of: provider) { _, _ in model = ""; response = ""; Task { await service.cancelLogin() } }
+        .onChange(of: service.selectedProvider) { _, value in if provider.isEmpty { provider = value } }
+        .onChange(of: service.selectedModel) { _, value in if model.isEmpty { model = value } }
+        .onChange(of: service.auth["prompt"]["id"].text) { _, _ in response = "" }
+        .onChange(of: service.auth["status"].text) { _, value in if value != "pending" { response = "" } }
         .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service) }
     }
     @ViewBuilder private var loginInteraction: some View {
@@ -137,7 +143,7 @@ struct PointGuardSetupView: View {
                     }.id(promptId)
                 }
             }
-            if let message = service.auth["error"].text { Text(message).foregroundStyle(.red) }
+            if let message = service.auth["error"].text ?? service.auth["error"]["message"].text { Text(message).foregroundStyle(.red) }
             if status == "pending" { Button("Cancel login") { response = ""; Task { await service.cancelLogin() } } }
         }
     }
@@ -150,7 +156,9 @@ struct PointGuardPhoneView: View {
         VStack(spacing: 16) {
             Text("Connect your phone").font(.title2)
             Text("Open the iPhone app → Connection → Scan Mac QR code. Keep Tailscale connected on both devices.")
-            if let payload = service.enrollment["payload"].text, let image = qr(payload) {
+            if service.enrollmentStatus == "consumed" {
+                Label("Phone connected", systemImage: "checkmark.circle.fill")
+            } else if let payload = service.enrollment["payload"].text, let image = qr(payload) {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let expired = expiry.map { context.date >= $0 } ?? true
                     if expired { Text("This QR has expired. Generate a new code.") }
@@ -168,6 +176,12 @@ struct PointGuardPhoneView: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }.padding(28).frame(width: 420)
+         .task(id: service.enrollment["enrollmentId"].text) {
+            while !Task.isCancelled && service.enrollmentStatus == "pending" {
+                await service.refreshEnrollment()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
         .onDisappear { Task { await service.closeEnrollment(); await service.refresh() } }
     }
     private var expiry: Date? {

@@ -19,6 +19,9 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var devices: [PiJSONValue] = []
     @Published private(set) var restartRequired = false
     @Published private(set) var cwd = ""
+    @Published private(set) var selectedProvider = ""
+    @Published private(set) var selectedModel = ""
+    @Published private(set) var enrollmentStatus = ""
     @Published private(set) var remoteEndpoint: String?
     private var process: Process?
     private var descriptor: PointGuardDescriptor?
@@ -131,6 +134,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     func refresh() async {
         do {
             let status = try await request("status"); cwd = status["cwd"].text ?? ""
+            selectedProvider = status["provider"].text ?? ""; selectedModel = status["model"].text ?? ""
             providers = (try await request("providers"))["providers"].values
             devices = (try await request("devices.list"))["devices"].values
         } catch { self.error = error.localizedDescription }
@@ -178,12 +182,25 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     }
     func connectPhone() async {
         guard let remoteEndpoint else { error = "Connect Tailscale on this Mac, then restart Point Guard to enable phone pairing."; return }
-        do { enrollment = try await request("pairing.create", fields: ["endpoint": .string(remoteEndpoint)]) }
+        do { enrollment = try await request("pairing.create", fields: ["endpoint": .string(remoteEndpoint)]); enrollmentStatus = "pending" }
+        catch { self.error = error.localizedDescription }
+    }
+    func refreshEnrollment() async {
+        guard let id = enrollment["enrollmentId"].text else { return }
+        do {
+            let status = try await request("pairing.status", fields: ["enrollmentId": .string(id)])
+            guard enrollment["enrollmentId"].text == id else { return }
+            enrollmentStatus = status["status"].text ?? "unknown"
+            if enrollmentStatus == "consumed" { await refresh() }
+        } catch { self.error = error.localizedDescription }
+    }
+    func rotateDevice(_ id: String) async {
+        do { _ = try await request("devices.rotate", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }
     }
     func closeEnrollment() async {
         guard let id = enrollment["enrollmentId"].text else { enrollment = .null; return }
-        enrollment = .null
+        enrollment = .null; enrollmentStatus = ""
         do { _ = try await request("pairing.revoke", fields: ["enrollmentId": .string(id)]) }
         catch { self.error = error.localizedDescription }
     }
