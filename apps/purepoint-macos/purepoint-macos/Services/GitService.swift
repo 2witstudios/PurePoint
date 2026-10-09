@@ -4,6 +4,14 @@ nonisolated struct CommandResult: Sendable {
     let stdout: String
     let stderr: String
     let exitCode: Int32
+    let outputExceededLimit: Bool
+
+    init(stdout: String, stderr: String, exitCode: Int32, outputExceededLimit: Bool = false) {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exitCode = exitCode
+        self.outputExceededLimit = outputExceededLimit
+    }
     var success: Bool { exitCode == 0 }
 }
 
@@ -70,12 +78,19 @@ actor GitService {
             let parts = record.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
             if parts.count == 3 { counts[String(parts[2])] = (Int(parts[0]) ?? 0, Int(parts[1]) ?? 0) }
         }
-        return status.stdout.split(separator: "\0").compactMap { record in
-            guard record.count >= 4 else { return nil }
+        var codes: [String: String] = [:]
+        for record in status.stdout.split(separator: "\0") {
+            guard record.count >= 4 else { continue }
             let name = String(record.dropFirst(3))
             let x = record.first!
             let y = record.dropFirst().first!
             let code = x == "?" ? "??" : String(y == " " ? x : y)
+            // rm --cached can report both a tracked deletion and an untracked
+            // file at the same path. Keep the tracked change (and its HEAD diff);
+            // the on-disk untracked copy remains accessible in Files mode.
+            if codes[name] == nil || code != "??" { codes[name] = code }
+        }
+        return codes.map { name, code in
             let count = counts[name] ?? (0, 0)
             return FileDiff(filename: name, statusCode: code, added: count.0, removed: count.1, hunks: [])
         }.sorted { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
@@ -101,9 +116,9 @@ actor GitService {
                 "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "HEAD",
                 "--", file.filename,
             ],
-            cwd: worktreePath)
+            cwd: worktreePath, outputLimit: 1_000_000)
+        guard !result.outputExceededLimit else { throw FilePreviewError.tooLarge }
         guard result.success else { throw WorkingTreeDiffError.git(result.stderr) }
-        guard result.stdout.utf8.count <= 1_000_000 else { throw FilePreviewError.tooLarge }
         // The path comes from status, not a quoted diff header. Parse only the hunks
         // of this one file so code containing "diff --git" cannot create fake rows.
         let hunks = parseHunks(result.stdout.components(separatedBy: "\n"))
@@ -323,8 +338,8 @@ actor GitService {
 
     // MARK: - Process Execution
 
-    private func runGit(_ args: [String], cwd: String) -> CommandResult {
-        runProcess("/usr/bin/git", args: args, cwd: cwd)
+    func runGit(_ args: [String], cwd: String, outputLimit: Int? = nil) -> CommandResult {
+        runProcess("/usr/bin/git", args: args, cwd: cwd, outputLimit: outputLimit)
     }
 
     private func runGh(_ args: [String], cwd: String) -> CommandResult {
@@ -375,7 +390,7 @@ actor GitService {
         return nil
     }
 
-    private func runProcess(_ path: String, args: [String], cwd: String) -> CommandResult {
+    private func runProcess(_ path: String, args: [String], cwd: String, outputLimit: Int? = nil) -> CommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
@@ -397,11 +412,29 @@ actor GitService {
         // forever because nobody is draining it.
         nonisolated(unsafe) var stdoutData = Data()
         nonisolated(unsafe) var stderrData = Data()
+        nonisolated(unsafe) var outputExceededLimit = false
         let group = DispatchGroup()
 
         group.enter()
         DispatchQueue.global().async {
-            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            if let outputLimit {
+                // Fixed-size reads bound capture before decoding. Keep draining
+                // after termination so a full pipe cannot prevent process exit.
+                while true {
+                    let chunk = stdoutPipe.fileHandleForReading.readData(ofLength: 16_384)
+                    if chunk.isEmpty { break }
+                    if outputExceededLimit { continue }
+                    if chunk.count > outputLimit - stdoutData.count {
+                        outputExceededLimit = true
+                        stdoutData.removeAll(keepingCapacity: false)
+                        process.terminate()
+                    } else {
+                        stdoutData.append(chunk)
+                    }
+                }
+            } else {
+                stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            }
             group.leave()
         }
         group.enter()
@@ -415,6 +448,8 @@ actor GitService {
 
         let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-        return CommandResult(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
+        return CommandResult(
+            stdout: stdout, stderr: stderr, exitCode: process.terminationStatus,
+            outputExceededLimit: outputExceededLimit)
     }
 }

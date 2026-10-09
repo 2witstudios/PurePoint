@@ -120,4 +120,53 @@ struct WorkingTreeDiffTests {
             // Expected: do not allocate a huge inline text layout.
         }
     }
+    @Test func givenLargeTrackedDiffShouldBoundCaptureAndRejectPreview() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let path = root + "/large.txt"
+        try "before\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try git(["add", "."], at: root)
+        try git(["commit", "-qm", "initial"], at: root)
+        try String(repeating: "a line of changed text\n", count: 100_000)
+            .write(toFile: path, atomically: true, encoding: .utf8)
+
+        let result = await GitService.shared.runGit(
+            ["diff", "HEAD", "--", "large.txt"], cwd: root, outputLimit: 1_000_000)
+        #expect(result.outputExceededLimit)
+        #expect(result.stdout.isEmpty)
+        let files = try await GitService.shared.fetchWorkingTreeChanges(worktreePath: root)
+        do {
+            _ = try await GitService.shared.fetchWorkingTreeFileDiff(worktreePath: root, file: files[0])
+            Issue.record("Expected the tracked diff to reject output beyond the capture limit")
+        } catch FilePreviewError.tooLarge {}
+
+        // A later smaller diff must still render after the oversized process exits.
+        try "after\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let diff = try await GitService.shared.fetchWorkingTreeFileDiff(worktreePath: root, file: files[0])
+        #expect(diff.hunks.flatMap(\.lines).last?.content == "after")
+    }
+
+    @Test func givenCachedRemovalWithDiskCopyShouldReturnOneDeletionPerPath() async throws {
+        let root = try repository()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let path = root + "/a.txt"
+        try "before\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try git(["add", "."], at: root)
+        try git(["commit", "-qm", "initial"], at: root)
+        try git(["rm", "--cached", "a.txt"], at: root)
+        try "untracked copy\n".write(toFile: path, atomically: true, encoding: .utf8)
+
+        let files = try await GitService.shared.fetchWorkingTreeChanges(worktreePath: root)
+        #expect(files.map(\.filename) == ["a.txt"])
+        let file = try #require(files.first)
+        #expect(file.statusCode == "D")
+        #expect(file.added == 0)
+        #expect(file.removed == 1)
+        let diff = try await GitService.shared.fetchWorkingTreeFileDiff(worktreePath: root, file: file)
+        #expect(diff.hunks.flatMap(\.lines).map(\.content) == ["before"])
+        #expect(diff.hunks.flatMap(\.lines).allSatisfy { $0.type == .deletion })
+        let preview = try await FileIOService.readFile(at: path, limit: 1_000_000)
+        #expect(preview.content == "untracked copy\n")
+    }
+
 }
