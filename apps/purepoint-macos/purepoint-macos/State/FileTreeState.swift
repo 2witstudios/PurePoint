@@ -11,6 +11,7 @@ final class FileTreeState {
     private var worktreePath: String?
     private var expandedPaths: Set<String> = []
     private var watcher: FileTreeWatcher?
+    private var refreshGeneration = 0
 
     private static let hiddenNames: Set<String> = [
         ".git", ".DS_Store", ".build", ".swiftpm", "xcuserdata",
@@ -22,19 +23,7 @@ final class FileTreeState {
         expandedPaths.removeAll()
         rootNodes = scanDirectory(atPath: worktreePath, relativeTo: worktreePath)
 
-        // Async gitignore filter — rescan after result
-        Task {
-            let ignored = await Self.computeGitIgnored(
-                directory: worktreePath,
-                worktreeRoot: worktreePath
-            )
-            if !ignored.isEmpty {
-                self.rootNodes = self.filterIgnored(
-                    self.rootNodes,
-                    ignored: ignored
-                )
-            }
-        }
+        refresh()
 
         watcher?.stopAll()
         watcher = FileTreeWatcher { [weak self] in
@@ -51,15 +40,7 @@ final class FileTreeState {
         expandedPaths.insert(node.absolutePath)
         node.children = scanDirectory(atPath: node.absolutePath, relativeTo: root)
 
-        Task {
-            let ignored = await Self.computeGitIgnored(
-                directory: node.absolutePath,
-                worktreeRoot: root
-            )
-            if !ignored.isEmpty {
-                node.children = self.filterIgnored(node.children, ignored: ignored)
-            }
-        }
+        refresh()
 
         watcher?.watchDirectory(path: node.absolutePath)
     }
@@ -67,27 +48,40 @@ final class FileTreeState {
     func collapseNode(_ node: FileTreeNode) {
         expandedPaths.remove(node.absolutePath)
         node.children = []
+        refresh()
         watcher?.unwatchDirectory(path: node.absolutePath)
     }
 
     func refresh() {
         guard let root = worktreePath else { return }
-        rootNodes = scanDirectory(atPath: root, relativeTo: root)
-        refreshExpanded(nodes: rootNodes, root: root)
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        let expanded = expandedPaths
+        Task {
+            // Build and filter a replacement before publishing it. Never expose
+            // an unfiltered polling scan, even briefly, in the visible tree.
+            let nodes = await filteredTree(directory: root, root: root, expanded: expanded)
+            guard generation == refreshGeneration, worktreePath == root else { return }
+            rootNodes = nodes
+        }
     }
 
     func stopWatching() {
+        refreshGeneration += 1
         watcher?.stopAll()
         watcher = nil
     }
 
     // MARK: - Private
 
-    private func refreshExpanded(nodes: [FileTreeNode], root: String) {
-        for node in nodes where node.isDirectory && expandedPaths.contains(node.absolutePath) {
-            node.children = scanDirectory(atPath: node.absolutePath, relativeTo: root)
-            refreshExpanded(nodes: node.children, root: root)
+    private func filteredTree(directory: String, root: String, expanded: Set<String>) async -> [FileTreeNode] {
+        let nodes = scanDirectory(atPath: directory, relativeTo: root)
+        let ignored = await Self.computeGitIgnored(directory: directory, worktreeRoot: root)
+        let visible = filterIgnored(nodes, ignored: ignored)
+        for node in visible where node.isDirectory && expanded.contains(node.absolutePath) {
+            node.children = await filteredTree(directory: node.absolutePath, root: root, expanded: expanded)
         }
+        return visible
     }
 
     private func scanDirectory(

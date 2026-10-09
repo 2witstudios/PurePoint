@@ -4,6 +4,7 @@ import AppKit
 
 class CommandPalettePanel: NSPanel {
     private static weak var current: CommandPalettePanel?
+    private static let openCoordinator = CommandPaletteOpenCoordinator()
     private var localMouseMonitor: Any?
 
     override var canBecomeKey: Bool { true }
@@ -72,6 +73,16 @@ class CommandPalettePanel: NSPanel {
             return
         }
         vc.handleEscape()
+    }
+
+    @discardableResult
+    static func requestOpen(_ open: @escaping @MainActor () async -> Void) -> Task<Void, Never>? {
+        // Toggle an already visible palette immediately, without starting another load.
+        if let existing = current, existing.isVisible {
+            existing.dismiss()
+            return nil
+        }
+        return openCoordinator.request(open)
     }
 
     @discardableResult

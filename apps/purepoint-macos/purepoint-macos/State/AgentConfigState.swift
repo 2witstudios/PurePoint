@@ -13,7 +13,17 @@ final class AgentConfigState {
     var isSavingGlobalSettings = false
     var globalError: String?
 
-    @ObservationIgnored private let client = DaemonClient()
+    @ObservationIgnored private let ensureDaemon: () async throws -> Void
+    @ObservationIgnored private let sendRequest: (DaemonRequest) async throws -> DaemonResponse
+
+    init(
+        ensureDaemon: @escaping () async throws -> Void = { try await DaemonLifecycle.ensureDaemon() },
+        sendRequest: ((DaemonRequest) async throws -> DaemonResponse)? = nil
+    ) {
+        self.ensureDaemon = ensureDaemon
+        let client = DaemonClient()
+        self.sendRequest = sendRequest ?? { try await client.send($0) }
+    }
 
     func loadGlobalSettings() async {
         await sendGlobalSettings(.getGlobalAgentSettings)
@@ -30,7 +40,8 @@ final class AgentConfigState {
     private func sendGlobalSettings(_ request: DaemonRequest) async {
         globalError = nil
         do {
-            switch try await client.send(request) {
+            try await ensureDaemon()
+            switch try await sendRequest(request) {
             case .globalAgentSettingsReport(let enabled):
                 codexYolo = enabled
                 globalSettingsLoaded = true
@@ -48,7 +59,7 @@ final class AgentConfigState {
         isLoading = true
         error = nil
         do {
-            let response = try await client.send(.getConfig(projectRoot: projectRoot))
+            let response = try await sendRequest(.getConfig(projectRoot: projectRoot))
             switch response {
             case .configReport(let defaultAgent, let agents):
                 self.defaultAgent = defaultAgent
@@ -67,7 +78,7 @@ final class AgentConfigState {
     func updateLaunchArgs(projectRoot: String, agentName: String, launchArgs: [String]?) async {
         error = nil
         do {
-            let response = try await client.send(
+            let response = try await sendRequest(
                 .updateAgentConfig(projectRoot: projectRoot, agentName: agentName, launchArgs: launchArgs))
             switch response {
             case .configReport(let defaultAgent, let agents):

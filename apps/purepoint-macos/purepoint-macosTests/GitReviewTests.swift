@@ -146,6 +146,24 @@ private enum GitReviewChecks {
         let oursOnly = await service.fetchLocalReview(at: conflict)
         let removed = oursOnly.unstaged.first { $0.filename == "conflict.txt" }
         try require(oursOnly.error == nil && removed?.removed == 1 && removed?.conflictBaseline == "ours (index stage 2)", "theirs-deleted working deletion uses existing ours baseline")
+        // Merge reconciliation preserves workspace HEAD-to-working-file APIs and capture caps.
+        let workspace = try repo(); defer { try? FileManager.default.removeItem(atPath: workspace) }
+        try write("root\n", "file.txt", at: workspace); try commit("root", at: workspace)
+        try write("staged\n", "file.txt", at: workspace); _ = try git(["add", "file.txt"], at: workspace)
+        try write("working\n", "file.txt", at: workspace)
+        try write("new\n", "quoted \"new\".txt", at: workspace)
+        let workspaceFiles = try await service.fetchWorkingTreeChanges(worktreePath: workspace)
+        try require(workspaceFiles.count == 2, "workspace staged/unstaged/untracked overview preserved")
+        let tracked = workspaceFiles.first { $0.filename == "file.txt" }!
+        let workspacePatch = try await service.fetchWorkingTreeFileDiff(worktreePath: workspace, file: tracked)
+        try require(workspacePatch.hunks.first?.lines.contains { $0.content == "working" && $0.type == .addition } == true, "workspace diff keeps final working contents")
+        let limited = await service.runGit(["diff", "HEAD", "--", "file.txt"], cwd: workspace, outputLimit: 8)
+        try require(limited.outputExceededLimit && limited.stdout.isEmpty, "workspace output capture cap preserved")
+        if ProcessInfo.processInfo.environment["GIT_REVIEW_SLOW_LOCAL_CHECK"] == "1" {
+            let slow = await service.runGit(["-c", "alias.slow=!sleep 26; printf complete", "slow"], cwd: workspace)
+            try require(slow.success && slow.stdout == "complete", "local Git must outlive remote-only 25-second deadline")
+            print("Slow local Git deadline regression passed")
+        }
         print("Git repository checks passed")
     }
 

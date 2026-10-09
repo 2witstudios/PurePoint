@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.env
+*.pem
+*.key

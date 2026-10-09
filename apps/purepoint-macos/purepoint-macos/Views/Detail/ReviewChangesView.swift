@@ -65,17 +65,23 @@ struct ReviewChangesView: View {
                 }
             }
         case .prDiffs:
-            if let error = state.prError { errorView(error) }
-            else if !state.ghAvailable { GHUnavailableView() }
+            VStack(spacing: 0) {
+            if let error = state.prError, !state.pullRequests.isEmpty || state.prDiff != nil {
+                HStack { Image(systemName: "exclamationmark.triangle"); Text(error).font(.system(size: 12)).textSelection(.enabled); Spacer(); Button("Retry") { state.refresh() } }.foregroundStyle(.secondary).padding(12).background(Color.orange.opacity(0.08))
+                Divider()
+            }
+            if let error = state.prError, state.pullRequests.isEmpty && state.prDiff == nil { errorView(error) }
+            else if !state.ghAvailable && state.pullRequests.isEmpty && state.prDiff == nil { GHUnavailableView() }
             else if let pr = state.selectedPR {
                 VStack(spacing: 0) {
                     HStack { Button { state.selectedPR = nil; state.prDiff = nil } label: { Image(systemName: "chevron.left") }; Text("#\(pr.number) \(pr.title)").font(.system(size: 13, weight: .medium)); Spacer(); if let url = URL(string: pr.url) { Link(destination: url) { Image(systemName: "arrow.up.right.square") } } }.padding(14)
                     Divider()
-                    DiffListView(diff: state.prDiff, isLoading: state.isLoadingPRDiff, emptyMessage: "No changes in PR", error: state.prError, onRetry: { state.refresh() })
+                    DiffListView(diff: state.prDiff, isLoading: state.isLoadingPRDiff, emptyMessage: "No changes in PR", error: state.prDiff == nil ? state.prError : nil, onRetry: { state.refresh() })
                 }
             } else if state.isLoadingPRs && state.pullRequests.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if state.pullRequests.isEmpty { Text("No open pull requests").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity) }
             else { ScrollView { LazyVStack(spacing: 0) { ForEach(state.pullRequests) { pr in Button { state.selectPR(pr) } label: { PRRowView(pr: pr) }.buttonStyle(.plain); Divider() } } } }
+            }
         }
     }
     private func patches(_ files: [FileDiff], loading: Bool, empty: String, error: String?) -> some View {
