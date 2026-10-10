@@ -143,11 +143,19 @@ import Foundation
         fixture.starts.removeValue(forKey: "live-stop")?.resume(returning: .object(["attemptId": .string("live-stop-id")]))
         await liveLogin.value
         await wait { service.auth["attemptId"].text == "live-stop-id" }
+        let liveQr = Task { await service.connectPhone() }
+        await wait { fixture.enrollment != nil }
+        fixture.enrollment?.resume(returning: .object(["enrollmentId": .string("live-stop-qr"), "payload": .string("live-qr")]))
+        fixture.enrollment = nil
+        await liveQr.value
         let child = Process(); child.executableURL = URL(fileURLWithPath: "/bin/sleep"); child.arguments = ["30"]
         try! child.run(); service.fixtureAttach(child)
         fixture.failStop = true
         do { try await service.stop(); fatalError("Stop must reject") } catch { }
         precondition(child.isRunning && service.ready && service.auth["attemptId"].text == "live-stop-id")
+        precondition(service.enrollment["enrollmentId"].text == "live-stop-qr")
+        await service.closeEnrollment()
+        precondition(fixture.revoked.contains("live-stop-qr"), "Rejected Stop must preserve QR revocation")
         await service.cancelLogin()
         precondition(fixture.canceled.contains("live-stop-id"), "Rejected Stop must preserve explicit cancellation")
         child.terminate(); child.waitUntilExit()
