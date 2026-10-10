@@ -7,6 +7,7 @@ import Foundation
     var revoked: [String] = []
     var failReplacement = false
     var failCancel = false
+    var failRevoke = false
     func request(_ operation: String, _ fields: [String: PiJSONValue]) async throws -> PiJSONValue {
         switch operation {
         case "auth.start":
@@ -17,7 +18,9 @@ import Foundation
             canceled.append(fields["attemptId"]?.text ?? ""); return .object([:])
         case "auth.status": return .object(["attemptId": fields["attemptId"] ?? .null, "status": .string("pending")])
         case "pairing.create": return await withCheckedContinuation { enrollment = $0 }
-        case "pairing.revoke": revoked.append(fields["enrollmentId"]?.text ?? ""); return .object([:])
+        case "pairing.revoke":
+            if failRevoke { throw PiChatError("Fixture revocation transport unavailable") }
+            revoked.append(fields["enrollmentId"]?.text ?? ""); return .object([:])
         default: return .object([:])
         }
     }
@@ -79,6 +82,28 @@ import Foundation
         await create.value
         precondition(fixture.revoked == ["dismissed"])
         precondition(service.enrollment["payload"].text == nil)
-        print("Native auth and enrollment cancellation race checks passed")
+        // Given a late attempt and a failed cleanup transport, retain its ID for explicit retry.
+        let lateFailure = Task { await service.login(provider: "late-failure", type: "oauth") }
+        await wait { fixture.starts["late-failure"] != nil }
+        await service.cancelLogin()
+        fixture.failCancel = true
+        fixture.starts.removeValue(forKey: "late-failure")?.resume(returning: .object(["attemptId": .string("cleanup-id")]))
+        await lateFailure.value
+        precondition(service.hasPendingAuthCleanup && service.error != nil)
+        fixture.failCancel = false
+        await service.retryAuthCleanup()
+        precondition(fixture.canceled.contains("cleanup-id") && !service.hasPendingAuthCleanup)
+        let lateQrFailure = Task { await service.connectPhone() }
+        await wait { fixture.enrollment != nil }
+        await service.closeEnrollment()
+        fixture.failRevoke = true
+        fixture.enrollment?.resume(returning: .object(["enrollmentId": .string("cleanup-qr"), "payload": .string("late-qr")]))
+        fixture.enrollment = nil
+        await lateQrFailure.value
+        precondition(service.hasPendingEnrollmentCleanup && service.enrollment["payload"].text == nil)
+        fixture.failRevoke = false
+        await service.retryEnrollmentCleanup()
+        precondition(fixture.revoked.contains("cleanup-qr") && !service.hasPendingEnrollmentCleanup)
+        print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }

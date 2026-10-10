@@ -28,12 +28,28 @@ struct PointGuardSetupView: View {
             Text("Pi runs with PurePoint. Your provider and conversations are saved on this Mac.")
                 .font(.callout).foregroundStyle(.secondary)
             if let error = service.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if service.hasPendingAuthCleanup { Button("Retry pending login cancellations") { Task { await service.retryAuthCleanup() } } }
+            if service.hasPendingEnrollmentCleanup { Button("Retry pending pairing revocations") { Task { await service.retryEnrollmentCleanup() } } }
             if service.restartRequired {
                 HStack {
                     Text("Setup saved. Apply when Pi is idle.")
                     Button("Apply and restart") { Task { await service.restart(chat: chat) } }.disabled(chat.busy)
                 }
             }
+                GroupBox("Working folder") {
+                    HStack {
+                        Text(workingDirectory.isEmpty ? service.cwd : workingDirectory).lineLimit(2).textSelection(.enabled)
+                        Spacer()
+                        Button("Choose…") {
+                            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
+                            panel.allowsMultipleSelection = false
+                            if panel.runModal() == .OK, let url = panel.url {
+                                workingDirectory = url.path
+                                Task { await service.configure(cwd: url.path) }
+                            }
+                        }.disabled(chat.busy)
+                    }.padding(8)
+                }
             if service.ready {
                 GroupBox("Provider") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -67,20 +83,6 @@ struct PointGuardSetupView: View {
                                     .disabled(model.isEmpty || chat.busy)
                             }
                         }
-                    }.padding(8)
-                }
-                GroupBox("Working folder") {
-                    HStack {
-                        Text(workingDirectory.isEmpty ? service.cwd : workingDirectory).lineLimit(2).textSelection(.enabled)
-                        Spacer()
-                        Button("Choose…") {
-                            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
-                            panel.allowsMultipleSelection = false
-                            if panel.runModal() == .OK, let url = panel.url {
-                                workingDirectory = url.path
-                                Task { await service.configure(cwd: url.path) }
-                            }
-                        }.disabled(chat.busy)
                     }.padding(8)
                 }
                 GroupBox("Phone") {
@@ -178,6 +180,7 @@ struct PointGuardPhoneView: View {
             } else { Text(service.error ?? "Preparing a one-time pairing code…") }
             Text("This QR enrolls one device. Revoke saved devices from Point Guard setup.").font(.callout).foregroundStyle(.secondary)
             HStack {
+                if service.hasPendingEnrollmentCleanup { Button("Retry revocation") { Task { await service.retryEnrollmentCleanup() } } }
                 Button("New code") { Task { await service.closeEnrollment(); await service.connectPhone() } }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }

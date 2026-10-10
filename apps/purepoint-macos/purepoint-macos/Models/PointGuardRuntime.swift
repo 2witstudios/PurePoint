@@ -82,3 +82,14 @@ struct PointGuardStartupFailure: Decodable, Sendable {
         return message + " " + recovery
     }
 }
+
+enum PointGuardWorkingFolder {
+    static func validated(_ path: String) throws -> URL {
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        var directory: ObjCBool = false
+        guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else {
+            throw PiChatError("Choose an existing working folder before starting Point Guard.")
+        }
+        return url
+    }
+}

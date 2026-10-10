@@ -41,6 +41,13 @@ import Foundation
         precondition(failure.description(pid: 42, instanceId: "owned")?.contains("deliberately") == true)
         precondition(failure.description(pid: 42, instanceId: "stale") == nil)
         precondition(failure.description(pid: 43, instanceId: "owned") == nil)
-        print("Point Guard runtime path, owned readiness and actionable error attribution checks passed")
+        let selected = base.appendingPathComponent("selected")
+        try FileManager.default.createDirectory(at: selected, withIntermediateDirectories: true)
+        _ = try PointGuardWorkingFolder.validated(selected.path)
+        try FileManager.default.removeItem(at: selected)
+        do { _ = try PointGuardWorkingFolder.validated(selected.path); fatalError("missing folder accepted") } catch { }
+        let recovered = try PointGuardWorkingFolder.validated(base.path)
+        precondition(recovered.path == base.path)
+        print("Point Guard runtime path, owned readiness, recovery-folder and error attribution checks passed")
     }
 }

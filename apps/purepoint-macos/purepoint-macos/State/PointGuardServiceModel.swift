@@ -18,6 +18,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var enrollment: PiJSONValue = .null
     @Published private(set) var devices: [PiJSONValue] = []
     @Published private(set) var restartRequired = false
+    @Published private(set) var hasPendingAuthCleanup = false
+    @Published private(set) var hasPendingEnrollmentCleanup = false
     @Published private(set) var cwd = ""
     @Published private(set) var selectedProvider = ""
     @Published private(set) var selectedModel = ""
@@ -31,8 +33,11 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     private var authGeneration = 0
     private var enrollmentGeneration = 0
     private var activeAttemptId: String?
+    private var pendingAuthCleanup = Set<String>()
+    private var pendingEnrollmentCleanup = Set<String>()
     private let requestOverride: (@MainActor (String, [String: PiJSONValue]) async throws -> PiJSONValue)?
     private var startTask: Task<Void, Never>?
+    private var launchCwd: URL?
     private var expectedStop = false
     private var stopping = false
     private weak var chat: PiChatModel?
@@ -67,6 +72,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 environment["POINT_GUARD_STATE_DIR"] = self.stateDirectory.path
                 environment["POINT_GUARD_PU_PATH"] = runtime.pu.path
                 environment["POINT_GUARD_INSTANCE_ID"] = self.instanceId
+                if let launchCwd = self.launchCwd { environment["PI_MOBILE_CWD"] = launchCwd.path }
                 environment["PATH"] = runtime.pu.deletingLastPathComponent().path + ":/usr/bin:/bin:/usr/sbin:/sbin"
                 // The app discovers the explicit tailnet IP without requiring an external CLI.
                 if let address = PointGuardTailnet.address() { environment["PI_MOBILE_HOST"] = address }
@@ -161,18 +167,15 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         authGeneration += 1; let generation = authGeneration
         pollTask?.cancel(); error = nil
         do {
-            if let prior = activeAttemptId {
-                // Do not lose an established attempt when the replacement request
-                // fails before dispatch. Cancellation must be confirmed first.
-                _ = try await request("auth.cancel", fields: ["attemptId": .string(prior)])
-                guard generation == authGeneration else { return }
-                activeAttemptId = nil
-            }
+            if let prior = activeAttemptId { pendingAuthCleanup.insert(prior) }
+            guard await retryAuthCleanup(), generation == authGeneration else { return }
+            activeAttemptId = nil
             auth = .object(["status": .string("pending")])
             let result = try await request("auth.start", fields: ["provider": .string(provider), "type": .string(type)])
             guard let id = result["attemptId"].text else { throw PiChatError("Provider login did not start.") }
             guard generation == authGeneration else {
-                _ = try? await request("auth.cancel", fields: ["attemptId": .string(id)])
+                pendingAuthCleanup.insert(id)
+                _ = await retryAuthCleanup()
                 return
             }
             activeAttemptId = id
@@ -204,22 +207,42 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         do { _ = try await request("auth.respond", fields: ["attemptId": .string(id), "promptId": .string(promptId), "value": .string(value)]) }
         catch { self.error = error.localizedDescription }
     }
+    /// Cleanup IDs remain owned until an explicit successful server receipt.
+    @discardableResult func retryAuthCleanup() async -> Bool {
+        for id in pendingAuthCleanup.sorted() {
+            do { _ = try await request("auth.cancel", fields: ["attemptId": .string(id)]); pendingAuthCleanup.remove(id) }
+            catch {
+                hasPendingAuthCleanup = true
+                self.error = "Login cancellation could not be confirmed. Retry pending cancellations when Point Guard is reachable."
+                return false
+            }
+        }
+        hasPendingAuthCleanup = !pendingAuthCleanup.isEmpty
+        return !hasPendingAuthCleanup
+    }
     func cancelLogin() async {
-        authGeneration += 1; pollTask?.cancel()
-        let generation = authGeneration
-        guard let id = activeAttemptId else { auth = .null; return }
-        do {
-            _ = try await request("auth.cancel", fields: ["attemptId": .string(id)])
-            guard generation == authGeneration else { return }
-            activeAttemptId = nil; auth = .null
-        } catch { if generation == authGeneration { self.error = error.localizedDescription } }
+        authGeneration += 1; pollTask?.cancel(); let generation = authGeneration
+        if let id = activeAttemptId { pendingAuthCleanup.insert(id) }
+        guard await retryAuthCleanup(), generation == authGeneration else { return }
+        activeAttemptId = nil; auth = .null
     }
     func selectModel(provider: String, model: String) async {
         do { _ = try await request("model.select", fields: ["provider": .string(provider), "model": .string(model)]); await refresh() }
         catch { self.error = error.localizedDescription }
     }
     func configure(cwd: String) async {
-        do { _ = try await request("runtime.configure", fields: ["cwd": .string(cwd)]); self.cwd = cwd; restartRequired = true }
+        do {
+            let folder = try PointGuardWorkingFolder.validated(cwd)
+            if ready {
+                _ = try await request("runtime.configure", fields: ["cwd": .string(folder.path)])
+                restartRequired = true
+            } else {
+                // Explicit recovery override is passed to the next owned launch;
+                // the runtime still validates schema/lock/private state before saving.
+                launchCwd = folder; phase = "Folder selected · Start / Retry"
+            }
+            self.cwd = folder.path
+        }
         catch { self.error = error.localizedDescription }
     }
     func connectPhone() async {
@@ -227,12 +250,13 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         guard let remoteEndpoint else { error = "Connect Tailscale on this Mac, then restart Point Guard to enable phone pairing."; return }
         let oldId = enrollment["enrollmentId"].text
         enrollment = .null; enrollmentStatus = ""
-        if let oldId { _ = try? await request("pairing.revoke", fields: ["enrollmentId": .string(oldId)]) }
-        guard generation == enrollmentGeneration else { return }
+        if let oldId { pendingEnrollmentCleanup.insert(oldId) }
+        guard await retryEnrollmentCleanup(), generation == enrollmentGeneration else { return }
         do {
             let result = try await request("pairing.create", fields: ["endpoint": .string(remoteEndpoint)])
             guard generation == enrollmentGeneration else {
-                if let id = result["enrollmentId"].text { _ = try? await request("pairing.revoke", fields: ["enrollmentId": .string(id)]) }
+                if let id = result["enrollmentId"].text { pendingEnrollmentCleanup.insert(id) }
+                _ = await retryEnrollmentCleanup()
                 return
             }
             enrollment = result; enrollmentStatus = "pending"
@@ -251,13 +275,23 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         do { _ = try await request("devices.rotate", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }
     }
+    @discardableResult func retryEnrollmentCleanup() async -> Bool {
+        for id in pendingEnrollmentCleanup.sorted() {
+            do { _ = try await request("pairing.revoke", fields: ["enrollmentId": .string(id)]); pendingEnrollmentCleanup.remove(id) }
+            catch {
+                hasPendingEnrollmentCleanup = true
+                self.error = "Pairing-code revocation could not be confirmed. The code may remain valid until expiry. Retry pending revocations when Point Guard is reachable."
+                return false
+            }
+        }
+        hasPendingEnrollmentCleanup = !pendingEnrollmentCleanup.isEmpty
+        return !hasPendingEnrollmentCleanup
+    }
     func closeEnrollment() async {
         enrollmentGeneration += 1
-        let id = enrollment["enrollmentId"].text
+        if let id = enrollment["enrollmentId"].text { pendingEnrollmentCleanup.insert(id) }
         enrollment = .null; enrollmentStatus = ""
-        guard let id else { return }
-        do { _ = try await request("pairing.revoke", fields: ["enrollmentId": .string(id)]) }
-        catch { self.error = error.localizedDescription }
+        _ = await retryEnrollmentCleanup()
     }
     func revokeDevice(_ id: String) async {
         do { _ = try await request("devices.revoke", fields: ["deviceId": .string(id)]); await refresh() }
@@ -286,7 +320,12 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         }
         ready = false; phase = "Stopping Pi…"; chat?.disconnect()
         for _ in 0..<100 {
-            if !child.isRunning { process = nil; descriptor = nil; adminToken = ""; phase = "Stopped"; return }
+            if !child.isRunning {
+                process = nil; descriptor = nil; adminToken = ""; phase = "Stopped"
+                pendingAuthCleanup.removeAll(); pendingEnrollmentCleanup.removeAll()
+                hasPendingAuthCleanup = false; hasPendingEnrollmentCleanup = false
+                return
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
         throw PiChatError("Point Guard has not exited. The update/restart is paused until its owned child stops.")
