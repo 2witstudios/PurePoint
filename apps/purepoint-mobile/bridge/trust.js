@@ -179,7 +179,7 @@ export async function openTrustStore({ directory, now = Date.now, helperPath }) 
           expiresAt,
           payload: JSON.stringify({
             type: "pi-mobile-pairing",
-            version: 2,
+            version: 1,
             endpoint: url.href,
             hostId: state.hostId,
             certificateSHA256: state.certificateSHA256,

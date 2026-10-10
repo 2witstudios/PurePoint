@@ -121,7 +121,7 @@ struct PairingCode: Decodable, Sendable {
         let milliseconds = Int64(now.timeIntervalSince1970 * 1000)
         guard text.utf8.count <= 8192,
               let code = try? JSONDecoder().decode(Self.self, from: Data(text.utf8)),
-              code.type == "pi-mobile-pairing", code.version == 2,
+              code.type == "pi-mobile-pairing", code.version == 1,
               ConnectionAddress.url(code.endpoint)?.scheme == "wss", UUID(uuidString: code.hostId) != nil,
               code.expiresAt > milliseconds, code.expiresAt <= milliseconds + 300000,
               code.certificateSHA256.count == 64, code.certificateSHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),

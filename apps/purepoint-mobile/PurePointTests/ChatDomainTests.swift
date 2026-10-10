@@ -84,10 +84,10 @@ final class ChatDomainTests: XCTestCase {
         XCTAssertEqual(rows[3].id, "message:error")
     }
     func testGivenPairingQRShouldAcceptNativePayloadAndRejectUnsafeOrUnsupportedCodes() {
-        let payload = "{\"type\":\"pi-mobile-pairing\",\"version\":2,\"endpoint\":\"wss://100.94.14.74:8787/v1\",\"hostId\":\"550e8400-e29b-41d4-a716-446655440000\",\"certificateSHA256\":\"" + String(repeating: "a", count: 64) + "\",\"enrollmentToken\":\"" + String(repeating: "b", count: 43) + "\",\"expiresAt\":" + String(Int64(Date().timeIntervalSince1970 * 1000) + 120000) + "}"
+        let payload = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"wss://100.94.14.74:8787/v1\",\"hostId\":\"550e8400-e29b-41d4-a716-446655440000\",\"certificateSHA256\":\"" + String(repeating: "a", count: 64) + "\",\"enrollmentToken\":\"" + String(repeating: "b", count: 43) + "\",\"expiresAt\":" + String(Int64(Date().timeIntervalSince1970 * 1000) + 120000) + "}"
         XCTAssertEqual(PairingCode.parse(payload)?.endpoint, "wss://100.94.14.74:8787/v1")
         XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "100.94.14.74", with: "example.com")))
-        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "\"version\":2", with: "\"version\":1")))
+        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")))
         XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: String(repeating: "b", count: 43), with: "short")))
         XCTAssertNil(PairingCode.parse(String(repeating: "x", count: 8193)))
         XCTAssertNil(PairingCode.parse("https://example.com"))

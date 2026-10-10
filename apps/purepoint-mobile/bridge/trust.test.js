@@ -27,7 +27,7 @@ test("short-lived enrollment is single use under concurrent attempts; credential
   fixture(async (store, directory) => {
     const enrollment = store.createEnrollment({ endpoint });
     const code = JSON.parse(enrollment.payload);
-    assert.equal(code.version, 2);
+    assert.equal(code.version, 1);
     assert.equal(code.certificateSHA256, store.certificateSHA256);
     assert.equal(code.secret, undefined);
     const outcomes = await Promise.allSettled([
