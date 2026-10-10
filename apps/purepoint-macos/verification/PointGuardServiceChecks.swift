@@ -56,6 +56,13 @@ import Foundation
         precondition(PointGuardTailnet.matchedAddress(candidates: ["100.64.1.2"], reported: "100.64.9.9") == nil)
         precondition(PointGuardTailnet.matchedAddress(candidates: ["100.64.1.2"], reported: "100.64.1.2\n100.64.9.9") == nil)
         precondition(PointGuardTailnet.matchedAddress(candidates: ["100.64.1.2"], reported: "100.64.1.2\n") == "100.64.1.2")
+        let queryStarted = Date()
+        let heldPipe = PointGuardTailnet.query(executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf '100.64.1.2\\n'; /bin/sleep 1 & exit 0"], candidates: ["100.64.1.2"], timeout: 0.2)
+        precondition(heldPipe == nil && Date().timeIntervalSince(queryStarted) < 0.8, "Descendant-held stdout must time out without accepting an IP")
+        let oversized = PointGuardTailnet.query(executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "i=0; while [ $i -lt 1000 ]; do printf '100.64.1.2\\n'; i=$((i+1)); done"], candidates: ["100.64.1.2"], timeout: 1)
+        precondition(oversized == nil, "Oversized query output must not be accepted")
         print("Point Guard runtime path, owned readiness, recovery-folder and error attribution checks passed")
     }
 }

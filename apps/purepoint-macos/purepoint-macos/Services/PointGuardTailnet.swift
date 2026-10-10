@@ -39,18 +39,41 @@ enum PointGuardTailnet {
                      home.appendingPathComponent("Applications/Tailscale.app/Contents/MacOS/Tailscale").path,
                      "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"]
         guard let executable = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+        return query(executable: URL(fileURLWithPath: executable), candidates: candidates)
+    }
+    /// Deadline covers process lifetime AND pipe EOF (including inherited descendant writers).
+    static func query(executable: URL, arguments: [String] = ["ip", "-4"], candidates: Set<String>, timeout: TimeInterval = 3) -> String? {
         let child = Process(); let output = Pipe()
-        child.executableURL = URL(fileURLWithPath: executable); child.arguments = ["ip", "-4"]
-        // GUI variants choose CLI mode from terminal environment; no shell or PATH lookup.
+        child.executableURL = executable; child.arguments = arguments
+        let home = FileManager.default.homeDirectoryForCurrentUser
         child.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SHLVL": "1", "TERM": "dumb"]
         child.standardOutput = output; child.standardError = FileHandle.nullDevice; child.standardInput = FileHandle.nullDevice
         do { try child.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(3)
-        while child.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-        if child.isRunning { child.terminate(); return nil }
-        guard child.terminationStatus == 0 else { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        guard data.count <= 4096, let reported = String(data: data, encoding: .utf8) else { return nil }
-        return matchedAddress(candidates: candidates, reported: reported)
+        try? output.fileHandleForWriting.close()
+        let fd = output.fileHandleForReading.fileDescriptor
+        defer { try? output.fileHandleForReading.close() }
+        guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) != -1 else {
+            if child.isRunning { child.terminate() }; return nil
+        }
+        var data = Data(); var eof = false
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            var buffer = [UInt8](repeating: 0, count: 1024)
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            if count > 0 {
+                data.append(contentsOf: buffer.prefix(count))
+                if data.count > 4096 { if child.isRunning { child.terminate() }; return nil }
+            } else if count == 0 { eof = true }
+            else if errno != EAGAIN && errno != EWOULDBLOCK {
+                if child.isRunning { child.terminate() }; return nil
+            }
+            if !child.isRunning && eof {
+                guard child.terminationStatus == 0, let reported = String(data: data, encoding: .utf8) else { return nil }
+                return matchedAddress(candidates: candidates, reported: reported)
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if child.isRunning { child.terminate() }
+        return nil
     }
 }
