@@ -40,16 +40,24 @@ test("given cancel during fresh owned startup should release lock and attribute 
         stdio: "ignore",
       },
     );
-    for (let i = 0; i < 200; i++) {
+    // Cold SDK import can exceed a second on CI. Wait for the actual startup
+    // milestone, never send a signal based on elapsed time alone.
+    const deadline = performance.now() + 30000;
+    let tokenCreated = false;
+    while (performance.now() < deadline) {
       try {
         await access(path.join(state, "admin-token"));
+        tokenCreated = true;
         break;
       } catch {}
       if (child.exitCode !== null)
         throw new Error("Startup exited before proof signal.");
       await pause(5);
     }
-    await access(path.join(state, "admin-token"));
+    assert.ok(
+      tokenCreated,
+      "Owned startup did not create its token within the bounded startup deadline.",
+    );
     const exited = once(child, "exit");
     child.kill("SIGTERM");
     const [, signal] = await exited;

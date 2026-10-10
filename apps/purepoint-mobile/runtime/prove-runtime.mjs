@@ -45,6 +45,20 @@ try {
   const port = free.address().port;
   await new Promise((resolve) => free.close(resolve));
   const descriptorFile = path.join(stateDir, "admin.json");
+  const assignedAddresses = new Set(
+    Object.values(os.networkInterfaces())
+      .flat()
+      .filter(Boolean)
+      .map((i) => i.address),
+  );
+  const unavailableHost = Array.from(
+    { length: 254 },
+    (_, i) => `100.127.255.${254 - i}`,
+  ).find((a) => !assignedAddresses.has(a));
+  assert.ok(
+    unavailableHost,
+    "Proof needs an unassigned valid private tailnet address",
+  );
   const launch = async (cwd, remote = false) => {
     const instanceId = randomUUID();
     let output = "";
@@ -60,7 +74,7 @@ try {
         ...(remote
           ? {
               PI_MOBILE_HOST:
-                remote === "unavailable" ? "192.0.2.1" : "127.0.0.1",
+                remote === "unavailable" ? unavailableHost : "127.0.0.1",
               PI_MOBILE_PORT: String(port),
             }
           : {}),
@@ -76,8 +90,17 @@ try {
     child.on("error", () => {});
     let ready;
     for (let i = 0; i < 200; i++) {
-      if (child.exitCode !== null)
-        throw new Error(`Packaged service exited ${child.exitCode}: ${output}`);
+      if (child.exitCode !== null) {
+        let failure;
+        try {
+          failure = JSON.parse(
+            await readFile(path.join(stateDir, "error.json"), "utf8"),
+          );
+        } catch {}
+        throw new Error(
+          `Packaged service exited ${child.exitCode}: ${failure?.code ?? "no attributed failure"}; ${failure?.recovery ?? output}`,
+        );
+      }
       try {
         const d = JSON.parse(await readFile(descriptorFile, "utf8"));
         if (d.pid === child.pid && d.instanceId === instanceId) {
