@@ -15,10 +15,15 @@ clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
 shell-words = "1"
 which = "8"
+libc = "0.2"
 
 [[bin]]
 name = "pu"
 path = "src/main.rs"
+
+[[bin]]
+name = "pu-point-guard-lock"
+path = "src/bin/point_guard_lock.rs"
 
 [dev-dependencies]
 pu-engine = { path = "../pu-engine" }
