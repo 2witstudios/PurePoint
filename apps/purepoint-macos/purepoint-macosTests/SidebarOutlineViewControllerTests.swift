@@ -54,6 +54,47 @@ struct SidebarOutlineViewControllerTests {
         #expect(controller.projectNodes[0].children.map(\.id) == ["wt-0", "wt-1"])
     }
 
+    @Test func givenUnreadChannelChangesShouldRefreshProjectBadgeWithoutChildRows() async throws {
+        let root = "/tmp/sidebar-unread-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: root))
+        defer { defaults.removePersistentDomain(forName: root) }
+        let message = ChannelMessage(
+            id: "message", sequence: 1, parentId: nil,
+            author: ChannelAuthor(id: "other", name: "Other", kind: "human", agentType: nil, worktreeId: nil, branch: nil),
+            text: "Update", createdAt: "", editedAt: nil, references: [], reactions: []
+        )
+        let channel = ChannelState(projectRoot: root, defaults: defaults) { _ in
+            .channelHistory(ChannelHistory(
+                messages: [message], revision: 1, latestSequence: 1,
+                hasMore: false, oldestSequence: 1, unchanged: false,
+                selfAuthorId: "self", replyCounts: [:]
+            ))
+        }
+        let project = ProjectState(projectRoot: root, service: SidebarTestWorkspaceService(), registry: nil, channel: channel)
+        let controller = SidebarOutlineViewController()
+        controller.loadViewIfNeeded()
+        controller.rebuildNodes(projects: [project])
+        let initialNode = try #require(controller.projectNodes.first)
+
+        await channel.refresh()
+        #expect(channel.unreadCount == 1)
+        controller.rebuildNodes(projects: [project])
+        let unreadNode = try #require(controller.projectNodes.first)
+        #expect(unreadNode !== initialNode)
+        #expect(unreadNode.children.isEmpty)
+        let cell = try #require(controller.outlineView(controller.outlineView, viewFor: nil, item: unreadNode))
+        let badge = try #require(cell.subviews.flatMap { $0.subviews }.compactMap { $0 as? NSTextField }
+            .first { $0.identifier?.rawValue == "channelUnreadCount" })
+        #expect(badge.stringValue == "1")
+
+        channel.markRead()
+        controller.rebuildNodes(projects: [project])
+        let readNode = try #require(controller.projectNodes.first)
+        #expect(readNode !== unreadNode)
+        let readCell = try #require(controller.outlineView(controller.outlineView, viewFor: nil, item: readNode))
+        #expect(!readCell.subviews.flatMap { $0.subviews }.contains { $0.identifier?.rawValue == "channelUnreadCount" })
+    }
+
     @Test func givenScrolledSidebarShouldPreserveScrollPositionAcrossUnchangedRebuild() {
         let controller = SidebarOutlineViewController()
         controller.loadViewIfNeeded()

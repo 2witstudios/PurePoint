@@ -36,9 +36,9 @@ final class ProjectState: Identifiable {
     /// How long to keep retrying daemon start + init before surfacing an error.
     private static let daemonConnectBudget: Duration = .seconds(20)
 
-    init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?) {
+    init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil) {
         self.projectRoot = projectRoot
-        self.channel = ChannelState(projectRoot: projectRoot)
+        self.channel = channel ?? ChannelState(projectRoot: projectRoot)
         self.service = service
         self.registry = registry
     }

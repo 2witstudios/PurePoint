@@ -63,6 +63,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     }
 
     private struct ProjectRenderState: Equatable {
+        let channelUnread: Int
         let projectRoot: String
         let rootWorkspaces: [WorkspaceRenderState]
         let worktrees: [WorktreeRenderState]
@@ -201,6 +202,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             }
 
             return ProjectRenderState(
+                channelUnread: project.channel.unreadCount,
                 projectRoot: project.projectRoot,
                 rootWorkspaces: rootWorkspaces,
                 worktrees: worktrees
@@ -341,6 +343,13 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.addArrangedSubview(icon)
         stack.addArrangedSubview(name)
         stack.addArrangedSubview(spacerView())
+        if project.channel.unreadCount > 0 {
+            let badge = makeBadge(count: project.channel.unreadCount)
+            badge.identifier = NSUserInterfaceItemIdentifier("channelUnreadCount")
+            badge.textColor = .controlAccentColor
+            badge.setAccessibilityLabel("\(project.channel.unreadCount) unread channel messages")
+            stack.addArrangedSubview(badge)
+        }
         stack.addArrangedSubview(addBtn)
         return cell
     }
