@@ -252,6 +252,44 @@ private enum GitReviewChecks {
         try require(!state.isLoadingBranch && !state.isLoadingPRs && state.commits.isEmpty, "stop invalidates in-flight loads")
         print("Git state and remote checks passed")
     }
+    @MainActor static func emptyRefreshChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        try write("root\n", "root.txt", at: path); try commit("root", at: path)
+        let state = DiffState(gitService: GitService(ghPath: "/usr/bin/false"))
+        defer { state.stopWatching() }
+        state.loadForProject(root: path)
+        try require(state.isInitiallyLoadingBranch && state.isInitiallyLoadingUnstaged, "new project shows initial loading")
+        try await settle(state)
+        for _ in 0..<3 {
+            state.refresh()
+            try require(state.isLoadingBranch && state.isLoadingUnstaged, "background refresh still fetches Git evidence")
+            try require(!state.isInitiallyLoadingBranch && !state.isInitiallyLoadingUnstaged, "empty branch, commits and clean working tree stay visible during refresh")
+            try await settle(state)
+            try require(state.branchDiff.isEmpty && state.commits.isEmpty && state.localFileCount == 0, "clean project remains empty")
+        }
+        try write("edited\n", "root.txt", at: path)
+        state.refresh(); try await settle(state)
+        try require(state.unstagedDiff.count == 1, "quiet refresh still publishes file edits")
+        _ = try git(["checkout", "-b", "feature"], at: path)
+        _ = try git(["commit", "--allow-empty", "-m", "empty"], at: path)
+        let worktree = WorktreeModel(id: "empty", name: "empty", path: path, branch: "feature", status: "active", agents: [], baseBranch: "main")
+        state.loadForWorktree(worktree)
+        try require(state.isInitiallyLoadingBranch && state.isInitiallyLoadingUnstaged, "worktree selection resets initial loading")
+        try await settle(state)
+        state.selectCommit(state.commits[0])
+        try require(state.isInitiallyLoadingCommit, "first commit selection loads its patch")
+        try await settle(state)
+        state.refresh(); try await settle(state)
+        state.selectCommit(state.commits[0])
+        try require(state.isLoadingCommit && !state.isInitiallyLoadingCommit && state.commitDiff.isEmpty, "empty selected commit remains visible during reload")
+        try await settle(state)
+        state.setComparisonBase("feature")
+        try require(state.isInitiallyLoadingBranch && !state.isInitiallyLoadingUnstaged, "new base reloads branch evidence without hiding local evidence")
+        try await settle(state)
+        try require(state.commits.isEmpty, "new comparison replaces commit list")
+        print("Empty review refresh checks passed")
+    }
+
     @MainActor static func settle(_ state: DiffState) async throws {
         for _ in 0..<200 {
             if !state.isLoadingBranch && !state.isLoadingUnstaged && !state.isLoadingPRs && !state.isLoadingPRDiff && !state.isLoadingCommit { return }
@@ -289,6 +327,7 @@ private enum GitReviewChecks {
     @MainActor static func main() async throws {
         try await GitReviewChecks.repositoryChecks()
         try await GitReviewChecks.stateChecks()
+        try await GitReviewChecks.emptyRefreshChecks()
         try await GitReviewChecks.concurrentProcessChecks()
     }
 }
@@ -296,6 +335,7 @@ private enum GitReviewChecks {
 struct GitReviewTests {
     @Test func realRepositories() async throws { try await GitReviewChecks.repositoryChecks() }
     @Test @MainActor func selectionsAndRemoteRefresh() async throws { try await GitReviewChecks.stateChecks() }
+    @Test @MainActor func emptyResultsStayVisibleDuringRefresh() async throws { try await GitReviewChecks.emptyRefreshChecks() }
     @Test func concurrentGitPipesComplete() async throws { try await GitReviewChecks.concurrentProcessChecks() }
 }
 #endif
