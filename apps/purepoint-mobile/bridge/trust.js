@@ -9,6 +9,7 @@ import {
 } from "node:crypto";
 import { ensureHostTLS, privateEntry } from "./trust-tls.js";
 import { pairingEndpoint } from "./endpoints.js";
+import { acquirePrivateLock } from "./lock-helper.js";
 const opaque = () => randomBytes(32).toString("base64url");
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const validToken = (value) =>
@@ -23,7 +24,8 @@ function same(left, right) {
   const b = Buffer.from(right, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
 }
-async function publish(file, value) {
+async function publish(file, value, assertHeld) {
+  assertHeld();
   const temp = file + "." + randomUUID() + ".tmp";
   let handle;
   try {
@@ -32,10 +34,12 @@ async function publish(file, value) {
     await handle.sync();
     await handle.close();
     handle = null;
+    assertHeld();
     await rename(temp, file);
     const directory = await open(path.dirname(file), "r");
     try {
       await directory.sync();
+      assertHeld();
     } finally {
       await directory.close();
     }
@@ -78,23 +82,27 @@ function validate(state, pin) {
   }
 }
 /** One private durable writer. Unknown/legacy state never becomes remote authorization. */
-export async function openTrustStore({ directory, now = Date.now }) {
+export async function openTrustStore({ directory, now = Date.now, helperPath }) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await privateEntry(directory, true);
-  const lockFile = path.join(directory, "writer.lock");
-  let lock;
+  let lockFailure;
+  let notifyLoss;
+  const lock = await acquirePrivateLock({
+    file: path.join(directory, "writer.lock"),
+    helperPath,
+    onLost(error) {
+      lockFailure = error;
+      notifyLoss?.(error);
+    },
+  });
+  const assertHeld = () => {
+    if (lockFailure) throw lockFailure;
+    lock.assertHeld();
+  };
   try {
-    lock = await open(lockFile, "wx", 0o600);
-    await lock.writeFile(String(process.pid));
-  } catch (e) {
-    if (e.code === "EEXIST")
-      throw new Error(
-        "Point Guard trust writer is already locked. Close the owning app; stale locks require deliberate recovery.",
-      );
-    throw e;
-  }
-  try {
-    const tls = await ensureHostTLS(directory);
+    assertHeld();
+    const tls = await ensureHostTLS(directory, assertHeld);
+    assertHeld();
     const file = path.join(directory, "trust.json");
     let state;
     try {
@@ -114,8 +122,9 @@ export async function openTrustStore({ directory, now = Date.now }) {
         certificateSHA256: tls.certificateSHA256,
         devices: [],
       };
-      await publish(file, state);
+      await publish(file, state, assertHeld);
     }
+    assertHeld();
     validate(state, tls.certificateSHA256);
     /** @type {EventEmitter & Record<string, any>} */
     const trust = new EventEmitter();
@@ -124,7 +133,12 @@ export async function openTrustStore({ directory, now = Date.now }) {
     let closed = false;
     let closing = false;
     let closingTask;
+    notifyLoss = (error) => {
+      enrollments.clear();
+      trust.emit("lockLost", error);
+    };
     const active = () => {
+      assertHeld();
       if (closed || closing)
         throw new Error("Point Guard trust store is closed.");
     };
@@ -192,7 +206,7 @@ export async function openTrustStore({ directory, now = Date.now }) {
         if (entry?.status === "pending") entry.status = "revoked";
       },
       authorize(credential) {
-        if (closed || closing || !validToken(credential)) return null;
+        if (closed || closing || lockFailure || !lock.held || !validToken(credential)) return null;
         const hash = digest(credential);
         const device = state.devices.find(
           (d) => same(hash, d.credentialHash) && d.revokedAt == null,
@@ -240,7 +254,8 @@ export async function openTrustStore({ directory, now = Date.now }) {
               },
             ],
           };
-          await publish(file, next);
+          await publish(file, next, assertHeld);
+          assertHeld();
           state = next;
           return {
             version: 1,
@@ -267,7 +282,8 @@ export async function openTrustStore({ directory, now = Date.now }) {
               d.deviceId === deviceId ? { ...d, revokedAt: now() } : d,
             ),
           };
-          await publish(file, next);
+          await publish(file, next, assertHeld);
+          assertHeld();
           state = next;
           trust.emit("revoked", deviceId);
         });
@@ -282,16 +298,15 @@ export async function openTrustStore({ directory, now = Date.now }) {
           await tail;
           closed = true;
           enrollments.clear();
-          await lock.close();
-          await rm(lockFile);
+          // Retained parent FD keeps kernel ownership until all submitted IO drains.
+          await lock.release();
         })();
         return closingTask;
       },
     });
     return trust;
   } catch (e) {
-    await lock.close();
-    await rm(lockFile);
+    await lock.release();
     throw e;
   }
 }

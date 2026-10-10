@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, stat, open, chmod, symlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { openTrustStore } from "./trust.js";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { once } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 const endpoint = "wss://100.100.1.2:8787/v1";
 async function fixture(fn) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-"));
@@ -118,7 +122,7 @@ test("trust survives restart while pending enrollments do not; rotating one devi
   }));
 test("unknown schema, identity mismatch and partial identity fail closed without overwriting state", async () =>
   fixture(async (store, directory) => {
-    await assert.rejects(openTrustStore({ directory }), /already|lock/i);
+    await assert.rejects(openTrustStore({ directory }), { code: "lock_busy" });
     await store.close();
     const file = path.join(directory, "trust.json");
     const original = JSON.parse(await readFile(file, "utf8"));
@@ -160,3 +164,126 @@ test("insecure existing files and public/legacy endpoints never downgrade trust"
     await chmod(path.join(directory, "trust.json"), 0o644);
     await assert.rejects(openTrustStore({ directory }), /private|owner/i);
   }));
+
+test("helper crash fences trust while retained kernel ownership excludes writers until submitted IO drains", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-holder-crash-"));
+  let store;
+  let resume;
+  let heldChild;
+  const spawn = childProcess.spawn;
+  t.mock.method(childProcess, "spawn", (...args) => {
+    const child = spawn(...args);
+    if (args[0] === process.env.POINT_GUARD_LOCK_HELPER_PATH) heldChild = child;
+    return child;
+  });
+  syncBuiltinESMExports();
+  try {
+    store = await openTrustStore({ directory });
+    assert.ok(heldChild?.pid, "fixture directly owns the spawned helper child");
+    const holder = heldChild;
+    const phone = await store.enroll({ enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload).enrollmentToken, name: "Saved phone" });
+    const original = await readFile(path.join(directory, "trust.json"));
+    const certificate = await readFile(path.join(directory, "identity-cert.pem"));
+    const inode = (await stat(path.join(directory, "writer.lock"))).ino;
+    const probe = await open(path.join(directory, "probe"), "w", 0o600);
+    const prototype = Object.getPrototypeOf(probe);
+    await probe.close();
+    const sync = prototype.sync;
+    let entered;
+    const entering = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { resume = resolve; });
+    let blocked = false;
+    t.mock.method(prototype, "sync", async function (...args) {
+      if (!blocked) { blocked = true; entered(); await gate; }
+      return sync.apply(this, args);
+    });
+    const outcome = store.revokeDevice(phone.deviceId).then(() => null, error => error);
+    await entering;
+    const loss = once(store, "lockLost");
+    holder.kill("SIGKILL"); // Only this fixture's directly-owned helper child.
+    const [error] = await loss;
+    assert.equal(error.code, "lock_lost");
+    assert.equal(store.authorize(phone.credential), null);
+    assert.throws(() => store.createEnrollment({ endpoint }), { code: "lock_lost" });
+    const queued = store.revokeDevice(phone.deviceId).then(() => null, error => error);
+    await assert.rejects(openTrustStore({ directory }), { code: "lock_busy" });
+    const closing = store.close();
+    await assert.rejects(openTrustStore({ directory }), { code: "lock_busy" });
+    resume();
+    assert.equal((await outcome).code, "lock_lost");
+    assert.equal((await queued).code, "lock_lost");
+    await closing;
+    const reopened = await openTrustStore({ directory });
+    try {
+      assert.equal(reopened.authorize(phone.credential).deviceId, phone.deviceId);
+      assert.deepEqual(await readFile(path.join(directory, "trust.json")), original);
+      assert.deepEqual(await readFile(path.join(directory, "identity-cert.pem")), certificate);
+      assert.equal((await stat(path.join(directory, "writer.lock"))).ino, inode);
+    } finally { await reopened.close(); }
+  } finally {
+    resume?.();
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await store?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("isolated bridge crash releases inherited helper ownership and preserves same inode and durable phone trust", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-bridge-crash-"));
+  const source = `import { openTrustStore } from ${JSON.stringify(new URL("./trust.js", import.meta.url).href)};
+    const store = await openTrustStore({directory:process.env.TRUST_FIXTURE_DIRECTORY});
+    const phone = await store.enroll({enrollmentToken:JSON.parse(store.createEnrollment({endpoint:${JSON.stringify(endpoint)}}).payload).enrollmentToken,name:"Phone"});
+    process.send({phone,hostId:store.hostId,certificateSHA256:store.certificateSHA256});
+    setInterval(()=>{},1000);`;
+  const child = childProcess.spawn(process.execPath, ["--input-type=module", "-e", source], {
+    env: { ...process.env, TRUST_FIXTURE_DIRECTORY: directory }, stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
+  let restarted;
+  try {
+    const [ready] = await Promise.race([once(child, "message"), once(child, "exit").then(() => { throw new Error("fixture bridge exited before ready"); }), delay(10000, undefined, { ref: false }).then(() => { throw new Error("fixture bridge readiness timed out"); })]);
+    const before = await readFile(path.join(directory, "trust.json"));
+    const cert = await readFile(path.join(directory, "identity-cert.pem"));
+    const inode = (await stat(path.join(directory, "writer.lock"))).ino;
+    await assert.rejects(openTrustStore({ directory }), { code: "lock_busy" });
+    const exited = once(child, "exit");
+    child.kill("SIGKILL"); // Only the fixture bridge spawned above; never production/session processes.
+    await exited;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      try { restarted = await openTrustStore({ directory }); break; }
+      catch (error) { if (error.code !== "lock_busy" || attempt === 49) throw error; await delay(20); }
+    }
+    assert.equal(restarted.hostId, ready.hostId);
+    assert.equal(restarted.certificateSHA256, ready.certificateSHA256);
+    assert.equal(restarted.authorize(ready.phone.credential).deviceId, ready.phone.deviceId);
+    assert.deepEqual(await readFile(path.join(directory, "trust.json")), before);
+    assert.deepEqual(await readFile(path.join(directory, "identity-cert.pem")), cert);
+    assert.equal((await stat(path.join(directory, "writer.lock"))).ino, inode);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; }
+    await restarted?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("permanent private old PID marker is inert; public or symlink lock refuses without repair", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-trust-lock-migration-"));
+  const file = path.join(directory, "writer.lock");
+  let store;
+  try {
+    await writeFile(file, "1", { mode: 0o600 });
+    const inode = (await stat(file)).ino;
+    store = await openTrustStore({ directory });
+    await store.close();
+    assert.equal(await readFile(file, "utf8"), "1");
+    assert.equal((await stat(file)).ino, inode);
+    await chmod(file, 0o644);
+    await assert.rejects(openTrustStore({ directory }), { code: "lock_private" });
+    assert.equal((await stat(file)).mode & 0o777, 0o644);
+    await rm(file); // Fixture-only replacement to construct a malicious symlink, never recovery.
+    await symlink(path.join(directory, "trust.json"), file);
+    const original = await readFile(path.join(directory, "trust.json"));
+    await assert.rejects(openTrustStore({ directory }), { code: "lock_private" });
+    assert.deepEqual(await readFile(path.join(directory, "trust.json")), original);
+  } finally { await store?.close(); await rm(directory, { recursive: true, force: true }); }
+});

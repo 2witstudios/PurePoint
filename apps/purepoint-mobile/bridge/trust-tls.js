@@ -32,7 +32,8 @@ async function exists(file) {
   }
 }
 /** Provision once under the trust writer lock; partial/expired identity requires deliberate recovery. */
-export async function ensureHostTLS(directory) {
+export async function ensureHostTLS(directory, assertHeld = () => {}) {
+  assertHeld();
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await privateEntry(directory, true);
   const certFile = path.join(directory, "identity-cert.pem");
@@ -43,10 +44,12 @@ export async function ensureHostTLS(directory) {
     exists(path.join(directory, "trust.json")),
   ]);
   const created = !present[0] && !present[1] && !present[2];
+  assertHeld();
   if (created) {
     const temporary = await mkdtemp(path.join(directory, ".identity-"));
     try {
       // Absolute OS tool, fixed arguments, no shell or caller-controlled certificate fields.
+      assertHeld();
       await execute(
         "/usr/bin/openssl",
         [
@@ -70,7 +73,9 @@ export async function ensureHostTLS(directory) {
       const { chmod } = await import("node:fs/promises");
       await chmod(path.join(temporary, "key.pem"), 0o600);
       await chmod(path.join(temporary, "cert.pem"), 0o600);
+      assertHeld();
       await rename(path.join(temporary, "key.pem"), keyFile);
+      assertHeld();
       await rename(path.join(temporary, "cert.pem"), certFile);
     } catch {
       throw new Error(

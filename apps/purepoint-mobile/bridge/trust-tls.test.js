@@ -6,6 +6,7 @@ import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { openTrustStore } from "./trust.js";
+import { ensureHostTLS } from "./trust-tls.js";
 const execute = promisify(execFile);
 test("expired persisted TLS identity fails actionably without rotating certificate or host trust", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pg-tls-expiry-"));
@@ -63,3 +64,25 @@ test("expired persisted TLS identity fails actionably without rotating certifica
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+for (const fence of [1, 4, 5]) {
+  test(`TLS provisioning fences lost ownership at boundary ${fence} without repairing identity`, async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pg-tls-lock-loss-"));
+    let checks = 0;
+    try {
+      await assert.rejects(ensureHostTLS(directory, () => {
+        if (++checks === fence) throw new Error("fixture lock lost");
+      }), /lost|provision/i);
+      await assert.rejects(readFile(path.join(directory, "identity-cert.pem")), { code: "ENOENT" });
+      if (fence === 5) {
+        const key = await readFile(path.join(directory, "identity-key.pem"));
+        await assert.rejects(ensureHostTLS(directory), /incomplete/i);
+        assert.deepEqual(await readFile(path.join(directory, "identity-key.pem")), key);
+      } else {
+        await assert.rejects(readFile(path.join(directory, "identity-key.pem")), { code: "ENOENT" });
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
