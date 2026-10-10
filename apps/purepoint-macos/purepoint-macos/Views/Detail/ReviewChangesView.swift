@@ -25,9 +25,9 @@ struct ReviewChangesView: View {
     @ViewBuilder private var content: some View {
         switch state.activeTab {
         case .branch:
-            patches(state.branchDiff, loading: state.isLoadingBranch, empty: "No changes since \(state.comparisonBase)", error: state.branchError)
+            patches(state.branchDiff, loading: state.isInitiallyLoadingBranch, empty: "No changes since \(state.comparisonBase)", error: state.branchError)
         case .unstaged:
-            if state.isLoadingUnstaged && state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if state.isInitiallyLoadingUnstaged && state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if state.stagedDiff.isEmpty && state.unstagedDiff.isEmpty && state.untrackedDiff.isEmpty { patches([], loading: false, empty: "Working tree is clean", error: state.localError) }
             else {
                 ScrollView {
@@ -45,7 +45,7 @@ struct ReviewChangesView: View {
                 VStack(spacing: 0) {
                     HStack { Button { state.selectedCommit = nil } label: { Image(systemName: "chevron.left") }; Text(commit.subject).font(.system(size: 13, weight: .medium)); Spacer(); Text(String(commit.sha.prefix(8))).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary) }.padding(14)
                     Divider()
-                    patches(state.commitDiff, loading: state.isLoadingCommit, empty: "This commit has no file changes", error: nil)
+                    patches(state.commitDiff, loading: state.isInitiallyLoadingCommit, empty: "This commit has no file changes", error: nil)
                 }
             } else {
                 ScrollView {
@@ -60,7 +60,7 @@ struct ReviewChangesView: View {
                             }.buttonStyle(.plain)
                             Divider()
                         }
-                        if state.commits.isEmpty { Text(state.isLoadingBranch ? "Loading commits…" : "No commits beyond \(state.comparisonBase)").foregroundStyle(.secondary).padding(30) }
+                        if state.commits.isEmpty { Text(state.isInitiallyLoadingBranch ? "Loading commits…" : "No commits beyond \(state.comparisonBase)").foregroundStyle(.secondary).padding(30) }
                     }
                 }
             }

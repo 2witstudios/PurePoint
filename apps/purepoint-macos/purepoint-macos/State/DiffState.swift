@@ -28,6 +28,13 @@ final class DiffState {
     var isLoadingBranch = false
     var isLoadingUnstaged = false
     var isLoadingCommit = false
+    // Empty results are loaded evidence too; polling must not replace them with a spinner.
+    private var hasLoadedBranch = false
+    private var hasLoadedLocal = false
+    private var hasLoadedCommit = false
+    var isInitiallyLoadingBranch: Bool { isLoadingBranch && !hasLoadedBranch }
+    var isInitiallyLoadingUnstaged: Bool { isLoadingUnstaged && !hasLoadedLocal }
+    var isInitiallyLoadingCommit: Bool { isLoadingCommit && !hasLoadedCommit }
     var pullRequests: [PullRequestInfo] = []
     var selectedPR: PullRequestInfo?
     var prDiff: DiffData?
@@ -68,6 +75,7 @@ final class DiffState {
         commits = []; selectedCommit = nil; commitDiff = []
         pullRequests = []; selectedPR = nil; prDiff = nil
         branchError = nil; localError = nil; prError = nil
+        hasLoadedBranch = false; hasLoadedLocal = false; hasLoadedCommit = false
         refresh()
         watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
             Task { @MainActor in self?.refreshLocal() }
@@ -91,19 +99,20 @@ final class DiffState {
         isLoadingPRDiff = false; isLoadingPRs = false
         // Old branch and commit evidence belongs to a different comparison.
         branchDiff = []; commits = []; selectedCommit = nil; commitDiff = []; isLoadingCommit = false
+        hasLoadedBranch = false; hasLoadedCommit = false
         refresh()
     }
 
     func selectCommit(_ commit: GitCommitInfo) {
         guard let path else { return }
-        if selectedCommit?.sha != commit.sha { commitDiff = [] }
+        if selectedCommit?.sha != commit.sha { commitDiff = []; hasLoadedCommit = false }
         selectedCommit = commit; commitTask?.cancel(); isLoadingCommit = true
         let token = generation
         commitTask = Task {
             do {
                 let files = try await git.fetchCommitDiff(at: path, sha: commit.sha)
                 guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
-                commitDiff = files
+                commitDiff = files; hasLoadedCommit = true
             } catch {
                 guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
                 branchError = error.localizedDescription
@@ -162,6 +171,7 @@ final class DiffState {
             if local.stagedError == nil { stagedDiff = local.staged }
             if local.unstagedError == nil { unstagedDiff = local.unstaged }
             if local.untrackedError == nil { untrackedDiff = local.untracked }
+            hasLoadedBranch = true; hasLoadedLocal = true
             isLoadingBranch = false; isLoadingUnstaged = false; localTask = nil
         }
     }
