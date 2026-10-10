@@ -215,6 +215,11 @@ mod tests {
             let error = ensure_daemon(&sock).await.unwrap_err().to_string();
             assert!(error.contains("protocol"), "{error}");
             assert!(error.contains("restart"), "{error}");
+            let error = crate::commands::prompt::run_list(&sock, false)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("protocol"), "{error}");
             // The old daemon remains reachable, preserving its live sessions.
             assert!(
                 matches!(crate::client::send_request(&sock, &Request::Health).await,

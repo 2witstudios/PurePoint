@@ -448,9 +448,9 @@ Gate evaluation timeouts: 60 seconds per command, 5 minutes total.
 
 ## Project channel
 
-The additive channel operations retain protocol version **6**: existing request
-and response payloads are unchanged. Older daemons return their existing parse
-error for unknown channel operations; clients must surface that error.
+Channel operations were introduced additively in protocol v6; their payloads
+remain unchanged in protocol **7**. CLI channel commands verify daemon protocol
+compatibility before dispatch and never auto-start a daemon.
 The authoritative fields and cursor rules are in
 [`project-channel.md`](../product/project-channel.md). Channel payloads use
 snake_case throughout, including nested authors and messages.

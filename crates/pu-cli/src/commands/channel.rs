@@ -131,6 +131,11 @@ async fn run_with_context(
     agent_id: Option<String>,
     action: ChannelAction,
 ) -> Result<(), CliError> {
+    // Channel operations do not auto-start a daemon, but must verify its version
+    // before a write or read is dispatched.
+    if !crate::daemon_ctrl::check_daemon_health(socket).await? {
+        return Err(CliError::DaemonNotRunning);
+    }
     let (request, json) = match action {
         ChannelAction::Send {
             text,
