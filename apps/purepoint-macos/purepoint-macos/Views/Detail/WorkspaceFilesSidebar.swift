@@ -44,6 +44,7 @@ struct WorkspaceFilesSidebar: View {
                     }
                 }
                 .onChange(of: state.expandedFiles) { previous, current in
+                    guard state.mode == .changes else { return }
                     if let collapsed = previous.subtracting(current).sorted().first {
                         proxy.scrollTo(collapsed, anchor: .top)
                     }
