@@ -87,6 +87,7 @@ struct PointGuardSetupView: View {
                 }
                 GroupBox("Phone") {
                     VStack(alignment: .leading, spacing: 10) {
+                        if let recovery = service.remoteRecovery { Text(recovery).foregroundStyle(.secondary).textSelection(.enabled) }
                         HStack {
                             Text("Pair once. Saved devices reconnect securely through Tailscale.")
                             Spacer()

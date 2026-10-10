@@ -8,8 +8,12 @@ import Foundation
     var failReplacement = false
     var failCancel = false
     var failRevoke = false
+    var failStop = false
     func request(_ operation: String, _ fields: [String: PiJSONValue]) async throws -> PiJSONValue {
         switch operation {
+        case "runtime.stop":
+            if failStop { throw PiChatError("Fixture runtime busy or unavailable") }
+            return .object([:])
         case "auth.start":
             if failReplacement && fields["provider"]?.text == "replacement" { throw PiChatError("Fixture failed before dispatch") }
             return await withCheckedContinuation { starts[fields["provider"]?.text ?? ""] = $0 }
@@ -132,6 +136,22 @@ import Foundation
         precondition(service.hasPendingAuthCleanup)
         try! await service.stop() // No child remains: cleanup is still invalidated.
         precondition(!service.hasPendingAuthCleanup && !service.hasPendingEnrollmentCleanup)
+        // A rejected authoritative Stop leaves both the exact child and login alive.
+        fixture.failCancel = false
+        let liveLogin = Task { await service.login(provider: "live-stop", type: "oauth") }
+        await wait { fixture.starts["live-stop"] != nil }
+        fixture.starts.removeValue(forKey: "live-stop")?.resume(returning: .object(["attemptId": .string("live-stop-id")]))
+        await liveLogin.value
+        await wait { service.auth["attemptId"].text == "live-stop-id" }
+        let child = Process(); child.executableURL = URL(fileURLWithPath: "/bin/sleep"); child.arguments = ["30"]
+        try! child.run(); service.fixtureAttach(child)
+        fixture.failStop = true
+        do { try await service.stop(); fatalError("Stop must reject") } catch { }
+        precondition(child.isRunning && service.ready && service.auth["attemptId"].text == "live-stop-id")
+        await service.cancelLogin()
+        precondition(fixture.canceled.contains("live-stop-id"), "Rejected Stop must preserve explicit cancellation")
+        child.terminate(); child.waitUntilExit()
+        service.ownedRuntimeExited(instanceId: "")
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }

@@ -24,6 +24,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var selectedProvider = ""
     @Published private(set) var selectedModel = ""
     @Published private(set) var enrollmentStatus = ""
+    @Published private(set) var remoteRecovery: String?
     @Published private(set) var remoteEndpoint: String?
     private var process: Process?
     private var descriptor: PointGuardDescriptor?
@@ -159,6 +160,9 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     func refresh() async {
         do {
             let status = try await request("status"); cwd = status["cwd"].text ?? ""
+            let recovery = status["remoteRecovery"]
+            remoteRecovery = [recovery["message"].text, recovery["recovery"].text].compactMap { $0 }.joined(separator: " ")
+            if remoteRecovery?.isEmpty == true { remoteRecovery = nil }
             selectedProvider = status["provider"].text ?? ""; selectedModel = status["model"].text ?? ""
             providers = (try await request("providers"))["providers"].values
             devices = (try await request("devices.list"))["devices"].values
@@ -320,8 +324,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     func stop() async throws {
         guard !stopping else { throw PiChatError("Point Guard is already stopping.") }
         stopping = true; defer { stopping = false }
-        startTask?.cancel(); pollTask?.cancel(); pollTask = nil
-        authGeneration += 1; enrollmentGeneration += 1; activeAttemptId = nil; auth = .null; enrollment = .null
+        startTask?.cancel()
         guard let child = process else { ownedRuntimeExited(instanceId: instanceId); phase = "Stopped"; return }
         expectedStop = true
         if ready {
@@ -333,6 +336,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         } else if child.isRunning {
             child.terminate() // Failed startup: still only this exact owned Process.
         }
+        pollTask?.cancel(); pollTask = nil
+        authGeneration += 1; enrollmentGeneration += 1
         ready = false; phase = "Stopping Pi…"; chat?.disconnect()
         for _ in 0..<100 {
             if !child.isRunning {
@@ -348,7 +353,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         guard instanceId == launchId else { return }
         runtimeGeneration += 1; authGeneration += 1; enrollmentGeneration += 1
         pollTask?.cancel(); pollTask = nil
-        ready = false; descriptor = nil; adminToken = ""; process = nil
+        ready = false; descriptor = nil; adminToken = ""; process = nil; remoteRecovery = nil
         activeAttemptId = nil; auth = .null; enrollment = .null; enrollmentStatus = ""
         pendingAuthCleanup.removeAll(); pendingEnrollmentCleanup.removeAll()
         hasPendingAuthCleanup = false; hasPendingEnrollmentCleanup = false
