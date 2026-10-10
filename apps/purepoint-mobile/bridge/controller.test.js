@@ -1225,3 +1225,19 @@ test("ownership fence rejects new and queued actions and drain awaits accepted w
   assert.equal(rpc.calls.includes("new_session"), false);
   c.dispose();
 });
+
+test("missing model asks for provider selection without a separate Pi installation", async () => {
+  const rpc = new Runtime();
+  rpc.state.model = null;
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  try {
+    await assert.rejects(
+      request(c, "send", { text: "hello", mode: "send" }),
+      /Configure a provider and select a model before sending/,
+    );
+    assert.equal(rpc.calls.includes("prompt"), false);
+  } finally {
+    c.dispose();
+  }
+});

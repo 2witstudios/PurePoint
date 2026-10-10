@@ -459,7 +459,7 @@ export class Controller extends EventEmitter {
         throw new Error("Pi is running. Choose Steer or After reply.");
       if (!this.state.model)
         throw new Error(
-          "No Pi model configured. Open local Pi and configure a provider/model first.",
+          "No Pi model configured. Configure a provider and select a model before sending.",
         );
       const queued = r.mode !== "send";
       if (queued && this.nativeQueue.length >= 100)
