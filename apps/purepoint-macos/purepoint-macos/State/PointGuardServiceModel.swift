@@ -250,7 +250,17 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         startTask?.cancel(); pollTask?.cancel(); pollTask = nil
         authGeneration += 1; enrollmentGeneration += 1; activeAttemptId = nil; auth = .null; enrollment = .null
         guard let child = process else { ready = false; phase = "Stopped"; return }
-        expectedStop = true; ready = false; phase = "Stopping Pi…"; chat?.disconnect(); child.terminate()
+        expectedStop = true
+        if ready {
+            do {
+                // The bridge checks authoritative Pi/queue idleness and freezes new
+                // mutations in the same serialized operation before owned shutdown.
+                _ = try await request("runtime.stop")
+            } catch { expectedStop = false; throw error }
+        } else if child.isRunning {
+            child.terminate() // Failed startup: still only this exact owned Process.
+        }
+        ready = false; phase = "Stopping Pi…"; chat?.disconnect()
         for _ in 0..<100 {
             if !child.isRunning { process = nil; descriptor = nil; adminToken = ""; phase = "Stopped"; return }
             try await Task.sleep(for: .milliseconds(100))
