@@ -105,12 +105,12 @@ pub fn list_schedule_defs(project_root: &Path) -> Vec<ScheduleDef> {
         }
     }
 
-    if let Ok(global_dir) = paths::global_schedules_dir() {
-        if global_dir.is_dir() {
-            for def in scan_dir(&global_dir, "global") {
-                if !seen.contains_key(&def.name) {
-                    result.push(def);
-                }
+    if let Ok(global_dir) = paths::global_schedules_dir()
+        && global_dir.is_dir()
+    {
+        for def in scan_dir(&global_dir, "global") {
+            if !seen.contains_key(&def.name) {
+                result.push(def);
             }
         }
     }
@@ -124,17 +124,16 @@ pub fn find_schedule_def(project_root: &Path, name: &str) -> Option<ScheduleDef>
         return None;
     }
     let local_dir = paths::schedules_dir(project_root);
-    if local_dir.is_dir() {
-        if let Some(def) = find_in_dir(&local_dir, name, "local") {
-            return Some(def);
-        }
+    if local_dir.is_dir()
+        && let Some(def) = find_in_dir(&local_dir, name, "local")
+    {
+        return Some(def);
     }
-    if let Ok(global_dir) = paths::global_schedules_dir() {
-        if global_dir.is_dir() {
-            if let Some(def) = find_in_dir(&global_dir, name, "global") {
-                return Some(def);
-            }
-        }
+    if let Ok(global_dir) = paths::global_schedules_dir()
+        && global_dir.is_dir()
+        && let Some(def) = find_in_dir(&global_dir, name, "global")
+    {
+        return Some(def);
     }
     None
 }
@@ -293,20 +292,20 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<ScheduleDef> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                match serde_yaml_ng::from_str::<ScheduleDef>(&content) {
-                    Ok(mut def) => {
-                        if let Err(e) = def.validate() {
-                            eprintln!("warning: invalid schedule {}: {e}", path.display());
-                            continue;
-                        }
-                        def.scope = scope.to_string();
-                        defs.push(def);
+        if path.extension().and_then(|e| e.to_str()) == Some("yaml")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            match serde_yaml_ng::from_str::<ScheduleDef>(&content) {
+                Ok(mut def) => {
+                    if let Err(e) = def.validate() {
+                        eprintln!("warning: invalid schedule {}: {e}", path.display());
+                        continue;
                     }
-                    Err(e) => {
-                        eprintln!("warning: failed to parse {}: {e}", path.display());
-                    }
+                    def.scope = scope.to_string();
+                    defs.push(def);
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to parse {}: {e}", path.display());
                 }
             }
         }
@@ -317,16 +316,15 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<ScheduleDef> {
 
 fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<ScheduleDef> {
     let path = dir.join(format!("{name}.yaml"));
-    if path.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut def) = serde_yaml_ng::from_str::<ScheduleDef>(&content) {
-                if def.validate().is_err() {
-                    return None;
-                }
-                def.scope = scope.to_string();
-                return Some(def);
-            }
+    if path.is_file()
+        && let Ok(content) = std::fs::read_to_string(&path)
+        && let Ok(mut def) = serde_yaml_ng::from_str::<ScheduleDef>(&content)
+    {
+        if def.validate().is_err() {
+            return None;
         }
+        def.scope = scope.to_string();
+        return Some(def);
     }
     scan_dir(dir, scope)
         .into_iter()

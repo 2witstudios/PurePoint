@@ -23,10 +23,10 @@ pub async fn run(
         }
     } else if let Some(a) = agent {
         // Self-protection: refuse to kill own agent
-        if let Some(ref self_id) = self_agent_id {
-            if &a == self_id {
-                return Err(CliError::Other("cannot kill self".into()));
-            }
+        if let Some(ref self_id) = self_agent_id
+            && &a == self_id
+        {
+            return Err(CliError::Other("cannot kill self".into()));
         }
         KillTarget::Agent(a)
     } else if let Some(wt) = worktree {

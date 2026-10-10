@@ -214,10 +214,10 @@ impl Engine {
     }
 
     fn register_project(&self, project_root: &str) {
-        if !project_root.is_empty() {
-            if let Ok(mut projects) = self.registered_projects.lock() {
-                projects.insert(project_root.to_string());
-            }
+        if !project_root.is_empty()
+            && let Ok(mut projects) = self.registered_projects.lock()
+        {
+            projects.insert(project_root.to_string());
         }
     }
 

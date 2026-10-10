@@ -66,12 +66,12 @@ pub fn list_trigger_defs(project_root: &Path) -> Vec<TriggerDef> {
         }
     }
 
-    if let Ok(global_dir) = paths::global_triggers_dir() {
-        if global_dir.is_dir() {
-            for def in scan_dir(&global_dir, "global") {
-                if !seen.contains_key(&def.name) {
-                    result.push(def);
-                }
+    if let Ok(global_dir) = paths::global_triggers_dir()
+        && global_dir.is_dir()
+    {
+        for def in scan_dir(&global_dir, "global") {
+            if !seen.contains_key(&def.name) {
+                result.push(def);
             }
         }
     }
@@ -82,17 +82,16 @@ pub fn list_trigger_defs(project_root: &Path) -> Vec<TriggerDef> {
 /// Find a trigger definition by name. Checks local first, then global.
 pub fn find_trigger_def(project_root: &Path, name: &str) -> Option<TriggerDef> {
     let local_dir = paths::triggers_dir(project_root);
-    if local_dir.is_dir() {
-        if let Some(def) = find_in_dir(&local_dir, name, "local") {
-            return Some(def);
-        }
+    if local_dir.is_dir()
+        && let Some(def) = find_in_dir(&local_dir, name, "local")
+    {
+        return Some(def);
     }
-    if let Ok(global_dir) = paths::global_triggers_dir() {
-        if global_dir.is_dir() {
-            if let Some(def) = find_in_dir(&global_dir, name, "global") {
-                return Some(def);
-            }
-        }
+    if let Ok(global_dir) = paths::global_triggers_dir()
+        && global_dir.is_dir()
+        && let Some(def) = find_in_dir(&global_dir, name, "global")
+    {
+        return Some(def);
     }
     None
 }
@@ -140,16 +139,16 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<TriggerDef> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                match serde_yaml_ng::from_str::<TriggerDef>(&content) {
-                    Ok(mut def) => {
-                        def.scope = scope.to_string();
-                        defs.push(def);
-                    }
-                    Err(e) => {
-                        eprintln!("warning: failed to parse {}: {e}", path.display());
-                    }
+        if path.extension().and_then(|e| e.to_str()) == Some("yaml")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            match serde_yaml_ng::from_str::<TriggerDef>(&content) {
+                Ok(mut def) => {
+                    def.scope = scope.to_string();
+                    defs.push(def);
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to parse {}: {e}", path.display());
                 }
             }
         }
@@ -160,16 +159,16 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<TriggerDef> {
 
 fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<TriggerDef> {
     let path = dir.join(format!("{name}.yaml"));
-    if path.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            match serde_yaml_ng::from_str::<TriggerDef>(&content) {
-                Ok(mut def) => {
-                    def.scope = scope.to_string();
-                    return Some(def);
-                }
-                Err(e) => {
-                    eprintln!("warning: failed to parse {}: {e}", path.display());
-                }
+    if path.is_file()
+        && let Ok(content) = std::fs::read_to_string(&path)
+    {
+        match serde_yaml_ng::from_str::<TriggerDef>(&content) {
+            Ok(mut def) => {
+                def.scope = scope.to_string();
+                return Some(def);
+            }
+            Err(e) => {
+                eprintln!("warning: failed to parse {}: {e}", path.display());
             }
         }
     }

@@ -60,7 +60,7 @@ Runs `cargo clippy --all-targets` with `RUSTFLAGS="-D warnings"`. All warnings a
 Config in `clippy.toml`:
 
 ```toml
-msrv = "1.88"
+msrv = "1.89"
 ```
 
 ### Dependency audit

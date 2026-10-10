@@ -338,29 +338,29 @@ impl Engine {
             }
 
             // If include_terminal is set, spawn a bare terminal into this worktree
-            if swarm_def.include_terminal {
-                if let Some(ref wt_id) = worktree_id {
-                    let term_name = format!("{swarm_name}-terminal-{wt_index}");
-                    let resp = self
-                        .handle_spawn(SpawnParams {
-                            project_root: project_root.to_string(),
-                            prompt: String::new(),
-                            agent_type: "terminal".into(),
-                            name: Some(term_name),
-                            base: None,
-                            root: false,
-                            worktree: Some(wt_id.clone()),
-                            terminal_command: None,
-                            no_auto: false,
-                            extra_args: vec![],
-                            plan_mode: false,
-                            no_trigger: false,
-                            trigger: None,
-                        })
-                        .await;
-                    if let Response::SpawnResult { agent_id, .. } = resp {
-                        spawned_agents.push(agent_id);
-                    }
+            if swarm_def.include_terminal
+                && let Some(ref wt_id) = worktree_id
+            {
+                let term_name = format!("{swarm_name}-terminal-{wt_index}");
+                let resp = self
+                    .handle_spawn(SpawnParams {
+                        project_root: project_root.to_string(),
+                        prompt: String::new(),
+                        agent_type: "terminal".into(),
+                        name: Some(term_name),
+                        base: None,
+                        root: false,
+                        worktree: Some(wt_id.clone()),
+                        terminal_command: None,
+                        no_auto: false,
+                        extra_args: vec![],
+                        plan_mode: false,
+                        no_trigger: false,
+                        trigger: None,
+                    })
+                    .await;
+                if let Response::SpawnResult { agent_id, .. } = resp {
+                    spawned_agents.push(agent_id);
                 }
             }
         }

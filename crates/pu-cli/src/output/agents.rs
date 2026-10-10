@@ -49,10 +49,10 @@ pub(crate) fn print_status_report(worktrees: &[WorktreeEntry], agents: &[AgentSt
             wt.branch,
             wt.status,
         );
-        if wt.status == WorktreeStatus::Failed {
-            if let Some(err) = &wt.error {
-                println!("  {} {err}", "error:".red().bold());
-            }
+        if wt.status == WorktreeStatus::Failed
+            && let Some(err) = &wt.error
+        {
+            println!("  {} {err}", "error:".red().bold());
         }
         if !wt.agents.is_empty() {
             println!(

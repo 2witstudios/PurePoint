@@ -67,7 +67,7 @@ Three steps. That's it.
 <details>
 <summary>Build from source</summary>
 
-Prerequisites: macOS, Rust 1.88+, Xcode, [just](https://github.com/casey/just)
+Prerequisites: macOS, Rust 1.89+, Xcode, [just](https://github.com/casey/just)
 
 ```sh
 git clone https://github.com/2witstudios/purepoint.git

@@ -158,11 +158,10 @@ pub(super) fn repair_session_file(path: &Path) -> bool {
             .get("messageId")
             .and_then(|v| v.as_str())
             .map(String::from)
+            && uuid_set.contains(&mid)
         {
-            if uuid_set.contains(&mid) {
-                entry["messageId"] = serde_json::Value::Null;
-                modified = true;
-            }
+            entry["messageId"] = serde_json::Value::Null;
+            modified = true;
         }
     }
 

@@ -54,7 +54,7 @@ jobs:
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - name: Build isolated lock helper for bridge proofs
         run: |
           printf 'CARGO_TARGET_DIR=%s/bridge-lock-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -87,7 +87,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - name: Build isolated lock helper for actual trust fixtures
         run: |
           printf 'CARGO_TARGET_DIR=%s/mobile-lock-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -149,7 +149,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
 
       - name: Isolate macOS artifact Rust output
         run: printf 'CARGO_TARGET_DIR=%s/macos-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -272,7 +272,7 @@ jobs:
           node-version: '22.23.3'
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - name: Set isolated build directory
         run: printf 'CARGO_TARGET_DIR=%s/pointguard-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Build isolated artifact CLI
@@ -359,7 +359,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
           components: rustfmt, clippy
       - name: Set isolated Rust output
         run: printf 'CARGO_TARGET_DIR=%s/runtime-rust-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
