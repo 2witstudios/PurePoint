@@ -7,7 +7,7 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 | Property | Value |
 |---|---|
 | Socket path | `~/.pu/daemon.sock` |
-| Protocol version | 6 |
+| Protocol version | 7 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes) |
 | Max connections | 1024 (semaphore-limited; further connections get one `BUSY` error line and are closed) |
@@ -85,7 +85,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 4,
+  "protocol_version": 7,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }

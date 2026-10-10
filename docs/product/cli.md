@@ -108,3 +108,5 @@ Interfaces: global `--project ROOT` and `--socket PATH` flags; `Inventory { proj
 Global summary and list commands ignore PU_PROJECT_ROOT unless --project is supplied. Ordinary `pu status` remains project-scoped. Bulk operations retain project scope. `pu init` sends Init to the daemon so already-initialized projects also register. The CLI does not install global plugin files when connected to a custom socket.
 
 Validation: `crates/pu-cli/tests/global_inventory.rs` exercises real CLI processes and IPC from an unrelated cwd across two projects, root/worktree agents, scoped rejection, send/logs, bench/kill, standalone shells and registry restart. Engine inventory tests cover aliases, corrupt stores, invalid registrations, duplicate IDs, partial inventories and exited handles before reaping.
+
+The CLI verifies protocol v7 before daemon commands. An older or newer daemon produces an explicit incompatibility error with restart guidance; it is never automatically stopped because that would terminate active agents. A busy daemon reports BUSY until compatibility can be verified.
