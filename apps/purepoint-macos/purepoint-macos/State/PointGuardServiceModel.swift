@@ -73,11 +73,14 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 for name in ["PU_AGENT_ID", "PU_PROJECT_ROOT", "NODE_OPTIONS", "NODE_PATH", "PI_MOBILE_SESSION", "PI_MOBILE_TOKEN_FILE", "PI_MOBILE_PU_SKILL", "PI_MOBILE_CWD"] { environment.removeValue(forKey: name) }
                 environment["POINT_GUARD_STATE_DIR"] = self.stateDirectory.path
                 environment["POINT_GUARD_PU_PATH"] = runtime.pu.path
+                environment["POINT_GUARD_LOCK_HELPER_PATH"] = runtime.lockHelper.path
                 environment["POINT_GUARD_INSTANCE_ID"] = self.instanceId
                 if let launchCwd = self.launchCwd { environment["PI_MOBILE_CWD"] = launchCwd.path }
                 environment["PATH"] = runtime.pu.deletingLastPathComponent().path + ":/usr/bin:/bin:/usr/sbin:/sbin"
                 // The app discovers the explicit tailnet IP without requiring an external CLI.
-                if let address = PointGuardTailnet.address() { environment["PI_MOBILE_HOST"] = address }
+                let tailnetAddress = await Task.detached(priority: .utility) { PointGuardTailnet.address() }.value
+                guard !Task.isCancelled else { return }
+                if let address = tailnetAddress { environment["PI_MOBILE_HOST"] = address }
                 else { environment.removeValue(forKey: "PI_MOBILE_HOST") }
                 child.environment = environment
                 child.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
@@ -347,6 +350,24 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             try await Task.sleep(for: .milliseconds(100))
         }
         throw PiChatError("Point Guard has not exited. The update/restart is paused until its owned child stops.")
+    }
+    /// Called only after the native Quit dialog's deliberate Stop Pi and Quit choice.
+    func stopOwnedForQuit() async throws {
+        guard !stopping else { throw PiChatError("Point Guard is already stopping. Wait, then retry Quit.") }
+        stopping = true; defer { stopping = false }
+        startTask?.cancel()
+        guard let child = process else { ownedRuntimeExited(instanceId: instanceId); phase = "Stopped"; return }
+        expectedStop = true
+        if child.isRunning { child.terminate() }
+        for _ in 0..<100 {
+            if !child.isRunning {
+                ownedRuntimeExited(instanceId: instanceId)
+                phase = "Stopped"; chat?.disconnect()
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw PiChatError("The owned Point Guard runtime has not exited. Quit and updates remain paused. Wait for it to stop, then retry Quit.")
     }
     /// Only the exact owned child exit invalidates its ephemeral provider/enrollment IDs.
     func ownedRuntimeExited(instanceId launchId: String) {

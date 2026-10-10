@@ -416,25 +416,3 @@ struct purepoint_macosApp: App {
     }
 }
 
-/// Wait for the app-owned bridge before quit/update can replace its executable.
-@MainActor final class PointGuardApplicationDelegate: NSObject, NSApplicationDelegate {
-    weak var pointGuardService: PointGuardServiceModel?
-    private var terminationPending = false
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let service = pointGuardService else { return .terminateNow }
-        guard !terminationPending else { return .terminateLater }
-        terminationPending = true
-        Task {
-            do {
-                try await service.stop()
-                terminationPending = false
-                sender.reply(toApplicationShouldTerminate: true)
-            } catch {
-                service.error = error.localizedDescription
-                terminationPending = false
-                sender.reply(toApplicationShouldTerminate: false)
-            }
-        }
-        return .terminateLater
-    }
-}

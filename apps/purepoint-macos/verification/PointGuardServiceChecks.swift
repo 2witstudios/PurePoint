@@ -9,11 +9,11 @@ import Foundation
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
         let manifest = """
-        {"schemaVersion":1,"contractVersion":1,"piVersion":"1.1.0","nodeVersion":"22.23.0","architecture":"arm64","sourceSHA":"fixture","paths":{"node":"../../Helpers/point-guard-node","pu":"../../Helpers/pu","entry":"bridge/main.js","instructions":"docs/point-guard.md","skills":["support/pu/SKILL.md","support/pu-cli/SKILL.md"]}}
+        {"schemaVersion":1,"contractVersion":1,"piVersion":"1.1.0","nodeVersion":"22.23.0","architecture":"arm64","sourceSHA":"fixture","paths":{"node":"../../Helpers/point-guard-node","pu":"../../Helpers/pu","lockHelper":"../../Helpers/point-guard-lock","entry":"bridge/main.js","instructions":"docs/point-guard.md","skills":["support/pu/SKILL.md","support/pu-cli/SKILL.md"]}}
         """
         try FileManager.default.createDirectory(at: resources.appendingPathComponent("bridge"), withIntermediateDirectories: true)
         try Data().write(to: resources.appendingPathComponent("bridge/main.js"))
-        for name in ["point-guard-node", "pu"] {
+        for name in ["point-guard-node", "pu", "point-guard-lock"] {
             let file = helpers.appendingPathComponent(name)
             try Data("#!/bin/sh\n".utf8).write(to: file)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
@@ -48,6 +48,14 @@ import Foundation
         do { _ = try PointGuardWorkingFolder.validated(selected.path); fatalError("missing folder accepted") } catch { }
         let recovered = try PointGuardWorkingFolder.validated(base.path)
         precondition(recovered.path == base.path)
+        precondition(!PointGuardTailnet.candidate(interface: "en0", isUp: true, address: "100.64.1.2"))
+        precondition(!PointGuardTailnet.candidate(interface: "utun0", isUp: false, address: "100.64.1.2"))
+        precondition(!PointGuardTailnet.candidate(interface: "utunknown", isUp: true, address: "100.64.1.2"))
+        precondition(!PointGuardTailnet.candidate(interface: "utun0", isUp: true, address: "192.168.1.2"))
+        precondition(PointGuardTailnet.candidate(interface: "utun42", isUp: true, address: "100.127.1.2"))
+        precondition(PointGuardTailnet.matchedAddress(candidates: ["100.64.1.2"], reported: "100.64.9.9") == nil)
+        precondition(PointGuardTailnet.matchedAddress(candidates: ["100.64.1.2"], reported: "100.64.1.2\n100.64.9.9") == nil)
+        precondition(PointGuardTailnet.matchedAddress(candidates: ["100.64.1.2"], reported: "100.64.1.2\n") == "100.64.1.2")
         print("Point Guard runtime path, owned readiness, recovery-folder and error attribution checks passed")
     }
 }

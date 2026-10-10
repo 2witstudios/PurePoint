@@ -3,13 +3,13 @@ import Foundation
 struct PointGuardRuntime: Sendable {
     struct Manifest: Decodable {
         struct Paths: Decodable {
-            let node: String; let pu: String; let entry: String
+            let node: String; let pu: String; let lockHelper: String; let entry: String
             let instructions: String; let skills: [String]
         }
         let schemaVersion: Int; let contractVersion: Int; let piVersion: String
         let nodeVersion: String; let architecture: String; let sourceSHA: String; let paths: Paths
     }
-    let node: URL; let pu: URL; let entry: URL
+    let node: URL; let pu: URL; let lockHelper: URL; let entry: URL
     static func load(manifestURL: URL) throws -> Self {
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
         guard manifest.schemaVersion == 1, manifest.contractVersion == 1, manifest.piVersion == "1.1.0",
@@ -27,11 +27,12 @@ struct PointGuardRuntime: Sendable {
         }
         let node = try resolve(manifest.paths.node, executable: true)
         let pu = try resolve(manifest.paths.pu, executable: true)
+        let lockHelper = try resolve(manifest.paths.lockHelper, executable: true)
         let entry = try resolve(manifest.paths.entry)
         _ = try resolve(manifest.paths.instructions)
         for skill in manifest.paths.skills { _ = try resolve(skill) }
         guard manifest.paths.skills.count >= 2 else { throw PiChatError("Point Guard package is missing its bundled skills.") }
-        return Self(node: node, pu: pu, entry: entry)
+        return Self(node: node, pu: pu, lockHelper: lockHelper, entry: entry)
     }
 }
 struct PointGuardDescriptor: Decodable, Sendable {

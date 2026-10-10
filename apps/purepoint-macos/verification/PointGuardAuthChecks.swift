@@ -158,8 +158,8 @@ import Foundation
         precondition(fixture.revoked.contains("live-stop-qr"), "Rejected Stop must preserve QR revocation")
         await service.cancelLogin()
         precondition(fixture.canceled.contains("live-stop-id"), "Rejected Stop must preserve explicit cancellation")
-        child.terminate(); child.waitUntilExit()
-        service.ownedRuntimeExited(instanceId: "")
+        try! await service.stopOwnedForQuit()
+        precondition(!child.isRunning && !service.ready, "Deliberate quit must await its exact child exit")
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }
