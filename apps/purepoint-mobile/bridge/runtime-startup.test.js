@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, access, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  access,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import os from "node:os";
@@ -80,6 +87,48 @@ test("given cancel during fresh owned startup should release lock and attribute 
       child.kill("SIGTERM");
       await exited;
     }
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test("given nonprivate owner capability should identify credential recovery rather than cwd", async () => {
+  const folder = await mkdtemp(
+    path.join(os.tmpdir(), "pointguard-capability-"),
+  );
+  try {
+    const state = path.join(folder, "state");
+    await mkdir(state, { mode: 0o700 });
+    const tokenFile = path.join(state, "admin-token");
+    await writeFile(tokenFile, "private-proof-credential", { mode: 0o644 });
+    const instanceId = randomUUID();
+    const child = spawn(
+      process.execPath,
+      [fileURLToPath(new URL("./main.js", import.meta.url)), "--managed"],
+      {
+        env: {
+          HOME: folder,
+          PATH: "/no-external-tools",
+          POINT_GUARD_STATE_DIR: state,
+          POINT_GUARD_PU_PATH: "/usr/bin/true",
+          POINT_GUARD_INSTANCE_ID: instanceId,
+        },
+        stdio: "ignore",
+      },
+    );
+    assert.equal((await once(child, "exit"))[0], 1);
+    const failure = JSON.parse(
+      await readFile(path.join(state, "error.json"), "utf8"),
+    );
+    assert.equal(failure.code, "local_capability_state");
+    assert.equal(failure.instanceId, instanceId);
+    assert.equal(failure.pid, child.pid);
+    assert.equal(
+      JSON.stringify(failure).includes("private-proof-credential"),
+      false,
+    );
+    assert.equal(await readFile(tokenFile, "utf8"), "private-proof-credential");
+    await assert.rejects(access(path.join(state, "runtime.lock")));
+  } finally {
     await rm(folder, { recursive: true, force: true });
   }
 });

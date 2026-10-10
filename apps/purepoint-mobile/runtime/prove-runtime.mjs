@@ -58,7 +58,11 @@ try {
         PI_SKIP_VERSION_CHECK: "1",
         ...(cwd ? { PI_MOBILE_CWD: cwd } : {}),
         ...(remote
-          ? { PI_MOBILE_HOST: "127.0.0.1", PI_MOBILE_PORT: String(port) }
+          ? {
+              PI_MOBILE_HOST:
+                remote === "unavailable" ? "192.0.2.1" : "127.0.0.1",
+              PI_MOBILE_PORT: String(port),
+            }
           : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -132,6 +136,12 @@ try {
   const session = first.ready.sessionId;
   assert.ok(session);
   await stop(first);
+  const unavailable = await launch(undefined, "unavailable");
+  assert.equal(unavailable.ready.chatURL, null);
+  assert.equal(unavailable.ready.remoteRecovery.code, "remote_unavailable");
+  assert.equal((await unavailable.admin("status")).phase, "ready");
+  await assert.rejects(unavailable.admin("pairing.create"));
+  await stop(unavailable);
   const second = await launch(selected, true);
   assert.equal(second.ready.sessionId, session);
   // Exercise the actual pinned SDK API-key prompt; no model request or billable prompt.

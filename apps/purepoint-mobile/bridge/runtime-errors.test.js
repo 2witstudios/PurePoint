@@ -7,6 +7,7 @@ test("given startup failure classes should give safe actionable attributed recov
     ["trust", "mismatched secret", "identity_corrupt"],
     ["runtime", "secret", "missing_runtime"],
     ["cwd", "secret", "invalid_cwd"],
+    ["capabilities", "secret", "local_capability_state"],
     ["credentials", "secret", "credential_state"],
     ["lock", "already running secret", "startup_collision"],
     ["lock", "corrupt state secret", "state_corrupt"],

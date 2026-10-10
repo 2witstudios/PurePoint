@@ -9,15 +9,22 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
     code = "startup_canceled";
     recovery =
       "Point Guard startup was canceled. Its owned child and startup lock have been released; retry when ready.";
-  } else if (stage === "lock" && (message.includes("startup lock") || message.includes("already running"))) {
+  } else if (
+    stage === "lock" &&
+    (message.includes("startup lock") || message.includes("already running"))
+  ) {
     code = "startup_collision";
     recovery =
       "Quit the app that owns Point Guard. If it crashed, use deliberate recovery for its private startup lock; no other process will be adopted or stopped.";
   } else if (stage === "lock") {
-    code = message.includes("private") || message.includes("owned") ? "private_state" : "state_corrupt";
-    recovery = code === "private_state"
-      ? "Restore owner-only permissions for Point Guard state before retrying."
-      : "Point Guard state is corrupt or uses an unsupported schema. Restore a known private backup before retrying.";
+    code =
+      message.includes("private") || message.includes("owned")
+        ? "private_state"
+        : "state_corrupt";
+    recovery =
+      code === "private_state"
+        ? "Restore owner-only permissions for Point Guard state before retrying."
+        : "Point Guard state is corrupt or uses an unsupported schema. Restore a known private backup before retrying.";
   } else if (stage === "runtime") {
     code = "missing_runtime";
     recovery =
@@ -25,6 +32,10 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
   } else if (stage === "cwd") {
     code = "invalid_cwd";
     recovery = "Choose an existing working folder in Point Guard setup.";
+  } else if (stage === "capabilities") {
+    code = "local_capability_state";
+    recovery =
+      "Restore separate private owner-only admin and desktop chat credentials before retrying. Existing credentials will never be replaced automatically.";
   } else if (stage === "credentials") {
     code = "credential_state";
     recovery =

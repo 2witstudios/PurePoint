@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage pinned runtime into an unsigned build artifact; never install or publish."""
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -16,6 +17,48 @@ PIN = json.loads((SOURCE / 'runtime/node-release.json').read_text())
 
 def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
+
+def complete_darwin_graph(modules, arches, cache):
+    # npm selects optional binaries for the build host. Restore every advertised
+    # Darwin architecture from exact lockfile URLs with its recorded integrity.
+    lock = json.loads((SOURCE / 'package-lock.json').read_text())
+    for location, entry in lock['packages'].items():
+        if entry.get('dev') or 'darwin' not in entry.get('os', []):
+            continue
+        destination = modules.parent / location
+        wanted = bool(set(entry.get('cpu', [])) & set(arches))
+        if not wanted:
+            shutil.rmtree(destination, ignore_errors=True)
+            continue
+        if destination.exists():
+            continue
+        if not location.startswith('node_modules/') or '..' in Path(location).parts:
+            raise ValueError('Unsafe native package lock path')
+        algorithm, expected = entry['integrity'].split('-', 1)
+        if algorithm != 'sha512' or not entry['resolved'].startswith('https://registry.npmjs.org/'):
+            raise ValueError('Unsupported native package integrity or source')
+        archive = cache / (hashlib.sha256(entry['resolved'].encode()).hexdigest() + '.tgz')
+        if not archive.exists():
+            urllib.request.urlretrieve(entry['resolved'], archive)
+        actual = base64.b64encode(hashlib.sha512(archive.read_bytes()).digest()).decode()
+        if actual != expected:
+            raise ValueError('Locked native package checksum mismatch')
+        destination.mkdir(parents=True)
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                parts = Path(member.name).parts
+                if not parts or parts[0] != 'package' or '..' in parts or member.issym() or member.islnk():
+                    raise ValueError('Unsafe locked package archive')
+                output = destination.joinpath(*parts[1:])
+                if member.isdir():
+                    output.mkdir(parents=True, exist_ok=True)
+                elif member.isfile():
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    with tar.extractfile(member) as stream, output.open('wb') as file:
+                        shutil.copyfileobj(stream, file)
+                    output.chmod(member.mode & 0o777)
+                else:
+                    raise ValueError('Unsupported locked package member')
 
 def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root=None):
     app, pu, cache = Path(app).resolve(), Path(pu).resolve(), Path(cache).resolve()
@@ -81,6 +124,7 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
             shutil.copy2(SOURCE / name, temp / name)
         run(npm, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', cwd=temp)
         shutil.copytree(temp / 'node_modules', target / 'node_modules', symlinks=False)
+        complete_darwin_graph(target / 'node_modules', arches, cache)
         # Remove foreign native addons; keep each advertised Darwin architecture.
         for platform in ['win32', 'linux']:
             shutil.rmtree(target / 'node_modules/@earendil-works/pi-tui/native' / platform, ignore_errors=True)

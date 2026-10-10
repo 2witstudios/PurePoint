@@ -14,6 +14,7 @@ import {
 } from "./runtime-state.js";
 import { nativeProviderSetup } from "./native-provider.js";
 import { serveAdmin, AdminError } from "./admin.js";
+import { optionalRemoteListener } from "./remote-listener.js";
 import { startupFailure } from "./runtime-errors.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -135,6 +136,7 @@ export async function runManaged(env = process.env) {
         "Selected working folder is unavailable. Choose an existing folder in Point Guard setup.",
       );
     await state.save({ cwd });
+    stage = "capabilities";
     const adminToken = await ensureToken(path.join(directory, "admin-token"));
     const chatToken = await ensureToken(
       path.join(directory, "desktop-chat-token"),
@@ -228,17 +230,22 @@ export async function runManaged(env = process.env) {
     });
     const nativeChatURL = endpoint("ws", "127.0.0.1", local);
     let chatURL = null;
+    let remoteRecovery;
     if (env.PI_MOBILE_HOST) {
       const port = Number(env.PI_MOBILE_PORT ?? 8787);
       if (!Number.isInteger(port) || port < 1 || port > 65535)
         throw new Error("Invalid phone listener port.");
-      remote = await serve(controller, {
-        host: env.PI_MOBILE_HOST,
-        port,
-        trust,
-        tls: trust.tls,
-      });
-      chatURL = endpoint("wss", env.PI_MOBILE_HOST, remote);
+      const result = await optionalRemoteListener(() =>
+        serve(controller, {
+          host: env.PI_MOBILE_HOST,
+          port,
+          trust,
+          tls: trust.tls,
+        }),
+      );
+      remote = result.server;
+      remoteRecovery = result.remoteRecovery;
+      if (remote) chatURL = endpoint("wss", env.PI_MOBILE_HOST, remote);
     }
     const status = () => ({
       phase: controller.error || persistError ? "failed" : "ready",
@@ -247,6 +254,7 @@ export async function runManaged(env = process.env) {
       contractVersion: 1,
       nativeChatURL,
       chatURL,
+      ...(remoteRecovery ? { remoteRecovery } : {}),
       hostId: trust.hostId,
       certificateSHA256: trust.certificateSHA256,
       desktopClientId: state.value.desktopClientId,

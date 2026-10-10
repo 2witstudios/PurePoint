@@ -76,6 +76,7 @@ jobs:
           swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o "$RUNNER_TEMP/mobile-responsiveness"
           "$RUNNER_TEMP/mobile-responsiveness"
           sh verification/check-recovery.sh
+          python3 verification/check-trust.py
           swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
           swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
           plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
@@ -83,12 +84,28 @@ jobs:
         run: |
           xcrun simctl list devices available --json > "$RUNNER_TEMP/mobile-simulators.json"
           simulator_id=$(python3 -c 'import json, os; data = json.load(open(os.environ["RUNNER_TEMP"] + "/mobile-simulators.json")); print(next(device["udid"] for runtime, devices in sorted(data["devices"].items(), reverse=True) if "iOS" in runtime for device in devices if device["name"].startswith("iPhone") and device["isAvailable"]))')
-          xcodebuild test \
+          xcodebuild build-for-testing \
             -project PurePoint.xcodeproj \
             -scheme PurePoint-Debug \
             -destination "platform=iOS Simulator,id=$simulator_id" \
-            -resultBundlePath "$RUNNER_TEMP/mobile-tests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath "$RUNNER_TEMP/mobile-derived" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
+          python3 runtime/verify-simulator-signing.py --app "$RUNNER_TEMP/mobile-derived/Build/Products/Debug-iphonesimulator/PurePoint.app" --diagnostics "$RUNNER_TEMP/mobile-diagnostics/signing"
+          xcodebuild test-without-building \
+            -project PurePoint.xcodeproj \
+            -scheme PurePoint-Debug \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -derivedDataPath "$RUNNER_TEMP/mobile-derived" \
+            -resultBundlePath "$RUNNER_TEMP/mobile-diagnostics/tests.xcresult" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
+      - name: Retain iOS signature and XCTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-diagnostics
+          path: ${{ runner.temp }}/mobile-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
 
   macos:
     name: macOS Build & Test
@@ -235,6 +252,8 @@ jobs:
             --app "$RUNNER_TEMP/PointGuardProof.app" \
             --pu "$CARGO_TARGET_DIR/release/pu" \
             --architecture "${{ matrix.architecture }}"
+      - name: Verify complete advertised native graph
+        run: python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$RUNNER_TEMP/PointGuardProof.app"
       - name: Sign and verify nested artifact code (ad-hoc only)
         run: |
           python3 apps/purepoint-mobile/runtime/sign-runtime.py --app "$RUNNER_TEMP/PointGuardProof.app" --identity -
@@ -251,10 +270,55 @@ jobs:
           path: ${{ runner.temp }}/PointGuardProof.app
           retention-days: 7
 
+  runtime-universal:
+    name: Point Guard universal package (${{ matrix.architecture }})
+    needs: [changes, runtime-package]
+    if: needs.changes.outputs.mobile == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            architecture: arm64
+          - runner: macos-26-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - uses: actions/download-artifact@v4
+        with:
+          name: point-guard-runtime-arm64
+          path: ${{ runner.temp }}/arm64-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: point-guard-runtime-x64
+          path: ${{ runner.temp }}/x64-input
+      - name: Compose exact-run CLI slices and stage universal runtime
+        run: |
+          /usr/bin/lipo -create "$RUNNER_TEMP/arm64-input/Contents/Helpers/pu" "$RUNNER_TEMP/x64-input/Contents/Helpers/pu" -output "$RUNNER_TEMP/universal-pu"
+          python3 apps/purepoint-mobile/runtime/package-runtime.py --app "$RUNNER_TEMP/UniversalProof.app" --pu "$RUNNER_TEMP/universal-pu" --architecture universal
+          python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$RUNNER_TEMP/UniversalProof.app"
+      - name: Sign nested runtime and verify repeated outer artifact seal (ad-hoc only)
+        run: python3 apps/purepoint-mobile/runtime/prove-restaging.py --app "$RUNNER_TEMP/UniversalProof.app" --pu "$RUNNER_TEMP/universal-pu" --architecture universal
+      - name: Launch relocated universal runtime on native architecture
+        run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/UniversalProof.app"
+      - name: Retain nonpublishing universal proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: point-guard-runtime-universal-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/UniversalProof.app
+          retention-days: 7
+
   build-and-test:
     name: Build & Test
     if: always()
-    needs: [changes, macos, mobile-bridge, mobile-swift, runtime-package]
+    needs: [changes, macos, mobile-bridge, mobile-swift, runtime-package, runtime-universal]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -265,4 +329,4 @@ jobs:
           CI_RESULTS: ${{ toJSON(needs) }}
         run: |
           python3 .github/scripts/ci.py gate
-          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert r["runtime-package"]["result"]==expected, r["runtime-package"]'
+          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert all(r[j]["result"]==expected for j in ["runtime-package","runtime-universal"]), {j:r[j] for j in ["runtime-package","runtime-universal"]}'
