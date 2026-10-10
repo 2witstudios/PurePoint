@@ -18,6 +18,14 @@ def components(paths):
     )
     return {
         "macos": shared or any(
+            path.startswith((
+                "apps/purepoint-mobile/bridge/", "apps/purepoint-mobile/runtime/",
+                "apps/purepoint-mobile/docs/", "apps/purepoint-mobile/support/",
+            )) or path in {
+                "apps/purepoint-mobile/package.json", "apps/purepoint-mobile/package-lock.json",
+            }
+            for path in paths
+        ) or any(
             path.startswith(("apps/purepoint-macos/", "crates/"))
             or path in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}
             for path in paths

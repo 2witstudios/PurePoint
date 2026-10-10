@@ -11,7 +11,13 @@ class RoutingTests(unittest.TestCase):
     def test_docs_mobile_macos_rust_and_workflow_changes(self):
         for paths, expected in (
             (["README.md"], {"macos": False, "mobile": False}),
-            (["apps/purepoint-mobile/bridge/core.js"], {"macos": False, "mobile": True}),
+            (["apps/purepoint-mobile/bridge/core.js"], {"macos": True, "mobile": True}),
+            (["apps/purepoint-mobile/runtime/package-runtime.py"], {"macos": True, "mobile": True}),
+            (["apps/purepoint-mobile/package-lock.json"], {"macos": True, "mobile": True}),
+            (["apps/purepoint-mobile/package.json"], {"macos": True, "mobile": True}),
+            (["apps/purepoint-mobile/docs/point-guard.md"], {"macos": True, "mobile": True}),
+            (["apps/purepoint-mobile/support/pu/SKILL.md"], {"macos": True, "mobile": True}),
+            (["apps/purepoint-mobile/PurePoint/ChatModel.swift"], {"macos": False, "mobile": True}),
             (["apps/purepoint-macos/App.swift"], {"macos": True, "mobile": False}),
             (["crates/pu-core/src/lib.rs"], {"macos": True, "mobile": True}),
             (["crates/pu-cli/src/bin/point_guard_lock.rs"], {"macos": True, "mobile": True}),
