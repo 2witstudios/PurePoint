@@ -15,3 +15,12 @@ subprocess.run(['swiftc', '-typecheck', '-strict-concurrency=complete', '-warnin
                 *[str(source / path) for path in ['Models/PiChatDomain.swift', 'Models/PointGuardRuntime.swift',
                 'Services/PiPairingSecret.swift', 'Services/PointGuardTailnet.swift',
                 'State/PiChatModel.swift', 'State/PointGuardServiceModel.swift']]], check=True)
+
+with tempfile.TemporaryDirectory(prefix='pointguard-service-', dir='/tmp') as folder:
+    binary = str(Path(folder) / 'auth-checks')
+    paths = ['Models/PiChatDomain.swift', 'Models/PointGuardRuntime.swift', 'Services/PiPairingSecret.swift',
+             'Services/PointGuardTailnet.swift', 'State/PiChatModel.swift', 'State/PointGuardServiceModel.swift']
+    subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors',
+                    *[str(source / path) for path in paths], str(root / 'verification/PointGuardAuthChecks.swift'),
+                    '-o', binary], check=True)
+    subprocess.run([binary], check=True, timeout=30)

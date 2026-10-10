@@ -28,6 +28,10 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     private var instanceId = ""
     private var adminToken = ""
     private var pollTask: Task<Void, Never>?
+    private var authGeneration = 0
+    private var enrollmentGeneration = 0
+    private var activeAttemptId: String?
+    private let requestOverride: (@MainActor (String, [String: PiJSONValue]) async throws -> PiJSONValue)?
     private var startTask: Task<Void, Never>?
     private var expectedStop = false
     private var stopping = false
@@ -35,7 +39,11 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     private let stateDirectory: URL
     private let session = URLSession(configuration: .ephemeral, delegate: PointGuardHTTPDelegate(), delegateQueue: nil)
 
-    init(stateDirectory: URL? = nil) {
+    init(stateDirectory: URL? = nil,
+         requestOverride: (@MainActor (String, [String: PiJSONValue]) async throws -> PiJSONValue)? = nil,
+         remoteEndpoint: String? = nil) {
+        self.requestOverride = requestOverride
+        self.remoteEndpoint = remoteEndpoint
         self.stateDirectory = stateDirectory ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/PurePoint/PointGuard", isDirectory: true)
     }
@@ -115,6 +123,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         throw PiChatError("Point Guard did not become ready in 30 seconds. Retry after checking its private state and ports.")
     }
     func request(_ operation: String, fields: [String: PiJSONValue] = [:]) async throws -> PiJSONValue {
+        if let requestOverride { return try await requestOverride(operation, fields) }
         guard ready, let descriptor, let child = process, child.isRunning,
             descriptor.belongs(to: child.processIdentifier, instanceId: instanceId),
             let url = PointGuardDescriptor.localURL(descriptor.adminURL, scheme: "http", path: "/admin/v1") else { throw PiChatError("Start Point Guard before changing setup.") }
@@ -140,26 +149,34 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         } catch { self.error = error.localizedDescription }
     }
     func login(provider: String, type: String) async {
-        pollTask?.cancel(); auth = .null; error = nil
+        authGeneration += 1; let generation = authGeneration
+        pollTask?.cancel(); activeAttemptId = nil
+        auth = .object(["status": .string("pending")]); error = nil
         do {
             let result = try await request("auth.start", fields: ["provider": .string(provider), "type": .string(type)])
             guard let id = result["attemptId"].text else { throw PiChatError("Provider login did not start.") }
+            guard generation == authGeneration else {
+                _ = try? await request("auth.cancel", fields: ["attemptId": .string(id)])
+                return
+            }
+            activeAttemptId = id
             pollTask = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    while !Task.isCancelled {
+                    while !Task.isCancelled && generation == self.authGeneration {
                         let status = try await self.request("auth.status", fields: ["attemptId": .string(id)])
-                        guard !Task.isCancelled else { return }
+                        guard !Task.isCancelled, generation == self.authGeneration else { return }
                         self.auth = status
                         if status["status"].text != "pending" {
+                            self.activeAttemptId = nil
                             if status["status"].text == "complete" { self.restartRequired = true; await self.refresh() }
                             return
                         }
                         try await Task.sleep(for: .milliseconds(500))
                     }
-                } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                } catch { if !Task.isCancelled && generation == self.authGeneration { self.error = error.localizedDescription } }
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { if generation == authGeneration { self.error = error.localizedDescription; self.auth = .null } }
     }
     func respond(_ value: String) async {
         guard let id = auth["attemptId"].text, let promptId = auth["prompt"]["id"].text else { return }
@@ -167,9 +184,10 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         catch { self.error = error.localizedDescription }
     }
     func cancelLogin() async {
-        pollTask?.cancel()
-        guard let id = auth["attemptId"].text else { auth = .null; return }
-        do { _ = try await request("auth.cancel", fields: ["attemptId": .string(id)]); auth = .null }
+        authGeneration += 1; pollTask?.cancel()
+        let id = activeAttemptId; activeAttemptId = nil; auth = .null
+        guard let id else { return }
+        do { _ = try await request("auth.cancel", fields: ["attemptId": .string(id)]) }
         catch { self.error = error.localizedDescription }
     }
     func selectModel(provider: String, model: String) async {
@@ -181,9 +199,20 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         catch { self.error = error.localizedDescription }
     }
     func connectPhone() async {
+        enrollmentGeneration += 1; let generation = enrollmentGeneration
         guard let remoteEndpoint else { error = "Connect Tailscale on this Mac, then restart Point Guard to enable phone pairing."; return }
-        do { enrollment = try await request("pairing.create", fields: ["endpoint": .string(remoteEndpoint)]); enrollmentStatus = "pending" }
-        catch { self.error = error.localizedDescription }
+        let oldId = enrollment["enrollmentId"].text
+        enrollment = .null; enrollmentStatus = ""
+        if let oldId { _ = try? await request("pairing.revoke", fields: ["enrollmentId": .string(oldId)]) }
+        guard generation == enrollmentGeneration else { return }
+        do {
+            let result = try await request("pairing.create", fields: ["endpoint": .string(remoteEndpoint)])
+            guard generation == enrollmentGeneration else {
+                if let id = result["enrollmentId"].text { _ = try? await request("pairing.revoke", fields: ["enrollmentId": .string(id)]) }
+                return
+            }
+            enrollment = result; enrollmentStatus = "pending"
+        } catch { if generation == enrollmentGeneration { self.error = error.localizedDescription } }
     }
     func refreshEnrollment() async {
         guard let id = enrollment["enrollmentId"].text else { return }
@@ -199,8 +228,10 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         catch { self.error = error.localizedDescription }
     }
     func closeEnrollment() async {
-        guard let id = enrollment["enrollmentId"].text else { enrollment = .null; return }
+        enrollmentGeneration += 1
+        let id = enrollment["enrollmentId"].text
         enrollment = .null; enrollmentStatus = ""
+        guard let id else { return }
         do { _ = try await request("pairing.revoke", fields: ["enrollmentId": .string(id)]) }
         catch { self.error = error.localizedDescription }
     }
@@ -217,6 +248,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         guard !stopping else { throw PiChatError("Point Guard is already stopping.") }
         stopping = true; defer { stopping = false }
         startTask?.cancel(); pollTask?.cancel(); pollTask = nil
+        authGeneration += 1; enrollmentGeneration += 1; activeAttemptId = nil; auth = .null; enrollment = .null
         guard let child = process else { ready = false; phase = "Stopped"; return }
         expectedStop = true; ready = false; phase = "Stopping Pi…"; chat?.disconnect(); child.terminate()
         for _ in 0..<100 {
