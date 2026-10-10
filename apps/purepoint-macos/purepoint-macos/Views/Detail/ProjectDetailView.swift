@@ -3,6 +3,14 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: ProjectState
     @Binding var selection: SidebarSelection?
+    private enum ProjectTab: String, CaseIterable, Identifiable {
+        case overview = "Overview"
+        case channel = "Channel"
+
+        var id: String { rawValue }
+    }
+
+    @State private var selectedTab: ProjectTab = .overview
     @State private var showRootFiles = false
     @State private var summaries: [String: GitReviewSummary] = [:]
     var body: some View {
@@ -12,29 +20,42 @@ struct ProjectDetailView: View {
                 Text(project.projectName).font(.system(size: 15, weight: .semibold))
                 Text("\(project.worktrees.count) worktrees").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
-                if showRootFiles { Button("Overview") { showRootFiles = false } }
-                Button { selection = .channel(project.projectRoot) } label: { Label("Channel", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(.borderless)
+                Picker("Project view", selection: $selectedTab) {
+                    ForEach(ProjectTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
             }.padding(.horizontal, 20).padding(.vertical, 14)
             Divider()
-            if showRootFiles { RootCheckoutDetailView(project: project) }
-            else {
-                HSplitView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("WORKTREES").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(.secondary).padding(18)
-                        ScrollView {
-                            VStack(spacing: 0) {
-                                Button { showRootFiles = true } label: { row(name: "Root checkout", branch: project.projectName, agents: project.rootAgents, summary: summaries[project.projectRoot], root: true) }.buttonStyle(.plain)
+            if selectedTab == .channel {
+                ProjectChannelView(project: project)
+            } else if showRootFiles {
+                HStack {
+                    Button("Back to overview") { showRootFiles = false }
+                    Spacer()
+                }.padding(.horizontal, 20).padding(.vertical, 10)
+                RootCheckoutDetailView(project: project)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("WORKTREES").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(.secondary).padding(18)
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            Button { showRootFiles = true } label: { row(name: "Root checkout", branch: project.projectName, agents: project.rootAgents, summary: summaries[project.projectRoot], root: true) }.buttonStyle(.plain)
+                            Divider().padding(.horizontal, 18)
+                            ForEach(project.worktrees) { worktree in
+                                Button { selection = .worktree(worktree.id) } label: { row(name: worktree.name, branch: worktree.branch, agents: worktree.agents, summary: summaries[worktree.path]) }.buttonStyle(.plain)
                                 Divider().padding(.horizontal, 18)
-                                ForEach(project.worktrees) { worktree in
-                                    Button { selection = .worktree(worktree.id) } label: { row(name: worktree.name, branch: worktree.branch, agents: worktree.agents, summary: summaries[worktree.path]) }.buttonStyle(.plain)
-                                    Divider().padding(.horizontal, 18)
-                                }
                             }
                         }
-                    }.frame(minWidth: 240, idealWidth: 300, maxWidth: 380)
-                    ProjectChannelView(project: project)
-                }
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+        }.onChange(of: project.projectRoot) { _, _ in
+            selectedTab = .overview
+            showRootFiles = false
+            summaries = [:]
         }.task(id: project.projectRoot) {
             while !Task.isCancelled {
                 guard NSApplication.shared.isActive else {

@@ -59,7 +59,7 @@ Limits: text 1–16,000 UTF-8 bytes (whitespace-only rejected); references at mo
 - REQ-CH-003: Given history larger than one read window, should support older/newer cursors and search without silently dropping parent context.
 - REQ-CH-004: Given an own message, should allow text editing; given another sender, should reject editing.
 - REQ-CH-005: Given reply/reaction, should persist and refresh it across CLI/app reads; reaction retries should be idempotent.
-- REQ-CH-006: Given project selection, should show short rows for all worktrees plus root checkout alongside the shared channel.
+- REQ-CH-006: Given project selection, should default to short rows for all worktrees plus root checkout and offer the shared channel as an optional tab within the project view, without channel rows in the sidebar.
 - REQ-CH-007: Given worktree selection, should default to branch changes with uncommitted/commit/file views and optional channel, without terminals.
 - REQ-CH-008: Given commit creation, should keep cumulative branch result visible after the working tree becomes clean.
 - REQ-CH-009: Given staged, unstaged and untracked files, should show their actual patches in the correct groups and count each local path once in the overview.

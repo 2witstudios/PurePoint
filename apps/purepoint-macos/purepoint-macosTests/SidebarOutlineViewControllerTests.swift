@@ -37,6 +37,23 @@ private func makeSidebarProject(root: String, worktreeCount: Int) -> ProjectStat
 @MainActor
 struct SidebarOutlineViewControllerTests {
 
+    @Test func givenEmptyProjectShouldHaveNoSidebarChildren() {
+        let controller = SidebarOutlineViewController()
+        controller.loadViewIfNeeded()
+        controller.rebuildNodes(projects: [makeSidebarProject(root: "/tmp/empty", worktreeCount: 0)])
+
+        #expect(controller.projectNodes.count == 1)
+        #expect(controller.projectNodes[0].children.isEmpty)
+    }
+
+    @Test func givenProjectWithWorktreesShouldOnlyShowWorktreeChildren() {
+        let controller = SidebarOutlineViewController()
+        controller.loadViewIfNeeded()
+        controller.rebuildNodes(projects: [makeSidebarProject(root: "/tmp/project", worktreeCount: 2)])
+
+        #expect(controller.projectNodes[0].children.map(\.id) == ["wt-0", "wt-1"])
+    }
+
     @Test func givenScrolledSidebarShouldPreserveScrollPositionAcrossUnchangedRebuild() {
         let controller = SidebarOutlineViewController()
         controller.loadViewIfNeeded()
