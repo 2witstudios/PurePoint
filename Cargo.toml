@@ -18,7 +18,8 @@ serde_json = "1"
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "process", "fs"] }
-uuid = { version = "1", features = ["v4"] }
+# UUID 1.27+ requires Rust 1.89; retain compatibility with our Rust 1.88 MSRV.
+uuid = { version = "~1.26.1", features = ["v4"] }
 indexmap = { version = "2", features = ["serde"] }
 
 # No panic = "abort": the daemon catches panics from blocking tasks and
