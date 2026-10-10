@@ -13,20 +13,9 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
 /// answers would otherwise hold each probe for the full request timeout.
 const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// True if a compatible daemon is alive on `socket`. A daemon at its connection limit
-/// answers `BUSY` instead of a health report: it is alive, and starting another
-/// one would only lose the single-instance lock.
-pub async fn check_daemon_health(socket: &Path) -> bool {
-    match probe_daemon(socket).await {
-        Ok(healthy) => healthy,
-        Err(CliError::DaemonError { code, .. }) => code == "BUSY",
-        Err(_) => false,
-    }
-}
-
 /// Check compatibility before any command; never restart a live daemon because
 /// doing so would terminate its agent sessions.
-async fn probe_daemon(socket: &Path) -> Result<bool, CliError> {
+pub async fn check_daemon_health(socket: &Path) -> Result<bool, CliError> {
     let probe = crate::client::send_request(socket, &Request::Health);
     match tokio::time::timeout(HEALTH_PROBE_TIMEOUT, probe).await {
         Ok(Ok(Response::HealthReport {
@@ -56,7 +45,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        if probe_daemon(socket).await? {
+        if check_daemon_health(socket).await? {
             return Ok(());
         }
     }
@@ -100,7 +89,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         let mut delay_ms = 10u64;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            if probe_daemon(socket).await? {
+            if check_daemon_health(socket).await? {
                 return Ok::<(), CliError>(());
             }
             delay_ms = (delay_ms * 2).min(640);
@@ -142,7 +131,7 @@ mod tests {
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let healthy = check_daemon_health(&sock).await;
+        let healthy = check_daemon_health(&sock).await.unwrap();
         assert!(healthy);
         ensure_daemon(&sock).await.unwrap();
 
@@ -157,7 +146,7 @@ mod tests {
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
         let sock = tmp.path().join("nope.sock");
-        let healthy = check_daemon_health(&sock).await;
+        let healthy = check_daemon_health(&sock).await.unwrap();
         assert!(!healthy);
     }
 
@@ -190,7 +179,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn given_daemon_at_connection_limit_should_report_alive() {
+    async fn given_daemon_at_connection_limit_should_report_busy() {
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
         let sock = tmp.path().join("busy.sock");
@@ -201,7 +190,9 @@ mod tests {
             ),
         );
 
-        assert!(check_daemon_health(&sock).await);
+        assert!(
+            matches!(check_daemon_health(&sock).await, Err(CliError::DaemonError { code, .. }) if code == "BUSY")
+        );
         server.abort();
     }
 
@@ -257,7 +248,7 @@ mod tests {
         let server = fake_daemon(&sock, None);
 
         let started = std::time::Instant::now();
-        assert!(!check_daemon_health(&sock).await);
+        assert!(!check_daemon_health(&sock).await.unwrap());
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         server.abort();
     }
