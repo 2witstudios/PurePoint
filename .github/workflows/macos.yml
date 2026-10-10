@@ -215,8 +215,6 @@ jobs:
             architecture: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/pointguard-cargo
     steps:
       - uses: actions/checkout@v7
         with:
@@ -227,6 +225,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88"
+      - name: Set isolated build directory
+        run: printf 'CARGO_TARGET_DIR=%s/pointguard-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Build isolated artifact CLI
         run: cargo build --locked --release -p pu-cli
       - name: Stage complete pinned runtime
