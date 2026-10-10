@@ -1,0 +1,99 @@
+name: Release archive proof
+on:
+  workflow_call:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+jobs:
+  archive:
+    name: Optimized universal Release archive
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Record exact candidate and compiler
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-diagnostics"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/release-diagnostics/commit.txt"
+          xcodebuild -version | tee "$RUNNER_TEMP/release-diagnostics/xcode.txt"
+          xcrun swiftc --version | tee "$RUNNER_TEMP/release-diagnostics/swift.txt"
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - name: Isolate archive Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/release-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Install log formatter
+        run: brew install xcbeautify
+      - name: Checkout pinned local tree-sitter packages
+        run: bash .github/scripts/checkout-tree-sitter.sh
+
+      - name: Prepare local packages for Xcode
+        run: |
+          # Xcode 26 ignores the explicit `sources` parameter in local SPM packages,
+          # so restructure each package to use path-based auto-discovery instead.
+          for pkg in apps/purepoint-macos/LocalPackages/tree-sitter-*; do
+            lib=$(sed -n 's/.*name: "\(TreeSitter[^"]*\)".*/\1/p' "$pkg/Package.swift" | head -1)
+            # Copy public header into src/include/
+            mkdir -p "$pkg/src/include"
+            find "$pkg/bindings/swift" -name '*.h' -exec cp {} "$pkg/src/include/" \;
+            # Copy queries into src/ so resources path works with path: "src"
+            cp -r "$pkg/queries" "$pkg/src/queries" 2>/dev/null || true
+            # Remove non-C/H files from src/ (JSON metadata confuses SPM)
+            find "$pkg/src" -type f -not -name '*.c' -not -name '*.h' -not -name '*.scm' -delete
+            find "$pkg/src" -type d -empty -delete 2>/dev/null || true
+            # Rewrite Package.swift: use path "src" so SPM auto-discovers all .c files
+            cat > "$pkg/Package.swift" << PKGEOF
+          // swift-tools-version:5.3
+          import PackageDescription
+          let package = Package(
+              name: "$lib",
+              products: [.library(name: "$lib", targets: ["$lib"])],
+              targets: [
+                  .target(
+                      name: "$lib",
+                      path: "src",
+                      resources: [.copy("queries")],
+                      publicHeadersPath: "include",
+                      cSettings: [.headerSearchPath(".")]
+                  ),
+              ],
+              cLanguageStandard: .c11
+          )
+          PKGEOF
+          done
+
+      - name: Archive optimized universal app without production credentials
+        run: |
+          python3 .github/scripts/log_macos_command.py "$RUNNER_TEMP/release-diagnostics/archive" \
+            xcodebuild archive \
+            -project apps/purepoint-macos/purepoint-macos.xcodeproj \
+            -scheme purepoint-macos -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/release-derived" \
+            -archivePath "$RUNNER_TEMP/PurePoint.xcarchive" \
+            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=''
+      - name: Verify archived universal executable and packaged runtime
+        run: |
+          app="$RUNNER_TEMP/PurePoint.xcarchive/Products/Applications/PurePoint.app"
+          for binary in PurePoint pu-engine pu pu-point-guard-lock; do
+            /usr/bin/lipo "$app/Contents/MacOS/$binary" -verify_arch arm64 x86_64
+          done
+          python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$app"
+          /usr/bin/codesign --verify --deep --strict "$app"
+      - name: Retain Release compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-archive-diagnostics
+          path: ${{ runner.temp }}/release-diagnostics
+          retention-days: 7

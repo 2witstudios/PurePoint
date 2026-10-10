@@ -72,6 +72,9 @@ final class ChannelState {
         if viewers == 0 && !backgroundEnabled { polling?.cancel(); polling = nil }
     }
     func shutdown() { polling?.cancel(); polling = nil; viewers = 0; backgroundEnabled = false; generation += 1 }
+    // Keep the async transport closure behind a call boundary: Swift 6.3.3
+    // crashes during optimized IR emission when this is inlined into refresh().
+    @inline(never)
     private func history(after: UInt64? = nil, before: UInt64? = nil, parent: String? = nil, known: UInt64? = nil) async throws -> ChannelHistory {
         let response = try await sendRequest(.channelRead(projectRoot: projectRoot, after: after, before: before, query: after != nil || parent != nil || query.isEmpty ? nil : query, parentId: parent, knownRevision: known))
         switch response {
