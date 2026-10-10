@@ -27,6 +27,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var remoteRecovery: String?
     @Published private(set) var remoteEndpoint: String?
     private var process: Process?
+    private var ownerLifetime: FileHandle?
     private var descriptor: PointGuardDescriptor?
     private var instanceId = ""
     private var adminToken = ""
@@ -75,6 +76,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 environment["POINT_GUARD_PU_PATH"] = runtime.pu.path
                 environment["POINT_GUARD_LOCK_HELPER_PATH"] = runtime.lockHelper.path
                 environment["POINT_GUARD_INSTANCE_ID"] = self.instanceId
+                environment["POINT_GUARD_APP_LIFETIME"] = "stdin"
                 if let launchCwd = self.launchCwd { environment["PI_MOBILE_CWD"] = launchCwd.path }
                 environment["PATH"] = runtime.pu.deletingLastPathComponent().path + ":/usr/bin:/bin:/usr/sbin:/sbin"
                 // The app discovers the explicit tailnet IP without requiring an external CLI.
@@ -84,6 +86,9 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 else { environment.removeValue(forKey: "PI_MOBILE_HOST") }
                 child.environment = environment
                 child.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+                // EOF also covers crashes and updater exits that skip the Quit delegate.
+                let lifetime = Pipe()
+                child.standardInput = lifetime
                 child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
                 let launchId = self.instanceId
                 child.terminationHandler = { [weak self] child in
@@ -93,6 +98,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                     }
                 }
                 try child.run(); self.process = child
+                self.ownerLifetime = lifetime.fileHandleForWriting
                 let descriptor = try await self.awaitReadiness(child, launchId: launchId)
                 guard !Task.isCancelled, child.isRunning, self.instanceId == launchId else { return }
                 self.descriptor = descriptor
@@ -396,6 +402,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     }
     func ownedRuntimeExited(instanceId launchId: String) {
         guard instanceId == launchId else { return }
+        try? ownerLifetime?.close(); ownerLifetime = nil
         runtimeGeneration += 1; authGeneration += 1; enrollmentGeneration += 1
         pollTask?.cancel(); pollTask = nil
         ready = false; descriptor = nil; adminToken = ""; process = nil; remoteRecovery = nil

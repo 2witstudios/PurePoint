@@ -10,12 +10,12 @@ import { randomUUID } from "node:crypto";
 import { openRuntimeState } from "./runtime-state.js";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("helper loss retains runtime ownership until a dispatched controller action drains", async () => {
+async function checkDrain(loss) {
   const home = await mkdtemp(
     path.join(os.tmpdir(), "pointguard-controller-drain-"),
   );
   const stateDir = path.join(home, "state");
-  let child, socket;
+  let child, socket, successor;
   const messages = [];
   const waitMessage = async (type) => {
     const deadline = Date.now() + 30000;
@@ -73,8 +73,9 @@ test("helper loss retains runtime ownership until a dispatched controller action
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           POINT_GUARD_INSTANCE_ID: randomUUID(),
           PI_SKIP_VERSION_CHECK: "1",
+          ...(loss === "app" ? { POINT_GUARD_APP_LIFETIME: "stdin" } : {}),
         },
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        stdio: [loss === "app" ? "pipe" : "ignore", "ignore", "ignore", "ipc"],
       },
     );
     child.on("message", (m) => messages.push(m));
@@ -134,13 +135,59 @@ test("helper loss retains runtime ownership until a dispatched controller action
       );
     assert.ok(helper, "Direct owned helper must be present");
     const closed = once(socket, "close");
-    process.kill(Number(helper[1]), "SIGKILL"); // exact direct child of disposable fixture
+    if (loss === "app")
+      child.stdin.end(); // app owner closes its lifetime writer
+    else process.kill(Number(helper[1]), "SIGKILL"); // exact disposable helper
     await closed;
     await waitMessage("rpcClosed");
+    let successorReady;
+    if (loss === "app") {
+      successor = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+        import {runManaged} from ${JSON.stringify(runtime)};
+        await runManaged();
+        process.send({type:"ready"});
+      `,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: home,
+            POINT_GUARD_STATE_DIR: stateDir,
+            POINT_GUARD_PU_PATH: "/usr/bin/true",
+            POINT_GUARD_APP_LIFETIME: "stdin",
+            PI_SKIP_VERSION_CHECK: "1",
+          },
+          stdio: ["pipe", "ignore", "ignore", "ipc"],
+        },
+      );
+      const successorMessages = [];
+      successor.on("message", (message) => successorMessages.push(message));
+      successorReady = async () => {
+        const deadline = Date.now() + 30000;
+        while (!successorMessages.length) {
+          if (successor.exitCode !== null || successor.signalCode !== null)
+            throw new Error("Replacement exited before readiness");
+          if (Date.now() >= deadline) throw new Error("Replacement timed out");
+          await pause(10);
+        }
+        return successorMessages[0];
+      };
+    }
     // The Pi child is gone but the accepted action is still gated. No second
     // writer may acquire until controller cleanup (including queued work) drains.
     for (let i = 0; i < 10; i++) {
       assert.equal(child.exitCode, null, "Service must await dispatched work");
+      if (successor)
+        assert.equal(
+          successor.exitCode,
+          null,
+          "Replacement waits for the predecessor's drain",
+        );
       let competing;
       try {
         competing = await openRuntimeState(stateDir);
@@ -158,12 +205,34 @@ test("helper loss retains runtime ownership until a dispatched controller action
     }
     const exited = once(child, "exit");
     child.send({ type: "release" });
-    assert.equal((await exited)[0], 1);
-    const restored = await openRuntimeState(stateDir);
-    assert.equal(restored.value.desktopClientId, ready.desktopClientId);
-    await restored.close();
+    assert.equal((await exited)[0], loss === "app" ? 0 : 1);
+    if (!successor) {
+      const restored = await openRuntimeState(stateDir);
+      assert.equal(restored.value.desktopClientId, ready.desktopClientId);
+      await restored.close();
+    }
+    if (successor) {
+      assert.equal((await successorReady()).type, "ready");
+      const next = JSON.parse(
+        await readFile(path.join(stateDir, "admin.json"), "utf8"),
+      );
+      assert.equal(next.desktopClientId, ready.desktopClientId);
+      assert.equal(next.pid, successor.pid);
+      const exited = once(successor, "exit");
+      successor.stdin.end();
+      assert.equal((await exited)[0], 0);
+    }
   } finally {
     socket?.terminate();
+    if (
+      successor &&
+      successor.exitCode === null &&
+      successor.signalCode === null
+    ) {
+      const exited = once(successor, "exit");
+      successor.stdin.end();
+      await exited;
+    }
     if (child && child.exitCode === null && child.signalCode === null) {
       child.send({ type: "release" });
       const exited = once(child, "exit");
@@ -172,4 +241,9 @@ test("helper loss retains runtime ownership until a dispatched controller action
     }
     await rm(home, { recursive: true, force: true });
   }
-});
+}
+
+for (const loss of ["helper", "app"]) {
+  test(`${loss} loss retains runtime ownership until a dispatched controller action drains`, () =>
+    checkDrain(loss));
+}
