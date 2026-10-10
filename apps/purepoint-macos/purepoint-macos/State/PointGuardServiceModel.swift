@@ -162,6 +162,18 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             devices = (try await request("devices.list"))["devices"].values
         } catch { self.error = error.localizedDescription }
     }
+    var authMessage: String? {
+        let name = auth["providerName"].text ?? "your provider"
+        switch auth["status"].text {
+        case "pending": return "Signing in to \(name)… Complete the provider’s instructions below."
+        case "complete": return auth["type"].text == "oauth" ? "Signed in to \(name)." : "Credentials saved for \(name)."
+        case "canceled", "cancelled": return "Sign-in canceled. Try again when you’re ready."
+        case "expired": return "Sign-in expired. Start a new sign-in to try again."
+        case "failed": return "Sign-in failed. Start a new sign-in to try again."
+        case nil: return nil
+        default: return "Sign-in could not be confirmed. Start a new sign-in to try again."
+        }
+    }
     func login(provider: String, type: String) async {
         authGeneration += 1; let generation = authGeneration
         let lifetime = runtimeGeneration
@@ -170,7 +182,9 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             if let prior = activeAttemptId { pendingAuthCleanup.insert(prior) }
             guard await retryAuthCleanup(), generation == authGeneration else { return }
             activeAttemptId = nil
-            auth = .object(["status": .string("pending")])
+            let name = providers.first { $0["id"].text == provider }?["name"].text ?? provider
+            let identity: [String: PiJSONValue] = ["provider": .string(provider), "providerName": .string(name), "type": .string(type)]
+            auth = .object(identity.merging(["status": .string("pending")]) { _, new in new })
             let result = try await request("auth.start", fields: ["provider": .string(provider), "type": .string(type)])
             guard lifetime == runtimeGeneration else { return }
             guard let id = result["attemptId"].text else { throw PiChatError("Provider login did not start.") }
@@ -186,7 +200,12 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                     while !Task.isCancelled && generation == self.authGeneration {
                         let status = try await self.request("auth.status", fields: ["attemptId": .string(id)])
                         guard !Task.isCancelled, generation == self.authGeneration else { return }
-                        self.auth = status
+                        var display = identity
+                        for key in ["status", "attemptId", "error"] { display[key] = status[key] }
+                        if status["status"].text == "pending" {
+                            display["events"] = status["events"]; display["prompt"] = status["prompt"]
+                        }
+                        self.auth = .object(display)
                         if status["status"].text != "pending" {
                             self.activeAttemptId = nil
                             if status["status"].text == "complete" { self.restartRequired = true; await self.refresh() }
@@ -227,10 +246,12 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         return !hasPendingAuthCleanup
     }
     func cancelLogin() async {
+        guard activeAttemptId != nil || auth["status"].text == "pending" || hasPendingAuthCleanup else { return }
         authGeneration += 1; pollTask?.cancel(); let generation = authGeneration
         if let id = activeAttemptId { pendingAuthCleanup.insert(id) }
         guard await retryAuthCleanup(), generation == authGeneration else { return }
-        activeAttemptId = nil; auth = .null
+        activeAttemptId = nil
+        auth = .object(["status": .string("canceled"), "provider": auth["provider"], "providerName": auth["providerName"], "type": auth["type"]])
     }
     func selectModel(provider: String, model: String) async {
         do { _ = try await request("model.select", fields: ["provider": .string(provider), "model": .string(model)]); await refresh() }

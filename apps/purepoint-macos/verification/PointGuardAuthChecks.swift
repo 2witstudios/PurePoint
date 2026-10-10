@@ -9,8 +9,13 @@ import Foundation
     var failCancel = false
     var failRevoke = false
     var failStop = false
+    var authStatus: PiJSONValue?
+    var heldStatus: CheckedContinuation<PiJSONValue, Never>?
+    var holdStatus = false
+    var savedProviders: [PiJSONValue] = []
     func request(_ operation: String, _ fields: [String: PiJSONValue]) async throws -> PiJSONValue {
         switch operation {
+        case "providers": return .object(["providers": .array(savedProviders)])
         case "runtime.stop":
             if failStop { throw PiChatError("Fixture runtime busy or unavailable") }
             return .object([:])
@@ -20,7 +25,10 @@ import Foundation
         case "auth.cancel":
             if failCancel { throw PiChatError("Fixture cancellation transport unavailable") }
             canceled.append(fields["attemptId"]?.text ?? ""); return .object([:])
-        case "auth.status": return .object(["attemptId": fields["attemptId"] ?? .null, "status": .string("pending")])
+        case "auth.status":
+            if holdStatus { return await withCheckedContinuation { heldStatus = $0 } }
+            if let authStatus { return authStatus }
+            return .object(["attemptId": fields["attemptId"] ?? .null, "status": .string("pending")])
         case "pairing.create": return await withCheckedContinuation { enrollment = $0 }
         case "pairing.revoke":
             if failRevoke { throw PiChatError("Fixture revocation transport unavailable") }
@@ -35,6 +43,59 @@ import Foundation
         fatalError("fixture timed out")
     }
     @MainActor static func main() async {
+        // Given confirmed OAuth completion, show provider-specific success and no obsolete interaction.
+        let successFixture = AdminFixture()
+        successFixture.authStatus = .object(["status": .string("complete"), "events": .array([.object(["url": .string("https://example.com/login")])]), "prompt": .object(["id": .string("obsolete")])])
+        let success = PointGuardServiceModel(requestOverride: { try await successFixture.request($0, $1) })
+        let login = Task { await success.login(provider: "Example Provider", type: "oauth") }
+        await wait { successFixture.starts["Example Provider"] != nil }
+        successFixture.starts.removeValue(forKey: "Example Provider")?.resume(returning: .object(["attemptId": .string("success")]))
+        await login.value
+        await wait { success.auth["status"].text == "complete" }
+        precondition(success.authMessage == "Signed in to Example Provider.")
+        if case .null = success.auth["events"] {} else { fatalError("Completed login must hide browser events") }
+        if case .null = success.auth["prompt"] {} else { fatalError("Completed login must hide prompts") }
+        precondition(success.restartRequired)
+        await success.cancelLogin() // Setup's selection synchronization must not erase success.
+        precondition(success.authMessage == "Signed in to Example Provider.")
+        // Given cancellation while status is in flight, a late success must never appear.
+        let staleFixture = AdminFixture(); staleFixture.holdStatus = true
+        let stale = PointGuardServiceModel(requestOverride: { try await staleFixture.request($0, $1) })
+        let staleLogin = Task { await stale.login(provider: "Canceled Provider", type: "oauth") }
+        await wait { staleFixture.starts["Canceled Provider"] != nil }
+        staleFixture.starts.removeValue(forKey: "Canceled Provider")?.resume(returning: .object(["attemptId": .string("stale")]))
+        await staleLogin.value
+        await wait { staleFixture.heldStatus != nil }
+        await stale.cancelLogin()
+        staleFixture.heldStatus?.resume(returning: .object(["status": .string("complete")]))
+        staleFixture.heldStatus = nil
+        for _ in 0..<10 { await Task.yield() }
+        precondition(stale.authMessage == "Sign-in canceled. Try again when you’re ready.")
+        precondition(!stale.restartRequired)
+        // Given each terminal provider outcome, hide pending instructions without claiming success.
+        for (status, expected) in [("failed", "Sign-in failed. Start a new sign-in to try again."),
+                                   ("expired", "Sign-in expired. Start a new sign-in to try again."),
+                                   ("canceled", "Sign-in canceled. Try again when you’re ready.")] {
+            let terminalFixture = AdminFixture()
+            terminalFixture.authStatus = .object(["status": .string(status), "events": .array([.object(["userCode": .string("obsolete")])]), "prompt": .object(["id": .string("obsolete")])])
+            let terminal = PointGuardServiceModel(requestOverride: { try await terminalFixture.request($0, $1) })
+            let task = Task { await terminal.login(provider: "Example", type: "oauth") }
+            await wait { terminalFixture.starts["Example"] != nil }
+            terminalFixture.starts.removeValue(forKey: "Example")?.resume(returning: .object(["attemptId": .string(status)]))
+            await task.value
+            await wait { terminal.auth["status"].text == status }
+            precondition(terminal.authMessage == expected && !terminal.restartRequired)
+            if case .null = terminal.auth["events"] {} else { fatalError("Terminal state retains obsolete instructions") }
+            if case .null = terminal.auth["prompt"] {} else { fatalError("Terminal state retains obsolete prompt") }
+        }
+        // Given reopening setup, saved credential metadata still comes from the durable provider catalog.
+        let reopenedFixture = AdminFixture()
+        reopenedFixture.savedProviders = [.object(["id": .string("example"), "name": .string("Example Provider"), "configured": .bool(true)])]
+        let reopened = PointGuardServiceModel(requestOverride: { try await reopenedFixture.request($0, $1) })
+        await reopened.refresh()
+        precondition(reopened.providers.first?["id"].text == "example")
+        if case .bool(true) = reopened.providers.first?["configured"] {} else { fatalError("Saved credentials must remain visible") }
+        precondition(reopened.authMessage == nil, "Saved credentials alone must not claim a new successful OAuth login")
         let fixture = AdminFixture()
         let service = PointGuardServiceModel(requestOverride: { try await fixture.request($0, $1) }, remoteEndpoint: "wss://100.64.0.1:8787/v1")
         let first = Task { await service.login(provider: "first", type: "oauth") }

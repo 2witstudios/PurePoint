@@ -51,7 +51,9 @@ export class Rpc extends EventEmitter {
     this.child.on("error", () =>
       this.fail(
         new Error(
-          "Pi could not start. Run npm ci and check the configured working folder.",
+          env.POINT_GUARD_MANAGED === "1"
+            ? "Bundled Pi could not start. Check the working folder in Point Guard setup and retry. If it still fails, update or reinstall PurePoint."
+            : "Pi could not start. Run npm ci and check the configured working folder.",
         ),
       ),
     );
@@ -69,7 +71,9 @@ export class Rpc extends EventEmitter {
         } catch {}
         this.fail(
           new Error(
-            `Pi exited (${code ?? signal}). Check native Pi provider setup in a terminal, then restart the bridge.`,
+            env.POINT_GUARD_MANAGED === "1"
+              ? `Pi exited (${code ?? signal}). Check the provider and model in Point Guard setup, then restart Point Guard.`
+              : `Pi exited (${code ?? signal}). Check native Pi provider setup in a terminal, then restart the bridge.`,
           ),
         );
       }

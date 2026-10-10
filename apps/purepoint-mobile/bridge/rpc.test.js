@@ -143,3 +143,24 @@ test("shutdown fence rejects pending and future writes before transport close", 
     await rpc.close();
   }
 });
+
+for (const managed of [true, false]) {
+  test(`missing RPC executable gives ${managed ? "managed app" : "developer"} recovery`, async () => {
+    const rpc = new Rpc("/nonexistent-pointguard-proof/node", [], process.cwd(), {
+      ...process.env, POINT_GUARD_MANAGED: managed ? "1" : "0",
+    });
+    rpc.on("failure", () => {});
+    await assert.rejects(rpc.call("get_state"), managed ? /PurePoint/ : /npm ci/);
+    if (managed) assert.doesNotMatch(rpc.failure.message, /npm|terminal|install Pi/);
+  });
+}
+
+test("managed child exit directs provider recovery to Point Guard setup", async () => {
+  const rpc = new Rpc(process.execPath, ["-e", "process.exit(7)"], process.cwd(), {
+    ...process.env, POINT_GUARD_MANAGED: "1",
+  });
+  rpc.on("failure", () => {});
+  await assert.rejects(rpc.call("get_state"), /Point Guard setup/);
+  assert.doesNotMatch(rpc.failure.message, /terminal/);
+  await rpc.close();
+});

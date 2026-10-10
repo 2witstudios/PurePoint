@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, mkdir, rm, cp, stat } from "node:fs/promises";
+import {
+  readFile,
+  mkdtemp,
+  mkdir,
+  rm,
+  cp,
+  stat,
+  chmod,
+} from "node:fs/promises";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
@@ -242,11 +250,15 @@ try {
     await readFile(path.join(stateDir, "runtime.json"), "utf8"),
   );
   await stop(second);
+  // An ordinary terminal Pi installation may leave its directory readable.
+  await chmod(path.dirname(authFile), 0o755);
+  assert.equal((await stat(authFile)).mode & 0o777, 0o600);
   // Replace the entire artifact after awaiting owned exit; durable state lives outside it.
   await rm(app, { recursive: true });
   await cp(source, app, { recursive: true });
   const third = await launch(selected, true);
   assert.equal(third.ready.sessionId, session);
+  assert.equal((await stat(path.dirname(authFile))).mode & 0o777, 0o755);
   assert.equal(third.ready.desktopClientId, runtimeState.desktopClientId);
   assert.equal(third.ready.hostId, second.ready.hostId);
   assert.equal(third.ready.certificateSHA256, second.ready.certificateSHA256);
