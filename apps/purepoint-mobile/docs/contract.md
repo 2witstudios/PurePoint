@@ -2,7 +2,7 @@
 
 Maturity: SPECIFIED. Scope: simultaneous native phone and desktop clients → shared Mac bridge → one vanilla Pi session. No dependency on PurePoint engine IPC. Authorizing briefs: Jono, 2026-10-08 and shared-client architecture correction, 2026-10-09.
 
-Prerelease setup/trust reconciliation: [PGSET normative contract](../../../docs/product/point-guard-setup.md) supersedes earlier shared-token, QRv1 and external-skill setup decisions below. Shared chat protocol remains v1; enrollment payload is v2.
+Prerelease setup/trust reconciliation: [PGSET normative contract](../../../docs/product/point-guard-setup.md) supersedes earlier shared-token, legacy shared-secret QRv1 prototype and external-skill setup decisions below. Shared chat protocol remains v1; enrollment QR uses v1.
 
 ## Purpose and conceptual model
 
@@ -18,7 +18,7 @@ Research progressed SEED (lifetime / session authority questions), EXPLORING (up
 
 ! [MOB-003] Serialize mutations; use epoch/run target for Stop — clear_queue returns text, pending dialogs are canceled so abort can reach idle, abort waits for idle, and agent_end can precede automatic continuation. agent_settled is the idle boundary. Dialog responses bypass mutation serialization so extension commands cannot deadlock. No automatic prompt replay. Unknown protocol/operations reject visibly.
 
-! [MOB-004] Remote phone chat binds only explicit tailnet addresses and requires pinned TLS/WSS plus individual per-device credentials. Credential identity determines the connection clientId; caller headers/messages cannot impersonate another device. Separate ephemeral loopback desktop chat uses a distinct local chat token; local HTTP administration uses another token and is unavailable to paired phones. One-time QRv2 enrollment, revocation/socket close, rotation and private stable host identity follow PRPG-TRUST-1. No plaintext/shared-token remote fallback.
+! [MOB-004] Remote phone chat binds only explicit tailnet addresses and requires pinned TLS/WSS plus individual per-device credentials. Credential identity determines the connection clientId; caller headers/messages cannot impersonate another device. Separate ephemeral loopback desktop chat uses a distinct local chat token; local HTTP administration uses another token and is unavailable to paired phones. One-time QR v1 enrollment, revocation/socket close, rotation and private stable host identity follow PRPG-TRUST-1. No plaintext/shared-token remote fallback.
 
 ! [MOB-005] Preserve vanilla resources — no provider overrides or no-skills flag. Pi discovers ~/.agents/skills (including symlinks). Managed distribution bundles versioned pu/pu-cli skills and support files, Point Guard instructions and explicit pu CLI; it does not require developer-home skill discovery. get_commands validates that skills loaded. Clear PU_AGENT_ID and PU_PROJECT_ROOT. Cross-project pu commands must route with a per-command PU_PROJECT_ROOT or explicit cwd (installed pu has no general --project-root flag). Source: skills.md, configuration.md, skills.ts. Read-only PageSpace harness precedent at 0cc42713700b5a779ba88feb62054c583c0f7eba: bin/pagespace.mjs uses argument arrays and extension preload; extensions/pagespace.ts replaces filesystem/provider behavior and its launcher disables native skills. None of those restrictions/replacements are adopted.
 
@@ -64,7 +64,7 @@ Up to 32 connected clients, one active session. No bridge crash durability for r
 
 # Historical QR pairing addition — 2026-10-08 (superseded)
 
-The following records the original QRv1 implementation. It is not the current setup/authentication contract; QRv2 PRPG-TRUST-1 replaces it and requires deliberate legacy re-pair.
+The following records the unreleased shared-secret QR prototype. It is not the current setup/authentication contract; the pinned one-time enrollment contract in [PRPG-TRUST-1](../../../docs/product/point-guard-setup.md) replaces it and requires deliberate re-pair. The first-release enrollment QR uses version 1; the prototype payload is not supported.
 
 The standalone bridge emits an offline SVG QR in a private local HTML file, using a private credential generated on first setup or an existing owner-supplied credential. The phone uses Apple's VisionKit DataScanner, checks support/availability and requests camera permission. Research: [Apple scanner contract](https://developer.apple.com/documentation/visionkit/scanning-data-with-the-camera), [node-qrcode SVG API](https://github.com/soldair/node-qrcode). Local generator dependency is pinned to qrcode 1.5.4.
 
@@ -138,5 +138,5 @@ Gesture grounding: Apple's [simultaneousGesture documentation](https://developer
 - Given racing idle sends, the bridge should accept one and reject the now-busy send with recoverable local input; explicit busy sends can queue.
 - Given competing session switches or dialog answers, one should win and the stale action should reject visibly.
 - Given Stop from either client, canceled queued text should return to its original submitter, including duplicate text and lost Stop acknowledgements.
-- Given unsupported protocol versions or label-only selections, the bridge should reject them. Both apps use chat protocol v1; enrollment QR uses v2 and pinned remote WSS. Legacy QRv1 cannot authorize remote access.
+- Given unsupported protocol versions or label-only selections, the bridge should reject them. Both apps use chat protocol v1; enrollment QR uses v1 and pinned remote WSS. The legacy shared-secret QRv1 prototype cannot authorize remote access.
 - Given many clients, use one broadcaster per event, a 32-client cap, 16 in-flight requests per socket, 16 serialized mutations globally, bounded native queue metadata, and independent per-client heartbeats/backlog handling.

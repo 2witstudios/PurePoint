@@ -15,7 +15,7 @@ export function pairingPayload(payload) {
   pairingEndpoint(code.endpoint);
   if (
     code.type !== "pi-mobile-pairing" ||
-    code.version !== 2 ||
+    code.version !== 1 ||
     typeof code.hostId !== "string" ||
     !/^[A-Za-z0-9_-]{43}$/.test(code.enrollmentToken) ||
     !/^[a-f0-9]{64}$/.test(code.certificateSHA256) ||

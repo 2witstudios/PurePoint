@@ -7,7 +7,7 @@ import { pairingPayload, writePairingPage } from "./pairing.js";
 
 const code = () => ({
   type: "pi-mobile-pairing",
-  version: 2,
+  version: 1,
   endpoint: "wss://100.94.14.74:8787/v1",
   hostId: "550e8400-e29b-41d4-a716-446655440000",
   certificateSHA256: "a".repeat(64),
@@ -17,6 +17,7 @@ const code = () => ({
 test("one-time pinned enrollment encodes without shared-token fallback", () => {
   const payload = code();
   assert.deepEqual(JSON.parse(pairingPayload(payload)), payload);
+  assert.throws(() => pairingPayload({ ...payload, version: 2 }));
   assert.throws(() =>
     pairingPayload({ ...payload, endpoint: "wss://example.com/v1" }),
   );
