@@ -42,10 +42,18 @@ struct PointGuardView: View {
         }
         .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
         .sheet(isPresented: $showSetup) {
-            ScrollView { PointGuardSetupView(service: appState.pointGuardService, chat: appState.pointGuardChat).padding(24) }
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Point Guard setup").font(.headline)
+                    Spacer()
+                    Button("Done") { showSetup = false }.keyboardShortcut(.cancelAction)
+                }.padding()
+                Divider()
+                ScrollView { PointGuardSetupView(service: appState.pointGuardService, chat: appState.pointGuardChat).padding(24) }
+            }
                 .frame(width: 620, height: 650)
         }
-        .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: appState.pointGuardService) }
+        .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: appState.pointGuardService, isPresented: $showPhone) }
         .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
             showSidebar.toggle()
         }

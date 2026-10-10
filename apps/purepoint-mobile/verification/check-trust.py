@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Compile actual mobile trust/model sources and exercise an isolated real TLS fixture."""
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import tempfile
 root = Path(__file__).resolve().parent.parent
+ats = plistlib.loads((root / 'PurePoint/Info.plist').read_bytes())['NSAppTransportSecurity']
+assert ats.get('NSAllowsArbitraryLoads') is True, 'QR-pinned TLS at user-selected IPs requires custom trust evaluation'
+assert not any(key in ats for key in ('NSAllowsLocalNetworking', 'NSAllowsArbitraryLoadsForMedia', 'NSAllowsArbitraryLoadsInWebContent')), 'Fine-grained ATS keys override NSAllowsArbitraryLoads on iOS and break IP pairing'
 with tempfile.TemporaryDirectory(prefix='pg-mobile-trust-', dir='/tmp') as directory:
     temp = Path(directory)
     recovery = (root / 'verification/RecoveryChecks.swift').read_text().split('// Run verification/')[0]
