@@ -104,6 +104,34 @@ import Foundation
         fixture.failRevoke = false
         await service.retryEnrollmentCleanup()
         precondition(fixture.revoked.contains("cleanup-qr") && !service.hasPendingEnrollmentCleanup)
+        // Cleanup belongs to one owned runtime. Its exit invalidates SDK attempts
+        // and memory-only enrollments, including completions arriving after exit.
+        let dying = Task { await service.login(provider: "dying", type: "oauth") }
+        await wait { fixture.starts["dying"] != nil }
+        await service.cancelLogin()
+        fixture.failCancel = true
+        fixture.starts.removeValue(forKey: "dying")?.resume(returning: .object(["attemptId": .string("dead-id")]))
+        await dying.value
+        precondition(service.hasPendingAuthCleanup)
+        service.ownedRuntimeExited(instanceId: "foreign")
+        precondition(service.hasPendingAuthCleanup, "Foreign exit must not discard live cleanup")
+        service.ownedRuntimeExited(instanceId: "")
+        precondition(!service.hasPendingAuthCleanup)
+        let afterCrash = Task { await service.login(provider: "after-crash", type: "oauth") }
+        await wait { fixture.starts["after-crash"] != nil }
+        service.ownedRuntimeExited(instanceId: "")
+        fixture.starts.removeValue(forKey: "after-crash")?.resume(returning: .object(["attemptId": .string("dead-late-id")]))
+        await afterCrash.value
+        precondition(!service.hasPendingAuthCleanup && service.auth["attemptId"].text == nil)
+        fixture.failCancel = false
+        let afterStop = Task { await service.login(provider: "after-stop", type: "oauth") }
+        await wait { fixture.starts["after-stop"] != nil }
+        await service.cancelLogin(); fixture.failCancel = true
+        fixture.starts.removeValue(forKey: "after-stop")?.resume(returning: .object(["attemptId": .string("stop-cleanup-id")]))
+        await afterStop.value
+        precondition(service.hasPendingAuthCleanup)
+        try! await service.stop() // No child remains: cleanup is still invalidated.
+        precondition(!service.hasPendingAuthCleanup && !service.hasPendingEnrollmentCleanup)
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }
