@@ -90,20 +90,19 @@ fn resolve_root(
         .current_dir(cwd)
         .args(["worktree", "list", "--porcelain", "-z"])
         .output()?;
-    if list.status.success() {
-        if let Some(root) = list
+    if list.status.success()
+        && let Some(root) = list
             .stdout
             .split(|b| *b == 0)
             .find_map(|field| field.strip_prefix(b"worktree "))
-        {
-            let candidate =
-                std::fs::canonicalize(Path::new(&String::from_utf8_lossy(root).into_owned()))?;
-            let manifest = pu_core::manifest::read_manifest(&candidate).map_err(|error| CliError::Other(format!("Git cannot identify an initialized primary project ({error}); use --project-root or PU_PROJECT_ROOT")))?;
-            if std::fs::canonicalize(&manifest.project_root)? != candidate {
-                return Err(CliError::Other("Git primary checkout does not match its project manifest; use --project-root or PU_PROJECT_ROOT".into()));
-            }
-            return Ok(candidate.to_string_lossy().into_owned());
+    {
+        let candidate =
+            std::fs::canonicalize(Path::new(&String::from_utf8_lossy(root).into_owned()))?;
+        let manifest = pu_core::manifest::read_manifest(&candidate).map_err(|error| CliError::Other(format!("Git cannot identify an initialized primary project ({error}); use --project-root or PU_PROJECT_ROOT")))?;
+        if std::fs::canonicalize(&manifest.project_root)? != candidate {
+            return Err(CliError::Other("Git primary checkout does not match its project manifest; use --project-root or PU_PROJECT_ROOT".into()));
         }
+        return Ok(candidate.to_string_lossy().into_owned());
     }
     Err(CliError::Other(
         "cannot resolve primary Git worktree; use --project-root".into(),

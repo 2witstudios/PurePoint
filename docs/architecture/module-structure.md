@@ -14,7 +14,7 @@ PurePoint's codebase needs a clear module/package structure. The structure deter
 
 ! [MOD-002] Protocol types in `pu-core::protocol`, shared by both binaries via Rust serde — no code generation, no separate schema repo. Request/Response enums with `#[serde(tag = "type", rename_all = "snake_case")]` for tagged-union JSON encoding. Domain types in `pu-core::types` with `#[serde(rename_all = "camelCase")]` for macOS app compatibility. This keeps API definitions in-repo, type-safe at compile time, and avoids build-time codegen complexity. Implemented in `pu-core/src/protocol/` and `pu-core/src/types/` directories.
 
-! [MOD-003] Rust, edition 2024, MSRV 1.88 — Rust chosen for: memory safety without GC (critical for long-running daemon), excellent async ecosystem (tokio), strong type system for protocol correctness, single-binary deployment, and cross-compilation support. Edition 2024 for latest language features. MSRV 1.88 pinned in workspace `Cargo.toml` via `rust-version`. Implemented in `Cargo.toml` (`[workspace.package]` edition and rust-version).
+! [MOD-003] Rust, edition 2024, MSRV 1.89 — Rust chosen for: memory safety without GC (critical for long-running daemon), excellent async ecosystem (tokio), strong type system for protocol correctness, single-binary deployment, and cross-compilation support. Edition 2024 for latest language features. MSRV raised to 1.89 to support current UUID releases; pinned in workspace `Cargo.toml` via `rust-version`. Implemented in `Cargo.toml` (`[workspace.package]` edition and rust-version).
 
 ## Design Directions
 

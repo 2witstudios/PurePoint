@@ -41,11 +41,11 @@ impl Engine {
                 if !def.enabled {
                     continue;
                 }
-                if let Some(next_run) = def.next_run {
-                    if next_run <= now {
-                        self.fire_schedule(&def).await;
-                        self.advance_schedule(def, now).await;
-                    }
+                if let Some(next_run) = def.next_run
+                    && next_run <= now
+                {
+                    self.fire_schedule(&def).await;
+                    self.advance_schedule(def, now).await;
                 }
             }
 

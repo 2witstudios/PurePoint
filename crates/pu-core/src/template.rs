@@ -89,12 +89,12 @@ pub fn list_templates(project_root: &Path) -> Vec<Template> {
     }
 
     // Global second (skip duplicates)
-    if let Ok(global_dir) = paths::global_templates_dir() {
-        if global_dir.is_dir() {
-            for tpl in scan_dir(&global_dir, "global") {
-                if !seen.contains_key(&tpl.name) {
-                    result.push(tpl);
-                }
+    if let Ok(global_dir) = paths::global_templates_dir()
+        && global_dir.is_dir()
+    {
+        for tpl in scan_dir(&global_dir, "global") {
+            if !seen.contains_key(&tpl.name) {
+                result.push(tpl);
             }
         }
     }
@@ -105,17 +105,16 @@ pub fn list_templates(project_root: &Path) -> Vec<Template> {
 /// Find a template by name. Checks local first, then global.
 pub fn find_template(project_root: &Path, name: &str) -> Option<Template> {
     let local_dir = paths::templates_dir(project_root);
-    if local_dir.is_dir() {
-        if let Some(tpl) = find_in_dir(&local_dir, name, "local") {
-            return Some(tpl);
-        }
+    if local_dir.is_dir()
+        && let Some(tpl) = find_in_dir(&local_dir, name, "local")
+    {
+        return Some(tpl);
     }
-    if let Ok(global_dir) = paths::global_templates_dir() {
-        if global_dir.is_dir() {
-            if let Some(tpl) = find_in_dir(&global_dir, name, "global") {
-                return Some(tpl);
-            }
-        }
+    if let Ok(global_dir) = paths::global_templates_dir()
+        && global_dir.is_dir()
+        && let Some(tpl) = find_in_dir(&global_dir, name, "global")
+    {
+        return Some(tpl);
     }
     None
 }
@@ -227,16 +226,16 @@ fn scan_dir(dir: &Path, source: &str) -> Vec<Template> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let Some(file_name) = path.file_name() else {
-                    continue;
-                };
-                let file_name = file_name.to_string_lossy().to_string();
-                let mut tpl = parse_template(&content, &file_name);
-                tpl.source = source.to_string();
-                templates.push(tpl);
-            }
+        if path.extension().and_then(|e| e.to_str()) == Some("md")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            let Some(file_name) = path.file_name() else {
+                continue;
+            };
+            let file_name = file_name.to_string_lossy().to_string();
+            let mut tpl = parse_template(&content, &file_name);
+            tpl.source = source.to_string();
+            templates.push(tpl);
         }
     }
     templates.sort_by(|a, b| a.name.cmp(&b.name));
@@ -247,13 +246,13 @@ fn find_in_dir(dir: &Path, name: &str, source: &str) -> Option<Template> {
     crate::validation::validate_name(name).ok()?;
     // Try exact file name first
     let path = dir.join(format!("{name}.md"));
-    if path.is_file() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            let file_name = path.file_name()?.to_string_lossy().to_string();
-            let mut tpl = parse_template(&content, &file_name);
-            tpl.source = source.to_string();
-            return Some(tpl);
-        }
+    if path.is_file()
+        && let Ok(content) = std::fs::read_to_string(&path)
+    {
+        let file_name = path.file_name()?.to_string_lossy().to_string();
+        let mut tpl = parse_template(&content, &file_name);
+        tpl.source = source.to_string();
+        return Some(tpl);
     }
     // Scan all files and match by frontmatter name
     scan_dir(dir, source)

@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
           components: rustfmt, clippy
       - name: Isolate Rust output
         run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - name: Isolate Rust output
         run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2

@@ -21,10 +21,10 @@ pub async fn run_bench(
         SuspendTarget::All
     } else if let Some(id) = agent {
         // Self-protection: refuse to bench own agent
-        if let Some(ref self_id) = self_agent_id {
-            if &id == self_id {
-                return Err(CliError::Other("cannot bench self".into()));
-            }
+        if let Some(ref self_id) = self_agent_id
+            && &id == self_id
+        {
+            return Err(CliError::Other("cannot bench self".into()));
         }
         SuspendTarget::Agent(id)
     } else {
@@ -47,14 +47,11 @@ pub async fn run_bench(
     let resp = output::check_response(resp, json)?;
 
     // Warn if self was included in bulk bench results
-    if let Some(ref self_id) = self_agent_id {
-        if let pu_core::protocol::Response::SuspendResult { ref suspended } = resp {
-            if suspended.contains(self_id) {
-                eprintln!(
-                    "warning: agent {self_id} benched itself — use `pu play {self_id}` to resume",
-                );
-            }
-        }
+    if let Some(ref self_id) = self_agent_id
+        && let pu_core::protocol::Response::SuspendResult { ref suspended } = resp
+        && suspended.contains(self_id)
+    {
+        eprintln!("warning: agent {self_id} benched itself — use `pu play {self_id}` to resume",);
     }
 
     output::print_response(&resp, json)?;

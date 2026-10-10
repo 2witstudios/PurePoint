@@ -32,10 +32,10 @@ pub fn cwd_string() -> Result<String, CliError> {
 /// Checks `PU_PROJECT_ROOT` env var first (set by the engine for worktree agents),
 /// falls back to the current working directory.
 pub fn project_root_string() -> Result<String, CliError> {
-    if let Ok(root) = std::env::var("PU_PROJECT_ROOT") {
-        if !root.is_empty() {
-            return Ok(root);
-        }
+    if let Ok(root) = std::env::var("PU_PROJECT_ROOT")
+        && !root.is_empty()
+    {
+        return Ok(root);
     }
     cwd_string()
 }

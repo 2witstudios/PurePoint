@@ -50,10 +50,10 @@ pub fn ensure_plugin_current() {
     let current_hash = plugin_hash();
 
     // Check if hash matches (skip exists() -- just try the read)
-    if let Ok(stored) = std::fs::read_to_string(&hash_path) {
-        if stored.trim() == current_hash {
-            return; // Up to date
-        }
+    if let Ok(stored) = std::fs::read_to_string(&hash_path)
+        && stored.trim() == current_hash
+    {
+        return; // Up to date
     }
 
     // Write plugin directory structure
@@ -66,11 +66,11 @@ pub fn ensure_plugin_current() {
 
     for (rel_path, content) in files {
         let path = dir.join(rel_path);
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("pu: failed to create plugin directory: {e}");
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            eprintln!("pu: failed to create plugin directory: {e}");
+            return;
         }
         let tmp_path = path.with_extension("tmp");
         match std::fs::write(&tmp_path, content) {
@@ -93,9 +93,9 @@ pub fn ensure_plugin_current() {
     }
 
     // Migrate: remove old skill directory
-    if let Some(old_dir) = old_skill_dir() {
-        if old_dir.exists() {
-            let _ = std::fs::remove_dir_all(&old_dir);
-        }
+    if let Some(old_dir) = old_skill_dir()
+        && old_dir.exists()
+    {
+        let _ = std::fs::remove_dir_all(&old_dir);
     }
 }

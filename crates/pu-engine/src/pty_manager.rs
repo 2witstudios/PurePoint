@@ -34,10 +34,10 @@ pub(crate) async fn snapshot_process_tree() -> HashMap<i32, Vec<i32>> {
         let mut parts = line.split_whitespace();
         let pid = parts.next().and_then(|p| p.parse::<i32>().ok());
         let ppid = parts.next().and_then(|p| p.parse::<i32>().ok());
-        if let (Some(pid), Some(ppid)) = (pid, ppid) {
-            if pid > 0 {
-                children.entry(ppid).or_default().push(pid);
-            }
+        if let (Some(pid), Some(ppid)) = (pid, ppid)
+            && pid > 0
+        {
+            children.entry(ppid).or_default().push(pid);
         }
     }
     children

@@ -120,10 +120,10 @@ pub async fn prune_worktrees(repo_root: &Path) -> Result<(), std::io::Error> {
 pub async fn resolve_base_ref(repo_root: &Path, refspec: &str) -> Result<String, std::io::Error> {
     if refspec == "HEAD" {
         // Try to get the branch name HEAD points to
-        if let Ok(branch) = run_git(&["symbolic-ref", "--short", "HEAD"], repo_root).await {
-            if !branch.is_empty() {
-                return Ok(branch);
-            }
+        if let Ok(branch) = run_git(&["symbolic-ref", "--short", "HEAD"], repo_root).await
+            && !branch.is_empty()
+        {
+            return Ok(branch);
         }
         // Detached HEAD — fall back to SHA
         run_git(&["rev-parse", "HEAD"], repo_root).await

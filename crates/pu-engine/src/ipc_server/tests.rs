@@ -477,11 +477,11 @@ async fn given_connection_limit_reached_should_reject_new_connection_promptly() 
     let mut served = None;
     for _ in 0..50 {
         let stream = UnixStream::connect(&sock_path).await.unwrap();
-        if let Some(resp) = send_health(stream).await {
-            if matches!(resp, Response::HealthReport { .. }) {
-                served = Some(resp);
-                break;
-            }
+        if let Some(resp) = send_health(stream).await
+            && matches!(resp, Response::HealthReport { .. })
+        {
+            served = Some(resp);
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }

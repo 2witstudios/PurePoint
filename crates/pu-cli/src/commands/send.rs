@@ -67,13 +67,12 @@ fn translate_keys(keys: &str) -> Result<Vec<u8>, CliError> {
                 if let Some(letter) = other
                     .strip_prefix("C-")
                     .or_else(|| other.strip_prefix("ctrl-"))
+                    && letter.len() == 1
                 {
-                    if letter.len() == 1 {
-                        let ch = letter.chars().next().unwrap();
-                        if ch.is_ascii_lowercase() {
-                            result.push(ch as u8 - b'a' + 1);
-                            continue;
-                        }
+                    let ch = letter.chars().next().unwrap();
+                    if ch.is_ascii_lowercase() {
+                        result.push(ch as u8 - b'a' + 1);
+                        continue;
                     }
                 }
                 return Err(CliError::Other(format!("unknown key: {other}")));

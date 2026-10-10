@@ -466,13 +466,12 @@ fn validate_data(data: &Data) -> Result<(), ChannelError> {
                 chrono::DateTime::parse_from_rfc3339(time)
                     .map_err(|e| ChannelError::Invalid(e.to_string()))?;
             }
-            if let Some(parent) = &m.parent_id {
-                if !data.messages[..i]
+            if let Some(parent) = &m.parent_id
+                && !data.messages[..i]
                     .iter()
                     .any(|p| &p.id == parent && p.parent_id.is_none())
-                {
-                    return Err(ChannelError::Invalid("invalid parent".into()));
-                }
+            {
+                return Err(ChannelError::Invalid("invalid parent".into()));
             }
             let mut emojis = HashSet::new();
             for r in &m.reactions {

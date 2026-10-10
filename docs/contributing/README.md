@@ -18,7 +18,7 @@ just test-app     # run Swift tests
 | Requirement | Version | Install |
 |---|---|---|
 | macOS | 26.1+ | (deployment target for app) |
-| Rust | 1.88+ | `rustup` (auto-installed by `just setup`) |
+| Rust | 1.89+ | `rustup` (auto-installed by `just setup`) |
 | Xcode | 16.1+ | Mac App Store |
 | just | any | `brew install just` |
 | swift-format | any | `brew install swift-format` (optional) |

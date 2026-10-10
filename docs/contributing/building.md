@@ -99,9 +99,9 @@ The release CI workflow (`.github/workflows/release.yml`) triggered by `v*` tags
 
 | Tool | Config file | Version |
 |---|---|---|
-| Rust | `rust-toolchain.toml` | 1.88 |
+| Rust | `rust-toolchain.toml` | 1.89 |
 | rustfmt | `rustfmt.toml` | edition 2024 |
-| clippy | `clippy.toml` | MSRV 1.88 |
+| clippy | `clippy.toml` | MSRV 1.89 |
 | Xcode | project.pbxproj | 16.1+ (objectVersion 77) |
 | Swift | Xcode project | 5.0 |
 
