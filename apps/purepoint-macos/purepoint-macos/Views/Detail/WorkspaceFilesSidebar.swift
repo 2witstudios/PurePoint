@@ -30,15 +30,22 @@ struct WorkspaceFilesSidebar: View {
             .padding(.horizontal, 10)
             .frame(height: PaneTabBar.height)
             Divider()
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if state.mode == .changes {
-                        changes
-                    } else {
-                        ForEach(state.fileTree.rootNodes, id: \.relativePath) { node in
-                            InlineFileTreeRow(node: node, state: state, depth: 0)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        if state.mode == .changes {
+                            changes
+                        } else {
+                            ForEach(state.fileTree.rootNodes, id: \.relativePath) { node in
+                                InlineFileTreeRow(node: node, state: state, depth: 0)
+                            }
+                            if state.fileTree.rootNodes.isEmpty { message("No files") }
                         }
-                        if state.fileTree.rootNodes.isEmpty { message("No files") }
+                    }
+                }
+                .onChange(of: state.expandedFiles) { previous, current in
+                    if let collapsed = previous.subtracting(current).sorted().first {
+                        proxy.scrollTo(collapsed, anchor: .top)
                     }
                 }
             }
@@ -58,7 +65,15 @@ struct WorkspaceFilesSidebar: View {
         } else {
             ForEach(state.files) { file in
                 let expanded = state.expandedFiles.contains(file.filename)
-                VStack(spacing: 0) {
+                // Keep the header separate from the potentially very tall native
+                // diff view. Pin it while scrolling its body so collapse stays reachable.
+                Section {
+                    if expanded {
+                        diffBody(file)
+                            .task { await state.loadDiff(file) }
+                    }
+                    Divider()
+                } header: {
                     Button {
                         state.toggleFile(file)
                     } label: {
@@ -78,11 +93,8 @@ struct WorkspaceFilesSidebar: View {
                     .buttonStyle(.plain)
                     .help(file.filename)
                     .accessibilityLabel("\(file.filename), \(expanded ? "Collapse diff" : "Expand diff")")
-                    if expanded {
-                        diffBody(file)
-                            .task { await state.loadDiff(file) }
-                    }
-                    Divider()
+                    .background(Color(nsColor: Theme.cardBackground))
+                    .id(file.filename)
                 }
             }
         }

@@ -53,6 +53,9 @@ final class InlineCodeNSView: NSView {
         textView.textContainerInset = NSSize(width: 4, height: 4)
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
+        // TextKit can resize the text view during layout. Keep it within the
+        // SwiftUI-assigned body instead of painting over the surrounding rows.
+        clipsToBounds = true
         addSubview(textView)
         highlighter = SyntaxHighlightManager(textView: textView, fontSize: 11)
     }
@@ -75,14 +78,14 @@ final class InlineCodeNSView: NSView {
         guard let container = textView.textContainer, let layout = textView.layoutManager else { return 8 }
         layout.ensureLayout(for: container)
         let height = ceil(layout.usedRect(for: container).height) + 8
-        textView.frame = NSRect(x: gutterWidth, y: 0, width: textWidth, height: height)
-        needsDisplay = true
         return height
     }
 
     override func layout() {
         super.layout()
-        _ = height(for: bounds.width)
+        let height = height(for: bounds.width)
+        textView.frame = NSRect(x: gutterWidth, y: 0, width: max(1, bounds.width - gutterWidth), height: height)
+        needsDisplay = true
     }
 
     private func render() {
@@ -112,7 +115,7 @@ final class InlineCodeNSView: NSView {
         // so they cannot confuse the existing tree-sitter syntax highlighter.
         highlighter?.setLanguage(language)
         highlighter?.invalidate()
-        _ = height(for: bounds.width > 0 ? bounds.width : 360)
+        needsLayout = true
         needsDisplay = true
     }
 
