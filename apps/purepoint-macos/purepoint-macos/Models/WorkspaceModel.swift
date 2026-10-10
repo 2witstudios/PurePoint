@@ -1,5 +1,7 @@
 import Foundation
 
+// ProjectState gates snapshot updates on equality. Compare every stored property so
+// metadata changes (including nested agent renames) reach the sidebar.
 nonisolated struct WorktreeModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
@@ -8,12 +10,9 @@ nonisolated struct WorktreeModel: Identifiable, Equatable, Sendable {
     let status: String
     var agents: [AgentModel]
     var baseBranch: String? = nil
-
-    static func == (lhs: WorktreeModel, rhs: WorktreeModel) -> Bool {
-        lhs.id == rhs.id && lhs.status == rhs.status && lhs.branch == rhs.branch && lhs.agents == rhs.agents && lhs.baseBranch == rhs.baseBranch
-    }
 }
 
+// Synthesized equality includes the name even when the agent's status is unchanged.
 nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
@@ -56,9 +55,5 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
             suspended: entry.suspended ?? false,
             command: entry.command
         )
-    }
-
-    static func == (lhs: AgentModel, rhs: AgentModel) -> Bool {
-        lhs.id == rhs.id && lhs.status == rhs.status && lhs.suspended == rhs.suspended
     }
 }
