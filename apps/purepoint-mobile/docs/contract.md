@@ -2,7 +2,7 @@
 
 Maturity: SPECIFIED. Scope: simultaneous native phone and desktop clients → shared Mac bridge → one vanilla Pi session. No dependency on PurePoint engine IPC. Authorizing briefs: Jono, 2026-10-08 and shared-client architecture correction, 2026-10-09.
 
-Prerelease setup/trust reconciliation: [PGSET normative contract](../../../docs/product/point-guard-setup.md) supersedes earlier shared-token, QRv1 and external-skill setup decisions below. Shared chat protocol remains v1; enrollment payload is v2.
+Prerelease setup/trust reconciliation: [PGSET normative contract](../../../docs/product/point-guard-setup.md) supersedes earlier shared-token, legacy shared-secret QRv1 prototype and external-skill setup decisions below. Shared chat protocol remains v1; enrollment payload is v2.
 
 ## Purpose and conceptual model
 
@@ -138,5 +138,5 @@ Gesture grounding: Apple's [simultaneousGesture documentation](https://developer
 - Given racing idle sends, the bridge should accept one and reject the now-busy send with recoverable local input; explicit busy sends can queue.
 - Given competing session switches or dialog answers, one should win and the stale action should reject visibly.
 - Given Stop from either client, canceled queued text should return to its original submitter, including duplicate text and lost Stop acknowledgements.
-- Given unsupported protocol versions or label-only selections, the bridge should reject them. Both apps use chat protocol v1; enrollment QR uses v2 and pinned remote WSS. Legacy QRv1 cannot authorize remote access.
+- Given unsupported protocol versions or label-only selections, the bridge should reject them. Both apps use chat protocol v1; enrollment QR uses v2 and pinned remote WSS. The legacy shared-secret QRv1 prototype cannot authorize remote access.
 - Given many clients, use one broadcaster per event, a 32-client cap, 16 in-flight requests per socket, 16 serialized mutations globally, bounded native queue metadata, and independent per-client heartbeats/backlog handling.
