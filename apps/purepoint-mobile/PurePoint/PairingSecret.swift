@@ -37,6 +37,24 @@ enum PairingSecret {
         guard status == errSecSuccess else { throw MobileError("Could not save Mac trust in Keychain (\(status)). Create a new QR and try again.") }
     }
 }
+// Generation updates and writes share one ordered utility queue. Cancellation never
+// lets an older in-progress Keychain write finish after a newer accepted commit.
+final class PairingTrustWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "pointguard.trust.commit", qos: .utility)
+    private var generation = 0 // Access only on queue; UI invalidation is nonblocking.
+    private let save: @Sendable (TrustedHost) throws -> Void
+    init(save: @escaping @Sendable (TrustedHost) throws -> Void) { self.save = save }
+    func advance(to generation: Int) { queue.async { self.generation = generation } }
+    func commit(_ record: TrustedHost, generation: Int) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                guard generation == self.generation else { continuation.resume(throwing: CancellationError()); return }
+                do { try self.save(record); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+}
 struct MobileError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }

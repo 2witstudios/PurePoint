@@ -66,10 +66,12 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
 
     private(set) var clientId: String
 
+    private let trustWriter: PairingTrustWriter
     private let trustLoader: @Sendable (String) throws -> TrustedHost?
     private let defaults: RecoveryPreferences
 
-    init(defaults: UserDefaults = .standard, trustLoader: @escaping @Sendable (String) throws -> TrustedHost? = { try PairingSecret.readTrust(endpoint: $0) }) {
+    init(defaults: UserDefaults = .standard, trustLoader: @escaping @Sendable (String) throws -> TrustedHost? = { try PairingSecret.readTrust(endpoint: $0) }, trustSaver: @escaping @Sendable (TrustedHost) throws -> Void = { try PairingSecret.saveTrust($0) }) {
+        self.trustWriter = PairingTrustWriter(save: trustSaver)
         self.trustLoader = trustLoader
         let defaults = RecoveryPreferences(value: defaults)
         self.defaults = defaults
@@ -163,7 +165,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
     func pair(_ code: PairingCode) {
         guard PairingCode.parse((try? String(data: JSONEncoder().encode(PairingWire(code)), encoding: .utf8)) ?? "") != nil else { error = "This QR expired. Create a new code on your Mac."; return }
-        pairingTask?.cancel(); pairingGeneration += 1; let attempt = pairingGeneration
+        pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); let attempt = pairingGeneration
         pairing = true; error = nil
         pairingTask = Task { [weak self] in
             let pin = PinnedHostSession(endpoint: code.endpoint, certificateSHA256: code.certificateSHA256)
@@ -178,9 +180,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 guard device.version == 1, device.hostId == code.hostId else { throw TrustFailure("Mac identity changed. Scan a new QR code deliberately.") }
                 let saved = TrustedHost(version: 1, endpoint: code.endpoint, hostId: code.hostId, certificateSHA256: code.certificateSHA256, deviceId: device.deviceId, clientId: device.clientId, credential: device.credential)
                 guard let self, !Task.isCancelled, attempt == self.pairingGeneration else { return }
-                try await Task.detached(priority: .userInitiated) { try PairingSecret.saveTrust(saved) }.value
+                try await self.trustWriter.commit(saved, generation: attempt)
                 guard !Task.isCancelled, attempt == self.pairingGeneration else { return }
-                self.saveDraft(); self.saveAttachmentDraft(); self.disconnect()
+                self.saveDraft(); self.saveAttachmentDraft(); self.disconnect(cancelPairing: false)
                 self.endpoint = saved.endpoint; self.defaults.value.set(saved.endpoint, forKey: "pi.endpoint")
                 self.snapshot = nil; self.draft = self.drafts[self.draftKey] ?? ""; self.attachments = self.attachmentDrafts[self.draftKey] ?? []
                 self.demo = false; self.pairing = false; self.pairingTask = nil; self.connect()
@@ -276,7 +278,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         foreground = active
         if active { retryBudget.reset(); if wantsConnection { connect(resetRetryBudget: false) } }
         else {
-            writer.flush(); retryTask?.cancel(); pairingTask?.cancel(); pairingGeneration += 1; pairing = false; pairingTask = nil
+            writer.flush(); retryTask?.cancel(); pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); pairing = false; pairingTask = nil
             detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac"
         }
     }
@@ -285,7 +287,12 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if reachable { retryBudget.reset(); if socket == nil { connect(resetRetryBudget: false) } }
         else { retryTask?.cancel(); detach(); connectionStatus = "Waiting for network · Pi continues on your Mac" }
     }
-    func disconnect() { wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected" }
+    func disconnect(cancelPairing: Bool = true) {
+        if cancelPairing {
+            pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); pairingTask = nil; pairing = false
+        }
+        wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected"
+    }
     private func detach() {
         generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
         hostSession?.invalidateAndCancel(); hostSession = nil; hostPin = nil

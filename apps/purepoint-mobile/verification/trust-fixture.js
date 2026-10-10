@@ -47,6 +47,9 @@ const record = {
   endpoint,
   certificateSHA256: trust.certificateSHA256,
 };
+for (const name of ["enrollment-a.json", "enrollment-b.json"]) {
+  await writeFile(path.join(directory, name), trust.createEnrollment({ endpoint }).payload, { mode: 0o600 });
+}
 await writeFile(path.join(directory, "record.json"), JSON.stringify(record), {
   mode: 0o600,
 });
