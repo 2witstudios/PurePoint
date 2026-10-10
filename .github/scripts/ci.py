@@ -9,7 +9,7 @@ from pathlib import Path
 
 def components(paths):
     shared = any(
-        path == ".github/workflows/macos.yml" or path.startswith(".github/scripts/")
+        path in {".github/workflows/macos.yml", ".github/workflows/release-proof.yml", ".github/workflows/release.yml"} or path.startswith(".github/scripts/")
         for path in paths
     )
     packaged_rust = any(
@@ -45,7 +45,7 @@ def changed_paths(event):
 def require_checks(results):
     if results["changes"]["result"] != "success":
         raise ValueError("Changed-component detection did not succeed")
-    for job, component in (("macos", "macos"), ("mobile-bridge", "mobile"), ("mobile-swift", "mobile")):
+    for job, component in (("macos", "macos"), ("release-archive", "macos"), ("mobile-bridge", "mobile"), ("mobile-swift", "mobile")):
         flag = results["changes"]["outputs"].get(component)
         if flag not in ("true", "false"):
             raise ValueError("Missing component decision: " + component)

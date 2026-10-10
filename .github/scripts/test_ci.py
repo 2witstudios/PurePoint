@@ -17,6 +17,8 @@ class RoutingTests(unittest.TestCase):
             (["crates/pu-cli/src/bin/point_guard_lock.rs"], {"macos": True, "mobile": True}),
             (["crates/pu-cli/Cargo.toml"], {"macos": True, "mobile": True}),
             (["Cargo.lock"], {"macos": True, "mobile": True}),
+            ([".github/workflows/release-proof.yml"], {"macos": True, "mobile": True}),
+            ([".github/workflows/release.yml"], {"macos": True, "mobile": True}),
             ([".github/workflows/macos.yml"], {"macos": True, "mobile": True}),
             ([".github/scripts/ci.py"], {"macos": True, "mobile": True}),
             (["apps/purepoint-mobile/a", "Cargo.lock"], {"macos": True, "mobile": True}),
@@ -56,6 +58,7 @@ class GateTests(unittest.TestCase):
         return {
             "changes": {"result": "success", "outputs": {"macos": str(macos).lower(), "mobile": str(mobile).lower()}},
             "macos": {"result": "success" if macos else "skipped"},
+            "release-archive": {"result": "success" if macos else "skipped"},
             "mobile-bridge": {"result": "success" if mobile else "skipped"},
             "mobile-swift": {"result": "success" if mobile else "skipped"},
         }
@@ -66,6 +69,13 @@ class GateTests(unittest.TestCase):
         for result in ("failure", "cancelled", "skipped"):
             results = self.results(mobile=True)
             results["mobile-swift"]["result"] = result
+            with self.assertRaises(ValueError):
+                require_checks(results)
+
+    def test_release_failure_cannot_hide_behind_debug_success(self):
+        for result in ("failure", "cancelled", "skipped"):
+            results = self.results(macos=True)
+            results["release-archive"]["result"] = result
             with self.assertRaises(ValueError):
                 require_checks(results)
 

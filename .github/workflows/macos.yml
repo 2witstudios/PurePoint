@@ -373,10 +373,15 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
 
+  release-archive:
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    uses: ./.github/workflows/release-proof.yml
+
   build-and-test:
     name: Build & Test
     if: always()
-    needs: [changes, macos, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust]
+    needs: [changes, macos, release-archive, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
