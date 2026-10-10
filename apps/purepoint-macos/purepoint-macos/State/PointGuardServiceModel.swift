@@ -104,7 +104,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 let chatToken = try PointGuardPrivateFile.token(self.stateDirectory.appendingPathComponent("desktop-chat-token"))
                 self.remoteEndpoint = descriptor.chatURL
                 chat.bindManagedConnection(endpoint: descriptor.nativeChatURL, secret: chatToken, clientId: descriptor.desktopClientId)
-                self.ready = true; self.phase = "Pi ready"
+                self.ready = true; self.phase = "Pi ready"; self.launchCwd = nil
                 await self.refresh()
             } catch {
                 self.error = error.localizedDescription
@@ -150,7 +150,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         request.httpBody = try JSONEncoder().encode(PiJSONValue.object(body))
         let (data, response) = try await session.data(for: request)
         guard launchId == instanceId, data.count <= 1024 * 1024,
-            let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw PiChatError("Point Guard setup request failed. Retry after checking the service.") }
+            let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) else { throw PiChatError("Point Guard setup request failed. Retry after checking the service.") }
         let result = try JSONDecoder().decode(PiJSONValue.self, from: data)
         guard case .bool(true) = result["ok"] else { throw PiChatError(result["error"]["message"].text ?? "Point Guard rejected this setup request.") }
         return result["result"]
