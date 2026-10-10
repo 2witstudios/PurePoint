@@ -45,6 +45,12 @@ Pinned remote HTTPS/WSS reuses [Node HTTPS](https://nodejs.org/api/https.html) a
 - Given legacy shared-token remote pairing, should preserve local recovery/native data and require QR v2 without authorization downgrade.
 - Given composed candidate, should pass independent complete exact-head review and applicable CI, both advertised package architectures, nested ad-hoc signing/entitlements/launch and state-preserving replacement fixture; human Developer ID/notarization/device acceptance stays pending.
 
+### Existing native Pi directory permissions
+
+Given an existing user-owned native Pi agent directory with group/other read or traverse permissions but no group/other write permissions, should reuse it without changing its mode or canonical auth/settings/session data. New native directories are created owner-only (0700). Existing native directories must be real directories, not symlinks, and owned by the current user; reject group/other-writable directories with sanitized actionable recovery. Native auth files remain strictly owner-only regular files with valid JSON; unsafe/corrupt files are never silently repaired. Managed Point Guard and trust directories remain strictly owner-only.
+
+Pi 1.1.0 settings initialization can create the native directory using the process umask; typical 0755 permissions are compatible with a private 0600 auth file. Requiring managed-state directory permissions for this existing Pi directory incorrectly rejects normal terminal installations.
+
 ## Sum Sheet
 
 packaged ∧ nativeAuth ∧ durableState ∧ appOwned ∧ pinnedHost ∧ individualTrust ∧ boundedReconnect ∧ noReplay ∧ independentReview ∧ exactHeadCI. ProductionActivation ⇒ ownerAcceptance ∧ protectedSigning.

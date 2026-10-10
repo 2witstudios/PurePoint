@@ -61,7 +61,9 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
   } else if (stage === "credentials") {
     code = "credential_state";
     recovery =
-      "Native Pi credentials are corrupt or not private. Restore owner-only permissions or a known private backup before retrying.";
+      error?.code === "native_directory_unsafe"
+        ? "Restore the native Pi agent directory as a real directory owned by your user, with no group or other write permissions. Keep auth.json owner-only, then retry. Existing data has not been changed."
+        : "Native Pi credentials are corrupt or not private. Restore owner-only permissions or a known private backup before retrying.";
   } else if (stage === "trust") {
     code = message.includes("expired")
       ? "identity_expired"
