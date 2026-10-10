@@ -143,3 +143,9 @@ Refuse insecure/malformed/unknown-schema existing state instead of resetting ide
 Earlier proposal wording about same bootstrap token/in-process replacement is superseded by these r2 signatures.
 
 The network option name localAdmin is retained by producer agreement but grants local chat only; it provides no HTTP admin routes. pairing.create refuses an endpoint different from actual configured remote chatURL; native uses descriptor chatURL. certificateSHA256 is the sole pin wire field, with no certPin alias.
+
+### Native setup-only persistence edge case
+
+**Researched: 2026-10-09**, pinned Pi 1.1.0 producer artifact proof. The SDK intentionally defers creating an empty new session file until conversation and can report unknown/unknown as a no-credential placeholder model. Persisting that placeholder then restoring via set_model causes a clean-install second launch to fail. Only catalog-valid selections are durable provider/model choices; an invalid old selection shows a setup notice. The managed adapter explicitly persists the native empty session tree with a small version-pinned SessionManager adapter, without fake user/assistant messages or changing nonmanaged Pi behavior. Prove native empty-tree roundtrip and relocated restart before first prompt as well as after conversation; preserve queue ownership and never replay prompts.
+
+Actionable startup errors are sanitized code/message/recovery with schemaVersion, exact pid and instanceId; the native app displays only the matching owned launch. No old error descriptor may identify a current recovery action.
