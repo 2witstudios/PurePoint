@@ -37,6 +37,10 @@ import Foundation
         precondition(descriptor.belongs(to: 42, instanceId: "owned"))
         precondition(!descriptor.belongs(to: 43, instanceId: "owned"))
         precondition(!descriptor.belongs(to: 42, instanceId: "stale"))
-        print("Point Guard runtime path and owned readiness checks passed")
+        let failure = PointGuardStartupFailure(schemaVersion: 1, pid: 42, instanceId: "owned", code: "identity", message: "Host identity unavailable.", recovery: "Restore private trust state deliberately.")
+        precondition(failure.description(pid: 42, instanceId: "owned")?.contains("deliberately") == true)
+        precondition(failure.description(pid: 42, instanceId: "stale") == nil)
+        precondition(failure.description(pid: 43, instanceId: "owned") == nil)
+        print("Point Guard runtime path, owned readiness and actionable error attribution checks passed")
     }
 }

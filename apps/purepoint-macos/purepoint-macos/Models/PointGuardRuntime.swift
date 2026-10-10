@@ -72,3 +72,13 @@ enum PointGuardPrivateFile {
         return value
     }
 }
+
+struct PointGuardStartupFailure: Decodable, Sendable {
+    let schemaVersion: Int; let pid: Int32; let instanceId: String
+    let code: String; let message: String; let recovery: String
+    func description(pid: Int32, instanceId: String) -> String? {
+        guard schemaVersion == 1, self.pid == pid, self.instanceId == instanceId,
+            !message.isEmpty, message.utf8.count <= 4096, recovery.utf8.count <= 4096 else { return nil }
+        return message + " " + recovery
+    }
+}

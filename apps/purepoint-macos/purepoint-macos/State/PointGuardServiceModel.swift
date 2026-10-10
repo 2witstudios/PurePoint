@@ -85,7 +85,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                         self.phase = "Stopped"
                         if !self.expectedStop {
                             self.phase = "Pi stopped"
-                            self.error = "Point Guard exited (\(status)). Retry to restore your saved session. Check private state permissions and available ports if startup fails."
+                            self.error = self.startupFailure(pid: child.processIdentifier, launchId: launchId)
+                                ?? "Point Guard exited (\(status)). Retry to restore your saved session. Check private state permissions and available ports if startup fails."
                         }
                     }
                 }
@@ -107,10 +108,18 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             }
         }
     }
+    private func startupFailure(pid: Int32, launchId: String) -> String? {
+        guard let data = try? PointGuardPrivateFile.read(stateDirectory.appendingPathComponent("error.json")),
+            let failure = try? JSONDecoder().decode(PointGuardStartupFailure.self, from: data) else { return nil }
+        return failure.description(pid: pid, instanceId: launchId)
+    }
     private func awaitReadiness(_ child: Process, launchId: String) async throws -> PointGuardDescriptor {
         let directory = stateDirectory
         for _ in 0..<300 {
-            guard !Task.isCancelled, child.isRunning else { throw PiChatError("Point Guard could not start. Check state permissions, existing runtime ownership and ports, then Retry.") }
+            guard !Task.isCancelled, child.isRunning else {
+                throw PiChatError(startupFailure(pid: child.processIdentifier, launchId: launchId)
+                    ?? "Point Guard could not start. Check state permissions, existing runtime ownership and ports, then Retry.")
+            }
             let pid = child.processIdentifier
             let candidate = await Task.detached(priority: .utility) {
                 guard let data = try? PointGuardPrivateFile.read(directory.appendingPathComponent("admin.json")),
