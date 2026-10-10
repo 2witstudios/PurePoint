@@ -5,17 +5,63 @@ import { Rpc } from "./rpc.js";
 import { Controller } from "./controller.js";
 import { serve } from "./network.js";
 import { fileURLToPath } from "node:url";
-const fixtureToken = "fixture-only-not-production-000000000000";
+import { openTrustStore } from "./trust.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
+async function trustedTransport(controller) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-e2e-"));
+  const trust = await openTrustStore({ directory });
+  const remote = await serve(controller, {
+    host: "127.0.0.1",
+    port: 0,
+    trust,
+    tls: trust.tls,
+  });
+  const url = `wss://127.0.0.1:${remote.address().port}/v1`;
+  const device = await trust.enroll({
+    enrollmentToken: JSON.parse(
+      trust.createEnrollment({ endpoint: url }).payload,
+    ).enrollmentToken,
+    name: "Fixture phone",
+  });
+  const desktop = {
+    credential: randomBytes(32).toString("base64url"),
+    clientId: "desktop",
+  };
+  const local = await serve(controller, {
+    host: "127.0.0.1",
+    port: 0,
+    localAdmin: { token: desktop.credential, clientId: desktop.clientId },
+  });
+  const nativeURL = `ws://127.0.0.1:${local.address().port}/v1`;
+  return {
+    phoneId: device.clientId,
+    connect: (kind = "phone") =>
+      phone(
+        kind === "desktop" ? nativeURL : url,
+        kind === "desktop" ? desktop : device,
+      ),
+    shutdown: async () => {
+      await remote.shutdown();
+      await local.shutdown();
+      await trust.close();
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}
 const fixtureImage = {
   type: "image",
   mimeType: "image/png",
   data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTz0AAAAASUVORK5CYII=",
 };
-function phone(url, clientId = "phone") {
+function phone(url, { clientId, credential }) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
+      rejectUnauthorized: false,
       headers: {
-        Authorization: `Bearer ${fixtureToken}`,
+        Authorization: `Bearer ${credential}`,
         "X-PointGuard-Client-ID": clientId,
       },
     });
@@ -78,15 +124,10 @@ test("full fixture flow reconnects without replay, recovers queue on Stop and an
   );
   const c = new Controller(rpc, { list: async () => [] });
   await c.refresh();
-  const server = await serve(c, {
-    host: "127.0.0.1",
-    port: 0,
-    token: fixtureToken,
-  });
+  const server = await trustedTransport(c);
   let p;
   try {
-    const url = `ws://127.0.0.1:${server.address().port}/v1`;
-    p = await phone(url);
+    p = await server.connect();
     const initial = await p.call("sync");
     assert.equal(
       (
@@ -111,7 +152,7 @@ test("full fixture flow reconnects without replay, recovers queue on Stop and an
       "queued",
     );
     await p.close();
-    p = await phone(url);
+    p = await server.connect();
     state = await p.call("sync");
     assert.equal(state.messages.filter((m) => m.role === "user").length, 1);
     assert.equal(state.queue[0].text, "Recover this follow-up");
@@ -132,7 +173,7 @@ test("full fixture flow reconnects without replay, recovers queue on Stop and an
     state = await p.call("sync");
     assert.equal(state.dialogs[0].method, "confirm");
     await p.close();
-    p = await phone(url);
+    p = await server.connect();
     state = await p.call("sync");
     await p.call("answer", { dialogId: state.dialogs[0].id, confirmed: true });
     state = await p.call("sync");
@@ -157,15 +198,10 @@ test("given an image upload should reach the RPC child and survive reconnect wit
   );
   const c = new Controller(rpc, { list: async () => [] });
   await c.refresh();
-  const server = await serve(c, {
-    host: "127.0.0.1",
-    port: 0,
-    token: fixtureToken,
-  });
+  const server = await trustedTransport(c);
   let p;
   try {
-    const url = `ws://127.0.0.1:${server.address().port}/v1`;
-    p = await phone(url);
+    p = await server.connect();
     const first = await p.call("sync");
     await p.call("send", {
       epoch: first.epoch,
@@ -179,7 +215,7 @@ test("given an image upload should reach the RPC child and survive reconnect wit
       fixtureImage,
     );
     await p.close();
-    p = await phone(url);
+    p = await server.connect();
     const state = await p.call("sync");
     assert.equal(state.messages.filter((m) => m.role === "user").length, 1);
     assert.match(
@@ -212,16 +248,11 @@ test("phone and desktop share streaming, queue ownership, dialogs, session races
   );
   const c = new Controller(rpc, { list: async () => [] });
   await c.refresh();
-  const server = await serve(c, {
-    host: "127.0.0.1",
-    port: 0,
-    token: fixtureToken,
-  });
+  const server = await trustedTransport(c);
   let p, d;
   try {
-    const url = `ws://127.0.0.1:${server.address().port}/v1`;
-    p = await phone(url, "phone");
-    d = await phone(url, "desktop");
+    p = await server.connect();
+    d = await server.connect("desktop");
     const initial = await p.call("sync");
     await d.call("sync");
     await p.call("send", {
@@ -260,14 +291,14 @@ test("phone and desktop share streaming, queue ownership, dialogs, session races
     const queued = await d.call("sync");
     assert.deepEqual(
       queued.queue.map((item) => item.clientId),
-      ["phone", "desktop"],
+      [server.phoneId, "desktop"],
     );
     assert.notEqual(queued.queue[0].id, queued.queue[1].id);
     await d.call("stop", { epoch: running.epoch, runId: running.runId });
     const stopped = await p.call("sync");
     assert.deepEqual(
       stopped.canceled.map((item) => item.clientId),
-      ["phone", "desktop"],
+      [server.phoneId, "desktop"],
     );
     assert.deepEqual(
       stopped.canceled.map((item) => item.id),
@@ -331,7 +362,7 @@ test("phone and desktop share streaming, queue ownership, dialogs, session races
       text: "/fixture-slow",
       mode: "send",
     });
-    p = await phone(url, "phone");
+    p = await server.connect();
     const reconnected = await p.call("sync");
     assert.equal(reconnected.busy, true);
     assert.equal(

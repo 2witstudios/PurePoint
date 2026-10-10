@@ -109,19 +109,33 @@ enum ConnectionAddress {
         return url
     }
 }
-struct PairingCode: Decodable {
+struct PairingCode: Decodable, Sendable {
     let type: String
     let version: Int
     let endpoint: String
-    let secret: String
-    static func parse(_ text: String) -> PairingCode? {
+    let hostId: String
+    let certificateSHA256: String
+    let enrollmentToken: String
+    let expiresAt: Int64
+    static func parse(_ text: String, now: Date = Date()) -> PairingCode? {
+        let milliseconds = Int64(now.timeIntervalSince1970 * 1000)
         guard text.utf8.count <= 8192,
               let code = try? JSONDecoder().decode(Self.self, from: Data(text.utf8)),
-              code.type == "pi-mobile-pairing", code.version == 1,
-              ConnectionAddress.url(code.endpoint) != nil,
-              code.secret.count >= 32, code.secret.utf8.count <= 1024,
-              !code.secret.contains("\n"), !code.secret.contains("\r") else { return nil }
+              code.type == "pi-mobile-pairing", code.version == 2,
+              ConnectionAddress.url(code.endpoint)?.scheme == "wss", UUID(uuidString: code.hostId) != nil,
+              code.expiresAt > milliseconds, code.expiresAt <= milliseconds + 300000,
+              code.certificateSHA256.count == 64, code.certificateSHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              code.enrollmentToken.utf8.count == 43, code.enrollmentToken.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { return nil }
         return code
+    }
+}
+struct ReconnectBudget {
+    private(set) var attempts = 0
+    mutating func reset() { attempts = 0 }
+    mutating func nextDelay() -> UInt64? {
+        guard attempts < 5 else { return nil }
+        defer { attempts += 1 }
+        return UInt64(1 << attempts)
     }
 }
 struct ChatMessage: Codable, Identifiable, Equatable, Sendable { let id: String; let role: String; let text: String; var activity: String?; var error: String? }

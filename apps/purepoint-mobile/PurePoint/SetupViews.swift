@@ -113,7 +113,7 @@ struct ConnectionView: View {
     @ObservedObject var model: ChatModel
     @Environment(\.dismiss) private var dismiss
     @State private var endpoint = ""
-    @State private var secret = ""
+    @State private var enrollment = ""
     @State private var showScanner = false
     @State private var requestingCamera = false
     var body: some View {
@@ -127,12 +127,16 @@ struct ConnectionView: View {
                 }
                 Section {
                     Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder") }
-                        .disabled(requestingCamera)
-                    DisclosureGroup("Manual connection") {
-                        TextField("Mac address", text: $endpoint).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).accessibilityLabel("Mac endpoint")
-                        SecureField("Pairing secret", text: $secret).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Pairing secret")
-                        Button("Connect") { model.pair(endpoint: endpoint, secret: secret) }
+                        .disabled(requestingCamera || model.pairing)
+                    DisclosureGroup("Paste Mac pairing code") {
+                        TextField("Enrollment QR contents", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Enrollment code")
+                        Button("Pair") {
+                            guard let code = PairingCode.parse(enrollment) else { model.error = "Paste a current Mac enrollment code. Legacy pairing secrets are no longer supported."; return }
+                            model.pair(code)
+                        }.disabled(model.pairing)
                     }
+                    if model.pairing { ProgressView("Pairing with your Mac…") }
+
                 }
                 if let error = model.error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
                 Section {
@@ -143,30 +147,23 @@ struct ConnectionView: View {
             }
             .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .task {
-                let address = model.endpoint
-                endpoint = address
-                guard !address.isEmpty else { return }
-                let saved = await Task.detached(priority: .userInitiated) { PairingSecret.read(endpoint: address) }.value
-                guard !Task.isCancelled, endpoint == address, secret.isEmpty else { return }
-                secret = saved
-            }
+            .task { endpoint = model.endpoint }
             .onChange(of: model.connected) { _, connected in if connected && !model.demo { dismiss() } }
             .sheet(isPresented: $showScanner) {
                 PairingScannerView { code in
-                    endpoint = code.endpoint; secret = code.secret; showScanner = false
-                    model.pair(endpoint: endpoint, secret: secret)
+                    endpoint = code.endpoint; showScanner = false
+                    model.pair(code)
                 }
             }
         }
     }
     @MainActor private func openScanner() async {
-        guard DataScannerViewController.isSupported else { model.error = "QR scanning is unavailable on this device. Use manual entry below (including in the simulator)."; return }
+        guard DataScannerViewController.isSupported else { model.error = "QR scanning is unavailable on this device. Paste the Mac enrollment code below (including in the simulator)."; return }
         requestingCamera = true
         defer { requestingCamera = false }
         let allowed = await AVCaptureDevice.requestAccess(for: .video)
-        guard allowed else { model.error = "Allow camera access for PurePoint in iPhone Settings to scan, or enter the address and secret manually."; return }
-        guard DataScannerViewController.isAvailable else { model.error = "The camera is unavailable. Try again or use manual entry."; return }
+        guard allowed else { model.error = "Allow camera access for PurePoint in iPhone Settings to scan, or paste the Mac enrollment code."; return }
+        guard DataScannerViewController.isAvailable else { model.error = "The camera is unavailable. Try again or paste the Mac enrollment code."; return }
         showScanner = true
     }
 }
@@ -218,19 +215,19 @@ private struct QRScanner: UIViewControllerRepresentable {
         }
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            do { try scanner.startScanning() } catch { onError("Could not start the camera. Close this screen and try again, or use manual entry.") }
+            do { try scanner.startScanning() } catch { onError("Could not start the camera. Close this screen and try again, or paste the Mac enrollment code.") }
         }
         override func viewWillDisappear(_ animated: Bool) { scanner.stopScanning(); super.viewWillDisappear(animated) }
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) { read(addedItems) }
         func dataScanner(_ dataScanner: DataScannerViewController, didUpdate updatedItems: [RecognizedItem], allItems: [RecognizedItem]) { read(updatedItems) }
         func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) { read([item]) }
-        func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) { onError("The camera is unavailable. Close this screen and try again, or use manual entry.") }
+        func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) { onError("The camera is unavailable. Close this screen and try again, or paste the Mac enrollment code.") }
         private func read(_ items: [RecognizedItem]) {
             guard !finished else { return }
             for item in items {
                 guard case .barcode(let barcode) = item, let payload = barcode.payloadStringValue, payload != lastPayload else { continue }
                 lastPayload = payload
-                guard let code = PairingCode.parse(payload) else { onError("This isn’t a supported Pi pairing code. Scan the QR created by your Mac’s Pi bridge."); continue }
+                guard let code = PairingCode.parse(payload) else { onError("This code is expired or unsupported. Create a new Connect phone QR in PurePoint on your Mac."); continue }
                 finished = true; scanner.stopScanning(); onPair(code); return
             }
         }

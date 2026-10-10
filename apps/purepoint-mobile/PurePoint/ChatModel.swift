@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Network
 
 // UserDefaults is thread-safe; the immutable reference is shared with the utility writer.
 private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefaults }
@@ -50,18 +51,26 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var generation = 0
     private var foreground = true
     private var wantsConnection = false
-    private var retryDelay: UInt64 = 2
+    private var retryBudget = ReconnectBudget()
+    private var hostSession: URLSession?
+    private var hostPin: PinnedHostSession?
+    private var pairingTask: Task<Void, Never>?
+    private var pairingGeneration = 0
+    private let networkMonitor = NWPathMonitor()
+    @Published private(set) var pairing = false
     var demo = false
     var busy: Bool { snapshot?.busy ?? false }
     var canSend: Bool { connected && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
-    let clientId: String
+    private(set) var clientId: String
 
+    private let trustLoader: @Sendable (String) throws -> TrustedHost?
     private let defaults: RecoveryPreferences
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, trustLoader: @escaping @Sendable (String) throws -> TrustedHost? = { try PairingSecret.readTrust(endpoint: $0) }) {
+        self.trustLoader = trustLoader
         let defaults = RecoveryPreferences(value: defaults)
         self.defaults = defaults
         clientId = defaults.value.string(forKey: "pi.clientId") ?? UUID().uuidString
@@ -73,6 +82,11 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         seenCanceledIds = Set(canceledIdHistory)
         draft = drafts[draftKey] ?? ""
         if canceledIdHistory != savedCanceledIds { saveCanceledIds() }
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let reachable = path.status == .satisfied
+            Task { @MainActor [weak self] in self?.networkChanged(reachable: reachable) }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "pointguard.reachability"))
         recoveryTask = Task { [weak self] in
             let saved = await Task.detached(priority: .utility) {
                 return (LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], LocalRecoveryStore.load("submissions", as: [Submission].self) ?? [])
@@ -91,6 +105,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
             self.saveSubmissions(); self.saveAttachmentDraft()
         }
     }
+    deinit { networkMonitor.cancel() }
     private static func recentCanceledIds(_ ids: [String]) -> [String] {
         var seen = Set<String>()
         return Array(ids.reversed().filter { seen.insert($0).inserted }.prefix(1000).reversed())
@@ -146,38 +161,91 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         guard attachments.count < 4, attachments.reduce(file.data.count, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Attach up to four files, totaling 512 KiB after preparation."; return }
         attachments.append(file)
     }
-    func pair(endpoint: String, secret: String) {
-        guard let url = ConnectionAddress.url(endpoint) else { error = "Enter a Tailscale address ending in /v1, such as ws://100.100.1.2:8787/v1."; return }
-        guard secret.count >= 32 else { error = "Enter the pairing secret from your Mac (at least 32 characters)."; return }
-        do { try PairingSecret.save(secret, endpoint: url.absoluteString) } catch { self.error = error.localizedDescription; return }
-        saveDraft(); saveAttachmentDraft(); disconnect(); self.endpoint = url.absoluteString; defaults.value.set(self.endpoint, forKey: "pi.endpoint"); snapshot = nil; draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false; wantsConnection = true; connect()
+    func pair(_ code: PairingCode) {
+        guard PairingCode.parse((try? String(data: JSONEncoder().encode(PairingWire(code)), encoding: .utf8)) ?? "") != nil else { error = "This QR expired. Create a new code on your Mac."; return }
+        pairingTask?.cancel(); pairingGeneration += 1; let attempt = pairingGeneration
+        pairing = true; error = nil
+        pairingTask = Task { [weak self] in
+            let pin = PinnedHostSession(endpoint: code.endpoint, certificateSHA256: code.certificateSHA256)
+            let session = pin.makeSession(); defer { session.invalidateAndCancel() }
+            do {
+                var request = URLRequest(url: Self.httpURL(code.endpoint, path: "/pair/enroll"))
+                request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try JSONSerialization.data(withJSONObject: ["version": 1, "enrollmentToken": code.enrollmentToken, "name": "iPhone"])
+                let (data, response) = try await session.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw TrustFailure("Enrollment expired, used or revoked. Create a new Mac QR code.") }
+                let device = try JSONDecoder().decode(EnrolledDevice.self, from: data)
+                guard device.version == 1, device.hostId == code.hostId else { throw TrustFailure("Mac identity changed. Scan a new QR code deliberately.") }
+                let saved = TrustedHost(version: 1, endpoint: code.endpoint, hostId: code.hostId, certificateSHA256: code.certificateSHA256, deviceId: device.deviceId, clientId: device.clientId, credential: device.credential)
+                guard let self, !Task.isCancelled, attempt == self.pairingGeneration else { return }
+                try await Task.detached(priority: .userInitiated) { try PairingSecret.saveTrust(saved) }.value
+                guard !Task.isCancelled, attempt == self.pairingGeneration else { return }
+                self.saveDraft(); self.saveAttachmentDraft(); self.disconnect()
+                self.endpoint = saved.endpoint; self.defaults.value.set(saved.endpoint, forKey: "pi.endpoint")
+                self.snapshot = nil; self.draft = self.drafts[self.draftKey] ?? ""; self.attachments = self.attachmentDrafts[self.draftKey] ?? []
+                self.demo = false; self.pairing = false; self.pairingTask = nil; self.connect()
+            } catch {
+                guard let self, attempt == self.pairingGeneration else { return }
+                self.pairing = false; self.pairingTask = nil
+                self.error = pin.identityRejected ? "Mac certificate does not match this QR. Scan a new code deliberately." : "Pairing failed. " + error.localizedDescription + " Create a new Mac QR code; enrollment is never replayed."
+            }
+        }
     }
-    func connect() {
-        guard !demo, foreground, socket == nil else { return }
-        guard let url = ConnectionAddress.url(endpoint) else {
-            if !endpoint.isEmpty { error = "Enter the bridge address ending in /v1, or scan its pairing QR." }
+    private struct PairingWire: Encodable {
+        let type: String; let version: Int; let endpoint: String; let hostId: String; let certificateSHA256: String; let enrollmentToken: String; let expiresAt: Int64
+        init(_ code: PairingCode) { type = code.type; version = code.version; endpoint = code.endpoint; hostId = code.hostId; certificateSHA256 = code.certificateSHA256; enrollmentToken = code.enrollmentToken; expiresAt = code.expiresAt }
+    }
+    private struct EnrolledDevice: Decodable { let version: Int; let hostId: String; let deviceId: String; let clientId: String; let credential: String }
+    private struct VerifiedDevice: Decodable { let version: Int; let hostId: String; let deviceId: String; let clientId: String }
+    private static func httpURL(_ endpoint: String, path: String) -> URL {
+        var components = URLComponents(string: endpoint)!
+        components.scheme = "https"; components.path = path
+        return components.url!
+    }
+    func connect(resetRetryBudget: Bool = true) {
+        guard !demo, foreground, socket == nil, connectionTask == nil else { return }
+        guard let url = ConnectionAddress.url(endpoint), url.scheme == "wss" else {
+            if !endpoint.isEmpty { requirePairing("Legacy or invalid Mac trust. Scan a new Mac QR code.") }
             return
         }
-        guard connectionTask == nil else { return }
-        wantsConnection = true
-        let address = endpoint
+        if resetRetryBudget { retryBudget.reset() }
+        wantsConnection = true; retryTask?.cancel()
+        let address = endpoint; generation += 1; let current = generation
         connectionStatus = "Connecting to your Mac…"
         connectionTask = Task { [weak self] in
             await self?.recoveryTask?.value
-            let secret = await Task.detached(priority: .userInitiated) { PairingSecret.read(endpoint: address) }.value
-            guard !Task.isCancelled, let self else { return }
-            self.connectionTask = nil
-            guard self.foreground, self.wantsConnection, self.endpoint == address, self.socket == nil else { return }
-            self.startConnection(url: url, secret: secret)
+            var session: URLSession?; var pin: PinnedHostSession?
+            do {
+                guard let saved = try await Task.detached(priority: .userInitiated, operation: { try self?.trustLoader(address) }).value else { throw TrustFailure("No saved device trust. Scan a new Mac QR code.") }
+                guard let self, !Task.isCancelled, current == self.generation else { return }
+                let delegate = PinnedHostSession(endpoint: address, certificateSHA256: saved.certificateSHA256)
+                let connection = delegate.makeSession(); session = connection; pin = delegate
+                var verify = URLRequest(url: Self.httpURL(address, path: "/pair/verify"))
+                verify.setValue("Bearer " + saved.credential, forHTTPHeaderField: "Authorization")
+                let (data, response) = try await connection.data(for: verify)
+                let status = (response as? HTTPURLResponse)?.statusCode
+                if status == 401 || status == 403 { throw TrustFailure("This phone’s trust was revoked or lost. Scan a new Mac QR code deliberately.") }
+                guard status == 200 else { throw MobileError("Mac trust verification is unavailable.") }
+                let verified = try JSONDecoder().decode(VerifiedDevice.self, from: data)
+                guard verified.version == 1, verified.hostId == saved.hostId, verified.deviceId == saved.deviceId, verified.clientId == saved.clientId else { throw TrustFailure("Saved Mac identity changed. Scan a new QR code deliberately.") }
+                guard !Task.isCancelled, current == self.generation, self.foreground, self.wantsConnection, self.endpoint == address else { connection.invalidateAndCancel(); return }
+                self.connectionTask = nil; self.clientId = saved.clientId; self.hostSession = connection; self.hostPin = delegate
+                self.startConnection(url: url, credential: saved.credential, session: connection)
+            } catch {
+                session?.invalidateAndCancel()
+                guard let self, !Task.isCancelled, current == self.generation else { return }
+                self.connectionTask = nil
+                if pin?.identityRejected == true || error is TrustFailure { self.requirePairing(pin?.identityRejected == true ? "Mac certificate changed. Scan a new QR code deliberately." : error.localizedDescription) }
+                else { self.connectionLost(error.localizedDescription) }
+            }
         }
     }
-    private func startConnection(url: URL, secret: String) {
-        guard !secret.isEmpty else { error = "Add the pairing secret in Connection settings."; return }
-        wantsConnection = true; retryTask?.cancel(); generation += 1; let current = generation
+    private func startConnection(url: URL, credential: String, session: URLSession) {
+        generation += 1; let current = generation
         cursor.reset(); connectionStatus = "Connecting to your Mac…"; error = nil
-        var request = URLRequest(url: url); request.setValue("Bearer " + secret, forHTTPHeaderField: "Authorization")
+        var request = URLRequest(url: url); request.setValue("Bearer " + credential, forHTTPHeaderField: "Authorization")
         request.setValue(clientId, forHTTPHeaderField: "X-PointGuard-Client-ID")
-        let task = URLSession.shared.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024; socket = task; task.resume()
+        let task = session.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024; socket = task; task.resume()
         receiveTask = Task { [weak self] in
             do {
                 while !Task.isCancelled {
@@ -189,30 +257,49 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                     guard current == self.generation else { return }
                     try self.receive(record)
                 }
-            } catch { guard let self, current == self.generation else { return }; self.connectionLost(error.localizedDescription) }
+            } catch {
+                guard let self, current == self.generation else { return }
+                if task.closeCode.rawValue == 4001 || self.hostPin?.identityRejected == true { self.requirePairing("Mac trust changed or this phone was revoked. Scan a new QR code deliberately.") }
+                else { self.connectionLost(error.localizedDescription) }
+            }
         }
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.syncState()
                 guard current == self.generation else { return }
-                self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryDelay = 2
-            }
-            catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
+                self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryBudget.reset()
+            } catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }
     }
-    func setForeground(_ active: Bool) { foreground = active; if active { if wantsConnection { connect() } } else { writer.flush(); detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac" } }
+    func setForeground(_ active: Bool) {
+        foreground = active
+        if active { retryBudget.reset(); if wantsConnection { connect(resetRetryBudget: false) } }
+        else {
+            writer.flush(); retryTask?.cancel(); pairingTask?.cancel(); pairingGeneration += 1; pairing = false; pairingTask = nil
+            detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac"
+        }
+    }
+    private func networkChanged(reachable: Bool) {
+        guard foreground, wantsConnection else { return }
+        if reachable { retryBudget.reset(); if socket == nil { connect(resetRetryBudget: false) } }
+        else { retryTask?.cancel(); detach(); connectionStatus = "Waiting for network · Pi continues on your Mac" }
+    }
     func disconnect() { wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected" }
     private func detach() {
         generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
+        hostSession?.invalidateAndCancel(); hostSession = nil; hostPin = nil
         let outstanding = pending; pending = [:]; for timeout in timeouts.values { timeout.cancel() }; timeouts = [:]
         for continuation in outstanding.values { continuation.resume(throwing: MobileError("Connection interrupted. Delivery may be uncertain. Inspect the conversation before sending again.")) }
     }
+    private func requirePairing(_ reason: String) {
+        wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Re-pair with your Mac"; error = reason
+    }
     private func connectionLost(_ reason: String) {
-        detach(); connectionStatus = "Connection lost · Pi continues on your Mac"; error = reason + " Check the Mac bridge, Tailscale, pairing secret, and the bridge address and pairing secret."
+        retryTask?.cancel(); detach(); connectionStatus = "Connection lost · Pi continues on your Mac"; error = reason + " Check PurePoint on your Mac and Tailscale."
         guard foreground, wantsConnection else { return }
-        let delay = retryDelay; retryDelay = min(retryDelay * 2, 30)
-        retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled else { return }; self?.connect() }
+        guard let delay = retryBudget.nextDelay() else { connectionStatus = "Reconnect paused · Check your Mac and network"; return }
+        retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled else { return }; self?.connect(resetRetryBudget: false) }
     }
     private func receive(_ incoming: IncomingRecord) throws {
         let record: WireEnvelope

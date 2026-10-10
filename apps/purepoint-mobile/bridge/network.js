@@ -10,42 +10,111 @@ function authenticated(header, token) {
   const expected = Buffer.from(`Bearer ${token}`);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
-export async function serve(controller, { host, port, trust = null, localAdmin = null, tls = null }) {
+export async function serve(
+  controller,
+  { host, port, trust = null, localAdmin = null, tls = null },
+) {
   if (!allowedHost(host))
     throw new Error(
       "Bind to an explicit Tailscale IP or loopback address. Public/wildcard addresses are refused.",
     );
-  if (Boolean(trust) === Boolean(localAdmin)) throw new Error("Configure exactly one remote device trust or local desktop chat principal; legacy shared-token authorization is disabled.");
-  if (localAdmin && (!["127.0.0.1", "::1"].includes(host) || typeof localAdmin.token !== "string" || localAdmin.token.length < 32 || !/^[A-Za-z0-9_-]{1,100}$/.test(localAdmin.clientId)))
-    throw new Error("Local desktop chat requires loopback and a fixed private principal.");
-  if (trust && !tls) throw new Error("Remote device trust requires pinned TLS; plaintext authorization is refused.");
-  const principal = header => {
-    if (localAdmin) return authenticated(header, localAdmin.token) ? { clientId: localAdmin.clientId } : null;
-    return typeof header === "string" && header.startsWith("Bearer ") ? trust.authorize(header.slice(7)) : null;
+  if (Boolean(trust) === Boolean(localAdmin))
+    throw new Error(
+      "Configure exactly one remote device trust or local desktop chat principal; legacy shared-token authorization is disabled.",
+    );
+  if (
+    localAdmin &&
+    (!["127.0.0.1", "::1"].includes(host) ||
+      typeof localAdmin.token !== "string" ||
+      localAdmin.token.length < 32 ||
+      !/^[A-Za-z0-9_-]{1,100}$/.test(localAdmin.clientId))
+  )
+    throw new Error(
+      "Local desktop chat requires loopback and a fixed private principal.",
+    );
+  if (trust && !tls)
+    throw new Error(
+      "Remote device trust requires pinned TLS; plaintext authorization is refused.",
+    );
+  const principal = (header) => {
+    if (localAdmin)
+      return authenticated(header, localAdmin.token)
+        ? { clientId: localAdmin.clientId }
+        : null;
+    return typeof header === "string" && header.startsWith("Bearer ")
+      ? trust.authorize(header.slice(7))
+      : null;
   };
   let pairingRequests = 0;
   const handler = async (req, res) => {
-    const respond = (code, data = null) => { res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(data ? JSON.stringify(data) : ""); };
-    if (req.headers.origin) { respond(403); return; }
-    if (!trust || !["/pair/enroll", "/pair/verify"].includes(req.url)) { respond(404); return; }
-    if (req.url === "/pair/verify") {
-      if (req.method !== "GET") { respond(405); return; }
-      const identity = principal(req.headers.authorization);
-      respond(identity ? 200 : 401, identity ? { version: 1, hostId: trust.hostId, ...identity } : null); return;
+    const respond = (code, data = null) => {
+      res.writeHead(code, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      });
+      res.end(data ? JSON.stringify(data) : "");
+    };
+    if (req.headers.origin) {
+      respond(403);
+      return;
     }
-    if (req.method !== "POST") { respond(405); return; }
-    if (pairingRequests >= 16) { respond(503); return; }
+    if (!trust || !["/pair/enroll", "/pair/verify"].includes(req.url)) {
+      respond(404);
+      return;
+    }
+    if (req.url === "/pair/verify") {
+      if (req.method !== "GET") {
+        respond(405);
+        return;
+      }
+      const identity = principal(req.headers.authorization);
+      respond(
+        identity ? 200 : 401,
+        identity ? { version: 1, hostId: trust.hostId, ...identity } : null,
+      );
+      return;
+    }
+    if (req.method !== "POST") {
+      respond(405);
+      return;
+    }
+    if (pairingRequests >= 16) {
+      respond(503);
+      return;
+    }
     pairingRequests++;
     req.setTimeout(5000, () => req.destroy());
     try {
-      let size = 0; const chunks = [];
-      for await (const chunk of req) { size += chunk.length; if (size > 8192) { respond(413); req.destroy(); return; } chunks.push(chunk); }
+      let size = 0;
+      const chunks = [];
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 8192) {
+          respond(413);
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      }
       const body = JSON.parse(Buffer.concat(chunks).toString());
-      if (body.version !== 1) { respond(400); return; }
-      const enrolled = await trust.enroll({ enrollmentToken: body.enrollmentToken, name: body.name });
+      if (body.version !== 1) {
+        respond(400);
+        return;
+      }
+      const enrolled = await trust.enroll({
+        enrollmentToken: body.enrollmentToken,
+        name: body.name,
+      });
       respond(200, enrolled);
-    } catch { if (!res.headersSent && !res.destroyed) respond(401, { error: "Enrollment unavailable. Scan a new Mac QR code." }); }
-    finally { req.setTimeout(0); pairingRequests--; }
+    } catch {
+      if (!res.headersSent && !res.destroyed)
+        respond(401, {
+          error: "Enrollment unavailable. Scan a new Mac QR code.",
+        });
+    } finally {
+      req.setTimeout(0);
+      pairingRequests--;
+    }
   };
   const server = tls
     ? https.createServer(tls, handler)
@@ -76,7 +145,10 @@ export async function serve(controller, { host, port, trust = null, localAdmin =
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      identities.set(ws, { ...principal(req.headers.authorization), credential: req.headers.authorization });
+      identities.set(ws, {
+        ...principal(req.headers.authorization),
+        credential: req.headers.authorization,
+      });
       wss.emit("connection", ws);
     });
   });
@@ -96,7 +168,9 @@ export async function serve(controller, { host, port, trust = null, localAdmin =
   // One listener per authoritative event, independent of the number of views.
   const broadcast = (record) => {
     const serialized = JSON.stringify(record);
-    for (const ws of wss.clients) if (principal(identities.get(ws)?.credential)) sendSerialized(ws, serialized);
+    for (const ws of wss.clients)
+      if (principal(identities.get(ws)?.credential))
+        sendSerialized(ws, serialized);
   };
   const snapshot = broadcast;
   const editor = broadcast;
@@ -127,7 +201,10 @@ export async function serve(controller, { host, port, trust = null, localAdmin =
       try {
         const r = JSON.parse(bytes.toString());
         id = typeof r.id === "string" ? r.id : "";
-        if (!principal(identities.get(ws)?.credential)) { ws.close(4001, "Device trust revoked; re-pair deliberately"); return; }
+        if (!principal(identities.get(ws)?.credential)) {
+          ws.close(4001, "Device trust revoked; re-pair deliberately");
+          return;
+        }
         if (r.clientId !== identities.get(ws).clientId)
           throw new Error("Client identity does not match this connection");
         const data = await controller.request(r);
@@ -144,8 +221,10 @@ export async function serve(controller, { host, port, trust = null, localAdmin =
       clearInterval(heartbeat);
     });
   });
-  const revoked = deviceId => {
-    for (const ws of wss.clients) if (identities.get(ws)?.deviceId === deviceId) ws.close(4001, "Device trust revoked; re-pair deliberately");
+  const revoked = (deviceId) => {
+    for (const ws of wss.clients)
+      if (identities.get(ws)?.deviceId === deviceId)
+        ws.close(4001, "Device trust revoked; re-pair deliberately");
   };
   trust?.on("revoked", revoked);
   try {
@@ -163,7 +242,7 @@ export async function serve(controller, { host, port, trust = null, localAdmin =
     address: () => server.address(),
     shutdown: async () => {
       trust?.off("revoked", revoked);
-    controller.off("snapshot", snapshot);
+      controller.off("snapshot", snapshot);
       controller.off("editor", editor);
       for (const ws of wss.clients) ws.terminate();
       await new Promise((resolve) =>

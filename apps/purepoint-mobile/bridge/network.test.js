@@ -28,7 +28,11 @@ test("tailnet bind policy rejects wildcard and public hosts", () => {
 test("authenticated concurrent clients share broadcasts and disconnect independently", async () => {
   const c = new EventEmitter();
   c.request = async (r) => ({ received: r.op });
-  const server = await serve(c, { host: "127.0.0.1", port: 0, localAdmin: { token, clientId: "desktop" } });
+  const server = await serve(c, {
+    host: "127.0.0.1",
+    port: 0,
+    localAdmin: { token, clientId: "desktop" },
+  });
   try {
     const url = `ws://127.0.0.1:${server.address().port}/v1`;
     await assert.rejects(connect(url, "wrong"));
@@ -74,7 +78,11 @@ test("v1 rejects unsupported paths, missing device headers and identity spoofing
     dispatched++;
     return {};
   };
-  const server = await serve(c, { host: "127.0.0.1", port: 0, localAdmin: { token, clientId: "desktop" } });
+  const server = await serve(c, {
+    host: "127.0.0.1",
+    port: 0,
+    localAdmin: { token, clientId: "desktop" },
+  });
   try {
     const base = `ws://127.0.0.1:${server.address().port}`;
     await assert.rejects(connect(base + "/unsupported"));
@@ -102,7 +110,11 @@ test("v1 rejects unsupported paths, missing device headers and identity spoofing
 test("concurrent clients are bounded and share one broadcaster without listener leaks", async () => {
   const c = new EventEmitter();
   c.request = async () => ({});
-  const server = await serve(c, { host: "127.0.0.1", port: 0, localAdmin: { token, clientId: "desktop" } });
+  const server = await serve(c, {
+    host: "127.0.0.1",
+    port: 0,
+    localAdmin: { token, clientId: "desktop" },
+  });
   const clients = [];
   try {
     const url = `ws://127.0.0.1:${server.address().port}/v1`;
