@@ -25,7 +25,7 @@ struct PointGuardSetupView: View {
                     Button("Start / Retry") { service.start(chat: chat) }
                 }
             }
-            Text("Pi runs with PurePoint. Your provider and conversations are saved on this Mac.")
+            Text("Pi is included with PurePoint and updated with the app. Your provider and conversations are saved on this Mac.")
                 .font(.callout).foregroundStyle(.secondary)
             if let error = service.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if service.hasPendingAuthCleanup { Button("Retry pending login cancellations") { Task { await service.retryAuthCleanup() } } }
@@ -67,7 +67,7 @@ struct PointGuardSetupView: View {
                             if flag(selected["apiKey"]) {
                                 Button("Use API key") { response = ""; Task { await service.login(provider: provider, type: "api_key") } }
                             }
-                            if flag(selected["configured"]) { Label("Configured", systemImage: "checkmark") }
+                            if flag(selected["configured"]) { Label("Credentials saved", systemImage: "checkmark.circle.fill") }
                         }.disabled(chat.busy)
                         loginInteraction
                         let models = values(selected["models"])
@@ -112,7 +112,10 @@ struct PointGuardSetupView: View {
          .onAppear { provider = service.selectedProvider; model = service.selectedModel }
         .onChange(of: provider) { _, value in
             model = value == service.selectedProvider ? service.selectedModel : ""
-            response = ""; Task { await service.cancelLogin() }
+            response = ""
+            Task {
+                if provider == value, service.auth["provider"].text != value { await service.cancelLogin() }
+            }
         }
         .onChange(of: service.selectedProvider) { old, value in
             if provider.isEmpty || provider == old { provider = value; model = service.selectedModel }
@@ -123,33 +126,42 @@ struct PointGuardSetupView: View {
         .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service) }
     }
     @ViewBuilder private var loginInteraction: some View {
-        if let status = service.auth["status"].text {
-            Text("Login: " + status).font(.callout).foregroundStyle(.secondary)
-            ForEach(values(service.auth["events"]).indices, id: \.self) { index in
-                let event = values(service.auth["events"])[index]
-                if let message = event["message"].text { Text(message).textSelection(.enabled) }
-                if let code = event["userCode"].text { Text("Code: " + code).font(.system(.body, design: .monospaced)).textSelection(.enabled) }
-                if let text = event["url"].text ?? event["verificationUri"].text,
-                   let url = URL(string: text), url.scheme == "https" {
-                    Link("Open provider sign-in", destination: url)
-                }
-                if let instructions = event["instructions"].text { Text(instructions).font(.callout) }
+        if service.auth["provider"].text == provider, let status = service.auth["status"].text {
+            if status == "complete" {
+                Label(service.authMessage ?? "Sign-in complete", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green).accessibilityAddTraits(.updatesFrequently)
+                Text(service.restartRequired ? "Choose Apply and restart when Pi is idle to use these credentials." : "Choose a model to start chatting.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Text(service.authMessage ?? "Sign-in status unavailable").font(.callout).foregroundStyle(.secondary)
             }
-            if let promptId = service.auth["prompt"]["id"].text {
-                let prompt = service.auth["prompt"]
-                Text(prompt["message"].text ?? "Provider response")
-                if prompt["type"].text == "select" {
-                    ForEach(values(prompt["options"]).indices, id: \.self) { index in
-                        let option = values(prompt["options"])[index]
-                        Button(option["label"].text ?? option["id"].text ?? "Select") {
-                            if let id = option["id"].text { Task { await service.respond(id) } }
-                        }
+            if status == "pending" {
+                ForEach(values(service.auth["events"]).indices, id: \.self) { index in
+                    let event = values(service.auth["events"])[index]
+                    if let message = event["message"].text { Text(message).textSelection(.enabled) }
+                    if let code = event["userCode"].text { Text("Code: " + code).font(.system(.body, design: .monospaced)).textSelection(.enabled) }
+                    if let text = event["url"].text ?? event["verificationUri"].text,
+                       let url = URL(string: text), url.scheme == "https" {
+                        Link("Open provider sign-in", destination: url)
                     }
-                } else {
-                    HStack {
-                        SecureField(prompt["placeholder"].text ?? "Response", text: $response).textFieldStyle(.roundedBorder)
-                        Button("Continue") { let value = response; response = ""; Task { await service.respond(value) } }.disabled(response.isEmpty)
-                    }.id(promptId)
+                    if let instructions = event["instructions"].text { Text(instructions).font(.callout) }
+                }
+                if let promptId = service.auth["prompt"]["id"].text {
+                    let prompt = service.auth["prompt"]
+                    Text(prompt["message"].text ?? "Provider response")
+                    if prompt["type"].text == "select" {
+                        ForEach(values(prompt["options"]).indices, id: \.self) { index in
+                            let option = values(prompt["options"])[index]
+                            Button(option["label"].text ?? option["id"].text ?? "Select") {
+                                if let id = option["id"].text { Task { await service.respond(id) } }
+                            }
+                        }
+                    } else {
+                        HStack {
+                            SecureField(prompt["placeholder"].text ?? "Response", text: $response).textFieldStyle(.roundedBorder)
+                            Button("Continue") { let value = response; response = ""; Task { await service.respond(value) } }.disabled(response.isEmpty)
+                        }.id(promptId)
+                    }
                 }
             }
             if let message = service.auth["error"].text ?? service.auth["error"]["message"].text { Text(message).foregroundStyle(.red) }
