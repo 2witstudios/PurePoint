@@ -17,7 +17,7 @@ def verify(file, architectures):
     assert file.is_file(), f'Missing native runtime file: {file}'
     for architecture in architectures:
         subprocess.run(['/usr/bin/lipo',str(file),'-verify_arch','x86_64' if architecture == 'x64' else architecture],check=True)
-for name in ['node', 'pu']:
+for name in ['node', 'pu', 'lockHelper']:
     verify((base / manifest['paths'][name]).resolve(), arches)
 for arch in arches:
     verify(base / f'node_modules/@esbuild/darwin-{arch}/bin/esbuild', [arch])

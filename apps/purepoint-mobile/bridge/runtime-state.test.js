@@ -23,9 +23,11 @@ test("given two owned starts should reject collision and preserve durable select
     });
     await assert.rejects(openRuntimeState(dir), /already|running|lock/i);
     const identity = first.value.desktopClientId;
+    const inode = (await stat(path.join(dir, "runtime.lock"))).ino;
     await first.close();
     const replacement = await openRuntimeState(dir);
     assert.equal(replacement.value.desktopClientId, identity);
+    assert.equal((await stat(path.join(dir, "runtime.lock"))).ino, inode);
     assert.equal(
       replacement.value.selectedSessionPath,
       "/native/session.jsonl",
@@ -61,5 +63,81 @@ test("given symlink state should reject rather than read or overwrite target", a
     assert.equal(await readFile(target, "utf8"), "{}");
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("given exact owned runtime crash should reopen permanent inode and restore selection", async () => {
+  const { spawn } = await import("node:child_process");
+  const { once } = await import("node:events");
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "pointguard-state-crash-"),
+  );
+  let child;
+  try {
+    const moduleURL = new URL("./runtime-state.js", import.meta.url).href;
+    child = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import {openRuntimeState} from ${JSON.stringify(moduleURL)};
+      const state = await openRuntimeState(process.argv[1]);
+      await state.save({cwd:process.argv[1],provider:"anthropic",model:"fixture-model",selectedSessionPath:"/native/saved.jsonl"});
+      console.log(JSON.stringify(state.value));
+      setInterval(()=>{},1000);
+    `,
+        directory,
+      ],
+      { env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const selection = await new Promise((resolve, reject) => {
+      let output = "";
+      const timer = setTimeout(
+        () => reject(new Error("Owned crash fixture not ready.")),
+        10000,
+      );
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+        if (output.includes("\n")) {
+          clearTimeout(timer);
+          resolve(JSON.parse(output.trim()));
+        }
+      });
+      child.once("exit", () => {
+        clearTimeout(timer);
+        reject(new Error("Owned fixture exited before readiness."));
+      });
+    });
+    const inode = (await stat(path.join(directory, "runtime.lock"))).ino;
+    const exited = once(child, "exit");
+    child.kill("SIGKILL"); // Only this directly spawned disposable fixture.
+    await exited;
+    let restored;
+    const deadline = Date.now() + 10000;
+    while (!restored) {
+      try {
+        restored = await openRuntimeState(directory);
+      } catch (error) {
+        if (error.code !== "lock_busy" || Date.now() >= deadline) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    try {
+      assert.deepEqual(restored.value, selection);
+      assert.equal(
+        (await stat(path.join(directory, "runtime.lock"))).ino,
+        inode,
+      );
+    } finally {
+      await restored.close();
+    }
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.kill("SIGTERM");
+      await exited;
+    }
+    await rm(directory, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, mkdir, rm, cp, stat } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
 import os from "node:os";
@@ -23,11 +23,13 @@ try {
   assert.equal(manifest.piVersion, "1.1.0");
   const node = path.resolve(base, manifest.paths.node),
     entry = path.resolve(base, manifest.paths.entry),
-    pu = path.resolve(base, manifest.paths.pu);
+    pu = path.resolve(base, manifest.paths.pu),
+    lockHelper = path.resolve(base, manifest.paths.lockHelper);
   for (const file of [
     node,
     entry,
     pu,
+    lockHelper,
     path.resolve(base, manifest.paths.instructions),
     ...manifest.paths.skills.map((s) => path.resolve(base, s)),
   ])
@@ -68,6 +70,7 @@ try {
         PATH: "/no-external-tools",
         POINT_GUARD_STATE_DIR: stateDir,
         POINT_GUARD_PU_PATH: pu,
+        POINT_GUARD_LOCK_HELPER_PATH: lockHelper,
         POINT_GUARD_INSTANCE_ID: instanceId,
         PI_SKIP_VERSION_CHECK: "1",
         ...(cwd ? { PI_MOBILE_CWD: cwd } : {}),
@@ -145,7 +148,10 @@ try {
     await context.admin("runtime.stop");
     const [code] = await exited;
     assert.equal(code, 0);
-    await assert.rejects(readFile(path.join(stateDir, "runtime.lock")));
+    assert.equal(
+      (await stat(path.join(stateDir, "runtime.lock"))).mode & 0o777,
+      0o600,
+    );
     child = null;
   };
   // Defaults do not depend on cwd of invoking process, repo files or external tools.
@@ -262,6 +268,7 @@ try {
       PATH: "/no-external-tools",
       POINT_GUARD_STATE_DIR: stateDir,
       POINT_GUARD_PU_PATH: pu,
+      POINT_GUARD_LOCK_HELPER_PATH: lockHelper,
       POINT_GUARD_INSTANCE_ID: randomUUID(),
     },
     stdio: "ignore",
@@ -271,9 +278,54 @@ try {
     (await third.admin("status")).instanceId,
     third.ready.instanceId,
   );
-  await stop(third);
+  // Crash only the exact child spawned by this proof. Kernel ownership must
+  // release without unlinking its permanent inode or rotating durable identity.
+  const inode = (await stat(path.join(stateDir, "runtime.lock"))).ino;
+  const crashed = child;
+  const crashedExit = once(crashed, "exit");
+  crashed.kill("SIGKILL");
+  await crashedExit;
+  child = null;
+  await pause(100); // inherited helper stdin EOF; launch still fails closed if held
+  const recovered = await launch(selected, true);
+  assert.equal(recovered.ready.hostId, third.ready.hostId);
+  assert.equal(recovered.ready.sessionId, session);
+  assert.equal((await stat(path.join(stateDir, "runtime.lock"))).ino, inode);
+  assert.deepEqual(await readFile(authFile), authBytes);
+  assert.deepEqual(await readFile(trustFile), trustBytes);
+
+  // Enumerate only direct children of our exact disposable managed process,
+  // then identify the packaged helper by its full executable path.
+  const helpers = execFileSync("/bin/ps", ["-axo", "pid=,ppid=,comm="], {
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
+    .filter(
+      (row) => row && Number(row[2]) === child.pid && row[3] === lockHelper,
+    );
+  assert.equal(helpers.length, 2, "Both owned store helpers must be present");
+  const lostOwner = child;
+  const lostExit = once(lostOwner, "exit");
+  process.kill(Number(helpers[0][1]), "SIGKILL");
+  const lossDeadline = new Promise((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Owned lock loss did not terminate service")),
+      10000,
+    );
+    lostExit.finally(() => clearTimeout(timer));
+  });
+  assert.equal((await Promise.race([lostExit, lossDeadline]))[0], 1);
+  child = null;
+  await assert.rejects(fetch(recovered.ready.adminURL));
+  await assert.rejects(readFile(descriptorFile));
+  const afterLoss = await launch(selected, true);
+  assert.equal(afterLoss.ready.hostId, recovered.ready.hostId);
+  assert.equal(afterLoss.ready.sessionId, session);
+  assert.deepEqual(await readFile(trustFile), trustBytes);
+  await stop(afterLoss);
   console.log(
-    `PASS clean relocated ${manifest.architecture} package: empty HOME/stripped PATH, SDK login, native session, separate authority, pinned trust, owned replacement, collision/no adoption.`,
+    `PASS clean relocated ${manifest.architecture} package: empty HOME/stripped PATH, SDK login, native session, separate authority, pinned trust, owned replacement, crash recovery, helper-loss teardown, collision/no adoption.`,
   );
 } finally {
   // Only this proof's own child may be signaled; never production or unowned PID.

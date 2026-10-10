@@ -60,12 +60,15 @@ def complete_darwin_graph(modules, arches, cache):
                 else:
                     raise ValueError('Unsupported locked package member')
 
-def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root=None):
+def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root=None, lock_helper=None):
     app, pu, cache = Path(app).resolve(), Path(pu).resolve(), Path(cache).resolve()
     if app.is_relative_to('/Applications') or app.is_relative_to('/System/Applications') or app.is_relative_to(Path.home() / 'Applications'):
         raise ValueError('Cannot stage into installed application directories.')
     if not app.name.endswith('.app'):
         raise ValueError('Destination must be a build artifact .app.')
+    lock_helper = Path(lock_helper).resolve() if lock_helper else pu.with_name('pu-point-guard-lock')
+    if not lock_helper.is_file():
+        raise ValueError('Provide the freshly built artifact pu-point-guard-lock helper.')
     if not pu.is_file():
         raise ValueError('Provide the freshly built artifact pu binary, never an installed binary.')
     if app.exists() and (app / 'Contents/_CodeSignature').exists():
@@ -116,6 +119,8 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
             shutil.copy2(nodes[0], helpers / 'point-guard-node')
         shutil.copyfile(pu, helpers / 'pu')
         (helpers / 'pu').chmod(0o755)
+        shutil.copyfile(lock_helper, helpers / 'point-guard-lock')
+        (helpers / 'point-guard-lock').chmod(0o755)
         # All production transitive npm dependencies and package resources come from the lock.
         npm = shutil.which('npm')
         if not npm:
@@ -138,7 +143,7 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
         sha = subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip()
         manifest = dict(schemaVersion=1, contractVersion=1, piVersion='1.1.0', nodeVersion=PIN['version'],
                         architecture=architecture, sourceSHA=sha,
-                        paths=dict(node='../../Helpers/point-guard-node', pu='../../Helpers/pu',
+                        paths=dict(node='../../Helpers/point-guard-node', pu='../../Helpers/pu', lockHelper='../../Helpers/point-guard-lock',
                                    entry='bridge/main.js', instructions='docs/point-guard.md',
                                    skills=['support/pu/SKILL.md', 'support/pu-cli/SKILL.md']))
         (target / 'runtime-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -148,9 +153,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', required=True)
     parser.add_argument('--pu', required=True)
+    parser.add_argument('--lock-helper', help='Freshly built pu-point-guard-lock artifact; defaults to pu sibling')
     parser.add_argument('--architecture', choices=['arm64','x64','universal'], required=True)
     parser.add_argument('--replace-build-artifact', action='store_true')
     parser.add_argument('--build-root', help='Explicit build directory that owns a signed incremental output')
     parser.add_argument('--cache', default=os.path.join(tempfile.gettempdir(), 'pointguard-node-cache'))
     options = parser.parse_args()
-    stage(options.app, options.pu, options.architecture, options.cache, options.replace_build_artifact, options.build_root)
+    stage(options.app, options.pu, options.architecture, options.cache, options.replace_build_artifact, options.build_root, options.lock_helper)

@@ -23,7 +23,7 @@ for file in resources.rglob('*'):
     if magic in [b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe']:
         run('/usr/bin/codesign', '--force', '--sign', identity, '--options', 'runtime', str(file))
         run('/usr/bin/codesign', '--verify', '--strict', str(file))
-for name in ['pu', 'point-guard-node']:
+for name in ['pu', 'point-guard-node', 'point-guard-lock']:
     file = app / 'Contents/Helpers' / name
     args = ['/usr/bin/codesign', '--force', '--sign', identity, '--options', 'runtime']
     if name == 'point-guard-node':

@@ -14,6 +14,7 @@ import {
 } from "./runtime-state.js";
 import { nativeProviderSetup } from "./native-provider.js";
 import { serveAdmin, AdminError } from "./admin.js";
+import { LockError } from "./lock-helper.js";
 import { optionalRemoteListener } from "./remote-listener.js";
 import { startupFailure } from "./runtime-errors.js";
 
@@ -61,9 +62,21 @@ export async function runManaged(env = process.env) {
   let restarting = false;
   let persistError = false;
   let canceled = false;
+  let ownershipLost = false;
   let ready = false;
   const checkCanceled = () => {
+    if (ownershipLost) throw new LockError("lock_lost");
     if (canceled) throw new Error("Owned startup canceled.");
+  };
+  const onOwnershipLoss = () => {
+    ownershipLost = true;
+    if (controller) controller.accepting = false;
+    provider?.close();
+    if (ready)
+      shutdown()
+        .then(() => process.exit(1))
+        .catch(() => process.exit(1));
+    else rpc?.close().catch(() => {});
   };
   const onSignal = () => {
     canceled = true;
@@ -116,6 +129,7 @@ export async function runManaged(env = process.env) {
       directory,
       env.POINT_GUARD_CLIENT_ID,
       instanceId,
+      { helperPath: env.POINT_GUARD_LOCK_HELPER_PATH, onLost: onOwnershipLoss },
     );
     checkCanceled();
     stage = "runtime";
@@ -151,7 +165,11 @@ export async function runManaged(env = process.env) {
     checkCanceled();
     stage = "trust";
     const { openTrustStore } = await import("./trust.js");
-    trust = await openTrustStore({ directory: path.join(directory, "trust") });
+    trust = await openTrustStore({
+      directory: path.join(directory, "trust"),
+      helperPath: env.POINT_GUARD_LOCK_HELPER_PATH,
+    });
+    trust.on("lockLost", onOwnershipLoss);
     checkCanceled();
     stage = "pi";
     const childEnv = {
@@ -248,7 +266,8 @@ export async function runManaged(env = process.env) {
       if (remote) chatURL = endpoint("wss", env.PI_MOBILE_HOST, remote);
     }
     const status = () => ({
-      phase: controller.error || persistError ? "failed" : "ready",
+      phase:
+        ownershipLost || controller.error || persistError ? "failed" : "ready",
       instanceId,
       pid: process.pid,
       contractVersion: 1,
@@ -270,6 +289,12 @@ export async function runManaged(env = process.env) {
         : {}),
     });
     const exclusive = async (action) => {
+      state.assertHeld();
+      if (ownershipLost)
+        throw new AdminError(
+          "ownership_lost",
+          "Point Guard ownership was lost. Wait for owned cleanup before restarting.",
+        );
       if (!idle(controller))
         throw new AdminError(
           "busy",
@@ -376,11 +401,15 @@ export async function runManaged(env = process.env) {
       },
     });
     checkCanceled();
-    await writePrivateJSON(descriptorFile, {
-      schemaVersion: 1,
-      ...status(),
-      adminURL: admin.url,
-    });
+    await writePrivateJSON(
+      descriptorFile,
+      {
+        schemaVersion: 1,
+        ...status(),
+        adminURL: admin.url,
+      },
+      state.assertHeld,
+    );
     checkCanceled();
     ready = true;
     return { shutdown, status };

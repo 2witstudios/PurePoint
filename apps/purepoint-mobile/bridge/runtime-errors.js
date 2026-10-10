@@ -5,7 +5,29 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
   let code = "startup_failed",
     recovery =
       "Check the complete app runtime and private state, then retry. No uncertain prompt will be replayed.";
-  if (stage === "canceled") {
+  if (error?.code === "lock_lost") {
+    code = "ownership_lost";
+    recovery =
+      "Private state ownership was lost. The owned service is closing after submitted writes drain. Restart it after cleanup; no uncertain prompt will replay.";
+  } else if (
+    error?.code === "lock_helper_missing" ||
+    error?.code === "lock_helper_failed"
+  ) {
+    code = "missing_runtime";
+    recovery =
+      "Reinstall the complete PurePoint app with its matching packaged lock helper. No external helper or stale lock deletion is supported.";
+  } else if (
+    error?.code === "lock_private" ||
+    error?.code === "lock_path_changed"
+  ) {
+    code = "private_state";
+    recovery =
+      "Restore private owner-only regular lock files in the original state directory. Do not delete or replace lock inodes to take ownership.";
+  } else if (error?.code === "lock_busy") {
+    code = "startup_collision";
+    recovery =
+      "Another service holds kernel ownership of this private state. Quit the owning app and wait for its writes to drain before restarting.";
+  } else if (stage === "canceled") {
     code = "startup_canceled";
     recovery =
       "Point Guard startup was canceled. Its owned child and startup lock have been released; retry when ready.";

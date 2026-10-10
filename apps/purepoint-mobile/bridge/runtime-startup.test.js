@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import os from "node:os";
 import path from "node:path";
+import { acquirePrivateLock } from "./lock-helper.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,6 +34,8 @@ test("given cancel during fresh owned startup should release lock and attribute 
           HOME: home,
           PATH: "/no-external-tools",
           POINT_GUARD_STATE_DIR: state,
+          POINT_GUARD_LOCK_HELPER_PATH:
+            process.env.POINT_GUARD_LOCK_HELPER_PATH,
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           POINT_GUARD_INSTANCE_ID: instanceId,
           PI_SKIP_VERSION_CHECK: "1",
@@ -62,7 +65,10 @@ test("given cancel during fresh owned startup should release lock and attribute 
     child.kill("SIGTERM");
     const [, signal] = await exited;
     assert.equal(signal, null);
-    await assert.rejects(access(path.join(state, "runtime.lock")));
+    const released = await acquirePrivateLock({
+      file: path.join(state, "runtime.lock"),
+    });
+    await released.release();
     const error = JSON.parse(
       await readFile(path.join(state, "error.json"), "utf8"),
     );
@@ -77,6 +83,8 @@ test("given cancel during fresh owned startup should release lock and attribute 
           HOME: home,
           PATH: "/no-external-tools",
           POINT_GUARD_STATE_DIR: state,
+          POINT_GUARD_LOCK_HELPER_PATH:
+            process.env.POINT_GUARD_LOCK_HELPER_PATH,
           POINT_GUARD_PU_PATH: "/nonexistent-proof-cli",
           POINT_GUARD_INSTANCE_ID: randomUUID(),
         },
@@ -88,7 +96,10 @@ test("given cancel during fresh owned startup should release lock and attribute 
       await readFile(path.join(state, "error.json"), "utf8"),
     );
     assert.equal(failure.code, "missing_runtime");
-    await assert.rejects(access(path.join(state, "runtime.lock")));
+    const releasedRetry = await acquirePrivateLock({
+      file: path.join(state, "runtime.lock"),
+    });
+    await releasedRetry.release();
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) {
       const exited = once(child, "exit");
@@ -117,6 +128,8 @@ test("given nonprivate owner capability should identify credential recovery rath
           HOME: folder,
           PATH: "/no-external-tools",
           POINT_GUARD_STATE_DIR: state,
+          POINT_GUARD_LOCK_HELPER_PATH:
+            process.env.POINT_GUARD_LOCK_HELPER_PATH,
           POINT_GUARD_PU_PATH: "/usr/bin/true",
           POINT_GUARD_INSTANCE_ID: instanceId,
         },
@@ -135,7 +148,10 @@ test("given nonprivate owner capability should identify credential recovery rath
       false,
     );
     assert.equal(await readFile(tokenFile, "utf8"), "private-proof-credential");
-    await assert.rejects(access(path.join(state, "runtime.lock")));
+    const released = await acquirePrivateLock({
+      file: path.join(state, "runtime.lock"),
+    });
+    await released.release();
   } finally {
     await rm(folder, { recursive: true, force: true });
   }

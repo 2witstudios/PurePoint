@@ -11,6 +11,7 @@ import os
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--app', required=True)
 parser.add_argument('--pu', required=True)
+parser.add_argument('--lock-helper')
 parser.add_argument('--architecture', required=True)
 args = parser.parse_args()
 app = Path(args.app).resolve()
@@ -37,11 +38,11 @@ def sign():
 sign()
 # A subsequent build must explicitly own the output before replacing its old signature.
 try:
-    package.stage(app,args.pu,args.architecture,Path(tempfile.gettempdir())/'pointguard-node-cache')
+    package.stage(app,args.pu,args.architecture,Path(tempfile.gettempdir())/'pointguard-node-cache',lock_helper=args.lock_helper)
 except ValueError as error:
     assert 'explicit' in str(error)
 else:
     raise AssertionError('Signed artifact was restaged without explicit ownership.')
-package.stage(app,args.pu,args.architecture,Path(tempfile.gettempdir())/'pointguard-node-cache',True,app.parent)
+package.stage(app,args.pu,args.architecture,Path(tempfile.gettempdir())/'pointguard-node-cache',True,app.parent,args.lock_helper)
 sign()
 print('PASS repeated signed build-artifact staging; nested and outer ad-hoc seal verified.')
