@@ -5,10 +5,16 @@ import Foundation
     var enrollment: CheckedContinuation<PiJSONValue, Never>?
     var canceled: [String] = []
     var revoked: [String] = []
-    func request(_ operation: String, _ fields: [String: PiJSONValue]) async -> PiJSONValue {
+    var failReplacement = false
+    var failCancel = false
+    func request(_ operation: String, _ fields: [String: PiJSONValue]) async throws -> PiJSONValue {
         switch operation {
-        case "auth.start": return await withCheckedContinuation { starts[fields["provider"]?.text ?? ""] = $0 }
-        case "auth.cancel": canceled.append(fields["attemptId"]?.text ?? ""); return .object([:])
+        case "auth.start":
+            if failReplacement && fields["provider"]?.text == "replacement" { throw PiChatError("Fixture failed before dispatch") }
+            return await withCheckedContinuation { starts[fields["provider"]?.text ?? ""] = $0 }
+        case "auth.cancel":
+            if failCancel { throw PiChatError("Fixture cancellation transport unavailable") }
+            canceled.append(fields["attemptId"]?.text ?? ""); return .object([:])
         case "auth.status": return .object(["attemptId": fields["attemptId"] ?? .null, "status": .string("pending")])
         case "pairing.create": return await withCheckedContinuation { enrollment = $0 }
         case "pairing.revoke": revoked.append(fields["enrollmentId"]?.text ?? ""); return .object([:])
@@ -23,7 +29,7 @@ import Foundation
     }
     @MainActor static func main() async {
         let fixture = AdminFixture()
-        let service = PointGuardServiceModel(requestOverride: { await fixture.request($0, $1) }, remoteEndpoint: "wss://100.64.0.1:8787/v1")
+        let service = PointGuardServiceModel(requestOverride: { try await fixture.request($0, $1) }, remoteEndpoint: "wss://100.64.0.1:8787/v1")
         let first = Task { await service.login(provider: "first", type: "oauth") }
         await wait { fixture.starts["first"] != nil }
         await service.cancelLogin()
@@ -44,6 +50,26 @@ import Foundation
         precondition(service.auth["attemptId"].text == "current")
         precondition(fixture.canceled.contains("superseded"))
         await service.cancelLogin()
+        let established = Task { await service.login(provider: "established", type: "oauth") }
+        await wait { fixture.starts["established"] != nil }
+        fixture.starts.removeValue(forKey: "established")?.resume(returning: .object(["attemptId": .string("established-id")]))
+        await established.value
+        await wait { service.auth["attemptId"].text == "established-id" }
+        fixture.failReplacement = true
+        await service.login(provider: "replacement", type: "oauth")
+        precondition(fixture.canceled.contains("established-id"), "A failed replacement must not strand the previous live login")
+        // A failed cancellation keeps the ID available for deliberate retry.
+        let retry = Task { await service.login(provider: "retry", type: "oauth") }
+        await wait { fixture.starts["retry"] != nil }
+        fixture.starts.removeValue(forKey: "retry")?.resume(returning: .object(["attemptId": .string("retry-id")]))
+        await retry.value
+        await wait { service.auth["attemptId"].text == "retry-id" }
+        fixture.failCancel = true
+        await service.cancelLogin()
+        precondition(service.auth["attemptId"].text == "retry-id")
+        fixture.failCancel = false
+        await service.cancelLogin()
+        precondition(fixture.canceled.contains("retry-id"))
         // Given dismissal during creation, revoke the late code and never show its payload.
         let create = Task { await service.connectPhone() }
         await wait { fixture.enrollment != nil }

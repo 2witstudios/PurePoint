@@ -159,9 +159,16 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     }
     func login(provider: String, type: String) async {
         authGeneration += 1; let generation = authGeneration
-        pollTask?.cancel(); activeAttemptId = nil
-        auth = .object(["status": .string("pending")]); error = nil
+        pollTask?.cancel(); error = nil
         do {
+            if let prior = activeAttemptId {
+                // Do not lose an established attempt when the replacement request
+                // fails before dispatch. Cancellation must be confirmed first.
+                _ = try await request("auth.cancel", fields: ["attemptId": .string(prior)])
+                guard generation == authGeneration else { return }
+                activeAttemptId = nil
+            }
+            auth = .object(["status": .string("pending")])
             let result = try await request("auth.start", fields: ["provider": .string(provider), "type": .string(type)])
             guard let id = result["attemptId"].text else { throw PiChatError("Provider login did not start.") }
             guard generation == authGeneration else {
@@ -185,7 +192,12 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                     }
                 } catch { if !Task.isCancelled && generation == self.authGeneration { self.error = error.localizedDescription } }
             }
-        } catch { if generation == authGeneration { self.error = error.localizedDescription; self.auth = .null } }
+        } catch {
+            if generation == authGeneration {
+                self.error = error.localizedDescription
+                if activeAttemptId == nil { self.auth = .null }
+            }
+        }
     }
     func respond(_ value: String) async {
         guard let id = auth["attemptId"].text, let promptId = auth["prompt"]["id"].text else { return }
@@ -194,10 +206,13 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     }
     func cancelLogin() async {
         authGeneration += 1; pollTask?.cancel()
-        let id = activeAttemptId; activeAttemptId = nil; auth = .null
-        guard let id else { return }
-        do { _ = try await request("auth.cancel", fields: ["attemptId": .string(id)]) }
-        catch { self.error = error.localizedDescription }
+        let generation = authGeneration
+        guard let id = activeAttemptId else { auth = .null; return }
+        do {
+            _ = try await request("auth.cancel", fields: ["attemptId": .string(id)])
+            guard generation == authGeneration else { return }
+            activeAttemptId = nil; auth = .null
+        } catch { if generation == authGeneration { self.error = error.localizedDescription } }
     }
     func selectModel(provider: String, model: String) async {
         do { _ = try await request("model.select", fields: ["provider": .string(provider), "model": .string(model)]); await refresh() }
