@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inside-out ad-hoc signing proof on CI artifacts; no production identity/publishing."""
+"""Sign nested runtime with an explicit identity; CI uses ad-hoc, owner builds supply their identity."""
 from pathlib import Path
 import subprocess
 import argparse

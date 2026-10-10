@@ -79,7 +79,15 @@ export class ProviderSetup {
   }
   async run(a, method) {
     try {
-      const before = JSON.stringify(await this.credentials.read(a.provider));
+      let before;
+      await this.credentials.modify(
+        a.provider,
+        async (current) => {
+          before = JSON.stringify(current);
+          return undefined;
+        },
+        { signal: a.controller.signal },
+      );
       if (!this.valid(a)) return;
       const credential = await method.login(
         {
@@ -92,6 +100,8 @@ export class ProviderSetup {
         { getDeviceId: this.deviceId, agentName: "PurePoint Point Guard" },
       );
       if (!this.valid(a)) return;
+      if (credential?.type !== a.type || (a.type === "oauth" && (!Number.isFinite(credential.expires) || credential.expires <= this.now())))
+        throw new Error("Provider returned invalid or expired credentials.");
       await this.credentials.modify(
         a.provider,
         async (current) => {

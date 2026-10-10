@@ -7,9 +7,14 @@ import { Rpc } from "./rpc.js";
 import { Controller } from "./controller.js";
 import { serve } from "./network.js";
 import { launchArguments, nativeSessions, ensureToken } from "./setup.js";
-import { openRuntimeState, writePrivateJSON } from "./runtime-state.js";
+import {
+  openRuntimeState,
+  writePrivateJSON,
+  privatePath,
+} from "./runtime-state.js";
 import { nativeProviderSetup } from "./native-provider.js";
 import { serveAdmin, AdminError } from "./admin.js";
+import { startupFailure } from "./runtime-errors.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function idle(c) {
@@ -49,22 +54,40 @@ export async function runManaged(env = process.env) {
   const instanceId = env.POINT_GUARD_INSTANCE_ID ?? randomUUID();
   if (!uuid.test(instanceId))
     throw new Error("Invalid Point Guard launch identity.");
-  const state = await openRuntimeState(
-    directory,
-    env.POINT_GUARD_CLIENT_ID,
-    instanceId,
-  );
-  let rpc, controller, trust, provider, admin, local, remote;
+  let state, rpc, controller, trust, provider, admin, local, remote;
+  let stage = "lock";
   let stopped = false;
   let restarting = false;
   let persistError = false;
+  let canceled = false;
+  let ready = false;
+  const checkCanceled = () => {
+    if (canceled) throw new Error("Owned startup canceled.");
+  };
+  const onSignal = () => {
+    canceled = true;
+    provider?.close();
+    if (ready)
+      shutdown()
+        .then(() => process.exit(0))
+        .catch(() => process.exit(1));
+    else rpc?.close().catch(() => {});
+  };
+  // Install before the first state-lock await, so early quit cannot orphan an owned startup.
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
   const descriptorFile = path.join(directory, "admin.json");
   const persist = async () => {
     if (!controller) return;
     const s = controller.state;
     await state.save({
       ...(s.sessionFile ? { selectedSessionPath: s.sessionFile } : {}),
-      ...(s.model ? { provider: s.model.provider, model: s.model.id } : {}),
+      ...(s.model &&
+      provider?.models.some(
+        (m) => m.provider === s.model.provider && m.id === s.model.id,
+      )
+        ? { provider: s.model.provider, model: s.model.id }
+        : {}),
     });
   };
   const shutdown = async () => {
@@ -83,9 +106,18 @@ export async function runManaged(env = process.env) {
     await persist().catch(() => {});
     await trust?.close();
     await rm(descriptorFile, { force: true });
-    await state.close();
+    await state?.close();
+    process.removeListener("SIGTERM", onSignal);
+    process.removeListener("SIGINT", onSignal);
   };
   try {
+    state = await openRuntimeState(
+      directory,
+      env.POINT_GUARD_CLIENT_ID,
+      instanceId,
+    );
+    checkCanceled();
+    stage = "runtime";
     await rm(descriptorFile, { force: true });
     await rm(path.join(directory, "error.json"), { force: true });
     const pu = env.POINT_GUARD_PU_PATH;
@@ -94,6 +126,7 @@ export async function runManaged(env = process.env) {
         "Bundled pu CLI path is missing. Reinstall the complete PurePoint app.",
       );
     await access(pu, constants.X_OK);
+    stage = "cwd";
     const cwd = env.PI_MOBILE_CWD
       ? path.resolve(env.PI_MOBILE_CWD)
       : (state.value.cwd ?? os.homedir());
@@ -110,34 +143,54 @@ export async function runManaged(env = process.env) {
       throw new Error(
         "Local capabilities collide. Restore separate private owner credentials.",
       );
+    checkCanceled();
+    stage = "credentials";
     provider = await nativeProviderSetup(state.value.desktopClientId);
+    checkCanceled();
+    stage = "trust";
     const { openTrustStore } = await import("./trust.js");
     trust = await openTrustStore({ directory: path.join(directory, "trust") });
+    checkCanceled();
+    stage = "pi";
     const childEnv = {
       ...env,
       PATH: [path.dirname(pu), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(
         path.delimiter,
       ),
       POINT_GUARD_PU_PATH: pu,
+      POINT_GUARD_MANAGED: "1",
     };
     // Never expose local owner service bootstrap configuration to extensions/tools.
     for (const key of Object.keys(childEnv))
-      if (key.startsWith("POINT_GUARD_") && key !== "POINT_GUARD_PU_PATH")
+      if (
+        key.startsWith("POINT_GUARD_") &&
+        key !== "POINT_GUARD_PU_PATH" &&
+        key !== "POINT_GUARD_MANAGED"
+      )
         delete childEnv[key];
     const args = await launchArguments(cwd, {
       ...env,
       PI_MOBILE_SESSION: state.value.selectedSessionPath,
     });
+    checkCanceled();
     rpc = new Rpc(process.execPath, args, cwd, childEnv);
     controller = new Controller(rpc, await nativeSessions());
     await controller.refresh();
-    if (state.value.provider && state.value.model) {
+    if (
+      state.value.provider &&
+      state.value.model &&
+      provider.models.some(
+        (m) =>
+          m.provider === state.value.provider && m.id === state.value.model,
+      )
+    ) {
       await rpc.call("set_model", {
         provider: state.value.provider,
         modelId: state.value.model,
       });
       await controller.refresh();
     }
+    checkCanceled();
     const { commands } = await rpc.call("get_commands");
     for (const name of ["skill:pu", "skill:pu-cli"])
       if (!commands.some((c) => c.source === "skill" && c.name === name))
@@ -166,6 +219,8 @@ export async function runManaged(env = process.env) {
         );
       });
     });
+    checkCanceled();
+    stage = "listener";
     local = await serve(controller, {
       host: "127.0.0.1",
       port: 0,
@@ -221,6 +276,7 @@ export async function runManaged(env = process.env) {
         controller.pendingMutations--;
       }
     };
+    checkCanceled();
     admin = await serveAdmin({
       token: adminToken,
       dispatch: async (r) => {
@@ -311,28 +367,30 @@ export async function runManaged(env = process.env) {
         }
       },
     });
+    checkCanceled();
     await writePrivateJSON(descriptorFile, {
       schemaVersion: 1,
       ...status(),
       adminURL: admin.url,
     });
-    const onSignal = () =>
-      shutdown()
-        .then(() => process.exit(0))
-        .catch(() => process.exit(1));
-    process.once("SIGTERM", onSignal);
-    process.once("SIGINT", onSignal);
+    checkCanceled();
+    ready = true;
     return { shutdown, status };
   } catch (error) {
-    await shutdown();
+    if (state) await shutdown();
+    else {
+      process.removeListener("SIGTERM", onSignal);
+      process.removeListener("SIGINT", onSignal);
+    }
     // Errors from SDK/network are intentionally not persisted verbatim.
-    await writePrivateJSON(path.join(directory, "error.json"), {
-      schemaVersion: 1,
-      code: "startup_failed",
-      message: "Point Guard could not start its packaged service.",
-      recovery:
-        "Check the selected folder, complete app runtime, private Pi state, and any existing listener/startup lock. Quit the owning app before deliberate recovery.",
-    });
+    await privatePath(directory, true)
+      .then(() =>
+        writePrivateJSON(
+          path.join(directory, "error.json"),
+          startupFailure(error, canceled ? "canceled" : stage, instanceId),
+        ),
+      )
+      .catch(() => {});
     throw error;
   }
 }

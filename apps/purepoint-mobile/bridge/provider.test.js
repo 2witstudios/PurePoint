@@ -140,3 +140,33 @@ test("given provider throws credential-bearing error should return only sanitize
   );
   api.close();
 });
+test("given unchanged native key expression should compare raw snapshot and permit explicit new login", async () => {
+  const credentials = AuthStorage.inMemory({
+    one: { type: "api_key", key: "$PRPG_FAKE_KEY" },
+  });
+  const api = new ProviderSetup({
+    credentials,
+    providers: [
+      {
+        id: "one",
+        auth: {
+          apiKey: {
+            login: async () => ({ type: "api_key", key: "replacement-proof" }),
+          },
+        },
+      },
+    ],
+    models: [],
+  });
+  const a = api.start("one", "api_key");
+  await tick();
+  assert.equal(api.status(a.attemptId).status, "complete");
+  assert.equal((await credentials.read("one")).key, "replacement-proof");
+  api.close();
+});
+test('given OAuth returns an expired token should preserve the prior credential',async()=>{
+ const {api,credentials}=setup(async()=>({type:'oauth',access:'expired-token',refresh:'expired-refresh',expires:1}));
+ await credentials.modify('one',async()=>({type:'api_key',key:'existing-proof'}));
+ const attempt=api.start('one','oauth');await tick();assert.equal(api.status(attempt.attemptId).status,'failed');
+ assert.equal((await credentials.read('one')).key,'existing-proof');api.close();
+});

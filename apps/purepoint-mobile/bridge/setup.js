@@ -2,6 +2,7 @@ import {
   readdir,
   readFile,
   stat,
+  lstat,
   access,
   mkdir,
   writeFile,
@@ -179,8 +180,8 @@ export async function loadToken(file) {
     throw new Error(
       "Set PI_MOBILE_TOKEN_FILE to an owner-created secret file (at least 32 characters, chmod 600).",
     );
-  const info = await stat(file);
-  if ((info.mode & 0o077) !== 0 || info.size > 4096)
+  const info = await lstat(file);
+  if (info.isSymbolicLink() || !info.isFile() || (typeof process.getuid === "function" && info.uid !== process.getuid()) || (info.mode & 0o077) !== 0 || info.size > 4096)
     throw new Error(
       "Pairing secret must be a private file (chmod 600), at most 4 KiB.",
     );

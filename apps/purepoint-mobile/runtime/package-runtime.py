@@ -17,12 +17,21 @@ PIN = json.loads((SOURCE / 'runtime/node-release.json').read_text())
 def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
 
-def stage(app, pu, architecture, cache):
+def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root=None):
     app, pu, cache = Path(app).resolve(), Path(pu).resolve(), Path(cache).resolve()
+    if app.is_relative_to('/Applications') or app.is_relative_to('/System/Applications') or app.is_relative_to(Path.home() / 'Applications'):
+        raise ValueError('Cannot stage into installed application directories.')
+    if not app.name.endswith('.app'):
+        raise ValueError('Destination must be a build artifact .app.')
     if not pu.is_file():
         raise ValueError('Provide the freshly built artifact pu binary, never an installed binary.')
     if app.exists() and (app / 'Contents/_CodeSignature').exists():
-        raise ValueError('Stage before signing; refuse to overwrite a signed app.')
+        if not replace_build_artifact or not build_root:
+            raise ValueError('Signed output requires explicit --replace-build-artifact and --build-root.')
+        artifact_root = Path(build_root).resolve()
+        if artifact_root not in app.parents or app.is_relative_to('/Applications') or app.is_relative_to(Path.home() / 'Applications'):
+            raise ValueError('Restaging is limited to the explicit build artifact root, never installed apps.')
+        shutil.rmtree(app / 'Contents/_CodeSignature')
     if '.app' not in app.name:
         raise ValueError('Destination must be a build artifact .app.')
     app.mkdir(parents=True, exist_ok=True)
@@ -96,6 +105,8 @@ if __name__ == '__main__':
     parser.add_argument('--app', required=True)
     parser.add_argument('--pu', required=True)
     parser.add_argument('--architecture', choices=['arm64','x64','universal'], required=True)
+    parser.add_argument('--replace-build-artifact', action='store_true')
+    parser.add_argument('--build-root', help='Explicit build directory that owns a signed incremental output')
     parser.add_argument('--cache', default=os.path.join(tempfile.gettempdir(), 'pointguard-node-cache'))
     options = parser.parse_args()
-    stage(options.app, options.pu, options.architecture, options.cache)
+    stage(options.app, options.pu, options.architecture, options.cache, options.replace_build_artifact, options.build_root)

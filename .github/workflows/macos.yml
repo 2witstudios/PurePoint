@@ -238,8 +238,10 @@ jobs:
       - name: Sign and verify nested artifact code (ad-hoc only)
         run: |
           python3 apps/purepoint-mobile/runtime/sign-runtime.py --app "$RUNNER_TEMP/PointGuardProof.app" --identity -
-          /usr/bin/lipo -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }} "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/point-guard-node"
-          /usr/bin/lipo -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }} "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/pu"
+          /usr/bin/lipo "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/point-guard-node" -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }}
+          /usr/bin/lipo "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/pu" -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }}
+      - name: Repeat signed build-artifact staging and verify outer seal
+        run: python3 apps/purepoint-mobile/runtime/prove-restaging.py --app "$RUNNER_TEMP/PointGuardProof.app" --pu "$CARGO_TARGET_DIR/release/pu" --architecture "${{ matrix.architecture }}"
       - name: Relocated clean native startup and state-preserving replacement
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/PointGuardProof.app"
       - name: Retain nonpublishing proof artifact

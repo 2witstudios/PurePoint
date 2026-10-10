@@ -16,4 +16,10 @@ import { AgentSession } from "../node_modules/@earendil-works/pi-coding-agent/di
 import { installQueueCorrelation } from "./native-queue.js";
 
 installQueueCorrelation(AgentSession);
+if (process.env.POINT_GUARD_MANAGED === "1") {
+  const { SessionManager } =
+    await import("../node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js");
+  const { installManagedPersistence } = await import("./native-persistence.js");
+  installManagedPersistence(SessionManager);
+}
 await import("../node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
