@@ -2,6 +2,7 @@ mod agent_lifecycle;
 mod channel;
 mod definitions;
 mod helpers;
+mod inventory;
 mod pty_operations;
 mod scheduler;
 mod session_repair;
@@ -64,6 +65,8 @@ pub(super) struct SaveTriggerParams {
 }
 
 pub struct Engine {
+    project_registry_path: Option<std::path::PathBuf>,
+    project_registry_updates: Arc<Mutex<()>>,
     start_time: Instant,
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
@@ -120,6 +123,8 @@ fn config_to_report(cfg: &pu_core::types::Config) -> Response {
 impl Engine {
     pub fn new() -> Self {
         Self {
+            project_registry_path: None,
+            project_registry_updates: Arc::new(Mutex::new(())),
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -213,18 +218,14 @@ impl Engine {
         }
     }
 
-    fn register_project(&self, project_root: &str) {
-        if !project_root.is_empty()
-            && let Ok(mut projects) = self.registered_projects.lock()
-        {
-            projects.insert(project_root.to_string());
-        }
-    }
-
     pub fn registered_projects(&self) -> Vec<String> {
         self.registered_projects
             .lock()
-            .map(|p| p.iter().cloned().collect())
+            .map(|p| {
+                let mut roots: Vec<_> = p.iter().cloned().collect();
+                roots.sort();
+                roots
+            })
             .unwrap_or_default()
     }
 
@@ -310,41 +311,49 @@ impl Engine {
         }
     }
 
-    pub async fn handle_request(&self, request: Request) -> Response {
-        // Register project for any project-scoped request
-        match &request {
-            Request::Init { project_root }
-            | Request::Spawn { project_root, .. }
-            | Request::CreateWorktree { project_root, .. }
-            | Request::Status { project_root, .. }
-            | Request::Kill { project_root, .. }
-            | Request::ListTemplates { project_root }
-            | Request::ListAgentDefs { project_root }
-            | Request::ListSwarmDefs { project_root }
-            | Request::ListSchedules { project_root }
-            | Request::SaveSchedule { project_root, .. }
-            | Request::EnableSchedule { project_root, .. }
-            | Request::DisableSchedule { project_root, .. }
-            | Request::ListTriggers { project_root }
-            | Request::SaveTrigger { project_root, .. }
-            | Request::EvaluateGate { project_root, .. }
-            | Request::Diff { project_root, .. }
-            | Request::GetConfig { project_root }
-            | Request::UpdateAgentConfig { project_root, .. }
-            | Request::Pulse { project_root, .. }
-            | Request::AssignTrigger { project_root, .. } => {
-                self.register_project(project_root);
-            }
-            _ => {}
+    pub async fn handle_request(&self, mut request: Request) -> Response {
+        if let Err(response) = self.prepare_request(&mut request).await {
+            return response;
         }
 
+        self.handle_prepared_request(request).await
+    }
+
+    pub(crate) async fn handle_prepared_request(&self, request: Request) -> Response {
+        if let Some(response) = self.handle_standalone_request(&request).await {
+            return response;
+        }
         match request {
             request @ (Request::ChannelRead { .. }
             | Request::ChannelSend { .. }
             | Request::ChannelEdit { .. }
             | Request::ChannelReact { .. }) => channel::handle(request).await,
+            Request::Inventory {
+                project_root,
+                kind,
+                state,
+            } => Response::Inventory(self.inventory(project_root, kind, state).await),
+            Request::ResolveAgent {
+                agent_id,
+                project_root,
+            } => match self.resolve_agent(&agent_id, project_root).await {
+                Ok((project_root, worktree_id)) => Response::AgentResolved {
+                    agent_id,
+                    project_root,
+                    worktree_id,
+                },
+                Err(response) => response,
+            },
             Request::Health => self.handle_health().await,
-            Request::Init { project_root } => self.handle_init(&project_root).await,
+            Request::Init { project_root } => {
+                let response = self.handle_init(&project_root).await;
+                if matches!(response, Response::InitResult { .. })
+                    && let Err(e) = self.register_project(&project_root).await
+                {
+                    return e;
+                }
+                response
+            }
             Request::Rename {
                 project_root,
                 agent_id,
@@ -684,8 +693,11 @@ impl Engine {
             pid: std::process::id(),
             uptime_seconds: self.start_time.elapsed().as_secs(),
             protocol_version: PROTOCOL_VERSION,
-            projects: vec![],
-            agent_count: sessions.len(),
+            projects: self.registered_projects(),
+            agent_count: sessions
+                .values()
+                .filter(|handle| handle.exit_rx.borrow().is_none())
+                .count(),
         }
     }
 
@@ -857,6 +869,37 @@ mod tests {
     use crate::test_helpers::init_and_spawn;
     use pu_core::protocol::{Request, Response};
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn given_initialized_project_should_expose_it_in_global_health() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let engine = Engine::new();
+        assert!(matches!(
+            engine
+                .handle_request(Request::Init {
+                    project_root: root.clone()
+                })
+                .await,
+            Response::InitResult { .. }
+        ));
+        match engine.handle_request(Request::Health).await {
+            Response::HealthReport {
+                projects,
+                agent_count,
+                ..
+            } => {
+                assert_eq!(projects, vec![root]);
+                assert_eq!(agent_count, 0);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn given_spawned_agent_should_return_attach_handles() {

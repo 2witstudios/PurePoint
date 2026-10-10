@@ -65,7 +65,11 @@ async fn main() {
     // fds and every client stream holds a socket, so raise it to the hard limit.
     daemon_lifecycle::raise_fd_limit();
 
-    let engine = Engine::new();
+    let engine = Engine::with_project_registry(paths::project_registry_path(&socket))
+        .unwrap_or_else(|e| {
+            eprintln!("failed to load project registry: {e}");
+            std::process::exit(1);
+        });
     let server = match IpcServer::bind(&socket, engine) {
         Ok(s) => s,
         Err(e) => {

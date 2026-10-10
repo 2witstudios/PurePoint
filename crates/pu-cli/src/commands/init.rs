@@ -1,41 +1,24 @@
-use pu_core::types::Manifest;
-use pu_core::{config, manifest, paths};
+use pu_core::paths;
 
 use crate::error::CliError;
 use crate::skill;
 
-pub async fn run(_socket: &std::path::Path, json: bool) -> Result<(), CliError> {
-    let cwd = std::env::current_dir()?;
-    let project_root = &cwd;
-
-    if paths::manifest_path(project_root).exists() {
-        if json {
-            println!("{}", serde_json::json!({"created": false}));
-        } else {
-            println!("Already initialized");
-        }
-        return Ok(());
+pub async fn run(socket: &std::path::Path, json: bool) -> Result<(), CliError> {
+    crate::daemon_ctrl::ensure_daemon(socket).await?;
+    let root = crate::commands::project_root_string()?;
+    let response = crate::client::send_request(
+        socket,
+        &pu_core::protocol::Request::Init {
+            project_root: root.clone(),
+        },
+    )
+    .await?;
+    let response = crate::output::check_response(response, json)?;
+    if pu_core::paths::daemon_socket_path().is_ok_and(|default| default == socket) {
+        skill::ensure_plugin_current();
     }
-
-    std::fs::create_dir_all(paths::pu_dir(project_root))?;
-
-    let m = Manifest::new(project_root.to_string_lossy().to_string());
-    manifest::write_manifest(project_root, &m).map_err(|e| CliError::Other(e.to_string()))?;
-
-    config::write_default_config(project_root).map_err(|e| CliError::Other(e.to_string()))?;
-
-    // Ensure plugin files are up to date
-    skill::ensure_plugin_current();
-
-    // Write agent-context.md for non-Claude tools
-    write_agent_context(project_root);
-
-    if json {
-        println!("{}", serde_json::json!({"created": true}));
-    } else {
-        println!("Initialized PurePoint workspace");
-    }
-    Ok(())
+    write_agent_context(std::path::Path::new(&root));
+    crate::output::print_response(&response, json)
 }
 
 fn write_agent_context(project_root: &std::path::Path) {

@@ -35,7 +35,11 @@ pub async fn run_bench(
 
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = crate::commands::project_root_string()?;
+    let project_root = if matches!(target, SuspendTarget::Agent(_)) {
+        crate::commands::agent_project_root()
+    } else {
+        crate::commands::project_root_string()?
+    };
     let resp = client::send_request(
         socket,
         &Request::Suspend {
@@ -62,7 +66,7 @@ pub async fn run_bench(
 pub async fn run_play(socket: &Path, agent_id: &str, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = crate::commands::project_root_string()?;
+    let project_root = crate::commands::agent_project_root();
     let resp = client::send_request(
         socket,
         &Request::Resume {

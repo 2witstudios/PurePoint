@@ -40,6 +40,37 @@ The daemon is the context assembler — every task should automatically inject r
 
 ## Research Notes
 
+#### [DAEMON-002] Global visibility for Point Guard
+
+**Researched: 2026-10-10.** The following records the pre-change evidence and design alternatives. Implementation now provides the proposed global summary and project/agent/worktree inventories, explicit CLI scope, durable socket-specific registration, and agent ownership routing. See `product/cli.md` for the specified feature contract. Registry removal/import operations remain design directions rather than shipped commands.
+
+The daemon already has `Engine::registered_projects`, an in-memory set used by the scheduler (`crates/pu-engine/src/engine/mod.rs`, `engine/scheduler.rs`). Selected project-scoped requests insert their supplied root before execution, so unsuccessful requests can register invalid roots. The set starts empty on daemon restart and stores paths without canonicalization. The desktop app separately persists open projects in UserDefaults (`apps/purepoint-macos/purepoint-macos/State/AppState.swift`). Open app projects and daemon-known projects therefore represent different scopes.
+
+Despite the existing HealthReport schema, `handle_health` currently returns `projects: vec![]` and `agent_count: sessions.len()`. Exited handles remain until the 30-second session reaper removes them. This count is not an exact live-process count. `pu status` requires a project root resolved from `PU_PROJECT_ROOT` or cwd (`crates/pu-cli/src/commands/status.rs`, `commands/mod.rs`). Point Guard intentionally inherits neither a project root nor a builder identity (`apps/purepoint-mobile/docs/point-guard.md`). It consequently lacks a direct global inventory query.
+
+Option A: CLI enumerates projects and issues one status request per project.
+- Pro: Reuses project status and can produce a flattened JSON list.
+- Con: Requires a discoverable project inventory anyway; repeats aggregation in clients, produces observations at different times, and leaves ownership routing to the caller.
+
+Option B: Daemon owns a durable project registry and exposes a global status query plus an agent inventory query.
+- Pro: CLI, desktop and Point Guard share query semantics, project discovery and agent ownership. Existing project manifests remain authoritative for durable project data, while live sessions supply process state.
+- Con: Requires registry lifecycle rules, reconciliation after restart and explicit handling of unreadable projects. A persistent agent database would duplicate manifests; begin with a derived view and add an in-memory ownership index where useful.
+
+Recommendation: Option B. Persist canonical project roots after successful initialization or validated use; restore the registry on startup without automatically spawning or resuming agents. Expose missing/unreadable projects rather than silently treating them as empty. Offer explicit project registration/removal, and keep app-open state separate from registration. Global means projects registered with the selected daemon, not every repository on disk; filesystem discovery can be an explicit import operation.
+
+Proposed minimal CLI surface:
+- `pu status --global [--json]`: compact totals and per-project summaries, without git diff scans, full prompts or logs.
+- `pu projects list --json`: registered roots and availability.
+- `pu agents list --global --state running --json`: flat live-agent records including project root, worktree id, id, name, type and observed state. Keep the existing `pu agent` namespace for saved agent definitions.
+- `pu --project <root> <command>`: explicit routing that takes precedence over `PU_PROJECT_ROOT` and cwd. Preserve existing project-scoped defaults.
+- Follow-up agent commands resolve ownership by id through the daemon when project scope is absent; return ambiguity errors rather than selecting an arbitrary match. An explicit project always constrains resolution.
+
+The query model needs one shared definition of counts: running means a daemon-owned process with no observed exit; suspended agents count separately; terminal sessions are distinguished from AI agents by type. Existing persisted `AgentStatus::Running` alone is insufficient because suspended agents retain that status (`crates/pu-core/src/types/agent.rs`). Idle duration does not establish completion or a need for human input. Counts and list filtering must use the same derived state.
+
+Machine-readable responses should include observation time, scope, completeness and per-project errors, with deterministic ordering and compact records. An incomplete inventory must never appear to be an exact global zero. Known live sessions should remain visible even if their project manifest is unavailable; live ownership can resolve those IDs without a complete durable inventory. Count/list queries should work outside a project, make one daemon request, and remain bounded under a slow or unreadable project. Avoid an arbitrary query language initially; explicit filters plus stable JSON support composition with tools such as jq.
+
+First delivery should cover registry durability, a shared global query implementation, CLI routing, and bundled Point Guard instructions. Validate queries outside any project, two projects containing root and worktree agents, suspended and exited agents, restart recovery, duplicate path aliases, and partial project failures. Global subscriptions and broader worktree/schedule inventories can reuse the scope model later.
+
 **Daemon startup sequence (from `pu-engine/src/main.rs`):** Parse args (looks for `--managed` flag and `--socket <path>`). Resolve socket path (`--socket` arg or `~/.pu/daemon.sock`). Init tracing. Take the `daemon.sock.lock` flock (exit 0 if another daemon holds it), then write the PID file (both modes) and raise the fd soft limit. Create `Engine`, bind `IpcServer` to socket (removes the stale socket file first, which is safe only because the lock is held). Run server until SIGTERM, SIGINT, or `Request::Shutdown`. On exit, stop agents gracefully, then remove the PID file and socket if the PID file still names this daemon.
 
 **Shutdown handling:** SIGTERM and SIGINT are caught via `tokio::signal::unix`. `Request::Shutdown` from any client also triggers graceful shutdown via `Arc<Notify>`.

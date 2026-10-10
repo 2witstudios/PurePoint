@@ -43,6 +43,54 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         return Ok(());
     }
     match response {
+        Response::Inventory(report) => {
+            let c = &report.summary;
+            println!(
+                "{} projects, {} worktrees, {} running ({} AI, {} terminals), {} suspended, {} broken, {} unknown",
+                c.projects,
+                c.worktrees,
+                c.running,
+                c.running_ai_agents,
+                c.running_terminals,
+                c.suspended,
+                c.broken,
+                c.unknown
+            );
+            for p in &report.projects {
+                if let Some(error) = &p.error {
+                    println!("{}: unavailable ({error})", p.project_root);
+                } else {
+                    println!(
+                        "{}: {} running, {} suspended, {} worktrees",
+                        p.project_root, p.counts.running, p.counts.suspended, p.counts.worktrees
+                    );
+                }
+            }
+            for a in &report.agents {
+                println!(
+                    "{}  {}  {}  {:?}  {}",
+                    a.id,
+                    a.name,
+                    a.agent_type,
+                    a.state,
+                    a.project_root.as_deref().unwrap_or("standalone")
+                );
+            }
+            for w in &report.worktrees {
+                println!("{}  {}  {}  {}", w.id, w.name, w.branch, w.project_root);
+            }
+            if !report.complete {
+                eprintln!("Inventory incomplete; totals cover readable projects only");
+            }
+        }
+        Response::AgentResolved {
+            agent_id,
+            project_root,
+            ..
+        } => println!(
+            "{agent_id}: {}",
+            project_root.as_deref().unwrap_or("standalone")
+        ),
         Response::ChannelHistory { .. } | Response::ChannelMessage { .. } => {
             print!("{}", crate::commands::channel::format_response(response));
         }

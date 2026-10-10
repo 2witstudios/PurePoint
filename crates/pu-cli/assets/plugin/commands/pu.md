@@ -6,6 +6,22 @@ description: "PurePoint CLI reference — spawn, status, logs, kill, triggers, s
 
 Spawn parallel AI coding agents in isolated git worktrees. Each agent gets its own branch, terminal, and working directory.
 
+## Global inventory and project routing
+
+```bash
+pu status --global --json                         # compact daemon-wide summary
+pu projects list --json                          # durable known-project inventory
+pu agents list --global --state running --json    # flat live-agent records
+pu worktrees list --json                         # flat worktrees with owning project
+pu status --agent ag-xxx --json                   # daemon resolves project by ID
+pu --project /absolute/project spawn "fix bug" --name fix
+pu --project /absolute/project init              # initialize/register, including existing projects
+```
+
+The three list commands are global by default and ignore cwd and PU_PROJECT_ROOT. --project narrows them to one project. Project commands resolve --project first, then PU_PROJECT_ROOT, then cwd. Targeted status, kill, bench, play and trigger assign resolve IDs globally unless --project is supplied; logs/send/attach already address daemon sessions globally, and --project constrains them. `pu agent` manages saved definitions; `pu agents` queries instances. `--socket PATH` selects another daemon.
+
+Inventory responses contain a compact summary plus projects and the requested flat records. Check `complete` and per-project errors before treating totals as exhaustive. `running` counts daemon-owned live processes; `running_ai_agents` excludes terminals and `running_terminals` counts them separately. Suspended, broken and unknown states are separate. Unknown means persisted state has no matching owned session and has not been reconciled. Agent-state filters only filter records; summary counts cover the entire scope. Standalone shells have null project_root and support status/logs/send/attach/kill. Queries omit full prompts and logs and perform no git diff scans. No manifest discovery is required by callers.
+
 ## Status Model
 
 Agents have two observable states:
