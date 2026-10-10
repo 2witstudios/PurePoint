@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct purepoint_macosApp: App {
+    @NSApplicationDelegateAdaptor(PointGuardApplicationDelegate.self) private var applicationDelegate
     @State private var appState = AppState()
     @State private var settingsState = SettingsState()
     @State private var viewCache = TerminalViewCache()
@@ -41,6 +42,8 @@ struct purepoint_macosApp: App {
                     hotkeyMonitor.start()
                     CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
+                    appState.pointGuardService.start(chat: appState.pointGuardChat)
+                    applicationDelegate.pointGuardService = appState.pointGuardService
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     appState.shutdownWithSuspend()
@@ -412,3 +415,4 @@ struct purepoint_macosApp: App {
         }
     }
 }
+

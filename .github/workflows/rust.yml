@@ -33,6 +33,8 @@ jobs:
         with:
           toolchain: "1.88"
           components: rustfmt, clippy
+      - name: Isolate Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets
@@ -46,6 +48,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88"
+      - name: Isolate Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
 

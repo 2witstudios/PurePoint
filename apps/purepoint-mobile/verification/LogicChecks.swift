@@ -14,11 +14,11 @@ import Foundation
             precondition(PairingCode.parse("{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://" + host + "/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}") == nil)
         }
         for host in ["100.64.0.1", "100.127.255.254"] { precondition(ConnectionAddress.url("ws://" + host + "/v1") != nil) }
-        let pairing = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://100.94.14.74:8787/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
-        precondition(PairingCode.parse(pairing)?.endpoint == "ws://100.94.14.74:8787/v1")
+        let pairing = "{\"type\":\"pi-mobile-pairing\",\"version\":2,\"endpoint\":\"wss://100.94.14.74:8787/v1\",\"hostId\":\"550e8400-e29b-41d4-a716-446655440000\",\"certificateSHA256\":\"" + String(repeating: "a", count: 64) + "\",\"enrollmentToken\":\"" + String(repeating: "b", count: 43) + "\",\"expiresAt\":" + String(Int64(Date().timeIntervalSince1970 * 1000) + 120000) + "}"
+        precondition(PairingCode.parse(pairing)?.endpoint == "wss://100.94.14.74:8787/v1")
         precondition(PairingCode.parse(pairing.replacingOccurrences(of: "100.94.14.74", with: "example.com")) == nil)
-        precondition(PairingCode.parse(pairing.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")) == nil)
-        precondition(PairingCode.parse(pairing.replacingOccurrences(of: "fixture-pairing-secret-0123456789abcdef", with: "short")) == nil)
+        precondition(PairingCode.parse(pairing.replacingOccurrences(of: "\"version\":2", with: "\"version\":1")) == nil)
+        precondition(PairingCode.parse(pairing.replacingOccurrences(of: String(repeating: "b", count: 43), with: "short")) == nil)
         precondition(PairingCode.parse("not a pairing code") == nil)
         let nativeTools = [ChatMessage(id: "toolResult-1-call-a", role: "toolResult", text: "First output", activity: "read"), ChatMessage(id: "assistant-2", role: "assistant", text: ""), ChatMessage(id: "toolResult-3-call-b", role: "toolResult", text: "Second output", activity: "bash")]
         let liveTools = [ToolActivity(id: "call-a", name: "read", state: "finished", text: "First output"), ToolActivity(id: "call-b", name: "bash", state: "finished", text: "Second output"), ToolActivity(id: "call-c", name: "read", state: "running", text: "Working")]

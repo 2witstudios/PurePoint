@@ -71,7 +71,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [PiSubmission] { submissions.filter { $0.recoverable } }
 
-    let clientId: String
+    private(set) var clientId: String
 
     private let defaults: PiRecoveryPreferences
 
@@ -176,6 +176,13 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             error = "Attach up to four files, totaling 512 KiB after preparation."; return
         }
         attachments.append(file)
+    }
+    func bindManagedConnection(endpoint: String, secret: String, clientId: String) {
+        guard UUID(uuidString: clientId) != nil else { error = "Invalid managed desktop identity."; return }
+        disconnect()
+        self.clientId = clientId
+        defaults.value.set(clientId, forKey: "pointguard.clientId")
+        pair(endpoint: endpoint, secret: secret)
     }
     func pair(endpoint: String, secret: String) {
         guard let url = PiConnectionAddress.url(endpoint) else {

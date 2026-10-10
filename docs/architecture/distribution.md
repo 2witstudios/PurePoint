@@ -1,6 +1,6 @@
 # Distribution
 
-**Maturity: EXPLORING**
+**Maturity: SPECIFIED**
 
 ## Context
 
@@ -12,11 +12,9 @@ PurePoint needs to ship to users as a self-contained product with no external ru
 
 ## Open Questions
 
-? [DIST-002] What is the migration path for existing users?
-Existing users may have legacy project directories and data. Should migration be automatic, an explicit command, or handled by the app?
+! [DIST-002] Preserve canonical Pi private auth/session/settings data outside the bundle and use versioned private Application Support managed/trust metadata — avoids duplicate credentials and survives updates. Legacy remote shared-token clients deliberately enroll again; never downgrade remote authorization.
 
-? [DIST-003] How should auto-update work?
-If the daemon is embedded in the app, updating the app updates the daemon too. But what if the daemon is running when the update happens? How are running processes handled during updates?
+! [DIST-003] Stop and await app-owned Point Guard children before executable replacement, then restore native session/provider/trust state — app lifetime satisfies owner scope without rewriting worker-daemon supervision. Never adopt or stop unknown processes. Protected production signing/notarization remains owner-controlled.
 
 ## Design Directions
 
@@ -28,3 +26,31 @@ If the daemon is embedded in the app, updating the app updates the daemon too. B
 ## Research Notes
 
 DIST-003 partially answered: updating the app updates the daemon because it's embedded. Running daemon during update: the app sends Shutdown before quit. If the daemon was started by CLI in standalone mode, the update only affects the bundled copy — the standalone binary in PATH is managed separately (e.g. cargo install).
+
+### [DIST-002] Point Guard state migration
+**Researched: 2026-10-09**
+
+Baseline bridge/setup.js discovers developer-home skills and main.js requires an explicit repository cwd. Its Pi 1.1.0 adapter reads native sessions and credentials. App-only preferences would diverge from CLI Pi; copying native auth/session data into a bundle would lose updates. Preserve canonical private ~/.pi/agent auth/settings/models/sessions and place managed runtime/identity metadata outside the bundle in private Application Support. Legacy remote shared-token pairing cannot safely identify individual devices; require deliberate QR v2 enrollment while preserving transcript/draft recovery. Bundle versioned Point Guard instructions and complete pu skills/reference support with explicit bundle-relative CLI/runtime paths.
+
+Candidate: preserve native Pi storage and version managed/trust state, failing closed on malformed/unknown schema. Alternative explicit all-state import adds copies/secret migration risk; retained only as future user-requested migration.
+
+### [DIST-003] App-lifetime bridge and updates
+**Researched: 2026-10-09**
+
+Existing bridge owns one Node Pi RPC process. App-lifetime Process ownership meets the approved lifetime boundary; launchd would add persistent supervision outside scope. Keep state and TLS identity outside the bundle, stop and await only owned children before replacement, and never adopt/kill an unknown listener. Candidate: app-owned process with exclusive private startup lock and bounded recovery. Alternative launchd deferred.
+
+Official Node distribution supplies Darwin arm64/x64 binaries and SHA256 manifests: [Node releases](https://nodejs.org/download/release/). Pi requires Node >=22.19 and supports script-free npm installation: [Pi upstream](https://github.com/earendil-works/pi). Pin runtime and complete transitive production dependencies; relocate packaged artifact outside checkout and prove empty-HOME/stripped-PATH launch for both advertised architectures.
+
+Apple requires nested code to be signed and hardened-runtime entitlements to follow the executable: [TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html), [JIT on Apple Silicon](https://developer.apple.com/documentation/Apple-Silicon/porting-just-in-time-compilers-to-apple-silicon). Inside-out signing and Node allow-jit must be checked on the artifact. Ad-hoc CI signature/execution proof does not establish [Developer ID/notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution); that remains protected owner evidence.
+
+## Requirements and Interfaces
+
+- Given a fresh supported Mac, should provide bundle-relative Node/Pi/bridge/pu and complete instructions/resources without external development tools.
+- Given a packaged candidate, should prove both advertised architectures under empty HOME and stripped PATH after relocation outside checkout.
+- Given an update, should stop owned managed children before replacement and preserve native auth/session/managed trust state.
+- Given ad-hoc CI success, should retain protected Developer ID/notarization and owner fresh-device acceptance as separate pending proof.
+- Bundle layout, runtime manifest, lifecycle/state/auth contracts and collision/recovery edge cases: `../product/point-guard-setup.md` PRPG r1 / PRPG-TRUST-1.
+
+## Edge Cases
+
+Missing architecture/resource/signature blocks package acceptance; no developer-path fallback in distribution. Unknown listeners are never adopted/killed. Unknown/corrupt state is never silently migrated to weaker authorization.

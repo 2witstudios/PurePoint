@@ -10,7 +10,9 @@
     "fixture": "node bridge/main.js --fixture",
     "pair": "node bridge/pair.js",
     "test": "node --test bridge/*.test.js",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "package:runtime": "python3 runtime/package-runtime.py",
+    "proof:runtime": "node runtime/prove-runtime.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.1.0",

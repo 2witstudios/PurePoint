@@ -11,6 +11,8 @@ struct PointGuardView: View {
     @State private var shellAgentId: String?
     @State private var selectedSessionId: String?
     @State private var shellError: String?
+    @State private var showSetup = false
+    @State private var showPhone = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +24,10 @@ struct PointGuardView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 160)
                 Spacer()
+                if !showShell {
+                    Button("Connect phone") { showPhone = true; Task { await appState.pointGuardService.connectPhone() } }
+                    Button("Setup") { showSetup = true }
+                }
                 Text("Point Guard")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -34,7 +40,12 @@ struct PointGuardView: View {
                 PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar)
             }
         }
-        .task { appState.pointGuardChat.connect() }
+        .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+        .sheet(isPresented: $showSetup) {
+            ScrollView { PointGuardSetupView(service: appState.pointGuardService, chat: appState.pointGuardChat).padding(24) }
+                .frame(width: 620, height: 650)
+        }
+        .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: appState.pointGuardService) }
         .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
             showSidebar.toggle()
         }

@@ -49,12 +49,22 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.19.0'
+          node-version: '22.23.3'
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
-      - run: npm ci
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+      - name: Build isolated lock helper for bridge proofs
+        run: |
+          printf 'CARGO_TARGET_DIR=%s/bridge-lock-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/bridge-lock-cargo" cargo build --locked -p pu-cli --bin pu-point-guard-lock
+          printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/bridge-lock-cargo/debug/pu-point-guard-lock\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
+      - name: Interrupted package download recovery
+        run: python3 runtime/test-package-runtime.py
 
   mobile-swift:
     name: Mobile Swift & iOS tests
@@ -69,6 +79,20 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: apps/purepoint-mobile/package-lock.json
+      - run: npm ci --ignore-scripts
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+      - name: Build isolated lock helper for actual trust fixtures
+        run: |
+          printf 'CARGO_TARGET_DIR=%s/mobile-lock-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/mobile-lock-cargo" cargo build --locked -p pu-cli --bin pu-point-guard-lock
+          printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/mobile-lock-cargo/debug/pu-point-guard-lock\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Swift domain and recovery checks
         run: |
           swiftc PurePoint/ChatDomain.swift verification/LogicChecks.swift -o "$RUNNER_TEMP/mobile-logic"
@@ -76,6 +100,7 @@ jobs:
           swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o "$RUNNER_TEMP/mobile-responsiveness"
           "$RUNNER_TEMP/mobile-responsiveness"
           sh verification/check-recovery.sh
+          python3 verification/check-trust.py
           swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
           swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
           plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
@@ -83,12 +108,28 @@ jobs:
         run: |
           xcrun simctl list devices available --json > "$RUNNER_TEMP/mobile-simulators.json"
           simulator_id=$(python3 -c 'import json, os; data = json.load(open(os.environ["RUNNER_TEMP"] + "/mobile-simulators.json")); print(next(device["udid"] for runtime, devices in sorted(data["devices"].items(), reverse=True) if "iOS" in runtime for device in devices if device["name"].startswith("iPhone") and device["isAvailable"]))')
-          xcodebuild test \
+          xcodebuild build-for-testing \
             -project PurePoint.xcodeproj \
             -scheme PurePoint-Debug \
             -destination "platform=iOS Simulator,id=$simulator_id" \
-            -resultBundlePath "$RUNNER_TEMP/mobile-tests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath "$RUNNER_TEMP/mobile-derived" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
+          python3 runtime/verify-simulator-signing.py --app "$RUNNER_TEMP/mobile-derived/Build/Products/Debug-iphonesimulator/PurePoint.app" --diagnostics "$RUNNER_TEMP/mobile-diagnostics/signing"
+          xcodebuild test-without-building \
+            -project PurePoint.xcodeproj \
+            -scheme PurePoint-Debug \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -derivedDataPath "$RUNNER_TEMP/mobile-derived" \
+            -resultBundlePath "$RUNNER_TEMP/mobile-diagnostics/tests.xcresult" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
+      - name: Retain iOS signature and XCTest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-diagnostics
+          path: ${{ runner.temp }}/mobile-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
 
   macos:
     name: macOS Build & Test
@@ -109,6 +150,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88"
+
+      - name: Isolate macOS artifact Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/macos-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
 
@@ -159,6 +203,19 @@ jobs:
           PKGEOF
           done
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - name: Prepare actual shared bridge dependencies and isolated helper
+        run: |
+          npm ci --ignore-scripts --prefix apps/purepoint-mobile
+          cargo build --locked -p pu-cli --bin pu-point-guard-lock
+          printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/debug/pu-point-guard-lock\n' "$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+      - name: Check shared actual phone and desktop Point Guard integration
+        run: python3 apps/purepoint-macos/verification/check-point-guard.py
+      - name: Check managed Point Guard service model
+        run: python3 apps/purepoint-macos/verification/check-point-guard-service.py
+
       - name: Compile app and test bundles
         timeout-minutes: 18
         run: |
@@ -198,10 +255,128 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  runtime-package:
+    name: Point Guard package (${{ matrix.architecture }})
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            architecture: arm64
+          - runner: macos-26-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+      - name: Set isolated build directory
+        run: printf 'CARGO_TARGET_DIR=%s/pointguard-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Build isolated artifact CLI
+        run: cargo build --locked --release -p pu-cli
+      - name: Stage complete pinned runtime
+        run: |
+          python3 apps/purepoint-mobile/runtime/package-runtime.py \
+            --app "$RUNNER_TEMP/PointGuardProof.app" \
+            --pu "$CARGO_TARGET_DIR/release/pu" \
+            --architecture "${{ matrix.architecture }}"
+      - name: Verify complete advertised native graph
+        run: python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$RUNNER_TEMP/PointGuardProof.app"
+      - name: Sign and verify nested artifact code (ad-hoc only)
+        run: |
+          python3 apps/purepoint-mobile/runtime/sign-runtime.py --app "$RUNNER_TEMP/PointGuardProof.app" --identity -
+          /usr/bin/lipo "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/point-guard-node" -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }}
+          /usr/bin/lipo "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/pu" -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }}
+      - name: Repeat signed build-artifact staging and verify outer seal
+        run: python3 apps/purepoint-mobile/runtime/prove-restaging.py --app "$RUNNER_TEMP/PointGuardProof.app" --pu "$CARGO_TARGET_DIR/release/pu" --architecture "${{ matrix.architecture }}"
+      - name: Relocated clean native startup and state-preserving replacement
+        run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/PointGuardProof.app"
+      - name: Retain nonpublishing proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: point-guard-runtime-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/PointGuardProof.app
+          retention-days: 7
+
+  runtime-universal:
+    name: Point Guard universal package (${{ matrix.architecture }})
+    needs: [changes, runtime-package]
+    if: needs.changes.outputs.mobile == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            architecture: arm64
+          - runner: macos-26-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - uses: actions/download-artifact@v4
+        with:
+          name: point-guard-runtime-arm64
+          path: ${{ runner.temp }}/arm64-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: point-guard-runtime-x64
+          path: ${{ runner.temp }}/x64-input
+      - name: Compose exact-run CLI slices and stage universal runtime
+        run: |
+          /usr/bin/lipo -create "$RUNNER_TEMP/arm64-input/Contents/Helpers/pu" "$RUNNER_TEMP/x64-input/Contents/Helpers/pu" -output "$RUNNER_TEMP/universal-pu"
+          /usr/bin/lipo -create "$RUNNER_TEMP/arm64-input/Contents/Helpers/point-guard-lock" "$RUNNER_TEMP/x64-input/Contents/Helpers/point-guard-lock" -output "$RUNNER_TEMP/universal-lock-helper"
+          python3 apps/purepoint-mobile/runtime/package-runtime.py --app "$RUNNER_TEMP/UniversalProof.app" --pu "$RUNNER_TEMP/universal-pu" --lock-helper "$RUNNER_TEMP/universal-lock-helper" --architecture universal
+          python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$RUNNER_TEMP/UniversalProof.app"
+      - name: Sign nested runtime and verify repeated outer artifact seal (ad-hoc only)
+        run: python3 apps/purepoint-mobile/runtime/prove-restaging.py --app "$RUNNER_TEMP/UniversalProof.app" --pu "$RUNNER_TEMP/universal-pu" --lock-helper "$RUNNER_TEMP/universal-lock-helper" --architecture universal
+      - name: Launch relocated universal runtime on native architecture
+        run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/UniversalProof.app"
+      - name: Retain nonpublishing universal proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: point-guard-runtime-universal-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/UniversalProof.app
+          retention-days: 7
+
+  runtime-rust:
+    name: Runtime Rust full checks
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+          components: rustfmt, clippy
+      - name: Set isolated Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/runtime-rust-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+
   build-and-test:
     name: Build & Test
     if: always()
-    needs: [changes, macos, mobile-bridge, mobile-swift]
+    needs: [changes, macos, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -210,4 +385,6 @@ jobs:
       - name: Require every applicable check to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
-        run: python3 .github/scripts/ci.py gate
+        run: |
+          python3 .github/scripts/ci.py gate
+          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert all(r[j]["result"]==expected for j in ["runtime-package","runtime-universal","runtime-rust"]), {j:r[j] for j in ["runtime-package","runtime-universal","runtime-rust"]}'

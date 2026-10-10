@@ -2,6 +2,7 @@ import {
   readdir,
   readFile,
   stat,
+  lstat,
   access,
   mkdir,
   writeFile,
@@ -103,7 +104,10 @@ export async function launchArguments(cwd, env) {
     throw new Error("PI_MOBILE_CWD must be an existing directory.");
   const skills = env.PI_MOBILE_PU_SKILL
     ? [path.resolve(env.PI_MOBILE_PU_SKILL)]
-    : await discoverPuSkills();
+    : [
+        path.join(root, "support/pu/SKILL.md"),
+        path.join(root, "support/pu-cli/SKILL.md"),
+      ];
   if (!skills.length)
     throw new Error(
       "No installed pu skill/reference found. Install Point Guard pu skills or set PI_MOBILE_PU_SKILL to its SKILL.md.",
@@ -176,8 +180,8 @@ export async function loadToken(file) {
     throw new Error(
       "Set PI_MOBILE_TOKEN_FILE to an owner-created secret file (at least 32 characters, chmod 600).",
     );
-  const info = await stat(file);
-  if ((info.mode & 0o077) !== 0 || info.size > 4096)
+  const info = await lstat(file);
+  if (info.isSymbolicLink() || !info.isFile() || (typeof process.getuid === "function" && info.uid !== process.getuid()) || (info.mode & 0o077) !== 0 || info.size > 4096)
     throw new Error(
       "Pairing secret must be a private file (chmod 600), at most 4 KiB.",
     );

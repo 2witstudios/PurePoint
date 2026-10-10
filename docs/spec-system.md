@@ -43,7 +43,7 @@ Technical decisions about how PurePoint is built. Each page follows the ADR temp
 | Storage | STORE | SEED |
 | Agent Execution | AGENT | CONVERGING |
 | Desktop App Integration | DESK | DECIDED |
-| Distribution | DIST | SEED |
+| Distribution | DIST | SPECIFIED |
 | Module Structure | MOD | DECIDED |
 
 ### Product (Domain Spec)
@@ -69,6 +69,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Memory System | MEM | SEED |
 | Recovery & Resilience | REC | SEED |
 | Desktop App | APP | CONVERGING |
+| Point Guard Setup | PGSET | SPECIFIED |
 | Configuration | CFG | SEED |
 
 ### Reference (Inventory)

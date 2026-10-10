@@ -34,6 +34,8 @@ export class Controller extends EventEmitter {
     this.error = null;
     this.broadcastTimer = null;
     this.disposed = false;
+    this.accepting = true;
+    this.inflight = new Set();
     rpc.on("event", (e) => this.event(e));
     rpc.on("failure", (error) => {
       this.error = error.message;
@@ -86,6 +88,7 @@ export class Controller extends EventEmitter {
     this.changed();
   }
   event(e) {
+    if (this.disposed) return;
     if (e.type === "agent_start") {
       this.activityVersion++;
       if (!this.busy) this.runId = randomUUID();
@@ -334,7 +337,30 @@ export class Controller extends EventEmitter {
     if (this.seen.size > 2000)
       this.seen.delete(this.seen.values().next().value);
   }
+  fence() {
+    this.accepting = false;
+  }
+  async drain() {
+    await Promise.allSettled([
+      ...this.inflight,
+      this.serial,
+      ...(this.refreshing ? [this.refreshing] : []),
+    ]);
+  }
   async request(r) {
+    if (!this.accepting)
+      throw new Error(
+        "Point Guard is closing. Inspect history; input will not be replayed.",
+      );
+    const operation = this.dispatch(r);
+    this.inflight.add(operation);
+    try {
+      return await operation;
+    } finally {
+      this.inflight.delete(operation);
+    }
+  }
+  async dispatch(r) {
     this.validate(r);
     if (r.op === "answer") {
       this.checkEpoch(r);
@@ -366,6 +392,10 @@ export class Controller extends EventEmitter {
         this.cancelDialogs();
       }
       const operation = this.serial.then(async () => {
+        if (!this.accepting)
+          throw new Error(
+            "Point Guard is closing. Queued input was not dispatched.",
+          );
         // Native session_start hooks run before mutation replies. Retain their
         // bounded UI changes for reset, while interactive dialogs stay live.
         if (r.op !== "stop")
@@ -600,6 +630,7 @@ export class Controller extends EventEmitter {
     return { answered: true };
   }
   dispose() {
+    this.fence();
     this.disposed = true;
     clearTimeout(this.broadcastTimer);
     for (const x of this.dialogs.values()) clearTimeout(x.timer);

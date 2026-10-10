@@ -20,7 +20,11 @@ enum PiPairingSecret {
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PurePoint.PointGuard.Pairing",
             kSecAttrAccount as String: endpoint,
         ]
-        SecItemDelete(query as CFDictionary)
+        let update = SecItemUpdate(query as CFDictionary, [kSecValueData as String: Data(secret.utf8)] as CFDictionary)
+        if update == errSecSuccess { return }
+        guard update == errSecItemNotFound else {
+            throw PiChatError("Could not update the local Point Guard credential in Keychain (\(update)).")
+        }
         var attributes = query
         attributes[kSecValueData as String] = Data(secret.utf8)
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly

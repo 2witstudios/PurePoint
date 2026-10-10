@@ -113,3 +113,33 @@ test("uncertain prompt timeout fences later prompts until bridge restart", async
     await rpc.close();
   }
 });
+
+test("shutdown fence rejects pending and future writes before transport close", async () => {
+  const rpc = new Rpc(
+    process.execPath,
+    ["-e", "process.stdin.resume()"],
+    process.cwd(),
+    process.env,
+  );
+  try {
+    const pending = rpc.call("get_state").then(
+      () => {
+        throw new Error("Unexpected reply");
+      },
+      (error) => error,
+    );
+    rpc.fence();
+    assert.match((await pending).message, /shutting down/);
+    await assert.rejects(
+      rpc.call("prompt", { message: "must not dispatch" }),
+      /shutting down/,
+    );
+    assert.throws(
+      () => rpc.answer({ id: "late", cancelled: true }),
+      /shutting down/,
+    );
+    assert.equal(rpc.pending.size, 0);
+  } finally {
+    await rpc.close();
+  }
+});

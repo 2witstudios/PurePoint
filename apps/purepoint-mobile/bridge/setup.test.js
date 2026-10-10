@@ -71,3 +71,8 @@ test("installed skill discovery follows owner symlinks without a pinned cache pa
     await rm(home, { recursive: true, force: true });
   }
 });
+test('given a secret symlink should refuse rather than share the target credential',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'pointguard-secret-link-'));
+ try{const target=path.join(dir,'target');await writeFile(target,'x'.repeat(43),{mode:0o600});const link=path.join(dir,'secret');await symlink(target,link);await assert.rejects(ensureToken(link));assert.equal(await readFile(target,'utf8'),'x'.repeat(43));}
+ finally{await rm(dir,{recursive:true,force:true});}
+});

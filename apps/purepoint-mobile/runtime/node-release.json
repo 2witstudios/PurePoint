@@ -1,0 +1,13 @@
+{
+  "version": "22.23.3",
+  "archives": {
+    "arm64": {
+      "name": "node-v22.23.3-darwin-arm64.tar.gz",
+      "sha256": "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53"
+    },
+    "x64": {
+      "name": "node-v22.23.3-darwin-x64.tar.gz",
+      "sha256": "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8"
+    }
+  }
+}

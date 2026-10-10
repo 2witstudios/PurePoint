@@ -1,9 +1,31 @@
 import XCTest
+import Security
 @testable import PurePoint
 final class ChatDomainTests: XCTestCase {
+    func testGivenSavedTrustShouldSurviveKeychainReadAndAtomicCredentialUpdate() throws {
+        let endpoint = "wss://fixture-" + UUID().uuidString.lowercased() + ".ts.net/v1"
+        // Synthetic unique account only; never touch owner endpoints or legacy trust.
+        defer { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PiMobile.TrustedHost.v1", kSecAttrAccount as String: endpoint] as CFDictionary) }
+        let host = UUID().uuidString; let device = UUID().uuidString
+        let first = TrustedHost(version: 1, endpoint: endpoint, hostId: host, certificateSHA256: String(repeating: "a", count: 64), deviceId: device, clientId: device, credential: String(repeating: "b", count: 43))
+        try PairingSecret.saveTrust(first)
+        XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, first.credential)
+        let updated = TrustedHost(version: 1, endpoint: endpoint, hostId: host, certificateSHA256: first.certificateSHA256, deviceId: device, clientId: device, credential: String(repeating: "c", count: 43))
+        try PairingSecret.saveTrust(updated)
+        XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, updated.credential)
+        let invalid = TrustedHost(version: 99, endpoint: endpoint, hostId: host, certificateSHA256: first.certificateSHA256, deviceId: device, clientId: device, credential: String(repeating: "d", count: 43))
+        XCTAssertThrowsError(try PairingSecret.saveTrust(invalid))
+        XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, updated.credential)
+    }
+    func testGivenRepeatedFailuresShouldBoundReconnectAndResetOnNetworkChange() {
+        var budget = ReconnectBudget()
+        XCTAssertEqual((0..<5).compactMap { _ in budget.nextDelay() }, [1,2,4,8,16])
+        XCTAssertNil(budget.nextDelay()); budget.reset(); XCTAssertEqual(budget.nextDelay(), 1)
+    }
+
     @MainActor func testGivenExplicitDisconnectShouldStayDisconnectedOnForegroundWithSavedEndpoint() {
         let model = ChatModel()
-        model.endpoint = "ws://100.100.1.2:8787/v1"
+        model.endpoint = "wss://100.100.1.2:8787/v1"
         model.disconnect()
         model.setForeground(false)
         model.setForeground(true)
@@ -13,7 +35,7 @@ final class ChatDomainTests: XCTestCase {
 
     @MainActor func testGivenConnectionIntentShouldReconnectOnForeground() {
         let model = ChatModel()
-        model.endpoint = "ws://100.100.1.2:8787/v1"
+        model.endpoint = "wss://100.100.1.2:8787/v1"
         model.connect()
         model.setForeground(false)
         model.setForeground(true)
@@ -62,11 +84,11 @@ final class ChatDomainTests: XCTestCase {
         XCTAssertEqual(rows[3].id, "message:error")
     }
     func testGivenPairingQRShouldAcceptNativePayloadAndRejectUnsafeOrUnsupportedCodes() {
-        let payload = "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"ws://100.94.14.74:8787/v1\",\"secret\":\"fixture-pairing-secret-0123456789abcdef\"}"
-        XCTAssertEqual(PairingCode.parse(payload)?.endpoint, "ws://100.94.14.74:8787/v1")
+        let payload = "{\"type\":\"pi-mobile-pairing\",\"version\":2,\"endpoint\":\"wss://100.94.14.74:8787/v1\",\"hostId\":\"550e8400-e29b-41d4-a716-446655440000\",\"certificateSHA256\":\"" + String(repeating: "a", count: 64) + "\",\"enrollmentToken\":\"" + String(repeating: "b", count: 43) + "\",\"expiresAt\":" + String(Int64(Date().timeIntervalSince1970 * 1000) + 120000) + "}"
+        XCTAssertEqual(PairingCode.parse(payload)?.endpoint, "wss://100.94.14.74:8787/v1")
         XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "100.94.14.74", with: "example.com")))
-        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")))
-        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "fixture-pairing-secret-0123456789abcdef", with: "short")))
+        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: "\"version\":2", with: "\"version\":1")))
+        XCTAssertNil(PairingCode.parse(payload.replacingOccurrences(of: String(repeating: "b", count: 43), with: "short")))
         XCTAssertNil(PairingCode.parse(String(repeating: "x", count: 8193)))
         XCTAssertNil(PairingCode.parse("https://example.com"))
     }
