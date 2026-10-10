@@ -103,7 +103,10 @@ export async function launchArguments(cwd, env) {
     throw new Error("PI_MOBILE_CWD must be an existing directory.");
   const skills = env.PI_MOBILE_PU_SKILL
     ? [path.resolve(env.PI_MOBILE_PU_SKILL)]
-    : await discoverPuSkills();
+    : [
+        path.join(root, "support/pu/SKILL.md"),
+        path.join(root, "support/pu-cli/SKILL.md"),
+      ];
   if (!skills.length)
     throw new Error(
       "No installed pu skill/reference found. Install Point Guard pu skills or set PI_MOBILE_PU_SKILL to its SKILL.md.",

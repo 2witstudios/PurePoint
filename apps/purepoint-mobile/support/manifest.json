@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "version": 2,
+  "sources": {
+    "pu": "purepoint/pu skill 0.1.0",
+    "pu-cli": "PurePoint CLI skill reference 2026-10-09",
+    "instructions": "PRPG r2"
+  },
+  "files": ["pu/SKILL.md", "pu-cli/SKILL.md", "../docs/point-guard.md"]
+}

@@ -1,116 +1,58 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import { Rpc } from "./rpc.js";
 import { Controller } from "./controller.js";
 import { serve } from "./network.js";
-import { root, launchArguments, nativeSessions, ensureToken } from "./setup.js";
-import { writePairingPage, pairingPagePath } from "./pairing.js";
+import { root, ensureToken } from "./setup.js";
+
 async function main() {
-  const fixture = process.argv.includes("--fixture");
-  const env = process.env;
-  const cwd = env.PI_MOBILE_CWD ? path.resolve(env.PI_MOBILE_CWD) : null;
-  if (!fixture && !cwd)
-    throw new Error(
-      "Set PI_MOBILE_CWD to the explicit folder Pi should work in.",
-    );
-  const token = await ensureToken(env.PI_MOBILE_TOKEN_FILE);
-  const host = env.PI_MOBILE_HOST;
-  if (!host)
-    throw new Error(
-      "Set PI_MOBILE_HOST to this Mac’s explicit Tailscale IP (or 127.0.0.1 for simulator).",
-    );
-  const port = Number(env.PI_MOBILE_PORT ?? 8787);
-  if (!Number.isInteger(port) || port < 1 || port > 65535)
-    throw new Error("PI_MOBILE_PORT must be 1–65535.");
-  const args = fixture
-    ? [path.join(root, "bridge/fixture.js")]
-    : await launchArguments(cwd, env);
-  const rpc = new Rpc(process.execPath, args, cwd ?? root, env);
-  const sessions = fixture
-    ? {
-        list: async () => [
-          {
-            id: "fixture-history",
-            name: "A previous thought",
-            modified: new Date("2026-01-01"),
-          },
-        ],
-        path: async () => "fixture-history",
-        history: async () => ({
-          sessionId: "fixture-history",
-          title: "A previous thought",
-          messages: [
-            { id: "fixture-old", role: "user", text: "Where should we begin?" },
-            {
-              id: "fixture-reply",
-              role: "assistant",
-              text: "With one clear idea.",
-            },
-          ],
-        }),
-      }
-    : await nativeSessions();
+  if (!process.argv.includes("--fixture")) {
+    const { runManaged } = await import("./runtime.js");
+    await runManaged();
+    return;
+  }
+  // Explicit loopback-only developer fixture; never falls back from managed startup.
+  if (process.env.PI_MOBILE_HOST && process.env.PI_MOBILE_HOST !== "127.0.0.1")
+    throw new Error("Fixtures require loopback.");
+  const token = await ensureToken(process.env.PI_MOBILE_TOKEN_FILE);
+  const rpc = new Rpc(
+    process.execPath,
+    [path.join(root, "bridge/fixture.js")],
+    root,
+    process.env,
+  );
+  const sessions = {
+    list: async () => [],
+    path: async () => {
+      throw new Error("Fixture session unavailable.");
+    },
+    history: async () => {
+      throw new Error("Fixture history unavailable.");
+    },
+  };
   const controller = new Controller(rpc, sessions);
   let server;
   try {
     await controller.refresh();
-    if (!fixture) {
-      const { commands } = await rpc.call("get_commands");
-      if (
-        !commands.some(
-          (c) =>
-            c.source === "skill" &&
-            ["skill:pu", "skill:pu-cli"].includes(c.name),
-        )
-      )
-        throw new Error(
-          "Pi did not load the pu skill. Check its frontmatter and native resource diagnostics locally.",
-        );
-      if (!controller.state.model)
-        controller.notice(
-          "Configure a provider/model with local Pi before sending a message.",
-        );
-    }
-    const tls =
-      env.PI_MOBILE_TLS_CERT && env.PI_MOBILE_TLS_KEY
-        ? {
-            cert: await readFile(env.PI_MOBILE_TLS_CERT),
-            key: await readFile(env.PI_MOBILE_TLS_KEY),
-          }
-        : null;
-    server = await serve(controller, { host, port, token, tls });
-    const endpoint = `${tls ? "wss" : "ws"}://${host.includes(":") ? "[" + host + "]" : host}:${port}/v1`;
-    try {
-      await writePairingPage(pairingPagePath, endpoint, token);
-      console.log(
-        `Open ${pairingPagePath} locally, then use Scan Mac QR code in the iPhone app. This private page contains your pairing secret; close it when done.`,
-      );
-    } catch {
-      console.log(
-        "Pairing QR could not be saved. Manual pairing remains available; QR requires a writable ~/.config/pi-mobile directory and a secret of 32–1024 bytes without newlines.",
-      );
-    }
-    console.log(
-      `Pi Mobile ${fixture ? "fixture" : "bridge"} listening on ${tls ? "wss" : "ws"}://${host.includes(":") ? "[" + host + "]" : host}:${port}/v1. Shared live session; Pi stays running when clients disconnect.`,
-    );
+    server = await serve(controller, {
+      host: "127.0.0.1",
+      port: Number(process.env.PI_MOBILE_PORT ?? 8787),
+      localAdmin: { token, clientId: "fixture" },
+    });
   } catch (e) {
     controller.dispose();
     await rpc.close();
     throw e;
   }
-  let exiting = false;
   const shutdown = async () => {
-    if (exiting) return;
-    exiting = true;
     controller.dispose();
     await server.shutdown();
     await rpc.close();
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
-main().catch((error) => {
-  console.error(`Setup failed: ${error.message}`);
+main().catch(() => {
+  console.error("Point Guard setup failed. Inspect private setup status.");
   process.exitCode = 1;
 });

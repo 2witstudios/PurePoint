@@ -49,7 +49,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: '22.19.0'
+          node-version: '22.23.3'
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
       - run: npm ci
@@ -159,6 +159,9 @@ jobs:
           PKGEOF
           done
 
+      - name: Check managed Point Guard service model
+        run: python3 apps/purepoint-macos/verification/check-point-guard-service.py
+
       - name: Compile app and test bundles
         timeout-minutes: 18
         run: |
@@ -198,10 +201,58 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  runtime-package:
+    name: Point Guard package (${{ matrix.architecture }})
+    needs: changes
+    if: needs.changes.outputs.mobile == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            architecture: arm64
+          - runner: macos-26-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/pointguard-cargo
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.3'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+      - name: Build isolated artifact CLI
+        run: cargo build --locked --release -p pu-cli
+      - name: Stage complete pinned runtime
+        run: |
+          python3 apps/purepoint-mobile/runtime/package-runtime.py \
+            --app "$RUNNER_TEMP/PointGuardProof.app" \
+            --pu "$CARGO_TARGET_DIR/release/pu" \
+            --architecture "${{ matrix.architecture }}"
+      - name: Sign and verify nested artifact code (ad-hoc only)
+        run: |
+          python3 apps/purepoint-mobile/runtime/sign-runtime.py --app "$RUNNER_TEMP/PointGuardProof.app" --identity -
+          /usr/bin/lipo -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }} "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/point-guard-node"
+          /usr/bin/lipo -verify_arch ${{ matrix.architecture == 'x64' && 'x86_64' || 'arm64' }} "$RUNNER_TEMP/PointGuardProof.app/Contents/Helpers/pu"
+      - name: Relocated clean native startup and state-preserving replacement
+        run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/PointGuardProof.app"
+      - name: Retain nonpublishing proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: point-guard-runtime-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/PointGuardProof.app
+          retention-days: 7
+
   build-and-test:
     name: Build & Test
     if: always()
-    needs: [changes, macos, mobile-bridge, mobile-swift]
+    needs: [changes, macos, mobile-bridge, mobile-swift, runtime-package]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -210,4 +261,6 @@ jobs:
       - name: Require every applicable check to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
-        run: python3 .github/scripts/ci.py gate
+        run: |
+          python3 .github/scripts/ci.py gate
+          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert r["runtime-package"]["result"]==expected, r["runtime-package"]'
