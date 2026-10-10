@@ -13,11 +13,6 @@ extension PiChatModel {
 }
 
 extension ChatModel {
-    func connectFixture(_ url: URL, secret: String) async {
-        await recoveryTask?.value
-        endpoint = url.absoluteString
-        startConnection(url: url, secret: secret)
-    }
     func flushFixture() async {
         await withCheckedContinuation { continuation in writer.flush { continuation.resume() } }
     }
@@ -37,13 +32,17 @@ extension ChatModel {
         precondition(
             home.hasPrefix("/tmp/pointguard-checks-") && FileManager.default.homeDirectoryForCurrentUser.path == home)
         let defaults = UserDefaults(suiteName: "pointguard-fixture-" + UUID().uuidString)!
+        defaults.set(env["POINTGUARD_FIXTURE_CLIENT_ID"]!, forKey: "pointguard.clientId")
         let model = PiChatModel(defaults: defaults)
-        let phone = ChatModel(defaults: UserDefaults(suiteName: "phone-fixture-" + UUID().uuidString)!)
+        let saved = try JSONDecoder().decode(TrustedHost.self, from: Data(contentsOf: URL(fileURLWithPath: home + "/phone-trust.json")))
+        let phoneDefaults = UserDefaults(suiteName: "phone-fixture-" + UUID().uuidString)!
+        phoneDefaults.set(saved.endpoint, forKey: "pi.endpoint")
+        let phone = ChatModel(defaults: phoneDefaults, trustLoader: { _ in saved })
         precondition(model.clientId != phone.clientId)
         let url = URL(string: "ws://127.0.0.1:\(env["POINTGUARD_FIXTURE_PORT"]!)/v1")!
         await model.connectFixture(url, secret: env["POINTGUARD_FIXTURE_TOKEN"]!)
         try await wait("initial authoritative sync") { model.connected }
-        await phone.connectFixture(url, secret: env["POINTGUARD_FIXTURE_TOKEN"]!)
+        phone.connect()
         try await wait("both connected") { phone.connected && model.connected }
         await model.loadConversations()
         precondition(model.conversations.first?.id == "fixture-history")

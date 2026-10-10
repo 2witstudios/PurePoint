@@ -106,9 +106,15 @@ struct PointGuardSetupView: View {
             }
         }
         .task { service.start(chat: chat); if service.ready { await service.refresh() } }
-         .onChange(of: provider) { _, _ in model = ""; response = ""; Task { await service.cancelLogin() } }
-        .onChange(of: service.selectedProvider) { _, value in if provider.isEmpty { provider = value } }
-        .onChange(of: service.selectedModel) { _, value in if model.isEmpty { model = value } }
+         .onAppear { provider = service.selectedProvider; model = service.selectedModel }
+        .onChange(of: provider) { _, value in
+            model = value == service.selectedProvider ? service.selectedModel : ""
+            response = ""; Task { await service.cancelLogin() }
+        }
+        .onChange(of: service.selectedProvider) { old, value in
+            if provider.isEmpty || provider == old { provider = value; model = service.selectedModel }
+        }
+        .onChange(of: service.selectedModel) { _, value in if provider == service.selectedProvider { model = value } }
         .onChange(of: service.auth["prompt"]["id"].text) { _, _ in response = "" }
         .onChange(of: service.auth["status"].text) { _, value in if value != "pending" { response = "" } }
         .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service) }
