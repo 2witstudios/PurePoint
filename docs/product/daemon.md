@@ -23,6 +23,8 @@ Daemon (pu-engine binary)
 
 **Single daemon, per-project state keyed by project root.** The daemon is a single process serving all projects. Each request includes a `project_root` parameter to scope operations. `Engine` maintains per-project state internally. `Request::Init { project_root }` registers a project; subsequent `Spawn`/`Status`/`Kill` requests reference it. `Response::HealthReport` includes a `projects: Vec<String>` listing all registered project roots and `agent_count: usize` across all projects.
 
+**Global inventory (implemented 2026-10-10):** Production startup loads canonical project roots from `<socket>.projects.json`; successful Init and validated project use register roots atomically. Alternate sockets have independent registries. Invalid registrations do not enter the set, unavailable registered projects remain visible with errors, and restart does not spawn agents. A derived Inventory query combines manifests with live ownership metadata; no duplicate global agent database is stored. Global summary and flat agent/worktree records share count semantics, and Health now returns known projects and the count of live session handles rather than all retained handles. In-memory Engine::new remains available for isolated embedding/tests.
+
 **Daemon binary:** `pu-engine` (separate from `pu-cli`). Both modes take an exclusive lock on `daemon.sock.lock` (one daemon per socket) and write the PID file; managed mode (`--managed`) additionally exits when its parent app dies. Socket path configurable via `--socket <path>`, defaults to `~/.pu/daemon.sock`.
 
 ## Open Questions

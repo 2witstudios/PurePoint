@@ -9,7 +9,11 @@ use std::path::Path;
 pub async fn run(socket: &Path, agent: Option<String>, json: bool) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
 
-    let project_root = project_root_string()?;
+    let project_root = if agent.is_some() {
+        crate::commands::agent_project_root()
+    } else {
+        project_root_string()?
+    };
     let resp = client::send_request(
         socket,
         &Request::Status {

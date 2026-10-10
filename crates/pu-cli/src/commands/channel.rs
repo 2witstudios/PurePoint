@@ -114,7 +114,8 @@ pub async fn run(
     explicit: Option<String>,
     action: ChannelAction,
 ) -> Result<(), CliError> {
-    let root_env = std::env::var("PU_PROJECT_ROOT").ok();
+    let root_env =
+        crate::commands::explicit_project().or_else(|| std::env::var("PU_PROJECT_ROOT").ok());
     let project_root = resolve_root(
         explicit.as_deref(),
         root_env.as_deref(),
@@ -130,6 +131,11 @@ async fn run_with_context(
     agent_id: Option<String>,
     action: ChannelAction,
 ) -> Result<(), CliError> {
+    // Channel operations do not auto-start a daemon, but must verify its version
+    // before a write or read is dispatched.
+    if !crate::daemon_ctrl::check_daemon_health(socket).await? {
+        return Err(CliError::DaemonNotRunning);
+    }
     let (request, json) = match action {
         ChannelAction::Send {
             text,

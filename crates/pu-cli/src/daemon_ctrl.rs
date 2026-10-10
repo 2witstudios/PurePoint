@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pu_core::paths;
-use pu_core::protocol::{Request, Response};
+use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 
 use crate::error::CliError;
 
@@ -13,15 +13,27 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
 /// answers would otherwise hold each probe for the full request timeout.
 const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// True if a daemon is alive on `socket`. A daemon at its connection limit
-/// answers `BUSY` instead of a health report: it is alive, and starting another
-/// one would only lose the single-instance lock.
-pub async fn check_daemon_health(socket: &Path) -> bool {
+/// Check compatibility before any command; never restart a live daemon because
+/// doing so would terminate its agent sessions.
+pub async fn check_daemon_health(socket: &Path) -> Result<bool, CliError> {
     let probe = crate::client::send_request(socket, &Request::Health);
     match tokio::time::timeout(HEALTH_PROBE_TIMEOUT, probe).await {
-        Ok(Ok(Response::HealthReport { .. })) => true,
-        Ok(Ok(Response::Error { code, .. })) => code == "BUSY",
-        _ => false,
+        Ok(Ok(Response::HealthReport {
+            protocol_version, ..
+        })) => {
+            if protocol_version != PROTOCOL_VERSION {
+                return Err(CliError::Other(format!(
+                    "daemon protocol v{protocol_version} is incompatible with CLI protocol v{PROTOCOL_VERSION} at {} — update pu and pu-engine together and restart the daemon after saving active agent work",
+                    socket.display()
+                )));
+            }
+            Ok(true)
+        }
+        // BUSY establishes liveness, but cannot establish protocol compatibility.
+        Ok(Ok(Response::Error { code, message })) if code == "BUSY" => {
+            Err(CliError::DaemonError { code, message })
+        }
+        _ => Ok(false),
     }
 }
 
@@ -33,7 +45,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        if check_daemon_health(socket).await {
+        if check_daemon_health(socket).await? {
             return Ok(());
         }
     }
@@ -62,6 +74,8 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
 
     // Start daemon
     std::process::Command::new(&binary)
+        .arg("--socket")
+        .arg(socket)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(stderr_target)
@@ -75,15 +89,15 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         let mut delay_ms = 10u64;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            if check_daemon_health(socket).await {
-                return;
+            if check_daemon_health(socket).await? {
+                return Ok::<(), CliError>(());
             }
             delay_ms = (delay_ms * 2).min(640);
         }
     };
     tokio::time::timeout(std::time::Duration::from_secs(3), poll)
         .await
-        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))
+        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))?
 }
 
 #[cfg(test)]
@@ -117,8 +131,9 @@ mod tests {
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let healthy = check_daemon_health(&sock).await;
+        let healthy = check_daemon_health(&sock).await.unwrap();
         assert!(healthy);
+        ensure_daemon(&sock).await.unwrap();
 
         crate::client::send_request(&sock, &pu_core::protocol::Request::Shutdown)
             .await
@@ -131,18 +146,19 @@ mod tests {
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
         let sock = tmp.path().join("nope.sock");
-        let healthy = check_daemon_health(&sock).await;
+        let healthy = check_daemon_health(&sock).await.unwrap();
         assert!(!healthy);
     }
 
     /// Serve one canned reply line (or none) to every connection on `sock`.
-    fn fake_daemon(sock: &Path, reply: Option<&'static str>) -> tokio::task::JoinHandle<()> {
+    fn fake_daemon(sock: &Path, reply: Option<String>) -> tokio::task::JoinHandle<()> {
         let listener = tokio::net::UnixListener::bind(sock).unwrap();
         tokio::spawn(async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
                 };
+                let reply = reply.clone();
                 tokio::spawn(async move {
                     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
                     let (reader, mut writer) = stream.split();
@@ -163,18 +179,69 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn given_daemon_at_connection_limit_should_report_alive() {
+    async fn given_daemon_at_connection_limit_should_report_busy() {
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
         let sock = tmp.path().join("busy.sock");
         let server = fake_daemon(
             &sock,
             Some(
-                "{\"type\":\"error\",\"code\":\"BUSY\",\"message\":\"daemon connection limit reached\"}\n",
+                "{\"type\":\"error\",\"code\":\"BUSY\",\"message\":\"daemon connection limit reached\"}\n".into(),
             ),
         );
 
-        assert!(check_daemon_health(&sock).await);
+        assert!(
+            matches!(check_daemon_health(&sock).await, Err(CliError::DaemonError { code, .. }) if code == "BUSY")
+        );
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_incompatible_daemon_should_reject_without_stopping_it() {
+        for version in [6, pu_core::protocol::PROTOCOL_VERSION + 1] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let sock = tmp.path().join("old.sock");
+            let reply = serde_json::to_string(&Response::HealthReport {
+                pid: 1,
+                uptime_seconds: 0,
+                protocol_version: version,
+                projects: vec![],
+                agent_count: 1,
+            })
+            .unwrap()
+                + "\n";
+            let server = fake_daemon(&sock, Some(reply));
+
+            let error = ensure_daemon(&sock).await.unwrap_err().to_string();
+            assert!(error.contains("protocol"), "{error}");
+            assert!(error.contains("restart"), "{error}");
+            let error = crate::commands::prompt::run_list(&sock, false)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("protocol"), "{error}");
+            // The old daemon remains reachable, preserving its live sessions.
+            assert!(
+                matches!(crate::client::send_request(&sock, &Request::Health).await,
+                Ok(Response::HealthReport { protocol_version, .. }) if protocol_version == version)
+            );
+            server.abort();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_busy_daemon_should_not_assume_protocol_compatibility() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("busy.sock");
+        let server = fake_daemon(
+            &sock,
+            Some(
+                "{\"type\":\"error\",\"code\":\"BUSY\",\"message\":\"daemon connection limit reached\"}\n".into(),
+            ),
+        );
+        assert!(
+            matches!(ensure_daemon(&sock).await, Err(CliError::DaemonError { code, .. }) if code == "BUSY")
+        );
         server.abort();
     }
 
@@ -186,7 +253,7 @@ mod tests {
         let server = fake_daemon(&sock, None);
 
         let started = std::time::Instant::now();
-        assert!(!check_daemon_health(&sock).await);
+        assert!(!check_daemon_health(&sock).await.unwrap());
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         server.abort();
     }

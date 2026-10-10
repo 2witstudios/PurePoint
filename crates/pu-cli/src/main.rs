@@ -10,6 +10,12 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "pu", about = "PurePoint workspace orchestrator")]
 struct Cli {
+    /// Route a command to this project; overrides PU_PROJECT_ROOT and cwd
+    #[arg(long, global = true, value_name = "ROOT")]
+    project: Option<String>,
+    /// Connect to a specific daemon socket
+    #[arg(long, global = true, value_name = "PATH")]
+    socket: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -81,12 +87,30 @@ enum Commands {
     },
     /// Show workspace status
     Status {
+        /// Summarize every registered project, independent of cwd
+        #[arg(long, conflicts_with_all = ["agent", "project"])]
+        global: bool,
         /// Show single agent status
         #[arg(long)]
         agent: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// List projects known to the daemon
+    Projects {
+        #[command(subcommand)]
+        action: InventoryAction,
+    },
+    /// List agent instances (saved definitions use `pu agent`)
+    Agents {
+        #[command(subcommand)]
+        action: InventoryAction,
+    },
+    /// List worktrees known to the daemon
+    Worktrees {
+        #[command(subcommand)]
+        action: InventoryAction,
     },
     /// Bench (suspend) agents — pull them off the court
     #[command(long_about = "Bench (suspend) agents — pull them off the court.\n\n\
@@ -524,6 +548,20 @@ enum TabAction {
 }
 
 #[derive(Subcommand)]
+enum InventoryAction {
+    /// List all registered projects by default; --project narrows the scope
+    List {
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+        /// Filter agent instances by observed state (agents list only)
+        #[arg(long, value_parser = ["running", "suspended", "broken", "unknown"])]
+        state: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ScheduleAction {
     /// List schedules
     List {
@@ -671,7 +709,15 @@ enum TriggerAction {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let socket = match pu_core::paths::daemon_socket_path() {
+    if let Some(root) = &cli.project {
+        commands::set_project_override(root.clone());
+    }
+    let custom_socket = cli.socket.is_some();
+    let socket = match cli
+        .socket
+        .map(Ok)
+        .unwrap_or_else(pu_core::paths::daemon_socket_path)
+    {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
@@ -680,7 +726,9 @@ async fn main() {
     };
 
     // Background plugin freshness check (non-blocking)
-    std::thread::spawn(skill::ensure_plugin_current);
+    if !custom_socket {
+        std::thread::spawn(skill::ensure_plugin_current);
+    }
 
     let result = match cli.command {
         Commands::Init { json } => commands::init::run(&socket, json).await,
@@ -716,7 +764,43 @@ async fn main() {
         Commands::Play { agent_id, json } => {
             commands::bench::run_play(&socket, &agent_id, json).await
         }
-        Commands::Status { agent, json } => commands::status::run(&socket, agent, json).await,
+        Commands::Status {
+            agent,
+            global,
+            json,
+        } => {
+            if global {
+                commands::inventory::run(
+                    &socket,
+                    pu_core::protocol::InventoryKind::Summary,
+                    None,
+                    json,
+                )
+                .await
+            } else {
+                commands::status::run(&socket, agent, json).await
+            }
+        }
+        Commands::Projects { action } => {
+            commands::inventory::run_list(
+                &socket,
+                pu_core::protocol::InventoryKind::Projects,
+                action,
+            )
+            .await
+        }
+        Commands::Agents { action } => {
+            commands::inventory::run_list(&socket, pu_core::protocol::InventoryKind::Agents, action)
+                .await
+        }
+        Commands::Worktrees { action } => {
+            commands::inventory::run_list(
+                &socket,
+                pu_core::protocol::InventoryKind::Worktrees,
+                action,
+            )
+            .await
+        }
         Commands::Kill {
             agent,
             worktree,
@@ -948,6 +1032,38 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_global_queries_and_explicit_scope_should_parse_without_ambiguous_scope() {
+        for args in [
+            vec!["pu", "status", "--global", "--json"],
+            vec!["pu", "projects", "list", "--json"],
+            vec!["pu", "agents", "list", "--state", "running", "--json"],
+            vec!["pu", "worktrees", "list", "--global", "--json"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        let cli = Cli::try_parse_from([
+            "pu",
+            "agents",
+            "list",
+            "--project",
+            "/project",
+            "--socket",
+            "/test.sock",
+        ])
+        .unwrap();
+        assert_eq!(cli.project.as_deref(), Some("/project"));
+        assert_eq!(cli.socket, Some(std::path::PathBuf::from("/test.sock")));
+        for args in [
+            vec!["pu", "status", "--global", "--agent", "ag-1"],
+            vec!["pu", "status", "--global", "--project", "/project"],
+            vec!["pu", "agents", "list", "--global", "--project", "/project"],
+            vec!["pu", "agents", "list", "--state", "idle"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
 
     #[test]
     fn given_channel_commands_should_parse_routing_and_reject_invalid_cursors() {

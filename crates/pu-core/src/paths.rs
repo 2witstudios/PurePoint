@@ -32,6 +32,13 @@ pub fn daemon_socket_path() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("daemon.sock"))
 }
 
+/// Registry belongs to the selected daemon socket, including custom sockets.
+pub fn project_registry_path(socket: &Path) -> PathBuf {
+    let mut path = socket.as_os_str().to_os_string();
+    path.push(".projects.json");
+    PathBuf::from(path)
+}
+
 pub fn daemon_log_path() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("daemon.log"))
 }
@@ -108,6 +115,18 @@ fn home_dir() -> Result<PathBuf, std::io::Error> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn given_distinct_socket_extensions_should_keep_registries_separate() {
+        assert_ne!(
+            project_registry_path(Path::new("/tmp/daemon.one")),
+            project_registry_path(Path::new("/tmp/daemon.two"))
+        );
+        assert_eq!(
+            project_registry_path(Path::new("/tmp/daemon.sock")),
+            PathBuf::from("/tmp/daemon.sock.projects.json")
+        );
+    }
 
     #[test]
     fn given_project_root_should_build_pu_dir() {

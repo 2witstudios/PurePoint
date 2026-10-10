@@ -331,3 +331,55 @@ async fn given_real_ipc_server_should_persist_cli_send_reply_edit_and_reaction()
     assert!(history.messages[0].reactions.is_empty());
     task.abort(); // only this test's temporary in-process server, never a daemon session
 }
+
+#[tokio::test]
+async fn given_incompatible_daemon_should_not_post_channel_message() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let temp = tempfile::tempdir().unwrap();
+    let socket = temp.path().join("old.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let mut line = String::new();
+        tokio::io::BufReader::new(read)
+            .read_line(&mut line)
+            .await
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Request>(&line).unwrap(),
+            Request::Health
+        ));
+        let response = Response::HealthReport {
+            pid: 1,
+            uptime_seconds: 0,
+            protocol_version: 6,
+            projects: vec![],
+            agent_count: 1,
+        };
+        write
+            .write_all((serde_json::to_string(&response).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    let result = run_with_context(
+        &socket,
+        "/unused".into(),
+        None,
+        ChannelAction::Send {
+            text: "must not post".into(),
+            reply_to: None,
+            commit: vec![],
+            pr: vec![],
+            json: false,
+        },
+    )
+    .await;
+    assert!(result.unwrap_err().to_string().contains("protocol"));
+    server.await.unwrap();
+}
