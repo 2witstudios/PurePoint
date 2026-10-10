@@ -168,7 +168,7 @@ impl IpcServer {
         engine: &Engine,
         shutdown: &Notify,
     ) -> bool {
-        let request: Request = match serde_json::from_str(line.trim()) {
+        let mut request: Request = match serde_json::from_str(line.trim()) {
             Ok(r) => r,
             Err(e) => {
                 let resp = Response::Error {
@@ -179,10 +179,13 @@ impl IpcServer {
             }
         };
 
+        if let Err(response) = engine.prepare_request(&mut request).await {
+            return write_response(writer, &response).await.is_ok();
+        }
         let is_shutdown = matches!(request, Request::Shutdown);
         let stream_mode = StreamMode::from_request(&request);
 
-        let response = engine.handle_request(request).await;
+        let response = engine.handle_prepared_request(request).await;
         if write_response(writer, &response).await.is_err() {
             if is_shutdown {
                 shutdown.notify_one();

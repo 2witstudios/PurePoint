@@ -55,6 +55,24 @@ Responses use the same `"type"` field convention. Error responses have `"type": 
 
 ## Core operations
 
+### Global inventory and ownership
+
+The query is one daemon operation, independent of client cwd:
+
+```json
+{"type":"inventory","kind":"summary"}
+{"type":"inventory","kind":"projects"}
+{"type":"inventory","kind":"agents","state":"running"}
+{"type":"inventory","kind":"worktrees","project_root":"/project"}
+{"type":"resolve_agent","agent_id":"ag-abc"}
+```
+
+Inventory returns `type: inventory`, observation time, optional project scope (null means global), `complete`, whole-scope `summary`, project summaries/availability/errors, and requested flat agent or worktree records. Running counts refer to daemon-owned live processes, with separate `running_ai_agents` and `running_terminals`; suspended, broken and unknown are separate. State filters apply to records, not summary counts. Unknown means persisted running state with no owned live session. Unreadable projects yield partial responses, while known live sessions remain visible. Standalone shells have null project ownership.
+
+ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree_id. Legacy Status (with agent_id), Kill (single agent), Suspend (single agent), Resume, Rename and AssignTrigger accept an empty project_root for daemon ownership resolution. Explicit roots constrain ownership. Bulk requests require a root. Duplicate durable IDs return AMBIGUOUS_AGENT; a live session owned by another project returns AGENT_OWNERSHIP_CONFLICT; an incomplete durable inventory returns INVENTORY_INCOMPLETE when a known live owner cannot resolve the ID. Standalone shells support status/logs/input/attach/kill and reject resumable project operations with UNSUPPORTED_AGENT_OPERATION.
+
+Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
+
 ### Health
 
 Check daemon liveness and protocol version.

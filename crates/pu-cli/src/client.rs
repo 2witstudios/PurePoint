@@ -30,6 +30,33 @@ fn timeout_for(request: &Request) -> Duration {
 }
 
 pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, CliError> {
+    // Session operations are already global. An explicit project constrains them.
+    if let Some(project_root) = crate::commands::explicit_project() {
+        let id = match request {
+            Request::Logs { agent_id, .. }
+            | Request::Input { agent_id, .. }
+            | Request::Attach { agent_id }
+            | Request::Resize { agent_id, .. } => Some(agent_id),
+            _ => None,
+        };
+        if let Some(id) = id {
+            let response = send_raw_request(
+                socket,
+                &Request::ResolveAgent {
+                    agent_id: id.clone(),
+                    project_root: Some(project_root),
+                },
+            )
+            .await?;
+            if !matches!(response, Response::AgentResolved { .. }) {
+                return Ok(response);
+            }
+        }
+    }
+    send_raw_request(socket, request).await
+}
+
+async fn send_raw_request(socket: &Path, request: &Request) -> Result<Response, CliError> {
     let timeout = timeout_for(request);
     let result = tokio::time::timeout(timeout, async {
         let stream = UnixStream::connect(socket)

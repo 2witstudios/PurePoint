@@ -119,7 +119,7 @@ pub async fn run_assign(
     json: bool,
 ) -> Result<(), CliError> {
     daemon_ctrl::ensure_daemon(socket).await?;
-    let project_root = commands::project_root_string()?;
+    let project_root = commands::agent_project_root();
     let resp = client::send_request(
         socket,
         &Request::AssignTrigger {

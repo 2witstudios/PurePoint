@@ -330,7 +330,7 @@ impl Engine {
             Err(e) => return Self::error_response(&e),
         };
 
-        let (agent_entry, _worktree_id, cwd) = match m.find_agent(agent_id) {
+        let (agent_entry, worktree_id, cwd) = match m.find_agent(agent_id) {
             Some(pu_core::types::AgentLocation::Root(a)) => {
                 (a.clone(), None::<String>, project_root.to_string())
             }
@@ -416,6 +416,10 @@ impl Engine {
         };
 
         handle.screen_aware = agent_entry.agent_type == "claude";
+        handle.project_root = Some(project_root.to_string());
+        handle.name = agent_entry.name.clone();
+        handle.agent_type = agent_entry.agent_type.clone();
+        handle.worktree_id = worktree_id.clone();
         let pid = handle.pid;
 
         // Store handle in session map BEFORE writing manifest.

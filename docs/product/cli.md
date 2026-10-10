@@ -35,7 +35,10 @@ Key behaviors:
 |---|---|---|
 | `pu init` | `--json` | Register current project with daemon |
 | `pu spawn [prompt]` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--command`, `--var KEY=VALUE`, `--no-auto`, `--agent-args`, `--plan`, `--no-trigger`, `--trigger`, `--json` | Spawn an agent (in worktree or root) |
-| `pu status` | `--agent <id>`, `--json` | Show project/agent status |
+| `pu status` | `--global`, `--agent <id>`, `--json` | Show project, global summary, or agent status |
+| `pu projects list` | `--global`, `--json` | List daemon-known projects |
+| `pu agents list` | `--global`, `--state running\|suspended\|broken\|unknown`, `--json` | List agent instances with ownership |
+| `pu worktrees list` | `--global`, `--json` | List worktrees with ownership |
 | `pu bench [agent_id]` | `--all`, `--json` | Suspend (bench) agents |
 | `pu play <agent_id>` | `--json` | Resume a benched agent |
 | `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive), `--include-root` (requires `--all`), `--json` | Kill agent(s) |
@@ -89,3 +92,19 @@ Key behaviors:
 **Client implementation (`pu-cli/src/client.rs`):** Connects to Unix socket, writes `{json}\n`, reads one newline-terminated response. 30-second request timeout. `ConnectionRefused`/`NotFound` errors converted to `DaemonNotRunning` error type.
 
 **Daemon discovery:** Socket path resolved from `pu_core::paths::daemon_socket_path()` → `~/.pu/daemon.sock`. No environment variable override currently.
+
+## Global Inventory and Routing Contract
+
+**Feature maturity: SPECIFIED.** Scope is the selected daemon's registered projects plus its standalone sessions. Registration survives restarts, with project manifests retaining durable agent/worktree state. The CLI never enumerates manifests to answer global queries.
+
+- REQ-CLI-003: Given any cwd, global status should return totals and project summaries through one Inventory request, without git scans, logs or full prompts.
+- REQ-CLI-004: Given any cwd, projects/agents/worktrees list should default to global scope; --project should constrain the inventory and --state should filter agent records without changing scope totals.
+- REQ-CLI-005: Given a targeted agent ID without an explicit --project scope, status/kill/bench/play/trigger assign should resolve ownership in the daemon. Duplicate durable IDs should require project scope; a mismatched live owner should reject the operation.
+- REQ-CLI-006: Given --project ROOT, project commands should prefer it over PU_PROJECT_ROOT and cwd; global session commands should validate that scope before acting. Existing channel/gate --project-root flags retain their explicit routing behavior.
+- REQ-CLI-007: Given unreadable projects or unowned persisted agents, inventory should report project errors and unknown states instead of inventing running agents or an exhaustive zero. Known live sessions remain visible, including standalone shells.
+
+Interfaces: global `--project ROOT` and `--socket PATH` flags; `Inventory { project_root?: string, kind: summary|projects|agents|worktrees, state?: running|suspended|broken|unknown }`; `ResolveAgent { agent_id, project_root?: string }`. Inventory returns observation time, scope, completeness, whole-scope counts, project availability, and requested flat records in deterministic order. Running counts derive from live session exit receivers; AI and terminal subtotals are separate. Legacy targeted requests with an empty project_root request daemon ownership resolution. Standalone shells have null ownership and support status/logs/input/attach/kill; resumable project operations return UNSUPPORTED_AGENT_OPERATION for them.
+
+Global summary and list commands ignore PU_PROJECT_ROOT unless --project is supplied. Ordinary `pu status` remains project-scoped. Bulk operations retain project scope. `pu init` sends Init to the daemon so already-initialized projects also register. The CLI does not install global plugin files when connected to a custom socket.
+
+Validation: `crates/pu-cli/tests/global_inventory.rs` exercises real CLI processes and IPC from an unrelated cwd across two projects, root/worktree agents, scoped rejection, send/logs, bench/kill, standalone shells and registry restart. Engine inventory tests cover aliases, corrupt stores, invalid registrations, duplicate IDs, partial inventories and exited handles before reaping.

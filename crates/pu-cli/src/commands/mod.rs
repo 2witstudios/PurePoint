@@ -8,6 +8,7 @@ pub mod gate;
 pub mod grid;
 pub mod health;
 pub mod init;
+pub mod inventory;
 pub mod kill;
 pub mod logs;
 pub mod prompt;
@@ -24,14 +25,31 @@ use std::collections::HashMap;
 
 use crate::error::CliError;
 
+static PROJECT_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn set_project_override(root: String) {
+    let _ = PROJECT_OVERRIDE.set(root);
+}
+pub fn explicit_project() -> Option<String> {
+    PROJECT_OVERRIDE.get().cloned()
+}
+
+/// Agent IDs are daemon-wide; only --project constrains targeted operations.
+pub fn agent_project_root() -> String {
+    explicit_project().unwrap_or_default()
+}
+
 pub fn cwd_string() -> Result<String, CliError> {
     Ok(std::env::current_dir()?.to_string_lossy().to_string())
 }
 
 /// Resolve the project root directory.
-/// Checks `PU_PROJECT_ROOT` env var first (set by the engine for worktree agents),
-/// falls back to the current working directory.
+/// Checks --project first, then PU_PROJECT_ROOT (set for worktree agents),
+/// then the current working directory.
 pub fn project_root_string() -> Result<String, CliError> {
+    if let Some(root) = explicit_project() {
+        return Ok(root);
+    }
     if let Ok(root) = std::env::var("PU_PROJECT_ROOT")
         && !root.is_empty()
     {

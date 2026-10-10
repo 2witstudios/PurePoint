@@ -341,7 +341,12 @@ async fn given_tab_command_should_be_accepted_and_broadcast_to_grid_subscribers(
                     agent_id,
                 },
         } => {
-            assert_eq!(project_root, h.project_root());
+            assert_eq!(
+                project_root,
+                std::fs::canonicalize(h.project_root())
+                    .unwrap()
+                    .to_string_lossy()
+            );
             assert_eq!(workspace_id.as_deref(), Some("ws-ag-a"));
             assert_eq!(leaf_id, Some(1));
             assert_eq!(agent_id.as_deref(), Some("ag-a"));
@@ -553,4 +558,76 @@ async fn given_uninitialised_project_kill_should_return_error() {
     );
 
     h.shutdown().await;
+}
+
+#[tokio::test]
+async fn given_production_daemon_restart_should_restore_registry_without_project_discovery() {
+    let tmp = TempDir::new().unwrap();
+    let socket = tmp.path().join("production.sock");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    async fn launch(socket: &std::path::Path) -> tokio::process::Child {
+        let mut process = tokio::process::Command::new(env!("CARGO_BIN_EXE_pu-engine"))
+            .arg("--socket")
+            .arg(socket)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                assert!(
+                    process.try_wait().unwrap().is_none(),
+                    "daemon exited before binding"
+                );
+                if UnixStream::connect(socket).await.is_ok() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        process
+    }
+    let mut process = launch(&socket).await;
+    assert!(matches!(
+        send(
+            &socket,
+            &Request::Init {
+                project_root: project.to_string_lossy().into_owned()
+            }
+        )
+        .await,
+        Response::InitResult { .. }
+    ));
+    assert!(pu_core::paths::project_registry_path(&socket).is_file());
+    send(&socket, &Request::Shutdown).await;
+    assert!(process.wait().await.unwrap().success());
+    let mut process = launch(&socket).await;
+    match send(
+        &socket,
+        &Request::Inventory {
+            project_root: None,
+            kind: pu_core::protocol::InventoryKind::Summary,
+            state: None,
+        },
+    )
+    .await
+    {
+        Response::Inventory(report) => {
+            assert!(report.complete);
+            assert_eq!(report.summary.projects, 1);
+            assert_eq!(report.summary.running, 0);
+            assert_eq!(
+                report.projects[0].project_root,
+                project.canonicalize().unwrap().to_string_lossy()
+            );
+        }
+        other => panic!("expected global inventory, got {other:?}"),
+    }
+    send(&socket, &Request::Shutdown).await;
+    assert!(process.wait().await.unwrap().success());
 }

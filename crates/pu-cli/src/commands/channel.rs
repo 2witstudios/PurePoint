@@ -114,7 +114,8 @@ pub async fn run(
     explicit: Option<String>,
     action: ChannelAction,
 ) -> Result<(), CliError> {
-    let root_env = std::env::var("PU_PROJECT_ROOT").ok();
+    let root_env =
+        crate::commands::explicit_project().or_else(|| std::env::var("PU_PROJECT_ROOT").ok());
     let project_root = resolve_root(
         explicit.as_deref(),
         root_env.as_deref(),

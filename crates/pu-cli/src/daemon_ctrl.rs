@@ -62,6 +62,8 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
 
     // Start daemon
     std::process::Command::new(&binary)
+        .arg("--socket")
+        .arg(socket)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(stderr_target)

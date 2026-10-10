@@ -1,5 +1,6 @@
 mod encoding;
 mod grid;
+mod inventory;
 mod payloads;
 mod targets;
 
@@ -8,6 +9,7 @@ mod tests;
 
 pub use crate::channel::{ChannelAuthor, ChannelMessage, ChannelReaction, ChannelReference};
 pub use grid::*;
+pub use inventory::*;
 pub use payloads::*;
 pub use targets::*;
 
@@ -63,6 +65,19 @@ pub enum Request {
         #[serde(default = "default_channel_emoji")]
         emoji: String,
         active: bool,
+    },
+    /// A daemon-owned inventory; no project root means all registered projects.
+    Inventory {
+        #[serde(default)]
+        project_root: Option<String>,
+        kind: InventoryKind,
+        #[serde(default)]
+        state: Option<AgentQueryState>,
+    },
+    ResolveAgent {
+        agent_id: String,
+        #[serde(default)]
+        project_root: Option<String>,
     },
     Health,
     Init {
@@ -384,6 +399,12 @@ pub enum Response {
         message: ChannelMessage,
         revision: u64,
     },
+    Inventory(InventoryReport),
+    AgentResolved {
+        agent_id: String,
+        project_root: Option<String>,
+        worktree_id: Option<String>,
+    },
     HealthReport {
         pid: u32,
         uptime_seconds: u64,
@@ -557,4 +578,58 @@ pub enum Response {
         code: String,
         message: String,
     },
+}
+
+impl Request {
+    /// Mutable project scope for legacy project-scoped operations.
+    pub fn project_root_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::ChannelRead { project_root, .. }
+            | Self::ChannelSend { project_root, .. }
+            | Self::ChannelEdit { project_root, .. }
+            | Self::ChannelReact { project_root, .. }
+            | Self::Init { project_root, .. }
+            | Self::Spawn { project_root, .. }
+            | Self::Status { project_root, .. }
+            | Self::Kill { project_root, .. }
+            | Self::Suspend { project_root, .. }
+            | Self::Resume { project_root, .. }
+            | Self::SubscribeGrid { project_root, .. }
+            | Self::SubscribeStatus { project_root, .. }
+            | Self::GridCommand { project_root, .. }
+            | Self::Rename { project_root, .. }
+            | Self::AssignTrigger { project_root, .. }
+            | Self::CreateWorktree { project_root, .. }
+            | Self::DeleteWorktree { project_root, .. }
+            | Self::ListTemplates { project_root, .. }
+            | Self::GetTemplate { project_root, .. }
+            | Self::SaveTemplate { project_root, .. }
+            | Self::DeleteTemplate { project_root, .. }
+            | Self::ListAgentDefs { project_root, .. }
+            | Self::GetAgentDef { project_root, .. }
+            | Self::SaveAgentDef { project_root, .. }
+            | Self::DeleteAgentDef { project_root, .. }
+            | Self::ListSwarmDefs { project_root, .. }
+            | Self::GetSwarmDef { project_root, .. }
+            | Self::SaveSwarmDef { project_root, .. }
+            | Self::DeleteSwarmDef { project_root, .. }
+            | Self::RunSwarm { project_root, .. }
+            | Self::ListSchedules { project_root, .. }
+            | Self::GetSchedule { project_root, .. }
+            | Self::SaveSchedule { project_root, .. }
+            | Self::DeleteSchedule { project_root, .. }
+            | Self::EnableSchedule { project_root, .. }
+            | Self::DisableSchedule { project_root, .. }
+            | Self::GetConfig { project_root, .. }
+            | Self::UpdateAgentConfig { project_root, .. }
+            | Self::ListTriggers { project_root, .. }
+            | Self::GetTrigger { project_root, .. }
+            | Self::SaveTrigger { project_root, .. }
+            | Self::DeleteTrigger { project_root, .. }
+            | Self::EvaluateGate { project_root, .. }
+            | Self::Diff { project_root, .. }
+            | Self::Pulse { project_root, .. } => Some(project_root),
+            _ => None,
+        }
+    }
 }

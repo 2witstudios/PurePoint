@@ -93,6 +93,13 @@ pub struct SpawnConfig {
 }
 
 pub struct AgentHandle {
+    /// Owning initialized project, absent for standalone shells.
+    pub project_root: Option<String>,
+    pub cwd: String,
+    pub name: String,
+    pub agent_type: String,
+    pub worktree_id: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
     pub pid: u32,
     pub output_buffer: Arc<OutputBuffer>,
     pub exit_rx: watch::Receiver<Option<i32>>,
@@ -290,6 +297,12 @@ impl NativePtyHost {
                 });
 
                 Ok(AgentHandle {
+                    project_root: None,
+                    cwd: config.cwd.clone(),
+                    name: "shell".into(),
+                    agent_type: "terminal".into(),
+                    worktree_id: None,
+                    started_at: chrono::Utc::now(),
                     pid,
                     output_buffer: buffer,
                     master_fd,

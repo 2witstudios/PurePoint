@@ -395,6 +395,10 @@ impl Engine {
             });
         }
 
+        handle.project_root = Some(project_root.clone());
+        handle.name = agent_name.clone();
+        handle.agent_type = agent_type.clone();
+        handle.worktree_id = worktree_id.clone();
         let pid = handle.pid;
 
         // Store handle in session map BEFORE writing manifest.
