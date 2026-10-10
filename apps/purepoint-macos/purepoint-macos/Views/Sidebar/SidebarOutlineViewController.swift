@@ -156,8 +156,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             .filter { $0.container == .projectRoot }
             .map { SidebarNode(kind: .workspace($0)) }
 
-        projectChildren.insert(SidebarNode(kind: .channel(project)), at: 0)
-
         for worktree in project.worktrees {
             let children = workspaces
                 .filter { $0.container == .worktree(worktree.id) }
@@ -243,7 +241,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         switch selection {
         case .workspace(let id): targetId = id
         case .worktree(let id): targetId = id
-        case .channel(let root): targetId = "channel:\(root)"
+        case .channel(let root): targetId = root
         case .project(let root): targetId = root
         case .nav:
             deselectAll()
@@ -292,7 +290,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         guard let node = item as? SidebarNode else { return false }
         switch node.kind {
         case .project, .worktree: return true
-        case .workspace, .channel: return false
+        case .workspace: return false
         }
     }
 
@@ -301,7 +299,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? SidebarNode else { return nil }
         switch node.kind {
-        case .channel(let project): return makeChannelCell(project)
         case .project(let project): return makeProjectCell(project)
         case .worktree(let worktree): return makeWorktreeCell(worktree, node: node)
         case .workspace(let workspace): return makeWorkspaceCell(workspace, node: node)
@@ -323,7 +320,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         let selection: SidebarSelection
         switch node.kind {
-        case .channel(let p): selection = .channel(p.projectRoot)
         case .project(let p): selection = .project(p.projectRoot)
         case .worktree(let w): selection = .worktree(w.id)
         case .workspace(let w): selection = .workspace(w.id)
@@ -332,23 +328,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     }
 
     // MARK: - Cell Factories
-
-    private func makeChannelCell(_ project: ProjectState) -> NSView {
-        let (cell, stack) = makeCellWithStack(spacing: 6)
-        let icon = NSImageView(image: NSImage(systemSymbolName: "number", accessibilityDescription: "Channel") ?? NSImage())
-        icon.contentTintColor = .secondaryLabelColor
-        stack.addArrangedSubview(icon)
-        let label = NSTextField(labelWithString: "Channel")
-        label.font = .systemFont(ofSize: 12, weight: project.channel.unreadCount > 0 ? .semibold : .regular)
-        stack.addArrangedSubview(label)
-        if project.channel.unreadCount > 0 {
-            let count = NSTextField(labelWithString: String(project.channel.unreadCount))
-            count.font = .systemFont(ofSize: 10, weight: .semibold)
-            count.textColor = .controlAccentColor
-            stack.addArrangedSubview(count)
-        }
-        return cell
-    }
 
     private func makeProjectCell(_ project: ProjectState) -> NSView {
         let (cell, stack) = makeCellWithStack(spacing: 6)
@@ -364,6 +343,13 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.addArrangedSubview(icon)
         stack.addArrangedSubview(name)
         stack.addArrangedSubview(spacerView())
+        if project.channel.unreadCount > 0 {
+            let badge = makeBadge(count: project.channel.unreadCount)
+            badge.identifier = NSUserInterfaceItemIdentifier("channelUnreadCount")
+            badge.textColor = .controlAccentColor
+            badge.setAccessibilityLabel("\(project.channel.unreadCount) unread channel messages")
+            stack.addArrangedSubview(badge)
+        }
         stack.addArrangedSubview(addBtn)
         return cell
     }
@@ -631,7 +617,6 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         switch node.kind {
         case .workspace(let workspace): buildWorkspaceContextMenu(menu, workspace: workspace)
         case .worktree(let worktree): buildWorktreeContextMenu(menu, worktree: worktree)
-        case .channel: break
         case .project(let project): buildProjectContextMenu(menu, project: project)
         }
     }
