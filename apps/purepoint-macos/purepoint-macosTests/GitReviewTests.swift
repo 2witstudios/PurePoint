@@ -287,6 +287,15 @@ private enum GitReviewChecks {
         try require(state.isInitiallyLoadingBranch && !state.isInitiallyLoadingUnstaged, "new base reloads branch evidence without hiding local evidence")
         try await settle(state)
         try require(state.commits.isEmpty, "new comparison replaces commit list")
+        let unavailable = GitCommitInfo(sha: String(repeating: "0", count: 40), subject: "Unavailable", author: "Test", date: "today")
+        for _ in 0..<2 {
+            // Refresh clears branchError before retrying a selected commit.
+            state.branchError = nil
+            state.selectCommit(unavailable)
+            try require(state.isInitiallyLoadingCommit && state.commitDiff.isEmpty, "failed commit fetch retries show loading rather than false empty evidence")
+            try await settle(state)
+            try require(state.branchError != nil && state.commitDiff.isEmpty, "unavailable commit exposes fetch failure")
+        }
         print("Empty review refresh checks passed")
     }
 

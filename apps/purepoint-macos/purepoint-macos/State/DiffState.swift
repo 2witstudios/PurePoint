@@ -112,12 +112,12 @@ final class DiffState {
             do {
                 let files = try await git.fetchCommitDiff(at: path, sha: commit.sha)
                 guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
-                commitDiff = files
+                commitDiff = files; hasLoadedCommit = true
             } catch {
                 guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
                 branchError = error.localizedDescription
             }
-            hasLoadedCommit = true; isLoadingCommit = false
+            isLoadingCommit = false
         }
     }
 
