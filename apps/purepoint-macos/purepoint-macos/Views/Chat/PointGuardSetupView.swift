@@ -123,7 +123,7 @@ struct PointGuardSetupView: View {
         .onChange(of: service.selectedModel) { _, value in if provider == service.selectedProvider { model = value } }
         .onChange(of: service.auth["prompt"]["id"].text) { _, _ in response = "" }
         .onChange(of: service.auth["status"].text) { _, value in if value != "pending" { response = "" } }
-        .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service) }
+        .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service, isPresented: $showPhone) }
     }
     @ViewBuilder private var loginInteraction: some View {
         if service.auth["provider"].text == provider, let status = service.auth["status"].text {
@@ -172,7 +172,7 @@ struct PointGuardSetupView: View {
 
 struct PointGuardPhoneView: View {
     @ObservedObject var service: PointGuardServiceModel
-    @Environment(\.dismiss) private var dismiss
+    @Binding var isPresented: Bool
     var body: some View {
         VStack(spacing: 16) {
             Text("Connect your phone").font(.title2)
@@ -195,7 +195,7 @@ struct PointGuardPhoneView: View {
             HStack {
                 if service.hasPendingEnrollmentCleanup { Button("Retry revocation") { Task { await service.retryEnrollmentCleanup() } } }
                 Button("New code") { Task { await service.closeEnrollment(); await service.connectPhone() } }
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { isPresented = false }.keyboardShortcut(.cancelAction)
             }
         }.padding(28).frame(width: 420)
          .task(id: service.enrollment["enrollmentId"].text) {
