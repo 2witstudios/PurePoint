@@ -112,6 +112,7 @@ export async function openRuntimeState(
           const next = { ...value, ...patch };
           assertHeld();
           validate(next);
+          if (Object.keys(patch).every((key) => value[key] === next[key])) return;
           await writePrivateJSON(file, next, assertHeld);
           value = next;
         });

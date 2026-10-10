@@ -63,6 +63,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
+      - name: Interrupted package download recovery
+        run: python3 runtime/test-package-runtime.py
 
   mobile-swift:
     name: Mobile Swift & iOS tests

@@ -59,6 +59,7 @@ export async function runManaged(env = process.env) {
   let state, rpc, controller, trust, provider, admin, local, remote;
   let stage = "lock";
   let stopped = false;
+  let shutdownPromise;
   let restarting = false;
   let persistError = false;
   let canceled = false;
@@ -70,7 +71,8 @@ export async function runManaged(env = process.env) {
   };
   const onOwnershipLoss = () => {
     ownershipLost = true;
-    if (controller) controller.accepting = false;
+    controller?.fence();
+    rpc?.fence();
     provider?.close();
     if (ready)
       shutdown()
@@ -104,25 +106,31 @@ export async function runManaged(env = process.env) {
         : {}),
     });
   };
-  const shutdown = async () => {
-    if (stopped) return;
+  const shutdown = () => {
+    if (shutdownPromise) return shutdownPromise;
     stopped = true;
     restarting = true;
     provider?.close();
     controller?.dispose();
-    // Listener closure stops new input before the owned child exits. No prompt is replayed.
-    await Promise.all([
-      local?.shutdown(),
-      remote?.shutdown(),
-      admin?.shutdown(),
-    ]);
-    if (rpc) await closeOwnedRpc(rpc);
-    await persist().catch(() => {});
-    await trust?.close();
-    await rm(descriptorFile, { force: true });
-    await state?.close();
-    process.removeListener("SIGTERM", onSignal);
-    process.removeListener("SIGINT", onSignal);
+    rpc?.fence();
+    shutdownPromise = (async () => {
+      // Reject future dispatch and unblock existing RPC before draining controller
+      // work. Every accepted action settles before the last ownership FD closes.
+      await Promise.all([
+        local?.shutdown(),
+        remote?.shutdown(),
+        admin?.shutdown(),
+      ]);
+      if (rpc) await closeOwnedRpc(rpc);
+      await controller?.drain();
+      await persist().catch(() => {});
+      await trust?.close();
+      await rm(descriptorFile, { force: true });
+      await state?.close();
+      process.removeListener("SIGTERM", onSignal);
+      process.removeListener("SIGINT", onSignal);
+    })();
+    return shutdownPromise;
   };
   try {
     state = await openRuntimeState(
@@ -301,7 +309,15 @@ export async function runManaged(env = process.env) {
           "Wait for Pi and its queued work to finish before applying setup changes.",
         );
       controller.pendingMutations++;
-      const operation = controller.serial.then(action);
+      const operation = controller.serial.then(() => {
+        state.assertHeld();
+        if (!controller.accepting || ownershipLost || stopped)
+          throw new AdminError(
+            "ownership_lost",
+            "Point Guard is closing. No setup mutation was dispatched.",
+          );
+        return action();
+      });
       controller.serial = operation.catch(() => {});
       try {
         return await operation;
@@ -313,6 +329,12 @@ export async function runManaged(env = process.env) {
     admin = await serveAdmin({
       token: adminToken,
       dispatch: async (r) => {
+        state.assertHeld();
+        if (ownershipLost || stopped)
+          throw new AdminError(
+            "ownership_lost",
+            "Point Guard is closing. Wait for owned cleanup.",
+          );
         switch (r.operation) {
           case "status":
             return status();

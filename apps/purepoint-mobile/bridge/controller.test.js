@@ -1176,3 +1176,52 @@ for (const mode of ["steer", "after"]) {
     }
   });
 }
+
+test("ownership fence rejects new and queued actions and drain awaits accepted work", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  let release, entered;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const call = rpc.call.bind(rpc);
+  rpc.call = async (op) => {
+    if (op === "prompt") {
+      entered();
+      await gate;
+    }
+    return call(op);
+  };
+  const first = request(c, "send", { text: "accepted", mode: "send" });
+  await started;
+  const queued = request(c, "new").then(
+    () => {
+      throw new Error("Queued action dispatched after fence");
+    },
+    (error) => error,
+  );
+  c.fence();
+  await assert.rejects(request(c, "sync"), /closing/);
+  await assert.rejects(
+    request(c, "send", { text: "late", mode: "send" }),
+    /closing/,
+  );
+  let drained = false;
+  const drain = c.drain().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drained, false);
+  release();
+  await first;
+  assert.match((await queued).message, /Queued input was not dispatched/);
+  await drain;
+  assert.equal(c.pendingMutations, 0);
+  assert.equal(rpc.calls.filter((op) => op === "prompt").length, 1);
+  assert.equal(rpc.calls.includes("new_session"), false);
+  c.dispose();
+});

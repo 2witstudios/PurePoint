@@ -117,6 +117,8 @@ import Foundation
         fixture.starts.removeValue(forKey: "dying")?.resume(returning: .object(["attemptId": .string("dead-id")]))
         await dying.value
         precondition(service.hasPendingAuthCleanup)
+        service.handleOwnedTermination(Process(), launchId: "", status: 1)
+        precondition(service.hasPendingAuthCleanup, "Late old-child callback must not invalidate current runtime")
         service.ownedRuntimeExited(instanceId: "foreign")
         precondition(service.hasPendingAuthCleanup, "Foreign exit must not discard live cleanup")
         service.ownedRuntimeExited(instanceId: "")

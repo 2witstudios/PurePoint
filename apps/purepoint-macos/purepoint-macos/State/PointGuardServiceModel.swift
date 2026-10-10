@@ -89,16 +89,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 child.terminationHandler = { [weak self] child in
                     let status = child.terminationStatus
                     Task { @MainActor in
-                        guard let self, self.instanceId == launchId else { return }
-                        self.ownedRuntimeExited(instanceId: launchId)
-                        self.chat?.disconnect()
-                        self.pollTask?.cancel(); self.pollTask = nil
-                        self.phase = "Stopped"
-                        if !self.expectedStop {
-                            self.phase = "Pi stopped"
-                            self.error = self.startupFailure(pid: child.processIdentifier, launchId: launchId)
-                                ?? "Point Guard exited (\(status)). Retry to restore your saved session. Check private state permissions and available ports if startup fails."
-                        }
+                        self?.handleOwnedTermination(child, launchId: launchId, status: status)
                     }
                 }
                 try child.run(); self.process = child
@@ -370,6 +361,18 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         throw PiChatError("The owned Point Guard runtime has not exited. Quit and updates remain paused. Wait for it to stop, then retry Quit.")
     }
     /// Only the exact owned child exit invalidates its ephemeral provider/enrollment IDs.
+    func handleOwnedTermination(_ child: Process, launchId: String, status: Int32) {
+        guard process === child, instanceId == launchId else { return }
+        ownedRuntimeExited(instanceId: launchId)
+        chat?.disconnect()
+        pollTask?.cancel(); pollTask = nil
+        phase = "Stopped"
+        if !expectedStop {
+            phase = "Pi stopped"
+            error = startupFailure(pid: child.processIdentifier, launchId: launchId)
+                ?? "Point Guard exited (\(status)). Retry to restore your saved session. Check private state permissions and available ports if startup fails."
+        }
+    }
     func ownedRuntimeExited(instanceId launchId: String) {
         guard instanceId == launchId else { return }
         runtimeGeneration += 1; authGeneration += 1; enrollmentGeneration += 1

@@ -141,3 +141,18 @@ test("given exact owned runtime crash should reopen permanent inode and restore 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("unchanged serialized selections preserve the durable file inode", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-unchanged-"));
+  const state = await openRuntimeState(dir);
+  try {
+    await state.save({ provider: "anthropic", model: "selected" });
+    const before = await stat(path.join(dir, "runtime.json"));
+    await Promise.all(Array.from({ length: 25 }, () => state.save({ provider: "anthropic", model: "selected" })));
+    const after = await stat(path.join(dir, "runtime.json"));
+    assert.equal(after.ino, before.ino);
+    assert.equal(after.mtimeMs, before.mtimeMs);
+    await state.save({ model: "changed" });
+    assert.notEqual((await stat(path.join(dir, "runtime.json"))).ino, before.ino);
+  } finally { await state.close(); await rm(dir, { recursive: true, force: true }); }
+});

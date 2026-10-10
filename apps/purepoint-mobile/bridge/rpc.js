@@ -86,6 +86,7 @@ export class Rpc extends EventEmitter {
     this.emit("failure", error);
   }
   write(record) {
+    if (this.closing) throw new Error("Bridge shutting down");
     if (this.failure) throw this.failure;
     if (this.child.stdin.writableLength > 1024 * 1024)
       throw new Error("Pi input is backlogged; inspect state before retrying.");
@@ -124,14 +125,17 @@ export class Rpc extends EventEmitter {
   answer(data) {
     this.write({ ...data, type: "extension_ui_response" });
   }
-  async close() {
+  fence() {
     this.closing = true;
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error("Bridge shutting down"));
     }
     this.pending.clear();
-    if (this.child.exitCode !== null) return;
+  }
+  async close() {
+    this.fence();
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.child.kill("SIGTERM");

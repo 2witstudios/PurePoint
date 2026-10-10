@@ -39,7 +39,16 @@ def complete_darwin_graph(modules, arches, cache):
             raise ValueError('Unsupported native package integrity or source')
         archive = cache / (hashlib.sha256(entry['resolved'].encode()).hexdigest() + '.tgz')
         if not archive.exists():
-            urllib.request.urlretrieve(entry['resolved'], archive)
+            with tempfile.NamedTemporaryFile(dir=cache, suffix='.download', delete=False) as file:
+                download = Path(file.name)
+            try:
+                urllib.request.urlretrieve(entry['resolved'], download)
+                actual = base64.b64encode(hashlib.sha512(download.read_bytes()).digest()).decode()
+                if actual != expected:
+                    raise ValueError('Locked native package checksum mismatch')
+                os.replace(download, archive)
+            finally:
+                download.unlink(missing_ok=True)
         actual = base64.b64encode(hashlib.sha512(archive.read_bytes()).digest()).decode()
         if actual != expected:
             raise ValueError('Locked native package checksum mismatch')

@@ -12,13 +12,17 @@ def components(paths):
         path == ".github/workflows/macos.yml" or path.startswith(".github/scripts/")
         for path in paths
     )
+    packaged_rust = any(
+        path.startswith("crates/") or path in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}
+        for path in paths
+    )
     return {
         "macos": shared or any(
             path.startswith(("apps/purepoint-macos/", "crates/"))
             or path in {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}
             for path in paths
         ),
-        "mobile": shared or any(path.startswith("apps/purepoint-mobile/") for path in paths),
+        "mobile": shared or packaged_rust or any(path.startswith("apps/purepoint-mobile/") for path in paths),
     }
 
 
