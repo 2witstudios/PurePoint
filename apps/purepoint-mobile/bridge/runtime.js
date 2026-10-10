@@ -17,6 +17,7 @@ import { serveAdmin, AdminError } from "./admin.js";
 import { LockError } from "./lock-helper.js";
 import { optionalRemoteListener } from "./remote-listener.js";
 import { startupFailure } from "./runtime-errors.js";
+import { watchAppLifetime } from "./app-lifetime.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function idle(c) {
@@ -65,6 +66,7 @@ export async function runManaged(env = process.env) {
   let canceled = false;
   let ownershipLost = false;
   let ready = false;
+  let stopWatchingApp = () => {};
   const checkCanceled = () => {
     if (ownershipLost) throw new LockError("lock_lost");
     if (canceled) throw new Error("Owned startup canceled.");
@@ -127,18 +129,42 @@ export async function runManaged(env = process.env) {
       await trust?.close();
       await rm(descriptorFile, { force: true });
       await state?.close();
+      stopWatchingApp();
       process.removeListener("SIGTERM", onSignal);
       process.removeListener("SIGINT", onSignal);
     })();
     return shutdownPromise;
   };
   try {
-    state = await openRuntimeState(
-      directory,
-      env.POINT_GUARD_CLIENT_ID,
-      instanceId,
-      { helperPath: env.POINT_GUARD_LOCK_HELPER_PATH, onLost: onOwnershipLoss },
-    );
+    // Owner EOF follows the same drain as SIGTERM, even during startup.
+    stopWatchingApp = watchAppLifetime(env, onSignal);
+    checkCanceled();
+    const ownershipDeadline = Date.now() + 5000;
+    for (;;) {
+      checkCanceled();
+      try {
+        state = await openRuntimeState(
+          directory,
+          env.POINT_GUARD_CLIENT_ID,
+          instanceId,
+          {
+            helperPath: env.POINT_GUARD_LOCK_HELPER_PATH,
+            onLost: onOwnershipLoss,
+          },
+        );
+        break;
+      } catch (error) {
+        // A replacement can overlap its predecessor's drain. Only kernel
+        // acquisition authorizes startup; a live owner still fails after 5s.
+        if (
+          env.POINT_GUARD_APP_LIFETIME !== "stdin" ||
+          error.code !== "lock_busy" ||
+          Date.now() >= ownershipDeadline
+        )
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
     checkCanceled();
     stage = "runtime";
     await rm(descriptorFile, { force: true });
@@ -438,6 +464,7 @@ export async function runManaged(env = process.env) {
   } catch (error) {
     if (state) await shutdown();
     else {
+      stopWatchingApp();
       process.removeListener("SIGTERM", onSignal);
       process.removeListener("SIGINT", onSignal);
     }
