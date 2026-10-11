@@ -213,13 +213,16 @@ export async function runManaged(env = process.env) {
       ),
       POINT_GUARD_PU_PATH: pu,
       POINT_GUARD_MANAGED: "1",
+      POINT_GUARD_PERSONAL_DIR: path.join(directory, "personal"),
     };
     // Never expose local owner service bootstrap configuration to extensions/tools.
     for (const key of Object.keys(childEnv))
       if (
         key.startsWith("POINT_GUARD_") &&
         key !== "POINT_GUARD_PU_PATH" &&
-        key !== "POINT_GUARD_MANAGED"
+        key !== "POINT_GUARD_MANAGED" &&
+        key !== "POINT_GUARD_PERSONAL_DIR" &&
+        key !== "POINT_GUARD_WORKFLOW_SOURCE"
       )
         delete childEnv[key];
     const args = await launchArguments(cwd, {

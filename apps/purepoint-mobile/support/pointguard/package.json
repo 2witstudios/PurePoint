@@ -1,0 +1,11 @@
+{
+  "name": "@purepoint/pointguard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["extensions/pointguard.js"],
+    "skills": ["../pu", "../pu-cli"]
+  }
+}
