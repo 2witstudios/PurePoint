@@ -15,6 +15,8 @@ struct ChatView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var importingAttachment = false
     @State private var confirmNew = false
+    @State private var dialogSelection = 0
+    @State private var attachmentSelection = 0
     @State private var presentedDialog: ExtensionDialog?
     @State private var following = true
     @FocusState private var composerFocused: Bool
@@ -46,7 +48,13 @@ struct ChatView: View {
                             Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("PurePoint").font(.headline)
-                                Text(headerStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                HStack(spacing: 4) {
+                                    if let machine = model.selectedMachine {
+                                        Text(machine.name).lineLimit(1).truncationMode(.middle)
+                                        Text("·")
+                                    }
+                                    Text(headerStatus).fixedSize(horizontal: true, vertical: false)
+                                }.font(.caption2).foregroundStyle(.secondary)
                             }
                         }.frame(minHeight: 44)
                     }
@@ -59,19 +67,24 @@ struct ChatView: View {
                 }
             }
             .confirmationDialog("Stop Pi before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
-                Button("Stop and start new", role: .destructive) { Task { await model.changeSession(stopFirst: true) } }
+                Button("Stop and start new", role: .destructive) { let token = model.selectionToken; Task { await model.changeSession(stopFirst: true, selection: token) } }
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be canceled and recoverable. Delegated workers keep running.") }
             .sheet(isPresented: $showConnection, onDismiss: presentPendingDialog) { ConnectionView(model: model) }
-            .sheet(isPresented: $showHistory, onDismiss: presentPendingDialog) { ConversationView(model: model) }
-            .sheet(item: dialogBinding) { dialog in ExtensionDialogView(model: model, dialog: dialog) }
+            .sheet(isPresented: $showHistory, onDismiss: presentPendingDialog) { ConversationView(model: model, selection: model.selectionToken) }
+            .sheet(item: dialogBinding) { dialog in ExtensionDialogView(model: model, dialog: dialog, selection: dialogSelection) }
             .onChange(of: model.snapshot?.dialogs.first?.id) { _, _ in
                 if showSidebar { closeSidebar() }
                 if model.snapshot?.dialogs.first != nil && (showPhotos || showFiles) {
                     showPhotos = false; showFiles = false
-                    Task { try? await Task.sleep(nanoseconds: 400_000_000); presentPendingDialog() }
-                } else if model.snapshot?.dialogs.first != nil && (showHistory || showConnection) { showHistory = false; showConnection = false }
+                    let token = model.selectionToken
+                    Task { try? await Task.sleep(nanoseconds: 400_000_000); if model.isSelected(token) { presentPendingDialog() } }
+                } else if model.snapshot?.dialogs.first != nil && showHistory { showHistory = false }
                 else { presentPendingDialog() }
+            }
+            .onChange(of: model.selectionToken) { _, _ in
+                presentedDialog = nil; confirmNew = false; showHistory = false
+                showPhotos = false; showFiles = false; selectedPhoto = nil; importingAttachment = false; closeSidebar()
             }
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
             .onAppear { LaunchLog.logger.notice("Chat view appeared") }
@@ -79,27 +92,31 @@ struct ChatView: View {
             .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
             .onChange(of: selectedPhoto) { _, item in
                 guard let item else { return }
+                let token = attachmentSelection
+                guard model.isSelected(token) else { return }
                 Task {
                     importingAttachment = true
-                    defer { importingAttachment = false; selectedPhoto = nil }
+                    defer { if model.isSelected(token) { importingAttachment = false; selectedPhoto = nil } }
                     do {
                         guard let data = try await item.loadTransferable(type: Data.self) else { throw ComposerError("This photo could not be opened.") }
                         let file = try await Task.detached(priority: .userInitiated) { try AttachmentImport.image(data, name: "Photo.jpg") }.value
-                        model.addAttachment(file)
-                    } catch { model.error = error.localizedDescription }
+                        guard model.isSelected(token) else { return }; model.addAttachment(file)
+                    } catch { if model.isSelected(token) { model.error = error.localizedDescription } }
                 }
             }
             .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf], allowsMultipleSelection: false) { result in
+                let token = attachmentSelection
+                guard model.isSelected(token) else { return }
                 Task {
                     importingAttachment = true
-                    defer { importingAttachment = false }
+                    defer { if model.isSelected(token) { importingAttachment = false } }
                     do {
                         guard let url = try result.get().first else { return }
                         let file = try await Task.detached(priority: .userInitiated) { try AttachmentImport.file(url) }.value
-                        model.addAttachment(file)
+                        guard model.isSelected(token) else { return }; model.addAttachment(file)
                     } catch {
                         let failure = error as NSError
-                        if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError { model.error = error.localizedDescription }
+                        if model.isSelected(token) && (failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError) { model.error = error.localizedDescription }
                     }
                 }
             }
@@ -112,7 +129,7 @@ struct ChatView: View {
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close conversations sidebar")
-                        ConversationSidebar(model: model, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
+                        ConversationSidebar(model: model, selection: model.selectionToken, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
                             .frame(width: min(320, geometry.size.width * 0.84), height: geometry.size.height)
                             .transition(.move(edge: .leading))
                             .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })
@@ -125,25 +142,37 @@ struct ChatView: View {
         })
     }
     private var headerStatus: String {
-        if !model.connected { return model.connectionStatus }
-        return model.demo ? "Preview" : model.busy ? "Working" : "Connected"
+        if model.connected { return model.demo ? "Preview" : model.busy ? "Working" : "Connected" }
+        if model.connectionStatus.hasPrefix("Connecting") { return "Connecting" }
+        if model.connectionStatus.hasPrefix("Re-pair") { return "Re-pair" }
+        if model.connectionStatus.hasPrefix("Paused") { return "Paused" }
+        if model.connectionStatus.hasPrefix("Waiting") { return "No network" }
+        if model.connectionStatus.hasPrefix("Reconnect paused") { return "Retry paused" }
+        if model.connectionStatus.hasPrefix("Connection lost") { return "Offline" }
+        return "Not connected"
     }
-    private func openSidebar() { composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { await model.loadConversations() } }
+    private func openSidebar() { let token = model.selectionToken; composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { if model.isSelected(token) { await model.loadConversations(selection: token) } } }
     private func closeSidebar() { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = false } }
-    private func newConversation() { closeSidebar(); if model.busy { confirmNew = true } else { Task { await model.changeSession() } } }
+    private func newConversation() { let token = model.selectionToken; closeSidebar(); if model.busy { confirmNew = true } else { Task { if model.isSelected(token) { await model.changeSession(selection: token) } } } }
     private func selectConversation(_ conversation: Conversation) {
+        let token = model.selectionToken
         closeSidebar()
         Task {
-            if model.busy || model.demo { await model.browse(conversation); showHistory = model.browsing != nil }
-            else { await model.changeSession(to: conversation.id) }
+            guard model.isSelected(token) else { return }
+            if model.busy || model.demo { await model.browse(conversation, selection: token); if model.isSelected(token) { showHistory = model.browsing != nil } }
+            else { await model.changeSession(to: conversation.id, selection: token) }
         }
     }
-    private func presentPendingDialog() { presentedDialog = model.snapshot?.dialogs.first }
+    private func presentPendingDialog() {
+        guard !showConnection, !showHistory, !showPhotos, !showFiles else { return }
+        dialogSelection = model.selectionToken; presentedDialog = model.snapshot?.dialogs.first
+    }
     private var dialogBinding: Binding<ExtensionDialog?> {
         Binding(get: { presentedDialog }, set: { newValue in
             let previous = presentedDialog
+            let token = dialogSelection
             presentedDialog = newValue
-            if newValue == nil, let previous, model.snapshot?.dialogs.contains(where: { $0.id == previous.id }) == true { Task { await model.answer(previous, cancelled: true) } }
+            if newValue == nil, let previous, model.snapshot?.dialogs.contains(where: { $0.id == previous.id }) == true { Task { await model.answer(previous, cancelled: true, selection: token) } }
         })
     }
     private var transcript: some View {
@@ -211,8 +240,8 @@ struct ChatView: View {
                     .accessibilityLabel("Message draft")
                 HStack(spacing: 12) {
                     Menu {
-                        Button("Photos", systemImage: "photo") { composerFocused = false; showPhotos = true }
-                        Button("Files", systemImage: "doc") { composerFocused = false; showFiles = true }
+                        Button("Photos", systemImage: "photo") { composerFocused = false; attachmentSelection = model.selectionToken; showPhotos = true }
+                        Button("Files", systemImage: "doc") { composerFocused = false; attachmentSelection = model.selectionToken; showFiles = true }
                     } label: {
                         Group { if importingAttachment { ProgressView() } else { Image(systemName: "plus").font(.title3) } }.frame(width: 44, height: 44)
                     }.disabled(importingAttachment || model.attachments.count >= 4).accessibilityLabel("Add attachment")
@@ -222,7 +251,7 @@ struct ChatView: View {
                             Button("Steer") { model.submit(mode: "steer"); following = true }
                             Button("After reply") { model.submit(mode: "after"); following = true }
                         } label: { Text("Send options").font(.callout.weight(.medium)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
-                        Button { Task { _ = await model.stop() } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
+                        Button { let token = model.selectionToken; Task { _ = await model.stop(selection: token) } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
                     } else {
                         Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend && !importingAttachment ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.canSend || importingAttachment).accessibilityLabel("Send message")
                     }

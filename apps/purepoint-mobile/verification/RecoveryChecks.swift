@@ -6,7 +6,7 @@ final class RecoveryDefaults: UserDefaults, @unchecked Sendable {
     private var canceledWrites = 0
     var canceledWriteCount: Int { writeLock.lock(); defer { writeLock.unlock() }; return canceledWrites }
     override func set(_ value: Any?, forKey key: String) {
-        if key == "pi.canceledIds" { writeLock.lock(); canceledWrites += 1; writeLock.unlock() }
+        if key == "pi.machineCanceledIds" { writeLock.lock(); canceledWrites += 1; writeLock.unlock() }
         var values = volatileDomain(forName: UserDefaults.argumentDomain)
         values[key] = value
         setVolatileDomain(values, forName: UserDefaults.argumentDomain)
@@ -54,7 +54,7 @@ extension ChatModel {
         let uncertain = Submission(id: "uncertain", text: "Keep original text", sessionId: state.sessionId, status: "Delivery uncertain", recoverable: true, attachments: [file])
         let sending = Submission(id: "sending", text: "In flight", sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: [file])
         let accepted = (0..<70).map { Submission(id: "accepted-\($0)", text: "Accepted", sessionId: state.sessionId, status: "Accepted", recoverable: false, attachments: [file]) }
-        try LocalRecoveryStore.save([uncertain, sending] + accepted, name: "submissions")
+        try LocalRecoveryStore.save([address: [uncertain, sending] + accepted], name: "machine-submissions-v1")
         let hydrated = ChatModel(defaults: defaults)
         await hydrated.hydrateForChecks()
         precondition(hydrated.submissions.count == 50, "Hydration bounds live receipts")
@@ -69,7 +69,7 @@ extension ChatModel {
         hydrated.acknowledgeForChecks("live")
         precondition(hydrated.submissions.last?.attachments == nil, "Acceptance releases file payloads")
         await hydrated.flushForChecks()
-        let persisted = LocalRecoveryStore.load("submissions", as: [Submission].self) ?? []
+        let persisted = LocalRecoveryStore.load("machine-submissions-v1", as: [String: [Submission]].self)?[address] ?? []
         precondition(persisted.count == 50 && persisted.last?.attachments == nil, "Disk and live retention agree")
         hydrated.submissions = (0..<50).map { Submission(id: "recovery-\($0)", text: "Uncertain", sessionId: state.sessionId, status: "Delivery uncertain", recoverable: true, attachments: [file]) }
         try hydrated.applyForChecks(state)
@@ -85,9 +85,9 @@ extension ChatModel {
         precondition(hydrated.submissions.count == 50 && hydrated.submissions.first { $0.id == sending.id }?.attachments?.first?.data == file.data, "Cancellation overflow remains bounded and protects in-flight files")
         precondition(hydrated.error?.contains("Older recovery receipts") == true, "Unavoidable cancellation overflow warns about omitted recovery")
         await hydrated.flushForChecks()
-        try LocalRecoveryStore.save([Submission](), name: "submissions")
+        try LocalRecoveryStore.save([address: [Submission]()], name: "machine-submissions-v1")
         let originalIds = (0..<1000).map { "cancel-\($0)" }
-        defaults.set(originalIds, forKey: "pi.canceledIds")
+        defaults.set([address: originalIds], forKey: "pi.machineCanceledIds")
         let cancellationModel = ChatModel(defaults: defaults)
         await cancellationModel.hydrateForChecks()
         func canceledState(_ revision: Int, _ ids: [String]) -> Snapshot {
@@ -98,7 +98,7 @@ extension ChatModel {
         precondition(cancellationModel.submissions.map(\.id) == ["cancel-1000"], "Known and duplicate cancellation IDs create no duplicate recovery")
         cancellationModel.dismissSubmission("cancel-1000")
         await cancellationModel.flushForChecks()
-        precondition(defaults.stringArray(forKey: "pi.canceledIds") == (1...1000).map { "cancel-\($0)" }, "Saturated cancellation history persists its changed content in chronological order")
+        precondition((defaults.dictionary(forKey: "pi.machineCanceledIds") as? [String: [String]])?[address] == (1...1000).map { "cancel-\($0)" }, "Saturated cancellation history persists its changed content in chronological order")
         let cancellationRestart = ChatModel(defaults: defaults)
         await cancellationRestart.hydrateForChecks()
         try cancellationRestart.applyForChecks(canceledState(1, latestIds))
@@ -112,27 +112,28 @@ extension ChatModel {
         try cancellationRestart.applyForChecks(canceledState(4, newestIds + newestIds))
         precondition(cancellationRestart.submissions.isEmpty, "Overcapacity updates retain current snapshot IDs without duplicate re-adds")
         await cancellationRestart.flushForChecks()
-        precondition(defaults.stringArray(forKey: "pi.canceledIds") == (201...1200).map { "cancel-\($0)" }, "Multiple saturated updates retain exactly the newest 1000 IDs")
+        precondition((defaults.dictionary(forKey: "pi.machineCanceledIds") as? [String: [String]])?[address] == (201...1200).map { "cancel-\($0)" }, "Multiple saturated updates retain exactly the newest 1000 IDs")
+        defaults.removeObject(forKey: "pi.machineCanceledIds")
         defaults.set(originalIds + ["cancel-500", "cancel-1000", "cancel-1000"], forKey: "pi.canceledIds")
         let legacyRestart = ChatModel(defaults: defaults)
         await legacyRestart.hydrateForChecks()
         await legacyRestart.flushForChecks()
-        let normalized = defaults.stringArray(forKey: "pi.canceledIds") ?? []
+        let normalized = (defaults.dictionary(forKey: "pi.machineCanceledIds") as? [String: [String]])?[address] ?? []
         precondition(normalized.count == 1000 && Set(normalized).count == 1000 && normalized.suffix(2) == ["cancel-500", "cancel-1000"], "Legacy arrays normalize duplicates and size while preserving available recent order")
         try legacyRestart.applyForChecks(canceledState(1, ["cancel-600"]))
         await legacyRestart.flushForChecks()
-        precondition(defaults.stringArray(forKey: "pi.canceledIds") == normalized.filter { $0 != "cancel-600" } + ["cancel-600"], "Changed recency order persists even when membership and count stay the same")
+        precondition((defaults.dictionary(forKey: "pi.machineCanceledIds") as? [String: [String]])?[address] == normalized.filter { $0 != "cancel-600" } + ["cancel-600"], "Changed recency order persists even when membership and count stay the same")
         let writes = defaults.canceledWriteCount
         try legacyRestart.applyForChecks(canceledState(2, ["cancel-600", "cancel-600"]))
         await legacyRestart.flushForChecks()
         precondition(defaults.canceledWriteCount == writes && legacyRestart.submissions.isEmpty, "Unchanged cancellation history neither writes preferences nor re-adds recovery")
-        try LocalRecoveryStore.save([Submission](), name: "submissions")
+        try LocalRecoveryStore.save([address: [Submission]()], name: "machine-submissions-v1")
         let storageModel = ChatModel(defaults: defaults)
         await storageModel.hydrateForChecks()
         try storageModel.applyForChecks(state)
         storageModel.demo = true; storageModel.connected = true
         await storageModel.flushForChecks()
-        let receiptsFile = support.appendingPathComponent("PiMobile/submissions.json")
+        let receiptsFile = support.appendingPathComponent("PiMobile/machine-submissions-v1.json")
         try FileManager.default.removeItem(at: receiptsFile)
         try FileManager.default.createDirectory(at: receiptsFile, withIntermediateDirectories: false)
         storageModel.draft = "Original unsent text"; storageModel.addAttachment(file)
@@ -146,7 +147,7 @@ extension ChatModel {
         precondition(storageModel.draft == "Newer composer edit" && storageModel.attachments.first?.id == newerFile.id && storageModel.error?.contains("not sent") == true, "Storage failure explains no transmission and keeps newer composer text/files")
         await storageModel.flushForChecks()
         try FileManager.default.removeItem(at: receiptsFile)
-        try LocalRecoveryStore.save([Submission](), name: "submissions")
+        try LocalRecoveryStore.save([address: [Submission]()], name: "machine-submissions-v1")
         let confirmedModel = ChatModel(defaults: defaults)
         // Submit twice before hydration starts, while both snapshots are idle.
         try confirmedModel.applyForChecks(state)
@@ -163,7 +164,7 @@ extension ChatModel {
         confirmedModel.addAttachment(newerFile)
         for _ in 0..<200 where !confirmedModel.busy { try await Task.sleep(nanoseconds: 10_000_000) }
         precondition(confirmedModel.busy, "Successful confirmed storage allows demo transmission")
-        let durable = LocalRecoveryStore.load("submissions", as: [Submission].self) ?? []
+        let durable = LocalRecoveryStore.load("machine-submissions-v1", as: [String: [Submission]].self)?[address] ?? []
         precondition(durable.map(\.text) == ["First durable message", "Second durable message"] && durable.allSatisfy { $0.status == "Sending" && $0.attachments?.first?.data == file.data }, "Both originals and files are durable before either demo reply completes")
         precondition(confirmedModel.draft == "Later typing" && confirmedModel.attachments.first?.id == newerFile.id, "Hydration and persistence barriers preserve later composer text/files")
         for _ in 0..<200 where confirmedModel.submissions.contains(where: { $0.status == "Sending" }) { try await Task.sleep(nanoseconds: 10_000_000) }
