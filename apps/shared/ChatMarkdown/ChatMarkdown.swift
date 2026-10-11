@@ -68,6 +68,7 @@ nonisolated enum ChatMarkdown {
                 case .quote(let nested): result.append(.quote(bounded(nested)))
                 case .listContinuation(let depth, let nested): result.append(.listContinuation(depth: depth, blocks: bounded(nested)))
                 case .table(let headers, let alignments, let rows):
+                    guard !headers.isEmpty else { continue }
                     guard remainingCells >= headers.count else { truncated = true; continue }
                     remainingCells -= headers.count
                     let count = min(rows.count, remainingCells / headers.count)
@@ -79,7 +80,9 @@ nonisolated enum ChatMarkdown {
             }
             return result
         }
-        var blocks = bounded(parse(source, nesting: 0))
+        let parsed = parse(source, nesting: 0)
+        guard !Task.isCancelled else { return [] }
+        var blocks = bounded(parsed)
         if truncated { blocks.append(.paragraph("Markdown preview limited to 256 blocks and 1,200 table cells.")) }
         return blocks
     }
