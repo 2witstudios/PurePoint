@@ -121,7 +121,7 @@
       "result": "PASS native RPC startup, catalog and command output; real integration actions NOT RUN",
       "teardown": true,
       "integrity": "sha512-auIFxAJmj0qijqO0r2cji5s0N2aqDgHcrL39cliKu32fMal2ZxoNhgEoAUu2vA9Q6jiKSzTs+y54QXypHoa/TA==",
-      "tarball": "https://registry.npmjs.org/@amaster.ai/pi-computer-use/-/amaster.ai-pi-computer-use-0.1.24.tgz"
+      "tarball": "https://registry.npmjs.org/@amaster.ai/pi-computer-use/-/pi-computer-use-0.1.24.tgz"
     }
   ]
 }
