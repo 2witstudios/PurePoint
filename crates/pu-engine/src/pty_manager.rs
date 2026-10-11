@@ -249,6 +249,7 @@ impl NativePtyHost {
                 drop(pty.slave);
                 let pid = child.as_raw() as u32;
                 let buffer = Arc::new(OutputBuffer::new());
+                buffer.resize_terminal(config.rows, config.cols);
                 let master_fd = Arc::new(pty.master);
 
                 // Spawn reader task: master fd → output buffer

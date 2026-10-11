@@ -34,7 +34,7 @@ PurePoint tasks are expected to be **completed fully**. This means:
 
 - **Commit messages**: Clear, descriptive. Reference the task or spec you're implementing.
 - **Code comments**: Only where logic isn't self-evident. Don't narrate — explain the WHY.
-- **If you're stuck**: Say so explicitly in your output. The point guard monitors via `pu logs`.
+- **If you're stuck**: Say so explicitly in your output. The point guard monitors via `pu read`.
 
 ## Key Rules
 
@@ -52,7 +52,14 @@ Read `../pu-cli/SKILL.md` for the full CLI reference. Key commands:
 - `pu agents list --global --json` — agent instances with project/worktree ownership
 - `pu worktrees list --json` — all known worktrees
 - `pu status` — see agents and worktrees in the current project
-- `pu logs <agent_id>` — read agent output
+- `pu read <agent_id>` — read the exact agent conversation; `--json` returns records and cursor
+- `pu logs <agent_id>` — deprecated raw terminal diagnostics
 - `pu send <agent_id> "message"` — send input to an agent
 - `pu spawn "prompt" --name <name>` — spawn a new agent
 - `pu kill --agent <agent_id>` — stop an agent
+
+## Conversation Monitoring
+
+Prefer `pu read <agent_id> --json` for native messages and tool activity. Use `--limit 1..200` (default 50) and pass the returned `next_cursor` to `--since` for incremental reads. Restart without `--since` if the cursor is stale. Terminal workers return explicitly labeled terminal text. Missing identity or unsupported native data is an explicit error; never guess the latest transcript. Bind legacy sessions with `--session EXACT_ID` only when the ID is verified.
+
+Check `pu read --help` before using it on older installations. CLI and daemon must both support protocol 8; do not restart active agents to force an upgrade. `pu logs` remains available for raw terminal diagnostics.

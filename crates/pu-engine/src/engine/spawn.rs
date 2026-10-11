@@ -221,14 +221,23 @@ impl Engine {
             // Append extra args from --agent-args (always applied, even with --no-auto)
             args.extend(extra_args.iter().cloned());
 
-            // Generate session ID for claude agents (enables resume via --resume)
-            let session_id = if agent_type == "claude" {
-                let id = pu_core::id::session_id();
-                args.push("--session-id".into());
-                args.push(id.clone());
-                Some(id)
+            let generated_id = if agent_type == "opencode" {
+                format!("ses_{}", &pu_core::id::session_id().replace('-', "")[..26])
             } else {
-                None
+                pu_core::id::session_id()
+            };
+            let session_id = match crate::read_source::prepare_session_args(
+                &agent_type,
+                &mut args,
+                &generated_id,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    return Response::Error {
+                        code: "INVALID_ARGUMENT".into(),
+                        message: e.to_string(),
+                    };
+                }
             };
 
             // Claude prompt via argv can stall first render in some terminals; keep stdin injection
@@ -298,6 +307,16 @@ impl Engine {
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.clone()));
         env.push(("PU_PROJECT_ROOT".into(), project_root.to_string()));
+        let initial_binding = session_id.as_deref().and_then(|id| {
+            let runtime = match agent_type.as_str() {
+                "claude" => pu_core::read::Runtime::Claude,
+                "opencode" => pu_core::read::Runtime::Opencode,
+                _ => return None,
+            };
+            crate::read_source::resolve_exact(runtime, id, &cwd, &env).ok()
+        });
+        let read_cwd = cwd.clone();
+        let read_type = agent_type.clone();
         let spawn_config = SpawnConfig {
             command,
             args,
@@ -406,6 +425,11 @@ impl Engine {
         // tries to attach — the session must already be in the map.
         self.watch_natural_exit(&project_root, &agent_id, handle.pid, handle.exit_rx.clone());
         self.sessions.lock().await.insert(agent_id.clone(), handle);
+        // Begin ownership capture immediately; startup may precede manifest publication.
+        if read_type == "codex" {
+            self.watch_codex_binding(project_root.to_owned(), agent_id.clone(), read_cwd)
+                .await;
+        }
 
         // Bind trigger if explicitly specified via --trigger <name>
         let (trigger_name, trigger_total) = if no_trigger {
@@ -530,6 +554,11 @@ impl Engine {
             };
         }
 
+        if let Some(binding) = initial_binding
+            && let Err(e) = crate::read_source::save_binding(root_path, &agent_id, &binding)
+        {
+            tracing::warn!(agent_id, error = %e, "native binding could not be persisted");
+        }
         self.notify_status_change(&project_root).await;
 
         if confirmed_prompt {

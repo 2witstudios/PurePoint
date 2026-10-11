@@ -92,6 +92,7 @@ impl Engine {
     /// ownership. Bulk operations always require a project.
     pub(crate) async fn prepare_request(&self, request: &mut Request) -> Result<(), Response> {
         let targeted = match request {
+            Request::Read { agent_id: id, .. } => Some(id.clone()),
             Request::Status {
                 agent_id: Some(id), ..
             }

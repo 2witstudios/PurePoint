@@ -22,6 +22,7 @@ struct BufferInner {
     last_write: Instant,
     last_content_write: Instant,
     total_written: usize,
+    terminal: vt100::Parser,
 }
 
 impl Default for OutputBuffer {
@@ -45,6 +46,7 @@ impl OutputBuffer {
                 last_write: now,
                 last_content_write: now,
                 total_written: 0,
+                terminal: vt100::Parser::new(40, 120, 1024),
             }),
             written_tx,
             written_rx,
@@ -54,6 +56,7 @@ impl OutputBuffer {
     pub fn write(&self, bytes: &[u8]) {
         let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         inner.total_written += bytes.len();
+        inner.terminal.process(bytes);
         // Trim before extending so the deque never grows past capacity. Extending
         // first would let VecDeque double its allocation (4MB -> 8MB) and keep it.
         let capacity = inner.capacity;
@@ -140,6 +143,42 @@ impl OutputBuffer {
     pub fn read_tail(&self, n: usize) -> Vec<u8> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         self.read_tail_inner(&inner, n)
+    }
+
+    pub fn resize_terminal(&self, rows: u16, cols: u16) {
+        self.inner
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .terminal
+            .screen_mut()
+            .set_size(rows.max(1), cols.max(1));
+    }
+
+    /// Render from the original stream, not an arbitrary retained byte suffix.
+    /// When either history bound is reached, a changed generation invalidates
+    /// incremental cursors instead of silently skipping evicted output.
+    pub fn terminal_snapshot(&self) -> (String, usize) {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let screen = inner.terminal.screen_mut();
+        screen.set_scrollback(usize::MAX);
+        let history = screen.scrollback();
+        let (rows, cols) = screen.size();
+        let mut lines = Vec::new();
+        for offset in (1..=history).rev() {
+            screen.set_scrollback(offset);
+            lines.push(screen.rows(0, cols).next().unwrap_or_default());
+        }
+        screen.set_scrollback(0);
+        lines.extend(screen.rows(0, cols).take(rows as usize));
+        while lines.last().is_some_and(|s| s.trim().is_empty()) {
+            lines.pop();
+        }
+        let generation = if history >= 1024 {
+            inner.total_written
+        } else {
+            inner.total_written.saturating_sub(inner.data.len())
+        };
+        (lines.join("\n"), generation)
     }
 
     pub fn content_idle_seconds(&self) -> u64 {
@@ -273,6 +312,35 @@ impl OutputBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_evicted_raw_bytes_should_preserve_emulated_text_and_change_capture_generation() {
+        // given
+        let buffer = OutputBuffer::with_capacity(8);
+        buffer.write(b"first");
+        let before = buffer.terminal_snapshot();
+        // when
+        buffer.write(b"\r\x1b[2Ksecond");
+        let after = buffer.terminal_snapshot();
+        // then
+        assert_eq!(before.0, "first");
+        assert_eq!(after.0, "second");
+        assert_eq!(before.1, 0);
+        assert!(after.1 > before.1);
+    }
+
+    #[test]
+    fn given_terminal_redraws_and_split_unicode_should_read_rendered_text() {
+        // given
+        let buf = OutputBuffer::new();
+        buf.write(b"progress 1\r\x1b[2Kprogress 2\r\x1b[2Kdone\r\n\xf0\x9f");
+        buf.write(b"\x98\x80");
+        // when
+        let (text, loss_generation) = buf.terminal_snapshot();
+        // then
+        assert_eq!(text, "done\n😀");
+        assert_eq!(loss_generation, 0);
+    }
     use std::sync::Arc;
 
     #[test]

@@ -370,7 +370,48 @@ impl Engine {
         };
 
         // 3. Repair corrupted session files before resume (claude-code#24304)
-        if let Some(ref sid) = agent_entry.session_id {
+        let mut env = self.agent_env().await;
+        let binding_root = project_root.to_owned();
+        let binding_agent = agent_id.to_owned();
+        let binding = tokio::task::spawn_blocking(move || {
+            crate::read_source::load_binding(Path::new(&binding_root), &binding_agent)
+        })
+        .await;
+        match binding {
+            Ok(Ok(binding)) => {
+                let runtime = match agent_entry.agent_type.as_str() {
+                    "claude" => pu_core::read::Runtime::Claude,
+                    "codex" => pu_core::read::Runtime::Codex,
+                    "opencode" => pu_core::read::Runtime::Opencode,
+                    "pi" => pu_core::read::Runtime::Pi,
+                    _ => pu_core::read::Runtime::Terminal,
+                };
+                if binding.runtime != runtime
+                    || binding.cwd != cwd
+                    || agent_entry.session_id.as_deref() != Some(&binding.session_id)
+                    || crate::read_source::validate_resume_root(&binding, &env).is_err()
+                {
+                    return Response::Error {code:"READ_IDENTITY_MISMATCH".into(),message:"resume storage differs from its native binding; restore the worker's original storage-root settings".into()};
+                }
+            }
+            Ok(Err(crate::read_source::SourceError::Io(e)))
+                if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(Err(e)) => {
+                return Response::Error {
+                    code: "READ_SOURCE_UNAVAILABLE".into(),
+                    message: e.to_string(),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    code: "READ_SOURCE_UNAVAILABLE".into(),
+                    message: e.to_string(),
+                };
+            }
+        }
+        if agent_entry.agent_type == "claude"
+            && let Some(ref sid) = agent_entry.session_id
+        {
             let cwd_clone = cwd.clone();
             let sid_clone = sid.clone();
             tokio::task::spawn_blocking(move || {
@@ -392,7 +433,6 @@ impl Engine {
         };
 
         // 5. Spawn PTY process
-        let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.to_string()));
         env.push(("PU_PROJECT_ROOT".into(), project_root.to_string()));
         let spawn_config = SpawnConfig {
@@ -489,12 +529,21 @@ impl Engine {
         let (command, mut args) = Self::parse_agent_command(agent_cfg, agent_type)?;
         let launch_args =
             pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
+        let mut policy_args = args.clone();
+        policy_args.extend(launch_args.clone());
+        crate::read_source::prepare_session_args(agent_type, &mut policy_args, "validation")
+            .map_err(|e| Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: e.to_string(),
+            })?;
         match agent_type {
             "claude" => {
-                let sid = session_id.ok_or_else(|| Response::Error {
-                    code: "RESUME_FAILED".into(),
-                    message: "cannot resume Claude agent: no session_id preserved".into(),
-                })?;
+                let sid = session_id
+                    .filter(|id| crate::read_source::valid_session_id(id))
+                    .ok_or_else(|| Response::Error {
+                        code: "RESUME_FAILED".into(),
+                        message: "cannot resume Claude agent: no session_id preserved".into(),
+                    })?;
                 args.extend(launch_args);
                 args.push("--resume".into());
                 args.push(sid.to_string());
@@ -503,14 +552,24 @@ impl Engine {
             "codex" => {
                 // Top-level flags (e.g. --sandbox) must precede the subcommand
                 args.extend(launch_args);
+                let sid = session_id.filter(|id| crate::read_source::valid_session_id(id)).ok_or_else(|| Response::Error {
+                    code: "READ_IDENTITY_UNAVAILABLE".into(), message: "cannot resume without an exact native session; bind it with pu read --session ID".into(),
+                })?;
+                if !args.iter().any(|arg| arg == "--no-daemon") {
+                    args.push("--no-daemon".into());
+                }
                 args.push("resume".into());
-                args.push("--last".into());
-                Ok((command, args, None))
+                args.push(sid.into());
+                Ok((command, args, Some(sid.into())))
             }
             "opencode" => {
                 args.extend(launch_args);
-                args.push("--continue".into());
-                Ok((command, args, None))
+                let sid = session_id.filter(|id| crate::read_source::valid_session_id(id)).ok_or_else(|| Response::Error {
+                    code: "READ_IDENTITY_UNAVAILABLE".into(), message: "cannot resume without an exact native session; bind it with pu read --session ID".into(),
+                })?;
+                args.push("--session".into());
+                args.push(sid.into());
+                Ok((command, args, Some(sid.into())))
             }
             _ => {
                 // Terminal / unknown: fresh shell in same directory
@@ -577,6 +636,32 @@ mod resume_command_tests {
     use super::*;
 
     #[test]
+    fn given_missing_or_conflicting_native_identity_should_reject_resume() {
+        // given
+        let engine = Engine::new();
+        for kind in ["codex", "opencode"] {
+            let config = pu_core::types::AgentConfig {
+                name: kind.into(),
+                command: kind.into(),
+                prompt_flag: None,
+                interactive: true,
+                launch_args: Some(vec![]),
+            };
+            // when / then
+            assert!(engine.build_resume_command(kind, &config, None).is_err());
+            let mut conflicting = config.clone();
+            conflicting.launch_args = Some(vec!["--continue".into()]);
+            if kind == "opencode" {
+                assert!(
+                    engine
+                        .build_resume_command(kind, &conflicting, Some("ses_exact"))
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn given_wrapped_agents_should_run_wrapper_setup_on_resume() {
         // given: setup performed by a wrapper, then an executable supplied by config
         let dir = tempfile::tempdir().unwrap();
@@ -589,8 +674,16 @@ mod resume_command_tests {
         let engine = Engine::new();
         for (agent_type, session_id, resume_args) in [
             ("claude", Some("sess-123"), vec!["--resume", "sess-123"]),
-            ("codex", None, vec!["resume", "--last"]),
-            ("opencode", None, vec!["--continue"]),
+            (
+                "codex",
+                Some("sess-123"),
+                vec!["--no-daemon", "resume", "sess-123"],
+            ),
+            (
+                "opencode",
+                Some("ses_exact"),
+                vec!["--session", "ses_exact"],
+            ),
         ] {
             let cfg = pu_core::types::AgentConfig {
                 name: agent_type.into(),

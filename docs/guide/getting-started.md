@@ -57,7 +57,7 @@ pu status
 Watch the agent's output:
 
 ```sh
-pu logs ag-{id}
+pu read ag-{id}
 ```
 
 Or attach to the agent's terminal interactively:

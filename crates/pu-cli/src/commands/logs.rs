@@ -6,6 +6,9 @@ use pu_core::protocol::Request;
 use std::path::Path;
 
 pub async fn run(socket: &Path, agent_id: &str, tail: usize, json: bool) -> Result<(), CliError> {
+    eprintln!(
+        "pu logs is deprecated for conversation reads; use pu read {agent_id} (logs still returns raw terminal bytes)"
+    );
     daemon_ctrl::ensure_daemon(socket).await?;
 
     let resp = client::send_request(

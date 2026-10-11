@@ -45,7 +45,11 @@ final class DiffState {
     var localFileCount: Int { Set((stagedDiff + unstagedDiff + untrackedDiff).map(\.filename)).count }
 
     private let git: GitService
-    init(gitService: GitService = .shared) { git = gitService }
+    private let observeChanges: Bool
+    init(gitService: GitService = .shared, observeChanges: Bool = true) {
+        git = gitService
+        self.observeChanges = observeChanges
+    }
 
     private var watcher: WorktreeWatcher?
     private var path: String?
@@ -77,6 +81,8 @@ final class DiffState {
         branchError = nil; localError = nil; prError = nil
         hasLoadedBranch = false; hasLoadedLocal = false; hasLoadedCommit = false
         refresh()
+        // Explicitly driven callers can own refresh timing without background races.
+        guard observeChanges else { return }
         watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
             Task { @MainActor in self?.refreshLocal() }
         }

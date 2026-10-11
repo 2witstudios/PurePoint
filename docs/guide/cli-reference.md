@@ -13,7 +13,8 @@
 | [`pu play`](#play) | Resume a suspended agent |
 | [`pu kill`](#kill) | Kill agents |
 | [`pu attach`](#attach) | Attach to an agent's terminal |
-| [`pu logs`](#logs) | View agent output logs |
+| [`pu read`](#read) | Read native agent conversations |
+| [`pu logs`](#logs) | Deprecated raw terminal diagnostics |
 | [`pu send`](#send) | Send text or keys to an agent |
 | [`pu health`](#health) | Check daemon health |
 | [`pu pulse`](#pulse) | Workspace overview at a glance |
@@ -130,9 +131,21 @@ pu attach <agent_id>
 
 Press `Ctrl+C` to detach without killing the agent.
 
+## read
+
+Read the exact native conversation for Claude, Codex, OpenCode or configured Pi. Terminal workers return labeled terminal text.
+
+```sh
+pu read <agent_id> [--limit <records>] [--since <cursor>] [--session <exact-id>] [--json]
+```
+
+Default limit: 50 records; range: 1–200. JSON includes source metadata and `next_cursor`; use it with `--since` for incremental reads. On stale cursors, restart without `--since`. Missing identity or unsupported data fails explicitly. `--session` persists an explicitly verified native session binding; never select the newest transcript by timestamp.
+
+Requires CLI and daemon protocol 8 together. Upgrade without restarting active agents. Retained native sources can be read after an agent stops; reaped terminal captures are unavailable.
+
 ## logs
 
-View agent output logs.
+Deprecated raw PTY diagnostics. Use `pu read` for conversation monitoring.
 
 ```sh
 pu logs <agent_id> [--tail <bytes>] [--json]

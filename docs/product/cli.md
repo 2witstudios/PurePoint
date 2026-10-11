@@ -43,7 +43,8 @@ Key behaviors:
 | `pu play <agent_id>` | `--json` | Resume a benched agent |
 | `pu kill` | `--agent`, `--worktree`, `--all` (mutually exclusive), `--include-root` (requires `--all`), `--json` | Kill agent(s) |
 | `pu attach <agent_id>` | — | Interactive PTY attach to agent |
-| `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Tail agent output buffer |
+| `pu read <agent_id>` | `--limit <n>` (default 50), `--since <cursor>`, `--session <exact-id>`, `--json` | Read exact native conversation or labeled terminal text |
+| `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Deprecated raw terminal diagnostic bytes |
 | `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal. Claude agents get screen-confirmed delivery (full text submitted as one turn, or non-zero exit); no nudge needed |
 | `pu health` | `--json` | Check daemon health |
 | `pu pulse` | `--json` | Workspace overview (agents, runtimes, git stats) |
@@ -109,4 +110,7 @@ Global summary and list commands ignore PU_PROJECT_ROOT unless --project is supp
 
 Validation: `crates/pu-cli/tests/global_inventory.rs` exercises real CLI processes and IPC from an unrelated cwd across two projects, root/worktree agents, scoped rejection, send/logs, bench/kill, standalone shells and registry restart. Engine inventory tests cover aliases, corrupt stores, invalid registrations, duplicate IDs, partial inventories and exited handles before reaping.
 
-The CLI verifies protocol v7 before daemon commands. An older or newer daemon produces an explicit incompatibility error with restart guidance; it is never automatically stopped because that would terminate active agents. A busy daemon reports BUSY until compatibility can be verified.
+The CLI verifies protocol v8 before daemon commands. An older or newer daemon produces an explicit incompatibility error with restart guidance; it is never automatically stopped because that would terminate active agents. A busy daemon reports BUSY until compatibility can be verified.
+
+
+Conversation reads (protocol 8): `Read { project_root, agent_id, limit, since?, session_id? }` returns `ReadResult` with runtime, exact session ID, source kind, normalized records, cursor and completeness indicators. See [Agent Conversation Reads](../product/agent-read.md). Resume uses exact recorded native identity; legacy unbound workers require `pu read AGENT --session ID`. No newest-session selection.

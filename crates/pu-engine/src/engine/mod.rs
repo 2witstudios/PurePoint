@@ -4,6 +4,7 @@ mod definitions;
 mod helpers;
 mod inventory;
 mod pty_operations;
+mod read;
 mod scheduler;
 mod session_repair;
 mod spawn;
@@ -437,6 +438,22 @@ impl Engine {
                 agent_id,
             } => self.handle_resume(&project_root, &agent_id).await,
             Request::Logs { agent_id, tail } => self.handle_logs(&agent_id, tail).await,
+            Request::Read {
+                project_root,
+                agent_id,
+                limit,
+                since,
+                session_id,
+            } => {
+                self.handle_read(
+                    &project_root,
+                    &agent_id,
+                    limit,
+                    since.as_deref(),
+                    session_id.as_deref(),
+                )
+                .await
+            }
             Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
             Request::Input {
                 agent_id,
@@ -1084,12 +1101,15 @@ mod tests {
 
         // when
         let (cmd, args, _) = engine
-            .build_resume_command("codex", &agent_cfg, None)
+            .build_resume_command("codex", &agent_cfg, Some("session-exact"))
             .unwrap();
 
         // then — top-level flags must precede the subcommand
         assert_eq!(cmd, "codex");
-        assert_eq!(args, vec!["--search", "resume", "--last"]);
+        assert_eq!(
+            args,
+            vec!["--search", "--no-daemon", "resume", "session-exact"]
+        );
     }
 
     #[test]
@@ -1106,7 +1126,7 @@ mod tests {
 
         // when
         let (cmd, args, _) = engine
-            .build_resume_command("codex", &agent_cfg, None)
+            .build_resume_command("codex", &agent_cfg, Some("session-exact"))
             .unwrap();
 
         // then — the auto-mode flags are top-level, they must come before `resume`
@@ -1118,8 +1138,9 @@ mod tests {
                 "workspace-write",
                 "--ask-for-approval",
                 "on-request",
+                "--no-daemon",
                 "resume",
-                "--last"
+                "session-exact"
             ]
         );
     }
@@ -1286,23 +1307,30 @@ mod tests {
     fn given_codex_resume_should_use_auto_mode_args() {
         let engine = Engine::new();
         let cfg = dummy_agent_cfg("codex");
-        let (cmd, args, _) = engine.build_resume_command("codex", &cfg, None).unwrap();
+        let (cmd, args, _) = engine
+            .build_resume_command("codex", &cfg, Some("session-exact"))
+            .unwrap();
         assert_eq!(cmd, "codex");
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
         assert!(args.contains(&"--ask-for-approval".to_string()));
         assert!(args.contains(&"on-request".to_string()));
         assert!(args.contains(&"resume".to_string()));
-        assert!(args.contains(&"--last".to_string()));
+        assert!(args.contains(&"session-exact".to_string()));
+        assert!(!args.contains(&"--last".to_string()));
     }
 
     #[test]
-    fn given_opencode_resume_should_use_continue() {
+    fn given_opencode_resume_should_use_exact_session() {
         let engine = Engine::new();
         let cfg = dummy_agent_cfg("opencode");
-        let (cmd, args, _) = engine.build_resume_command("opencode", &cfg, None).unwrap();
+        let (cmd, args, _) = engine
+            .build_resume_command("opencode", &cfg, Some("ses_exact"))
+            .unwrap();
         assert_eq!(cmd, "opencode");
-        assert!(args.contains(&"--continue".to_string()));
+        assert!(args.contains(&"--session".to_string()));
+        assert!(args.contains(&"ses_exact".to_string()));
+        assert!(!args.contains(&"--continue".to_string()));
         assert!(!args.contains(&"--agent".to_string()));
     }
 

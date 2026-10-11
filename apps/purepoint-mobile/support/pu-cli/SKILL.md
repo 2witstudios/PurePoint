@@ -68,10 +68,16 @@ pu status --json                   # machine-readable
 
 ### Read agent output
 ```bash
-pu logs <agent_id>                 # last 500 bytes of PTY output
-pu logs <agent_id> --tail 2000     # more context
-pu logs <agent_id> --json          # { "agent_id": "...", "data": "..." }
+pu read <agent_id>                         # latest 50 conversation records
+pu read <agent_id> --limit 100 --json      # bounded page (1–200), source and next_cursor
+pu read <agent_id> --since CURSOR --json   # next records; retain the returned next_cursor
+pu read <agent_id> --session EXACT_ID     # explicitly bind a known native session
+pu logs <agent_id> --tail 2000            # deprecated raw PTY diagnostics only
 ```
+
+Use `pu read` for conversation monitoring. Claude, Codex, OpenCode and configured Pi use native records; terminal workers return explicitly labeled terminal text. Preserve `source_kind` and error metadata when interpreting JSON. If a cursor is stale, start a fresh read without `--since`. A pending source may not have written a complete record yet; retry later. Missing identity, unavailable sources and unsupported schemas are errors, not an invitation to select the newest transcript or treat raw PTY bytes as conversation history. Use `--session` only with a verified exact native ID; it persists the binding for that agent.
+
+Check `pu read --help` on older installations. This command requires CLI and daemon protocol 8 together; do not restart active agents to force an upgrade. Use `pu logs` only when raw terminal diagnostics are specifically needed.
 
 ### Send input to agents
 ```bash
@@ -260,7 +266,7 @@ Use with: `pu spawn --template code-review --var BRANCH=main`
 
 ## Reading Conversation History
 
-Claude agents have a `session_id` visible in `pu status --json`. Session transcripts are stored at `~/.claude/projects/{project-hash}/*.jsonl`. You can grep for the session ID to find the right transcript, or use `pu logs <agent_id>` to read the PTY output directly.
+Use `pu read <agent_id> --json` for the bound native conversation across supported agents, including stopped agents with retained native sources. Legacy unbound agents need a verified exact `--session ID`; do not guess from cwd or timestamps. Codex requires `--no-daemon` support for automatic process-owned binding. Terminal text depends on the retained capture and is unavailable after it is reaped.
 
 ## `--json` Flag
 
