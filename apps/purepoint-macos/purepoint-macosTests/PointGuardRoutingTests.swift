@@ -29,6 +29,29 @@ private struct PointGuardRoutingService: WorkspaceService {
         try body(state, registry, root)
     }
 
+    @Test func paletteQueriesPointGuardFolderWithAndWithoutVisibleProjects() throws {
+        try withState { state, _, root in
+            let id = try #require(state.activatePointGuardWorkspace())
+            #expect(state.paletteProjectRoots(forWorkspace: id) == [root])
+            state.openProject(root + "-project")
+            #expect(state.paletteProjectRoots(forWorkspace: id) == [root, root + "-project"])
+            state.openProject(root)
+            #expect(state.paletteProjectRoots(forWorkspace: id) == [root, root + "-project"])
+        }
+    }
+
+    @Test func argumentLaunchRestoresHiddenFoldersWithoutRestoringOtherVisibleProjects() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+            UserDefaults.standard.set([root + "-next"], forKey: "PurePointOpenProjects")
+            UserDefaults.standard.set([root], forKey: "PurePointPointGuardFolders")
+            state.restoreProjects(projectRoot: root + "-project")
+            #expect(state.projects.map(\.projectRoot) == [root + "-project"])
+            #expect(state.projectState(forRoot: root) != nil)
+            #expect(state.projectState(forRoot: root + "-next") == nil)
+        }
+    }
+
     @Test func restoringOpenProjectsRetainsSavedHiddenPointGuardFolders() throws {
         try withState { state, _, root in
             try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)

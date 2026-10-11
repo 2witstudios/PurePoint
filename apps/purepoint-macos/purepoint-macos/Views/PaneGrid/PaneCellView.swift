@@ -115,7 +115,7 @@ private struct EmptyTabView: View {
         let rootPath = state.fileRoot(forWorkspace: wsId, registry: reg)
         let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
-            await hub.loadAll(projectRoots: state.projects.map(\.projectRoot))
+            await hub.loadAll(projectRoots: state.paletteProjectRoots(forWorkspace: wsId))
             let files = await Task.detached { rootPath.map { FileIndex.list(root: $0) } ?? [] }.value
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.allVariants,

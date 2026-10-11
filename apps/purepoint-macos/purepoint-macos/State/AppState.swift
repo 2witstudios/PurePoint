@@ -97,13 +97,14 @@ final class AppState {
         return projectState(forRoot: root) == nil
     }
 
-    func restoreProjects() {
-        let paths = UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
+    func restoreProjects(projectRoot: String? = nil) {
+        let paths = projectRoot.map { [$0] }
+            ?? UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
         // Opening projects persists current state, so snapshot both saved lists first.
         let savedPointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
         pointGuardFolders.formUnion(savedPointGuardFolders)
         for path in paths {
-            guard FileManager.default.fileExists(atPath: path) else { continue }
+            guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else { continue }
             openProject(path)
         }
         for root in savedPointGuardFolders {
@@ -182,6 +183,14 @@ final class AppState {
             let workspace = registry.workspace(id: id)
         else { return }
         registry.pendingPaletteSurfaceId = registry.newTab(workspaceId: id, leafId: workspace.focusedLeafId)
+    }
+
+    /// Load the pane's own local definitions as well as definitions from visible projects.
+    /// The owning root comes first so a Point Guard-only session still queries global definitions.
+    func paletteProjectRoots(forWorkspace workspaceId: String) -> [String] {
+        let visibleRoots = projects.map(\.projectRoot)
+        guard let root = registry?.projectRoot(forWorkspace: workspaceId) else { return visibleRoots }
+        return [root] + visibleRoots.filter { $0 != root }
     }
 
     // MARK: - Cross-Project Queries

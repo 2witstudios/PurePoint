@@ -290,7 +290,7 @@ struct purepoint_macosApp: App {
         for (i, arg) in args.enumerated() {
             if arg == "--project-root", i + 1 < args.count {
                 let path = args[i + 1]
-                appState.openProject(path)
+                appState.restoreProjects(projectRoot: path)
                 return
             }
         }
