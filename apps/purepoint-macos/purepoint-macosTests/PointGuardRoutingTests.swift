@@ -81,6 +81,20 @@ private struct PointGuardRoutingService: WorkspaceService {
         #expect(registry.activeWorkspaceId == nil)
     }
 
+    @Test func unknownPointGuardFolderClearsPreviouslySelectedCodingWorkspace() throws {
+        try withState { state, registry, root in
+            let agent = AgentModel(id: "ag-coding", name: "Terminal", agentType: "terminal",
+                                   status: .running, prompt: "", startedAt: "")
+            registry.reconcile(projectRoot: root + "-project", rootAgents: [agent], worktrees: [])
+            let id = try #require(registry.workspaceId(forAgent: agent.id))
+            registry.activate(workspaceId: id)
+            state.updatePointGuardRoot("")
+            #expect(state.activatePointGuardWorkspace() == nil)
+            #expect(registry.activeWorkspaceId == nil)
+            #expect(registry.workspace(id: id) != nil)
+        }
+    }
+
     @Test func restoringOrSelectingPointGuardPreservesVisibleCodingProject() throws {
         try withState { state, registry, root in
             state.openProject(root + "-project")
@@ -142,7 +156,7 @@ private struct PointGuardRoutingService: WorkspaceService {
             #expect(state.projectState(forRoot: root) != nil)
             #expect(registry.workspace(id: original) != nil)
             state.updatePointGuardRoot("")
-            #expect(state.pointGuardRoot == root + "-next")
+            #expect(state.pointGuardRoot == nil)
         }
     }
 

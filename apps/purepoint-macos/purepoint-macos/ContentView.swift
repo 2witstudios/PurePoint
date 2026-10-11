@@ -56,10 +56,9 @@ struct ContentView: View {
             guard let action = notification.userInfo?["action"] as? HotkeyAction else { return }
             handleHotkeyAction(action)
         }
-        .onReceive(appState.pointGuardService.$cwd.removeDuplicates()) { cwd in
-            guard !cwd.isEmpty,
-                URL(fileURLWithPath: cwd).standardizedFileURL.path != appState.pointGuardRoot
-            else { return }
+        .onReceive(appState.pointGuardService.$activeCwd.removeDuplicates()) { cwd in
+            let root = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd).standardizedFileURL.path
+            guard root != appState.pointGuardRoot else { return }
             appState.updatePointGuardRoot(cwd)
             if selection == .nav(.dashboard) {
                 appState.activatePointGuardWorkspace()

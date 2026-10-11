@@ -21,6 +21,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var hasPendingAuthCleanup = false
     @Published private(set) var hasPendingEnrollmentCleanup = false
     @Published private(set) var cwd = ""
+    /// The owned Pi process's folder; a saved configuration change applies only after restart.
+    @Published private(set) var activeCwd = ""
     @Published private(set) var selectedProvider = ""
     @Published private(set) var selectedModel = ""
     @Published private(set) var enrollmentStatus = ""
@@ -158,8 +160,12 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         return result["result"]
     }
     func refresh() async {
+        let generation = runtimeGeneration
         do {
-            let status = try await request("status"); cwd = status["cwd"].text ?? ""
+            let status = try await request("status")
+            guard generation == runtimeGeneration else { return }
+            activeCwd = status["cwd"].text ?? ""
+            cwd = activeCwd
             let recovery = status["remoteRecovery"]
             remoteRecovery = [recovery["message"].text, recovery["recovery"].text].compactMap { $0 }.joined(separator: " ")
             if remoteRecovery?.isEmpty == true { remoteRecovery = nil }
@@ -405,7 +411,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         try? ownerLifetime?.close(); ownerLifetime = nil
         runtimeGeneration += 1; authGeneration += 1; enrollmentGeneration += 1
         pollTask?.cancel(); pollTask = nil
-        ready = false; descriptor = nil; adminToken = ""; process = nil; remoteRecovery = nil
+        ready = false; activeCwd = ""; descriptor = nil; adminToken = ""; process = nil; remoteRecovery = nil
         activeAttemptId = nil; auth = .null; enrollment = .null; enrollmentStatus = ""
         pendingAuthCleanup.removeAll(); pendingEnrollmentCleanup.removeAll()
         hasPendingAuthCleanup = false; hasPendingEnrollmentCleanup = false

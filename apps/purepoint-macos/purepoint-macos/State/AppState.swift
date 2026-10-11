@@ -150,8 +150,7 @@ final class AppState {
 
     /// Pi's configured folder is independent of the selected coding project.
     func updatePointGuardRoot(_ cwd: String) {
-        guard !cwd.isEmpty else { return }
-        pointGuardRoot = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        pointGuardRoot = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd).standardizedFileURL.path
     }
 
     private func ensurePointGuardProject(root: String) {
@@ -167,7 +166,11 @@ final class AppState {
 
     @discardableResult
     func activatePointGuardWorkspace() -> String? {
-        guard let registry, let root = pointGuardRoot else { return nil }
+        guard let registry else { return nil }
+        guard let root = pointGuardRoot else {
+            registry.activeWorkspaceId = nil
+            return nil
+        }
         ensurePointGuardProject(root: root)
         guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) else {
             registry.activeWorkspaceId = nil
