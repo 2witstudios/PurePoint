@@ -48,6 +48,7 @@ fn given_cursor_should_read_each_block_once_and_reject_updated_or_wrong_source()
             .map(|n| record(n.to_string(), RecordKind::Assistant, &format!("Text {n}")))
             .collect(),
         pending_tail: false,
+        revision: String::new(),
     };
     // when
     let first = paginate("agent:session", &transcript, None, 2).unwrap();
@@ -89,7 +90,7 @@ fn given_live_jsonl_writes_should_wait_for_partial_records_and_reject_complete_c
     let result = parse_jsonl(Runtime::Claude, &partial).unwrap();
     // then
     assert_eq!(result.records.len(), 1);
-    assert_eq!(result.pending_tail, true);
+    assert!(result.pending_tail);
     assert!(matches!(
         parse_jsonl(Runtime::Claude, b"{broken}\n"),
         Err(ReadError::InvalidRecord(_))
@@ -214,4 +215,74 @@ fn given_codex_agent_messages_and_images_should_retain_visible_content() {
         ),
         Err(ReadError::UnsupportedSchema(_))
     ));
+}
+
+#[test]
+fn given_malformed_supported_records_should_fail_instead_of_returning_empty_success() {
+    // given / when / then
+    for (runtime, input) in [
+        (
+            Runtime::Claude,
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\"}]}}\n",
+        ),
+        (
+            Runtime::Pi,
+            "{\"type\":\"message\",\"id\":\"a\",\"parentId\":null,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"future_block\"}]}}\n",
+        ),
+    ] {
+        assert!(parse_jsonl(runtime, input.as_bytes()).is_err());
+    }
+    assert!(
+        parse_opencode(
+            &serde_json::json!({"messages":[{"id":"a","type":"assistant","content":false}]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn given_native_compaction_without_visible_text_changes_should_reject_a_prior_cursor() {
+    // given
+    let original = b"{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\"}]}}\n";
+    let first = parse_jsonl(Runtime::Codex, original).unwrap();
+    let cursor = paginate("source", &first, None, 50).unwrap().next_cursor;
+    let changed = [
+        original.as_slice(),
+        b"{\"type\":\"compacted\",\"payload\":{\"message\":\"summary\"}}\n",
+    ]
+    .concat();
+    // when
+    let changed = parse_jsonl(Runtime::Codex, &changed).unwrap();
+    // then
+    assert_eq!(
+        paginate("source", &changed, Some(&cursor), 50).unwrap_err(),
+        ReadError::StaleCursor
+    );
+}
+
+#[test]
+fn given_claude_or_opencode_compaction_metadata_should_invalidate_cursors() {
+    // given
+    let claude = b"{\"type\":\"user\",\"uuid\":\"u\",\"parentUuid\":null,\"message\":{\"content\":\"Question\"}}\n";
+    let first = parse_jsonl(Runtime::Claude, claude).unwrap();
+    let cursor = paginate("claude", &first, None, 50).unwrap().next_cursor;
+    let changed = [
+        claude.as_slice(),
+        b"{\"type\":\"system\",\"subtype\":\"compact_boundary\"}\n",
+    ]
+    .concat();
+    // when / then
+    let changed = parse_jsonl(Runtime::Claude, &changed).unwrap();
+    assert_eq!(
+        paginate("claude", &changed, Some(&cursor), 50).unwrap_err(),
+        ReadError::StaleCursor
+    );
+    let original = serde_json::json!({"messages":[{"id":"m","type":"user","text":"Question"}]});
+    let first = parse_opencode(&original).unwrap();
+    let cursor = paginate("open", &first, None, 50).unwrap().next_cursor;
+    let changed = parse_opencode(&serde_json::json!({"messages":[{"id":"m","type":"user","text":"Question"},{"id":"c","type":"compaction"}]})).unwrap();
+    assert_eq!(
+        paginate("open", &changed, Some(&cursor), 50).unwrap_err(),
+        ReadError::StaleCursor
+    );
 }

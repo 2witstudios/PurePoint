@@ -27,7 +27,14 @@ pub async fn run(
 }
 
 pub fn format_report(report: &ReadReport) -> String {
-    let mut text = String::new();
+    let mut text = if report.source_kind == SourceKind::TerminalText {
+        format!(
+            "Terminal text — {}\n",
+            pu_core::read::clean_text(&report.agent_id)
+        )
+    } else {
+        String::new()
+    };
     for record in &report.page.records {
         if report.source_kind == SourceKind::TerminalText {
             text.push_str(&record.text);

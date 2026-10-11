@@ -42,6 +42,7 @@ pub struct ReadRecord {
 pub struct Transcript {
     pub records: Vec<ReadRecord>,
     pub pending_tail: bool,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -58,6 +59,13 @@ pub enum ReadError {
     StaleCursor,
     #[error("read limit must be between 1 and 200")]
     InvalidLimit,
+}
+
+fn required_text<'a>(value: &'a Value, key: &str) -> Result<&'a str, ReadError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| ReadError::InvalidRecord(format!("missing or invalid {key}")))
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {
@@ -164,7 +172,7 @@ fn claude_message(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadEr
     for (i, block) in blocks.iter().enumerate() {
         let block_id = format!("{id}:{i}");
         let r = match block["type"].as_str() {
-            Some("text") => record(block_id, kind, block["text"].as_str().unwrap_or_default()),
+            Some("text") => record(block_id, kind, required_text(block, "text")?),
             Some("tool_use") => {
                 let mut r = record(block_id, RecordKind::ToolCall, &block["input"].to_string());
                 r.tool_name = string(block, "name");
@@ -246,10 +254,31 @@ pub fn parse_jsonl(runtime: Runtime, bytes: &[u8]) -> Result<Transcript, ReadErr
     } else {
         values.iter().enumerate().collect()
     };
+    let metadata_candidates = if runtime == Runtime::Pi {
+        selected.clone()
+    } else {
+        values.iter().enumerate().collect()
+    };
+    let metadata: Vec<_> = metadata_candidates
+        .iter()
+        .filter_map(|(_, v)| {
+            let semantic = match runtime {
+                Runtime::Claude => {
+                    v["isCompactSummary"] == true
+                        || (v["type"] == "system" && v["subtype"] == "compact_boundary")
+                }
+                Runtime::Codex => v["type"] == "compacted" || v["payload"]["type"] == "compaction",
+                Runtime::Pi => matches!(v["type"].as_str(), Some("compaction" | "branch_summary")),
+                _ => false,
+            };
+            semantic.then_some(*v)
+        })
+        .collect();
+    result.revision = digest(&serde_json::to_vec(&metadata).expect("native metadata serializes"));
     for (index, value) in selected {
         result.records.extend(match runtime {
-            Runtime::Claude => claude_message(&value, index)?,
-            Runtime::Codex => codex_item(&value, index)?,
+            Runtime::Claude => claude_message(value, index)?,
+            Runtime::Codex => codex_item(value, index)?,
             Runtime::Pi => pi_message(value, index)?,
             _ => unreachable!(),
         });
@@ -309,7 +338,7 @@ fn pi_message(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadError>
     let kind = match message["role"].as_str() {
         Some("user") => RecordKind::User,
         Some("assistant") => RecordKind::Assistant,
-        _ => return Ok(vec![]),
+        other => return Err(ReadError::UnsupportedSchema(format!("Pi role {other:?}"))),
     };
     if let Some(text) = message["content"].as_str() {
         return Ok(vec![record(id, kind, text)]);
@@ -321,16 +350,16 @@ fn pi_message(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadError>
     for (i, block) in blocks.iter().enumerate() {
         let id = format!("{id}:{i}");
         match block["type"].as_str() {
-            Some("text") => {
-                result.push(record(id, kind, block["text"].as_str().unwrap_or_default()))
-            }
+            Some("text") => result.push(record(id, kind, required_text(block, "text")?)),
             Some("toolCall") => {
                 let mut r = record(id, RecordKind::ToolCall, &block["arguments"].to_string());
                 r.tool_name = string(block, "name");
                 r.tool_call_id = string(block, "id");
                 result.push(r);
             }
-            _ => {}
+            Some("image") => result.push(record(id, RecordKind::Notice, "Attachment: image")),
+            Some("thinking") => {}
+            other => return Err(ReadError::UnsupportedSchema(format!("Pi block {other:?}"))),
         }
     }
     Ok(result)
@@ -368,6 +397,7 @@ struct Cursor {
     source: String,
     position: usize,
     prefix: String,
+    revision: String,
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -398,7 +428,8 @@ pub fn paginate(
         if cursor.version != 1 || cursor.source != source {
             return Err(ReadError::InvalidCursor);
         }
-        if cursor.position > transcript.records.len()
+        if cursor.revision != transcript.revision
+            || cursor.position > transcript.records.len()
             || prefix_digest(&transcript.records[..cursor.position]) != cursor.prefix
         {
             return Err(ReadError::StaleCursor);
@@ -413,6 +444,7 @@ pub fn paginate(
         source,
         position: end,
         prefix: prefix_digest(&transcript.records[..end]),
+        revision: transcript.revision.clone(),
     };
     Ok(ReadPage {
         records: transcript.records[start..end].to_vec(),
@@ -521,15 +553,20 @@ pub fn parse_opencode(snapshot: &Value) -> Result<Transcript, ReadError> {
             .get("parts")
             .or_else(|| info.get("content"))
             .and_then(Value::as_array);
+        if blocks.is_none() && info.get("text").and_then(Value::as_str).is_none() {
+            return Err(ReadError::InvalidRecord(format!(
+                "{id}: missing or invalid content"
+            )));
+        }
         if let Some(blocks) = blocks {
             for (i, block) in blocks.iter().enumerate() {
                 let block_id = string(block, "id").unwrap_or_else(|| format!("{id}:{i}"));
                 match block["type"].as_str() {
-                    Some("text") => result.records.push(record(
-                        block_id,
-                        kind,
-                        block["text"].as_str().unwrap_or_default(),
-                    )),
+                    Some("text") => {
+                        result
+                            .records
+                            .push(record(block_id, kind, required_text(block, "text")?))
+                    }
                     Some("tool") => {
                         let state = &block["state"];
                         let tool_name = string(block, "tool").or_else(|| string(block, "name"));
@@ -581,6 +618,19 @@ pub fn parse_opencode(snapshot: &Value) -> Result<Transcript, ReadError> {
             }
         }
     }
+    let metadata: Vec<_> = messages
+        .iter()
+        .filter(|message| {
+            let info = message.get("info").unwrap_or(message);
+            info["type"] == "compaction"
+                || message
+                    .get("parts")
+                    .or_else(|| info.get("content"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| parts.iter().any(|p| p["type"] == "compaction"))
+        })
+        .collect();
+    result.revision = digest(&serde_json::to_vec(&metadata).expect("native metadata serializes"));
     Ok(result)
 }
 

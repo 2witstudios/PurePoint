@@ -314,6 +314,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn given_evicted_raw_bytes_should_preserve_emulated_text_and_change_capture_generation() {
+        // given
+        let buffer = OutputBuffer::with_capacity(8);
+        buffer.write(b"first");
+        let before = buffer.terminal_snapshot();
+        // when
+        buffer.write(b"\r\x1b[2Ksecond");
+        let after = buffer.terminal_snapshot();
+        // then
+        assert_eq!(before.0, "first");
+        assert_eq!(after.0, "second");
+        assert_eq!(before.1, 0);
+        assert!(after.1 > before.1);
+    }
+
+    #[test]
     fn given_terminal_redraws_and_split_unicode_should_read_rendered_text() {
         // given
         let buf = OutputBuffer::new();

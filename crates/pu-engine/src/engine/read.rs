@@ -64,7 +64,7 @@ impl Engine {
                     match result {
                         Ok(Ok(())) => break,
                         // Manifest publication can lag the first owned rollout descriptor.
-                        Ok(Err(SourceError::Io(_))) if owned => {}
+                        Ok(Err(SourceError::IdentityUnavailable)) if owned => {}
                         _ => {
                             tracing::warn!(
                                 agent_id,
@@ -179,6 +179,7 @@ impl Engine {
                     })
                     .collect(),
                 pending_tail: false,
+                revision: String::new(),
             };
             return match paginate(&source, &transcript, since, limit) {
                 Ok(page) => Response::ReadResult(ReadReport {
@@ -318,6 +319,77 @@ mod tests {
     use super::super::Engine;
     use crate::read_source::Binding;
     use pu_core::protocol::{Request, Response};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_two_codex_processes_in_one_directory_should_bind_their_owned_rollouts() {
+        // given: actual PTYs, descriptors and native files; no model/network execution
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let root_s = root.to_str().unwrap();
+        let engine = Engine::new();
+        engine
+            .login_env
+            .set(vec![
+                ("HOME".into(), root_s.into()),
+                ("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()),
+            ])
+            .unwrap();
+        engine
+            .handle_request(Request::Init {
+                project_root: root_s.into(),
+            })
+            .await;
+        let script = root.join("worker.sh");
+        std::fs::write(&script, r#"mkdir -p "$HOME/.codex/sessions"
+source="$HOME/.codex/sessions/rollout-$PU_AGENT_ID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","source":"cli","cwd":"%s"}}\n' "$PU_AGENT_ID" "$PWD" > "$source"
+printf '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"%s"}]}}\n' "$PU_AGENT_ID" >> "$source"
+exec 3< "$source"
+sleep 30
+"#).unwrap();
+        std::fs::write(root.join(".pu/config.yaml"), format!("agents:\n  codex:\n    name: Codex\n    command: {}\n    interactive: true\n    launchArgs: []\n", serde_json::to_string(&format!("/bin/sh {}", script.display())).unwrap())).unwrap();
+        let mut agents = Vec::new();
+        for _ in 0..2 {
+            let req = serde_json::from_value(serde_json::json!({"type":"spawn","project_root":root_s,"prompt":"","agent":"codex","root":true,"no_trigger":true})).unwrap();
+            match engine.handle_request(req).await {
+                Response::SpawnResult { agent_id, .. } => agents.push(agent_id),
+                other => panic!("{other:?}"),
+            }
+        }
+        // when: automatic capture must bind each process, without explicit --session
+        let reports = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let mut reports = Vec::new();
+                for id in &agents {
+                    if let Response::ReadResult(report) = engine
+                        .handle_request(Request::Read {
+                            project_root: root_s.into(),
+                            agent_id: id.clone(),
+                            limit: 50,
+                            since: None,
+                            session_id: None,
+                        })
+                        .await
+                    {
+                        reports.push(report);
+                    }
+                }
+                if reports.len() == 2 {
+                    break reports;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        engine.kill_agents(&agents).await;
+        // then
+        let reports = reports.unwrap();
+        assert_ne!(reports[0].session_id, reports[1].session_id);
+        for (report, id) in reports.iter().zip(&agents) {
+            assert_eq!(&report.session_id, id);
+            assert_eq!(&report.page.records[0].text, id);
+        }
+    }
 
     #[tokio::test]
     async fn given_suspended_agent_should_read_its_bound_transcript_without_a_live_terminal() {

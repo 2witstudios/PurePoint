@@ -103,6 +103,31 @@ async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_
             "READ_INVALID_CURSOR"
         );
     }
+    let other = root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    json(
+        &socket,
+        &["--project", other.to_str().unwrap(), "init", "--json"],
+    )
+    .await;
+    let scoped = cli(
+        &socket,
+        &[
+            "--project",
+            other.to_str().unwrap(),
+            "read",
+            "ag-claude",
+            "--json",
+        ],
+    )
+    .await;
+    assert!(!scoped.status.success());
+    pu_core::manifest::update_manifest(&root, |mut m| { m.agents.insert("ag-custom".into(),serde_json::from_value(serde_json::json!({"id":"ag-custom","name":"custom","agentType":"custom","status":"running","startedAt":"2026-10-10T00:00:00Z","suspended":true})).unwrap());m }).unwrap();
+    let unsupported = cli(&socket, &["read", "ag-custom", "--json"]).await;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&unsupported.stdout).unwrap()["code"],
+        "READ_UNSUPPORTED_RUNTIME"
+    );
     let terminal = json(
         &socket,
         &[
@@ -136,6 +161,8 @@ async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_
     .await
     .unwrap();
     assert_eq!(report["source_kind"], "terminal_text");
+    let human = cli(&socket, &["read", id]).await;
+    assert!(String::from_utf8_lossy(&human.stdout).starts_with("Terminal text"));
     let raw = cli(&socket, &["logs", id, "--json"]).await;
     assert!(raw.status.success());
     assert!(String::from_utf8_lossy(&raw.stderr).contains("deprecated"));

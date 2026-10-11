@@ -110,6 +110,38 @@ pub fn native_root(runtime: Runtime, env: &[(String, String)]) -> Result<PathBuf
     })
 }
 
+/// Resume refuses to launch the same native ID into a different storage root.
+pub fn validate_resume_root(
+    binding: &Binding,
+    env: &[(String, String)],
+) -> Result<(), SourceError> {
+    let original = match binding.runtime {
+        Runtime::Claude => binding
+            .path
+            .parent()
+            .and_then(|p| p.parent())
+            .filter(|p| p.file_name().is_some_and(|x| x == "projects"))
+            .and_then(|p| p.parent()),
+        Runtime::Codex | Runtime::Pi => binding
+            .path
+            .ancestors()
+            .find(|p| p.file_name().is_some_and(|x| x == "sessions"))
+            .and_then(|p| p.parent()),
+        Runtime::Opencode if binding.path.extension().is_some_and(|x| x == "json") => binding
+            .path
+            .ancestors()
+            .find(|p| p.file_name().is_some_and(|x| x == "storage"))
+            .and_then(|p| p.parent()),
+        Runtime::Opencode => binding.path.parent(),
+        Runtime::Terminal => return Ok(()),
+    }
+    .ok_or(SourceError::IdentityMismatch)?;
+    if native_root(binding.runtime, env)? != original {
+        return Err(SourceError::IdentityMismatch);
+    }
+    Ok(())
+}
+
 pub fn resolve_exact(
     runtime: Runtime,
     id: &str,
@@ -263,9 +295,10 @@ pub fn commit_binding(
     expected_session: Option<&str>,
     binding: &Binding,
 ) -> Result<(), SourceError> {
-    let mut result = Err(SourceError::IdentityMismatch);
+    let mut result = Err(SourceError::IdentityUnavailable);
     pu_core::manifest::update_manifest(root, |mut m| {
         if let Some(a) = m.find_agent_mut(agent) {
+            result = Err(SourceError::IdentityMismatch);
             if a.pid == expected_pid && a.session_id.as_deref() == expected_session {
                 result = save_binding(root, agent, binding);
                 if result.is_ok() {
@@ -384,8 +417,25 @@ pub fn read_jsonl(binding: &Binding) -> Result<Transcript, SourceError> {
     if first_line.len() > 1024 * 1024 {
         return Err(pu_core::read::ReadError::TooLarge.into());
     }
-    let header: Value = serde_json::from_slice(first_line)
-        .map_err(|e| SourceError::UnsupportedSchema(e.to_string()))?;
+    let header: Value = match serde_json::from_slice(first_line) {
+        Ok(header) => header,
+        Err(e)
+            if !bytes.contains(&b'\n')
+                && (e.is_eof()
+                    || bytes.is_empty()
+                    || std::str::from_utf8(&bytes).is_err_and(|e| e.error_len().is_none())) =>
+        {
+            if binding.runtime == Runtime::Claude
+                && binding.path.file_stem().and_then(|s| s.to_str()) != Some(&binding.session_id)
+            {
+                return Err(SourceError::IdentityMismatch);
+            }
+            let mut pending = parse_jsonl(binding.runtime, &bytes)?;
+            pending.pending_tail = true;
+            return Ok(pending);
+        }
+        Err(e) => return Err(SourceError::UnsupportedSchema(e.to_string())),
+    };
     let matches = match binding.runtime {
         Runtime::Codex => {
             header["type"] == "session_meta"
@@ -581,6 +631,56 @@ fn read_opencode_files(binding: &Binding) -> Result<Transcript, SourceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_first_native_record_is_partial_should_return_pending_without_text() {
+        // given
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("exact.jsonl");
+        std::fs::write(
+            &path,
+            b"{\"type\":\"assistant\",\"sessionId\":\"exact\",\"message\":",
+        )
+        .unwrap();
+        let binding = Binding {
+            version: 1,
+            runtime: Runtime::Claude,
+            session_id: "exact".into(),
+            path,
+            cwd: "/project".into(),
+        };
+        // when
+        let transcript = read_jsonl(&binding).unwrap();
+        // then
+        assert!(transcript.pending_tail);
+        assert!(transcript.records.is_empty());
+    }
+
+    #[test]
+    fn given_changed_native_roots_should_reject_resume_in_another_store() {
+        // given
+        let binding = Binding {
+            version: 1,
+            runtime: Runtime::Opencode,
+            session_id: "ses_exact".into(),
+            path: "/original/opencode/opencode.db".into(),
+            cwd: "/project".into(),
+        };
+        let original = vec![
+            ("HOME".into(), "/home".into()),
+            ("XDG_DATA_HOME".into(), "/original".into()),
+        ];
+        let changed = vec![
+            ("HOME".into(), "/home".into()),
+            ("XDG_DATA_HOME".into(), "/new".into()),
+        ];
+        // when / then
+        assert!(validate_resume_root(&binding, &original).is_ok());
+        assert!(matches!(
+            validate_resume_root(&binding, &changed),
+            Err(SourceError::IdentityMismatch)
+        ));
+    }
 
     #[test]
     fn given_legacy_opencode_json_should_read_the_exact_session_in_native_order() {
