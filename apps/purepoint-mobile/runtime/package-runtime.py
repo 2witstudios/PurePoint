@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -80,6 +81,8 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
         raise ValueError('Provide the freshly built artifact pu-point-guard-lock helper.')
     if not pu.is_file():
         raise ValueError('Provide the freshly built artifact pu binary, never an installed binary.')
+    # Reject incomplete or edited imports before replacing a build artifact.
+    run(sys.executable, str(SOURCE / 'support/pointguard-workflows/tools/import-workflows.py'), '--verify')
     if app.exists() and (app / 'Contents/_CodeSignature').exists():
         if not replace_build_artifact or not build_root:
             raise ValueError('Signed output requires explicit --replace-build-artifact and --build-root.')
@@ -154,6 +157,7 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
                         architecture=architecture, sourceSHA=sha,
                         paths=dict(node='../../Helpers/point-guard-node', pu='../../Helpers/pu', lockHelper='../../Helpers/point-guard-lock',
                                    entry='bridge/main.js', instructions='docs/point-guard.md',
+                                   workflowPackage='support/pointguard-workflows',
                                    skills=['support/pu/SKILL.md', 'support/pu-cli/SKILL.md']))
         (target / 'runtime-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return target

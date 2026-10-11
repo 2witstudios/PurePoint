@@ -1,0 +1,14 @@
+{
+  "name": "@purepoint/pointguard-workflows",
+  "version": "1.0.0",
+  "description": "Pinned Pointguard workflows with native Pi capability adapters",
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "files": ["skills", "source", "source-manifest.json", "PI-ADAPTERS.md", "README.md", "LICENSE", "NOTICE.md", "tools"],
+  "pi": {
+    "skills": ["skills"],
+    "extensions": [],
+    "prompts": [],
+    "themes": []
+  }
+}

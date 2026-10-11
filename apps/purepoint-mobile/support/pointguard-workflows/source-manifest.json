@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/2witstudios/pointguard",
+  "commit": "a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f",
+  "files": {
+    "LICENSE": {
+      "sha256": "b71f362baf2151efe53352d11e19eb83230fa9d311a2fa636590e2f53380d6a1",
+      "mode": "644"
+    },
+    "NOTICE.md": {
+      "sha256": "0702ac3a353fc05f158420fe7c7927e1da5408cf94664a0de3eeabffbc43dae1",
+      "mode": "644"
+    },
+    "README.md": {
+      "sha256": "a06394a322feacb6538d3a3907bd47ca935e026fa005409810cfa33d8ea91093",
+      "mode": "644"
+    },
+    "codex-skills/orchestrate/SKILL.md": {
+      "sha256": "fe518a433e2c4166f8faf4d9005f19011f0072e93623ec0f6193e5756dab0a2e",
+      "mode": "644"
+    },
+    "codex-skills/plan/SKILL.md": {
+      "sha256": "60147cce429ffd736a220f22da8a7ebb8f0fea03f36f46f2a5aa9e0af2521e0c",
+      "mode": "644"
+    },
+    "install.sh": {
+      "sha256": "425de5252f3cb866d4c8b75ae2b114fbe160ac0e85523ffc2d7890f78fafb8e6",
+      "mode": "755"
+    },
+    "skills/geo-interview/SKILL.md": {
+      "sha256": "90c22de0f2e4eda2a63126e367ee035c4ab36a1485bfcef0efe6ec46fd7f5a66",
+      "mode": "644"
+    },
+    "skills/geo-interview/fan-out-queries.md": {
+      "sha256": "3d87ebd3d46a4248706952cab8961cf368652ac75d31a3b369a8bb98a12e07cf",
+      "mode": "644"
+    },
+    "skills/geo-interview/geo-scoring.md": {
+      "sha256": "649ef1fc1ebd11e8f525187481977fe638b38ccc15749e713ad360174253d3f3",
+      "mode": "644"
+    },
+    "skills/geo-interview/index.md": {
+      "sha256": "434c00bdd0142b1b6f7fd9b57f20d79131774f468914877f3c91dcbcea862b79",
+      "mode": "644"
+    },
+    "skills/handoff/SKILL.md": {
+      "sha256": "32371d2d659e594aa7ee397ce5388420dd115f1aa38bdbfe428adfe89f63508f",
+      "mode": "644"
+    },
+    "skills/pagespace-canvas-websites/SKILL.md": {
+      "sha256": "2f6127372d54b49d2b8d33c0bef4edea07bc4fc28fe9b7f60375755d1f6354d0",
+      "mode": "644"
+    },
+    "skills/pagespace-cli/SKILL.md": {
+      "sha256": "a0f1b93825dcd62e116dd0195740c27f6f1973d43678c73eb6bd93b33ec782e2",
+      "mode": "644"
+    },
+    "skills/pagespace-cli/references/tool-mapping.md": {
+      "sha256": "62f5fd766abd378eed8ab27d8f6a50514d58d5b795ccbf5c362e30a655a6dd93",
+      "mode": "644"
+    },
+    "skills/pagespace-sdk/SKILL.md": {
+      "sha256": "a18701585ede3a7c895dd1b31f90a1cbed8636fee59ef64d62cbd4f491d398d3",
+      "mode": "644"
+    },
+    "skills/pagespace-spreadsheets/SKILL.md": {
+      "sha256": "cc9f0766e1c668e8ca5bc489bf712d66d4912ed69783397ca9d41a3272cd7224",
+      "mode": "644"
+    },
+    "skills/pagespace-task-management/SKILL.md": {
+      "sha256": "083d4d0699d73002a6e86729a9cfa1bf6726805909410991e5c30c3a26498d9d",
+      "mode": "644"
+    },
+    "skills/pagespace-writing-documents/SKILL.md": {
+      "sha256": "296b7625de4185259b1fb4da1118e328a32171985b07cc7c6c673e42d55b2b8c",
+      "mode": "644"
+    },
+    "skills/pr/SKILL.md": {
+      "sha256": "2204b0ac23225b4c0e7b3926b5508a9c0da31f7c12cc62685c4c709875926551",
+      "mode": "644"
+    },
+    "skills/review/SKILL.md": {
+      "sha256": "020ac2766b5d922dea08d28fa6412cf4a8ff1a21b6aa1f6b559a425eb05f69aa",
+      "mode": "644"
+    },
+    "skills/review/references/review-example.md": {
+      "sha256": "818b5a99db1861bb0ab633b85034d3397597ddd6c7a72958ec4423b0b64569db",
+      "mode": "644"
+    },
+    "skills/rtc/SKILL.md": {
+      "sha256": "89be66ca40a3398b6de71209c450e159e4321f25d359c131c6f7e5d7945c1c99",
+      "mode": "644"
+    },
+    "skills/task/SKILL.md": {
+      "sha256": "a08ba2b3bf7e9d13aec16208413d03c6959e6fb4bf2eb5647cab995d998886e4",
+      "mode": "644"
+    },
+    "skills/triage/README.md": {
+      "sha256": "72ed445819ac63654da12fbf02aff3bbe0471e0046fc8127ff2d5fe9c9fd65d5",
+      "mode": "644"
+    },
+    "skills/triage/SKILL.md": {
+      "sha256": "192b6ca5a989c315499c793d54e9f52c9097bbb0c2073819164af3045f1f6dae",
+      "mode": "644"
+    }
+  }
+}
