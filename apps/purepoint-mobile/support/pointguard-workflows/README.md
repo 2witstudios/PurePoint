@@ -2,7 +2,7 @@
 
 An independently usable native Pi package. All shared workflows and Codex
 plan/orchestrate come from Pointguard commit
-`a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f`. `source/` preserves the complete
+`a12cecee28e8c22c250da6c30aecbdcad2f38fe5`. `source/` preserves the complete
 pinned tree, including references, scripts and attribution. `skills/` contains
 small Pi adapters; the original workflows remain the source of truth.
 

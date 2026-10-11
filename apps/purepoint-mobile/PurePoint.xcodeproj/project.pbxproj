@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001; };
-		BB1122334455667788990000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000; };
 		03A1BD6E1882C4B943D28330 /* PairingSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9011667ABD8DFEEFEECB394 /* PairingSecret.swift */; };
 		12D470CE39B24951FAF76E04 /* ChatDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 273E7B0E984A3DD6E2D1A676 /* ChatDomain.swift */; };
 		1642213AB225045F66717EA3 /* PurePointApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EDD619AA16E0B012865022 /* PurePointApp.swift */; };
 		7DBBAA5038C8CBDCAD663A2A /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597949AACD9086B8CBE7C0AF /* ChatView.swift */; };
 		A4470EE61A1423E7350F03DB /* SetupViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A15C1FE727B85D6A19B0C9E /* SetupViews.swift */; };
+		BB1122334455667788990000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000 /* ChatMarkdown.swift */; };
+		BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001 /* ChatMarkdownView.swift */; };
 		C0D67A4EB10BD088221C291D /* ChatDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83EDD2910EB5DE69EF1AD3C3 /* ChatDomainTests.swift */; };
 		C59583F7E18B4596597BEDDA /* ChatModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7478A76549FBF19ACA4DBFB2 /* ChatModel.swift */; };
 		DC70FFF4E06BDA5237F8DE31 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E57F277FE965A78320F0683F /* Assets.xcassets */; };
@@ -30,8 +30,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		AA1122334455667788990001 /* ChatMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdownView.swift; path = ../shared/ChatMarkdown/ChatMarkdownView.swift; sourceTree = SOURCE_ROOT; };
-		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
 		1A15C1FE727B85D6A19B0C9E /* SetupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupViews.swift; sourceTree = "<group>"; };
 		273E7B0E984A3DD6E2D1A676 /* ChatDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDomain.swift; sourceTree = "<group>"; };
 		49197345D553FC30BF042262 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -41,6 +39,8 @@
 		83EDD2910EB5DE69EF1AD3C3 /* ChatDomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDomainTests.swift; sourceTree = "<group>"; };
 		A7221477E79F821CCE16BAD1 /* PurePoint.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A9011667ABD8DFEEFEECB394 /* PairingSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSecret.swift; sourceTree = "<group>"; };
+		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
+		AA1122334455667788990001 /* ChatMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdownView.swift; path = ../shared/ChatMarkdown/ChatMarkdownView.swift; sourceTree = SOURCE_ROOT; };
 		E57F277FE965A78320F0683F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F7EDD619AA16E0B012865022 /* PurePointApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurePointApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -241,7 +241,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = verification/Simulator.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = M96WTV3CKX;
 				ENABLE_TESTABILITY = YES;
 				INFOPLIST_FILE = PurePoint/Info.plist;
@@ -277,7 +277,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = verification/Simulator.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = M96WTV3CKX;
 				INFOPLIST_FILE = PurePoint/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PurePoint;

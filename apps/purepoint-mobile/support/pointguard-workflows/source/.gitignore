@@ -1,0 +1,5 @@
+# Local PurePoint state and worktrees
+/.pu/
+
+# macOS Finder metadata
+.DS_Store

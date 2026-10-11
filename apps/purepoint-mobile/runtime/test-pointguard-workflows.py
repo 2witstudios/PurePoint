@@ -126,8 +126,8 @@ class WorkflowPackageTests(unittest.TestCase):
             relocated = Path(folder) / 'resources with spaces/workflows'
             shutil.copytree(PACKAGE, relocated)
             proof = json.loads((relocated / 'source-manifest.json').read_text())
-            self.assertEqual(proof['commit'], 'a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f')
-            self.assertEqual(len(proof['files']), 25)
+            self.assertEqual(proof['commit'], 'a12cecee28e8c22c250da6c30aecbdcad2f38fe5')
+            self.assertEqual(len(proof['files']), 26)
             self.assertEqual(set(proof['files']), {
                 p.relative_to(relocated / 'source').as_posix()
                 for p in (relocated / 'source').rglob('*') if p.is_file()
