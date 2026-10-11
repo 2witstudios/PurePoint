@@ -7,6 +7,15 @@ import Observation
 @MainActor
 final class AppState {
     var projects: [ProjectState] = []
+    /// Folder-backed daemon state for Point Guard, kept out of the project sidebar.
+    private var pointGuardProjects: [String: ProjectState] = [:]
+    var pointGuardRoot = FileManager.default.homeDirectoryForCurrentUser.path
+
+    private var managedProjects: [ProjectState] {
+        projects + pointGuardProjects.values.filter { hidden in
+            !projects.contains { $0.projectRoot == hidden.projectRoot }
+        }
+    }
     var activeProjectRoot: String?
     var activeSidebarSelection: SidebarSelection?
     var daemonError: String?
@@ -32,12 +41,17 @@ final class AppState {
     var focusedAgentId: String? { registry?.activeWorkspace?.focusedAgentId }
 
     @ObservationIgnored private let service: any WorkspaceService
+    @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
 
     private static let openProjectsKey = "PurePointOpenProjects"
 
-    init(service: any WorkspaceService = DaemonWorkspaceService()) {
+    init(
+        service: any WorkspaceService = DaemonWorkspaceService(),
+        startProject: @escaping @MainActor (ProjectState) -> Void = { $0.startWatching() }
+    ) {
         self.service = service
+        self.startProject = startProject
     }
 
     var isLoaded: Bool { !projects.isEmpty }
@@ -47,10 +61,11 @@ final class AppState {
     func openProject(_ root: String) {
         guard !projects.contains(where: { $0.projectRoot == root }) else { return }
 
-        let project = ProjectState(projectRoot: root, service: service, registry: registry)
+        let project = pointGuardProjects.removeValue(forKey: root)
+            ?? ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
         projects.append(project)
-        project.startWatching()
+        startProject(project)
         initializeActiveProjectIfNeeded(root: root)
 
         // Watch daemon binary for changes (shared — only start once)
@@ -65,17 +80,25 @@ final class AppState {
 
     func closeProject(_ root: String) {
         guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return }
-        projects[index].stopWatching()
-        projects.remove(at: index)
-        registry?.forgetProject(root)
+        let project = projects.remove(at: index)
+        if registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true {
+            pointGuardProjects[root] = project
+        } else {
+            project.stopWatching()
+            registry?.forgetProject(root)
+        }
         persistOpenProjects()
     }
 
     func restoreProjects() {
-        guard let paths = UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) else { return }
+        let paths = UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
         for path in paths {
             guard FileManager.default.fileExists(atPath: path) else { continue }
             openProject(path)
+        }
+        for root in UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? [] {
+            guard FileManager.default.fileExists(atPath: root) else { continue }
+            ensurePointGuardProject(root: root)
         }
         // Workspace layouts load lazily in WorkspaceRegistry.reconcile, on the first
         // manifest read for each project.
@@ -113,44 +136,64 @@ final class AppState {
         }
     }
 
-    /// Cmd+N in Point Guard opens the normal palette in a new root-workspace tab.
-    func newPointGuardTab() {
-        guard let registry,
-            let root = activeProjectRoot.flatMap({ projectState(forRoot: $0) != nil ? $0 : nil })
-                ?? projects.first?.projectRoot
-        else { return }
-        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) else {
+    /// Pi's configured folder is independent of the selected coding project.
+    func updatePointGuardRoot(_ cwd: String) {
+        guard !cwd.isEmpty else { return }
+        pointGuardRoot = URL(fileURLWithPath: cwd).standardizedFileURL.path
+    }
+
+    private func ensurePointGuardProject(root: String) {
+        guard projectState(forRoot: root) == nil else { return }
+        let project = ProjectState(projectRoot: root, service: service, registry: registry)
+        project.appState = self
+        pointGuardProjects[root] = project
+        startProject(project)
+        UserDefaults.standard.set(Array(pointGuardProjects.keys), forKey: "PurePointPointGuardFolders")
+    }
+
+    @discardableResult
+    func activatePointGuardWorkspace() -> String? {
+        guard let registry else { return nil }
+        ensurePointGuardProject(root: pointGuardRoot)
+        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: pointGuardRoot) else {
             registry.activeWorkspaceId = nil
-            return
+            return nil
         }
         registry.activate(workspaceId: id)
-        guard let workspace = registry.workspace(id: id) else { return }
+        return id
+    }
+
+    /// Cmd+N uses the same folder and palette as Point Guard splits.
+    func newPointGuardTab() {
+        guard let registry, let id = activatePointGuardWorkspace(),
+            let workspace = registry.workspace(id: id)
+        else { return }
         registry.pendingPaletteSurfaceId = registry.newTab(workspaceId: id, leafId: workspace.focusedLeafId)
     }
 
     // MARK: - Cross-Project Queries
 
     func agent(byId id: String) -> AgentModel? {
-        for project in projects {
+        for project in managedProjects {
             if let agent = project.agent(byId: id) { return agent }
         }
         return nil
     }
 
     func projectState(forAgentId agentId: String) -> ProjectState? {
-        projects.first { $0.agent(byId: agentId) != nil }
+        managedProjects.first { $0.agent(byId: agentId) != nil }
     }
 
     func projectState(forWorktreeId worktreeId: String) -> ProjectState? {
-        projects.first { $0.worktrees.contains { $0.id == worktreeId } }
+        managedProjects.first { $0.worktrees.contains { $0.id == worktreeId } }
     }
 
     func projectState(forRoot root: String) -> ProjectState? {
-        projects.first { $0.projectRoot == root }
+        managedProjects.first { $0.projectRoot == root }
     }
 
     func agentId(forSessionId sessionId: String) -> String? {
-        for project in projects {
+        for project in managedProjects {
             if let agent = project.allAgents.first(where: { $0.sessionId == sessionId }) {
                 return agent.id
             }
@@ -160,7 +203,7 @@ final class AppState {
 
     func worktreeId(forPath path: String) -> String? {
         let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
-        for project in projects {
+        for project in managedProjects {
             if let worktree = project.worktrees.first(where: {
                 URL(fileURLWithPath: $0.path).standardizedFileURL.path == normalizedPath
             }) {
@@ -179,14 +222,14 @@ final class AppState {
         persistSelectedAgent()
         registry?.saveAll()
 
-        for project in projects {
+        for project in managedProjects {
             project.stopWatching()
         }
         binaryWatcher?.stop()
         binaryWatcher = nil
 
         // Block until daemon RPCs complete (macOS terminates shortly after willTerminate)
-        let projectRoots = projects.map(\.projectRoot)
+        let projectRoots = managedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
             let client = DaemonClient()
@@ -235,7 +278,7 @@ final class AppState {
             activeProjectRoot = root
             return pendingId
         }
-        if projects.allSatisfy({ registry.workspacesByProject[$0.projectRoot] != nil }) {
+        if managedProjects.allSatisfy({ registry.workspacesByProject[$0.projectRoot] != nil }) {
             pendingSelectWorkspaceId = nil
         }
         return nil
@@ -246,6 +289,7 @@ final class AppState {
     private func persistOpenProjects() {
         let paths = projects.map(\.projectRoot)
         UserDefaults.standard.set(paths, forKey: Self.openProjectsKey)
+        UserDefaults.standard.set(Array(pointGuardProjects.keys), forKey: "PurePointPointGuardFolders")
     }
 
     private func restartDaemonAndRefresh() {
@@ -254,8 +298,8 @@ final class AppState {
                 try await DaemonLifecycle.restartDaemon()
                 // Re-run the full open sequence, not just a refresh: init marks the
                 // agents the old daemon stopped as suspended, and they get resumed.
-                for project in projects {
-                    project.startWatching()
+                for project in managedProjects {
+                    startProject(project)
                 }
             } catch {
                 self.daemonError = error.localizedDescription

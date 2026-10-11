@@ -6,18 +6,15 @@ struct PointGuardView: View {
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
 
-    private var projectRoot: String? {
-        appState.activeProjectRoot.flatMap { appState.projectState(forRoot: $0) != nil ? $0 : nil }
-            ?? appState.projects.first?.projectRoot
-    }
+    private var projectRoot: String { appState.pointGuardRoot }
 
     private var workspace: Workspace? {
-        projectRoot.flatMap { root in registry.workspacesByProject[root]?.first(where: \.isPointGuard) }
+        registry.workspacesByProject[projectRoot]?.first(where: \.isPointGuard)
     }
 
     var body: some View {
         Group {
-            if let projectRoot, let error = registry.layoutErrorsByProject[projectRoot] {
+            if let error = registry.layoutErrorsByProject[projectRoot] {
                 ContentUnavailableView {
                     Label("Could not restore layout", systemImage: "exclamationmark.triangle")
                 } description: {
@@ -27,12 +24,6 @@ struct PointGuardView: View {
                 }
             } else if let workspace {
                 PaneGridView(workspaceId: workspace.id)
-            } else if projectRoot == nil {
-                VStack(spacing: 0) {
-                    PointGuardPaneControls(model: appState.pointGuardChat)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(8)
-                    PointGuardChatSurfaceView(isFocused: true)
-                }
             } else {
                 Color.clear
             }
@@ -43,12 +34,7 @@ struct PointGuardView: View {
     }
 
     private func activateWorkspace() {
-        guard let projectRoot else { return }
-        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: projectRoot) else {
-            registry.activeWorkspaceId = nil
-            return
-        }
-        registry.activate(workspaceId: id)
+        appState.activatePointGuardWorkspace()
     }
 }
 

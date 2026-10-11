@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run pane/model tests in an isolated package, without the macOS app build phases."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -26,15 +27,23 @@ let package = Package(
 ''')
     for name in [
         "Models/Workspace.swift", "Models/WorkspaceModel.swift", "Models/AgentStatus.swift",
-        "Models/ManifestModel.swift", "Views/PaneGrid/PaneSplitNode.swift",
-        "Views/PaneGrid/WorkspacePersistence.swift", "State/WorkspaceRegistry.swift"
+        "Models/ManifestModel.swift", "Models/ChannelModel.swift", "Views/PaneGrid/PaneSplitNode.swift",
+        "State/AppState.swift", "Services/WorkspaceService.swift", "Services/DaemonProtocol.swift",
+        "Views/PaneGrid/WorkspacePersistence.swift", "State/WorkspaceRegistry.swift",
+        "Views/Chat/PointGuardView.swift"
     ]:
         shutil.copyfile(source / name, sources / Path(name).name)
 
-    protocol = (source / "Services/DaemonProtocol.swift").read_text()
-    grid = protocol[protocol.index("nonisolated struct GridCommandPayload"):
-                    protocol.index("nonisolated struct SwarmRosterEntryPayload")]
-    (sources / "GridProtocol.swift").write_text("import Foundation\n" + grid)
+    shutil.copyfile(app / "verification/PointGuardRoutingStubs.swift", sources / "RoutingStubs.swift")
+    project = (source / "State/ProjectState.swift").read_text()
+    spawn = project[project.index("    func spawnAgentForSurface("):
+                    project.index("    func createWorktree(")]
+    (sources / "SurfaceSpawn.swift").write_text("import Foundation\n@MainActor extension ProjectState {\n" + spawn + "}\n")
+    connection = (source / "Services/DaemonConnection.swift").read_text()
+    hex_code = connection[connection.index("nonisolated private let hexDigits"):
+                          connection.index("// MARK: - Errors")]
+    (sources / "DataHex.swift").write_text("import Foundation\n" + hex_code)
+    shutil.copyfile(app / "verification/PointGuardSpawnRoutingChecks.swift", tests / "PointGuardSpawnRoutingChecks.swift")
     # File editor/watchers are outside these tests; registry/pane/persistence code is real.
     (sources / "FileTabStoreStub.swift").write_text('''import Foundation
 @MainActor final class FileTabStore {
@@ -43,7 +52,7 @@ let package = Package(
 }
 ''')
     for name in [
-        "PointGuardWorkspaceTests.swift", "PaneTabStackTests.swift",
+        "PointGuardWorkspaceTests.swift", "PointGuardRoutingTests.swift", "PaneTabStackTests.swift",
         "WorkspaceReconcilerTests.swift", "WorkspaceModelTests.swift"
     ]:
         shutil.copyfile(app / "purepoint-macosTests" / name, tests / name)
@@ -52,4 +61,6 @@ let package = Package(
     persistence_tests = app_tests[app_tests.index("struct GridLayoutPersistenceTests {"):]
     (tests / "GridLayoutPersistenceTests.swift").write_text(
         "import Foundation\nimport Testing\n@testable import PurePoint\n" + persistence_tests)
-    subprocess.run(["xcrun", "swift", "test", "--package-path", str(package)], check=True)
+    environment = dict(os.environ, CFFIXED_USER_HOME=str(package / "home"))
+    (package / "home").mkdir()
+    subprocess.run(["xcrun", "swift", "test", "--package-path", str(package)], check=True, env=environment)

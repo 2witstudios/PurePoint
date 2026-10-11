@@ -63,7 +63,6 @@ struct purepoint_macosApp: App {
                     keyBindingState.keyEquivalent(for: .newAgent),
                     modifiers: keyBindingState.eventModifiers(for: .newAgent)
                 )
-                .disabled(appState.projects.isEmpty)
 
                 Button("Open Project\u{2026}") {
                     openProjectWithPicker()
