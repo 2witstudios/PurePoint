@@ -232,7 +232,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
     func renameMachine(_ id: String, name: String) {
         guard let index = registry.machines.firstIndex(where: { $0.id == id }) else { return }
-        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).filter { !$0.isNewline && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }.prefix(60))
+        let name = SavedMachine.normalizedName(name)
         guard !name.isEmpty else { return }
         registry.machines[index].name = name; persistRegistry()
     }
