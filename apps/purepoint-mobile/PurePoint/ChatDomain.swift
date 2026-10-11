@@ -1,5 +1,39 @@
 import Foundation
 
+// Metadata contains no device principal, bearer credential or certificate pin.
+struct SavedMachine: Codable, Identifiable, Equatable, Sendable {
+    var id: String // verified hostId; legacy endpoint is provisional until verified
+    var endpoint: String
+    var name: String
+    let stateKey: String // retained through re-pair/address changes, including legacy drafts
+}
+struct MachineRegistry: Codable, Sendable {
+    var version = 1
+    var machines: [SavedMachine] = []
+    var selectedId: String?
+    var valid: Bool {
+        version == 1 && Set(machines.map(\.id)).count == machines.count && Set(machines.map(\.stateKey)).count == machines.count &&
+        machines.allSatisfy { !$0.name.isEmpty && $0.name.count <= 60 && !$0.stateKey.isEmpty && ConnectionAddress.url($0.endpoint) != nil && (UUID(uuidString: $0.id) != nil || $0.id == "legacy:" + $0.endpoint) } &&
+        (selectedId == nil ? machines.isEmpty : machines.contains { $0.id == selectedId })
+    }
+    var selected: SavedMachine? { machines.first { $0.id == selectedId } }
+    static func migrate(endpoint: String) -> Self {
+        guard !endpoint.isEmpty else { return Self() }
+        let machine = SavedMachine(id: "legacy:" + endpoint, endpoint: endpoint, name: defaultName(endpoint), stateKey: endpoint)
+        return Self(machines: [machine], selectedId: machine.id)
+    }
+    static func defaultName(_ endpoint: String) -> String { String((URL(string: endpoint)?.host ?? "Mac").prefix(60)) }
+    mutating func remember(hostId: String, endpoint: String) -> SavedMachine {
+        // A verified identity supersedes a provisional legacy entry at this address.
+        let existing = machines.first { $0.id == hostId } ?? machines.first { $0.id == "legacy:" + endpoint }
+        let machine = SavedMachine(id: hostId, endpoint: endpoint, name: existing?.name ?? Self.defaultName(endpoint), stateKey: existing?.stateKey ?? hostId)
+        machines.removeAll { $0.id == hostId || $0.id == "legacy:" + endpoint }
+        machines.append(machine)
+        selectedId = machine.id
+        return machine
+    }
+}
+
 struct DraftState: Equatable {
     var text: String = ""
     mutating func takeSubmission() -> String { let value = text; text = ""; return value }
@@ -43,12 +77,19 @@ enum LocalRecoveryStore {
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         return base.appendingPathComponent(name + ".json")
     }
-    static func load<T: Decodable>(_ name: String, as type: T.Type) -> T? {
-        guard let file = try? url(name), let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 40 * 1024 * 1024, let data = try? Data(contentsOf: file), data.count <= 40 * 1024 * 1024 else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
+    static func read<T: Decodable>(_ name: String, as type: T.Type) throws -> T? {
+        let file = try url(name)
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
+        guard size <= 40 * 1024 * 1024 else { throw ComposerError("Saved recovery exceeds the phone's storage limit. Keep it for recovery before continuing.") }
+        let data = try Data(contentsOf: file)
+        guard data.count <= 40 * 1024 * 1024 else { throw ComposerError("Saved recovery exceeds the phone's storage limit.") }
+        return try JSONDecoder().decode(type, from: data)
     }
+    static func load<T: Decodable>(_ name: String, as type: T.Type) -> T? { try? read(name, as: type) }
     static func save<T: Encodable>(_ value: T, name: String) throws {
         let data = try JSONEncoder().encode(value)
+        guard data.count <= 40 * 1024 * 1024 else { throw ComposerError("Recovery storage is full. Restore or dismiss saved messages before sending more files.") }
         let file = try url(name)
         try data.write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)

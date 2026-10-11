@@ -30,7 +30,23 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     @Published var browsing: History?
     @Published var editorOffer: String?
     @Published var changingSession = false
-    @Published var endpoint = ""
+    @Published private(set) var endpoint = ""
+    @Published private(set) var registry = MachineRegistry()
+    @Published var pairingError: String?
+    var machines: [SavedMachine] { registry.machines }
+    var selectedMachine: SavedMachine? { registry.selected }
+    var machineKey: String { selectedMachine?.stateKey ?? endpoint }
+    private var selectionGeneration = 0
+    var selectionToken: Int { selectionGeneration }
+    func isSelected(_ token: Int) -> Bool { token == selectionGeneration }
+    private var switchingMachine = false
+    private var registryUnavailable = false
+    private var machineSubmissions: [String: [Submission]] = [:]
+    private var machineCanceledIds: [String: [String]] = [:]
+    private var cachedSnapshots: [String: Snapshot] = [:]
+    private var machineEditorIds: [String: Set<String>] = [:]
+    private var machineSessions: [String: String] = [:]
+
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
@@ -42,6 +58,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var recoveryTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
     private var recoveryLoaded = false
+    private var recoveryFailed = false
     private var normalizingSubmissions = false
     private var projectingSnapshot = false
     private var cursor = SnapshotCursor()
@@ -60,8 +77,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     @Published private(set) var pairing = false
     var demo = false
     var busy: Bool { snapshot?.busy ?? false }
-    var canSend: Bool { connected && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
-    var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
+    var canSend: Bool { connected && !recoveryFailed && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
+    var draftKey: String { machineKey + ":" + (snapshot?.sessionId ?? machineSessions[machineKey] ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
     private(set) var clientId: String
@@ -69,42 +86,76 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private let trustWriter: PairingTrustWriter
     private let trustLoader: @Sendable (String) throws -> TrustedHost?
     private let defaults: RecoveryPreferences
+    private let recoverySaver: @Sendable ([String: [Submission]]) throws -> Void
+    private let enrollment: (@Sendable (PairingCode) async throws -> TrustedHost)?
 
-    init(defaults: UserDefaults = .standard, trustLoader: @escaping @Sendable (String) throws -> TrustedHost? = { try PairingSecret.readTrust(endpoint: $0) }, trustSaver: @escaping @Sendable (TrustedHost) throws -> Void = { try PairingSecret.saveTrust($0) }) {
-        self.trustWriter = PairingTrustWriter(save: trustSaver)
+    init(defaults: UserDefaults = .standard, trustLoader: @escaping @Sendable (String) throws -> TrustedHost? = { try PairingSecret.readTrust(endpoint: $0) }, trustSaver: (@Sendable (TrustedHost) throws -> Void)? = nil,
+         trustRemover: @escaping @Sendable (String) throws -> Void = { try PairingSecret.removeTrust(endpoint: $0) },
+         enrollment: (@Sendable (PairingCode) async throws -> TrustedHost)? = nil,
+         recoveryLoader: (@Sendable () async throws -> ([String: [ComposerAttachment]], [String: [Submission]]))? = nil,
+         recoverySaver: @escaping @Sendable ([String: [Submission]]) throws -> Void = { try LocalRecoveryStore.save($0, name: "machine-submissions-v1") }) {
+        if let trustSaver {
+            self.trustWriter = PairingTrustWriter(save: trustSaver, load: trustLoader, remove: trustRemover)
+        } else {
+            self.trustWriter = PairingTrustWriter(save: { try PairingSecret.saveTrust($0) }, load: { try PairingSecret.readTrustForTransaction(endpoint: $0) }, remove: trustRemover, begin: { try PairingSecret.beginTrustChange(endpoint: $0) }, finish: { try PairingSecret.finishTrustChange(endpoint: $0) })
+        }
+        self.enrollment = enrollment
+        self.recoverySaver = recoverySaver
         self.trustLoader = trustLoader
         let defaults = RecoveryPreferences(value: defaults)
         self.defaults = defaults
         clientId = defaults.value.string(forKey: "pi.clientId") ?? UUID().uuidString
         defaults.value.set(clientId, forKey: "pi.clientId")
-        endpoint = defaults.value.string(forKey: "pi.endpoint") ?? ""
+        let legacyEndpoint = defaults.value.string(forKey: "pi.endpoint") ?? ""
+        if let stored = defaults.value.data(forKey: "pi.machines.v1") {
+            if stored.count <= 1024 * 1024, let decoded = try? JSONDecoder().decode(MachineRegistry.self, from: stored), decoded.valid { registry = decoded }
+            else { registryUnavailable = true; error = "Saved Mac list could not be read. Local data has been kept. Re-pair deliberately to reconnect." }
+        } else { registry = MachineRegistry.migrate(endpoint: legacyEndpoint) }
+        endpoint = registry.selected?.endpoint ?? (registryUnavailable ? legacyEndpoint : "")
+        machineSessions = defaults.value.dictionary(forKey: "pi.machineSessions") as? [String: String] ?? [:]
+        machineCanceledIds = defaults.value.dictionary(forKey: "pi.machineCanceledIds") as? [String: [String]] ?? [:]
+        if machineCanceledIds.isEmpty && registry.selected?.id.hasPrefix("legacy:") == true { machineCanceledIds[machineKey] = defaults.value.stringArray(forKey: "pi.canceledIds") ?? [] }
         drafts = defaults.value.dictionary(forKey: "pi.drafts") as? [String: String] ?? [:]
-        let savedCanceledIds = defaults.value.stringArray(forKey: "pi.canceledIds") ?? []
+        let savedCanceledIds = machineCanceledIds[machineKey] ?? []
         canceledIdHistory = Self.recentCanceledIds(savedCanceledIds)
         seenCanceledIds = Set(canceledIdHistory)
         draft = drafts[draftKey] ?? ""
-        if canceledIdHistory != savedCanceledIds { saveCanceledIds() }
+        if canceledIdHistory != savedCanceledIds || defaults.value.dictionary(forKey: "pi.machineCanceledIds") == nil { saveCanceledIds() }
+        persistRegistry()
+        let legacyRecoveryKey = machineKey
         networkMonitor.pathUpdateHandler = { [weak self] path in
             let reachable = path.status == .satisfied
             Task { @MainActor [weak self] in self?.networkChanged(reachable: reachable) }
         }
         networkMonitor.start(queue: DispatchQueue(label: "pointguard.reachability"))
         recoveryTask = Task { [weak self] in
-            let saved = await Task.detached(priority: .utility) {
-                return (LocalRecoveryStore.load("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], LocalRecoveryStore.load("submissions", as: [Submission].self) ?? [])
-            }.value
-            guard let self else { return }
-            // Edits made while loading always win over saved recovery.
-            self.attachmentDrafts = saved.0.merging(self.attachmentDrafts) { _, current in current }
-            let currentIds = Set(self.submissions.map(\.id))
-            self.submissions = saved.1.filter { !currentIds.contains($0.id) }.map { item in
-                var item = item
-                if item.status == "Sending" { item.status = "Delivery uncertain"; item.recoverable = true }
-                return item
-            } + self.submissions
-            self.attachments = self.attachmentDrafts[self.draftKey] ?? self.attachments
-            self.recoveryLoaded = true
-            self.saveSubmissions(); self.saveAttachmentDraft()
+            do {
+                let saved: ([String: [ComposerAttachment]], [String: [Submission]])
+                if let recoveryLoader { saved = try await recoveryLoader() }
+                else { saved = try await Task.detached(priority: .utility) {
+                    let receipts = try LocalRecoveryStore.read("machine-submissions-v1", as: [String: [Submission]].self) ?? [legacyRecoveryKey: LocalRecoveryStore.read("submissions", as: [Submission].self) ?? []]
+                    return (try LocalRecoveryStore.read("attachment-drafts", as: [String: [ComposerAttachment]].self) ?? [:], receipts)
+                }.value }
+                guard let self else { return }
+                // Edits made while loading always win over saved recovery.
+                self.attachmentDrafts = saved.0.merging(self.attachmentDrafts) { _, current in current }
+                for (key, items) in saved.1 {
+                    let current = self.machineSubmissions[key] ?? (key == self.machineKey ? self.submissions : [])
+                    let currentIds = Set(current.map(\.id))
+                    self.machineSubmissions[key] = Self.retainedSubmissions(items.filter { !currentIds.contains($0.id) }.map { item in
+                        var item = item
+                        if item.status == "Sending" { item.status = "Delivery uncertain"; item.recoverable = true }
+                        return item
+                    } + current)
+                }
+                self.submissions = self.machineSubmissions[self.machineKey] ?? self.submissions
+                self.attachments = self.attachmentDrafts[self.draftKey] ?? self.attachments
+                self.recoveryLoaded = true
+                self.saveSubmissions(); self.saveAttachmentDraft()
+            } catch {
+                self?.recoveryFailed = true
+                self?.error = "Could not open saved message recovery. Keep this phone’s local data and resolve its storage issue before sending."
+            }
         }
     }
     deinit { networkMonitor.cancel() }
@@ -113,13 +164,15 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         return Array(ids.reversed().filter { seen.insert($0).inserted }.prefix(1000).reversed())
     }
     private func saveCanceledIds() {
-        let ids = canceledIdHistory
+        machineCanceledIds[machineKey] = canceledIdHistory
+        let ids = machineCanceledIds
         let defaults = defaults
-        writer.schedule(key: "canceled") { defaults.value.set(ids, forKey: "pi.canceledIds") }
+        writer.schedule(key: "canceled") { defaults.value.set(ids, forKey: "pi.machineCanceledIds") }
     }
     private func saveDraft() {
+        guard !switchingMachine else { return }
         drafts[draftKey] = String(draft.prefix(65536))
-        if drafts.count > 100 { drafts.removeValue(forKey: drafts.keys.first(where: { $0 != draftKey }) ?? "") }
+        if drafts.keys.filter({ $0.hasPrefix(machineKey + ":") }).count > 100 { drafts.removeValue(forKey: drafts.keys.first(where: { $0.hasPrefix(machineKey + ":") && $0 != draftKey }) ?? "") }
         let value = drafts
         let defaults = defaults
         writer.schedule(key: "drafts") { defaults.value.set(value, forKey: "pi.drafts") }
@@ -140,37 +193,106 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         }
     }
     private func saveSubmissions() {
+        guard !switchingMachine else { return }
+        machineSubmissions[machineKey] = submissions
         guard recoveryLoaded else { return }
-        let value = submissions
+        let value = machineSubmissions
+        let token = selectionGeneration
+        let save = recoverySaver
         writer.schedule(key: "submissions") { [weak self] in
-            do { try LocalRecoveryStore.save(value, name: "submissions") }
+            do { try save(value) }
             catch { Task { @MainActor [weak self] in
-                if self?.error?.hasPrefix("Message not sent:") != true { self?.error = "Could not save message recovery on this phone." }
+                if self?.isSelected(token) == true && self?.error?.hasPrefix("Message not sent:") != true { self?.error = "Could not save message recovery on this phone." }
             } }
         }
     }
     private func saveAttachmentDraft() {
+        guard !switchingMachine else { return }
         attachmentDrafts[draftKey] = attachments
-        while attachmentDrafts.count > 10, let key = attachmentDrafts.keys.first(where: { $0 != draftKey }) { attachmentDrafts.removeValue(forKey: key) }
+        while attachmentDrafts.keys.filter({ $0.hasPrefix(machineKey + ":") }).count > 10, let key = attachmentDrafts.keys.first(where: { $0.hasPrefix(machineKey + ":") && $0 != draftKey }) { attachmentDrafts.removeValue(forKey: key) }
         guard recoveryLoaded else { return }
         let value = attachmentDrafts
+        let token = selectionGeneration
         writer.schedule(key: "attachments") { [weak self] in
             do { try LocalRecoveryStore.save(value, name: "attachment-drafts") }
-            catch { Task { @MainActor [weak self] in self?.error = "Could not save attachments on this phone. Keep the app open until sending." } }
+            catch { Task { @MainActor [weak self] in if self?.isSelected(token) == true { self?.error = "Could not save attachments on this phone. Keep the app open until sending." } } }
         }
     }
     func addAttachment(_ file: ComposerAttachment) {
         guard attachments.count < 4, attachments.reduce(file.data.count, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Attach up to four files, totaling 512 KiB after preparation."; return }
         attachments.append(file)
     }
+    private func persistRegistry() {
+        guard !registryUnavailable else { return }
+        defaults.value.set(try? JSONEncoder().encode(registry), forKey: "pi.machines.v1")
+        defaults.value.set(endpoint, forKey: "pi.endpoint")
+    }
+    func renameMachine(_ id: String, name: String) {
+        guard let index = registry.machines.firstIndex(where: { $0.id == id }) else { return }
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).filter { !$0.isNewline && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }.prefix(60))
+        guard !name.isEmpty else { return }
+        registry.machines[index].name = name; persistRegistry()
+    }
+    func cancelPairing() {
+        pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration)
+        pairingTask = nil; pairing = false; pairingError = nil
+    }
+    func selectMachine(_ id: String) {
+        guard let machine = machines.first(where: { $0.id == id }) else { return }
+        cancelPairing()
+        if registry.selectedId == id { connect(); return }
+        saveActiveMachine()
+        registry.selectedId = id
+        activateMachine(machine)
+    }
+    private func saveActiveMachine() {
+        saveDraft(); saveAttachmentDraft(); saveSubmissions(); saveCanceledIds()
+        machineEditorIds[machineKey] = seenEditorIds
+        if let state = snapshot {
+            cachedSnapshots[machineKey] = Snapshot(version: state.version, epoch: state.epoch, revision: state.revision, busy: false, sessionId: state.sessionId, title: state.title, messages: state.messages, tools: state.tools, queue: [], dialogs: [], notices: [], capabilities: state.capabilities)
+        }
+    }
+    private func activatePairedHost(_ trust: TrustedHost) {
+        saveActiveMachine()
+        if registryUnavailable {
+            if defaults.value.data(forKey: "pi.machines.recovery.v1") == nil { defaults.value.set(defaults.value.data(forKey: "pi.machines.v1"), forKey: "pi.machines.recovery.v1") }
+            registry = MachineRegistry.migrate(endpoint: endpoint); registryUnavailable = false
+        }
+        let machine = registry.remember(hostId: trust.hostId, endpoint: trust.endpoint)
+        activateMachine(machine)
+    }
+    private func activateMachine(_ machine: SavedMachine) {
+        retryTask?.cancel(); detach(); selectionGeneration += 1; switchingMachine = true
+        endpoint = machine.endpoint; demo = false; clientId = ""; wantsConnection = false
+        snapshot = cachedSnapshots[machineKey]; cursor.reset(); conversations = []; browsing = nil; editorOffer = nil
+        seenEditorIds = machineEditorIds[machineKey] ?? []; changingSession = false; error = nil; pairingError = nil
+        canceledIdHistory = Self.recentCanceledIds(machineCanceledIds[machineKey] ?? [])
+        seenCanceledIds = Set(canceledIdHistory)
+        submissions = machineSubmissions[machineKey] ?? []
+        draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []
+        switchingMachine = false; persistRegistry(); connect()
+    }
+    // Bind migrated metadata only after the saved credential and pin verify this identity.
+    private func bindVerifiedHost(_ trust: TrustedHost) throws {
+        if let selected = selectedMachine, !selected.id.hasPrefix("legacy:"), selected.id != trust.hostId {
+            throw TrustFailure("Selected Mac identity changed. Scan a new QR code deliberately.")
+        }
+        if selectedMachine?.id.hasPrefix("legacy:") == true {
+            _ = registry.remember(hostId: trust.hostId, endpoint: trust.endpoint); persistRegistry()
+        }
+    }
+
     func pair(_ code: PairingCode) {
-        guard PairingCode.parse((try? String(data: JSONEncoder().encode(PairingWire(code)), encoding: .utf8)) ?? "") != nil else { error = "This QR expired. Create a new code on your Mac."; return }
+        guard PairingCode.parse((try? String(data: JSONEncoder().encode(PairingWire(code)), encoding: .utf8)) ?? "") != nil else { pairingError = "This QR expired. Create a new code on your Mac."; return }
         pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); let attempt = pairingGeneration
-        pairing = true; error = nil
+        pairing = true; pairingError = nil
         pairingTask = Task { [weak self] in
             let pin = PinnedHostSession(endpoint: code.endpoint, certificateSHA256: code.certificateSHA256)
             let session = pin.makeSession(); defer { session.invalidateAndCancel() }
             do {
+                let saved: TrustedHost
+                if let enrollment = self?.enrollment { saved = try await enrollment(code) }
+                else {
                 var request = URLRequest(url: Self.httpURL(code.endpoint, path: "/pair/enroll"))
                 request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = try JSONSerialization.data(withJSONObject: ["version": 1, "enrollmentToken": code.enrollmentToken, "name": "iPhone"])
@@ -178,18 +300,18 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw TrustFailure("Enrollment expired, used or revoked. Create a new Mac QR code.") }
                 let device = try JSONDecoder().decode(EnrolledDevice.self, from: data)
                 guard device.version == 1, device.hostId == code.hostId else { throw TrustFailure("Mac identity changed. Scan a new QR code deliberately.") }
-                let saved = TrustedHost(version: 1, endpoint: code.endpoint, hostId: code.hostId, certificateSHA256: code.certificateSHA256, deviceId: device.deviceId, clientId: device.clientId, credential: device.credential)
+                saved = TrustedHost(version: 1, endpoint: code.endpoint, hostId: code.hostId, certificateSHA256: code.certificateSHA256, deviceId: device.deviceId, clientId: device.clientId, credential: device.credential)
+                }
+                guard saved.valid, saved.endpoint == code.endpoint, saved.hostId == code.hostId, saved.certificateSHA256 == code.certificateSHA256 else { throw TrustFailure("The Mac returned mismatched device trust. Scan a new QR code.") }
                 guard let self, !Task.isCancelled, attempt == self.pairingGeneration else { return }
                 try await self.trustWriter.commit(saved, generation: attempt)
-                guard !Task.isCancelled, attempt == self.pairingGeneration else { return }
-                self.saveDraft(); self.saveAttachmentDraft(); self.disconnect(cancelPairing: false)
-                self.endpoint = saved.endpoint; self.defaults.value.set(saved.endpoint, forKey: "pi.endpoint")
-                self.snapshot = nil; self.draft = self.drafts[self.draftKey] ?? ""; self.attachments = self.attachmentDrafts[self.draftKey] ?? []
-                self.demo = false; self.pairing = false; self.pairingTask = nil; self.connect()
+                guard !Task.isCancelled, attempt == self.pairingGeneration, self.trustWriter.accept(generation: attempt) else { return }
+                self.activatePairedHost(saved)
+                self.pairing = false; self.pairingTask = nil
             } catch {
                 guard let self, attempt == self.pairingGeneration else { return }
                 self.pairing = false; self.pairingTask = nil
-                self.error = pin.identityRejected ? "Mac certificate does not match this QR. Scan a new code deliberately." : "Pairing failed. " + error.localizedDescription + " Create a new Mac QR code; enrollment is never replayed."
+                self.pairingError = pin.identityRejected ? "Mac certificate does not match this QR. Scan a new code deliberately." : "Pairing failed. " + error.localizedDescription + " Create a new Mac QR code; enrollment is never replayed."
             }
         }
     }
@@ -205,6 +327,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         return components.url!
     }
     func connect(resetRetryBudget: Bool = true) {
+        guard !registryUnavailable else { return }
         guard !demo, foreground, socket == nil, connectionTask == nil else { return }
         guard let url = ConnectionAddress.url(endpoint), url.scheme == "wss" else {
             if !endpoint.isEmpty { requirePairing("Legacy or invalid Mac trust. Scan a new Mac QR code.") }
@@ -216,10 +339,13 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         connectionStatus = "Connecting to your Mac…"
         connectionTask = Task { [weak self] in
             await self?.recoveryTask?.value
+            await self?.trustWriter.drain()
             var session: URLSession?; var pin: PinnedHostSession?
             do {
                 guard let saved = try await Task.detached(priority: .userInitiated, operation: { try self?.trustLoader(address) }).value else { throw TrustFailure("No saved device trust. Scan a new Mac QR code.") }
                 guard let self, !Task.isCancelled, current == self.generation else { return }
+                guard saved.valid, saved.endpoint == address else { throw TrustFailure("Saved Mac trust is invalid. Scan a new QR code deliberately.") }
+                if let selected = self.selectedMachine, !selected.id.hasPrefix("legacy:"), selected.id != saved.hostId { throw TrustFailure("Selected Mac identity changed. Scan a new QR code deliberately.") }
                 let delegate = PinnedHostSession(endpoint: address, certificateSHA256: saved.certificateSHA256)
                 let connection = delegate.makeSession(); session = connection; pin = delegate
                 var verify = URLRequest(url: Self.httpURL(address, path: "/pair/verify"))
@@ -231,6 +357,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 let verified = try JSONDecoder().decode(VerifiedDevice.self, from: data)
                 guard verified.version == 1, verified.hostId == saved.hostId, verified.deviceId == saved.deviceId, verified.clientId == saved.clientId else { throw TrustFailure("Saved Mac identity changed. Scan a new QR code deliberately.") }
                 guard !Task.isCancelled, current == self.generation, self.foreground, self.wantsConnection, self.endpoint == address else { connection.invalidateAndCancel(); return }
+                try self.bindVerifiedHost(saved)
                 self.connectionTask = nil; self.clientId = saved.clientId; self.hostSession = connection; self.hostPin = delegate
                 self.startConnection(url: url, credential: saved.credential, session: connection)
             } catch {
@@ -278,8 +405,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         foreground = active
         if active { retryBudget.reset(); if wantsConnection { connect(resetRetryBudget: false) } }
         else {
-            writer.flush(); retryTask?.cancel(); pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); pairing = false; pairingTask = nil
-            detach(); connectionStatus = "Paused on this phone · Pi continues on your Mac"
+            writer.flush(); retryTask?.cancel(); cancelPairing()
+            detach(); if wantsConnection { connectionStatus = "Paused on this phone · Pi continues on your Mac" }
         }
     }
     private func networkChanged(reachable: Bool) {
@@ -289,7 +416,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
     func disconnect(cancelPairing: Bool = true) {
         if cancelPairing {
-            pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); pairingTask = nil; pairing = false
+            self.cancelPairing()
         }
         wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected"
     }
@@ -306,7 +433,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         retryTask?.cancel(); detach(); connectionStatus = "Connection lost · Pi continues on your Mac"; error = reason + " Check PurePoint on your Mac and Tailscale."
         guard foreground, wantsConnection else { return }
         guard let delay = retryBudget.nextDelay() else { connectionStatus = "Reconnect paused · Check your Mac and network"; return }
-        retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled else { return }; self?.connect(resetRetryBudget: false) }
+        let token = selectionGeneration
+        retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled, self?.isSelected(token) == true else { return }; self?.connect(resetRetryBudget: false) }
     }
     private func receive(_ incoming: IncomingRecord) throws {
         let record: WireEnvelope
@@ -333,6 +461,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if previous != state.sessionId { saveDraft() }
         if let rows { projectingSnapshot = true; transcriptRows = rows }
         snapshot = state
+        machineSessions[machineKey] = state.sessionId
+        defaults.value.set(machineSessions, forKey: "pi.machineSessions")
         projectingSnapshot = false
         let previousCanceled = canceledIdHistory
         for canceled in state.canceled ?? [] where canceled.clientId == clientId && !seenCanceledIds.contains(canceled.id) {
@@ -399,72 +529,93 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         do { content = try ComposerPayload.make(text: text, attachments: files) } catch { self.error = error.localizedDescription; return }
         guard content.images.isEmpty || demo || state.capabilities?.contains("images") == true else { error = "Restart the updated Mac bridge before sending images."; return }
         let id = UUID().uuidString
+        let origin = machineKey; let token = selectionGeneration; let transport = generation
         submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files)); draft = ""; attachments = []
         Task {
             // Hydration and confirmed persistence precede any transmission, while
             // the composer remains editable. Sending receipts cannot be dismissed.
             await recoveryTask?.value
-            let receipts = submissions
+            let receipts = machineSubmissions
+            let save = recoverySaver
             do {
-                try await writer.writeAndConfirm { try LocalRecoveryStore.save(receipts, name: "submissions") }
+                guard recoveryLoaded else { throw MobileError("Saved recovery could not be opened.") }
+                try await writer.writeAndConfirm { try save(receipts) }
             } catch {
                 let guidance = "Message not sent: could not save recovery on this phone. Free storage, then restore the saved message and try again. Keep the app open to retain its text and files."
-                updateSubmission(id, status: guidance, recoverable: true); self.error = guidance
+                updateSubmission(id, status: guidance, recoverable: true, machine: origin); if isSelected(token) { self.error = guidance }
                 return
             }
             do {
-                if demo { await demoReply(content.message); updateSubmission(id, status: "Accepted", recoverable: false); return }
+                guard isSelected(token), transport == generation else { throw MobileError("Connection changed before sending. Restore this message on its original Mac.") }
+                if demo { await demoReply(content.message); updateSubmission(id, status: "Accepted", recoverable: false, machine: origin); return }
                 let data = try await call("send", fields: ["epoch": state.epoch, "text": content.message, "mode": mode, "images": content.images], id: id)
                 let disposition = data["disposition"].text ?? "accepted"
-                updateSubmission(id, status: disposition == "queued" ? "Queued" : disposition == "handled" ? "Handled by extension" : "Accepted", recoverable: false)
-            } catch { updateSubmission(id, status: error.localizedDescription, recoverable: true); self.error = error.localizedDescription }
+                updateSubmission(id, status: disposition == "queued" ? "Queued" : disposition == "handled" ? "Handled by extension" : "Accepted", recoverable: false, machine: origin)
+            } catch { updateSubmission(id, status: error.localizedDescription, recoverable: true, machine: origin); if isSelected(token), transport == generation { self.error = error.localizedDescription } }
         }
     }
-    private func updateSubmission(_ id: String, status: String, recoverable: Bool) {
-        if let i = submissions.firstIndex(where: { $0.id == id }) {
-            var item = submissions[i]; item.status = status; item.recoverable = recoverable
-            submissions[i] = item
+    private func updateSubmission(_ id: String, status: String, recoverable: Bool, machine: String? = nil) {
+        let key = machine ?? machineKey
+        if key == machineKey {
+            if let i = submissions.firstIndex(where: { $0.id == id }) {
+                var item = submissions[i]; item.status = status; item.recoverable = recoverable; submissions[i] = item
+            }
+        } else if let i = machineSubmissions[key]?.firstIndex(where: { $0.id == id }) {
+            machineSubmissions[key]?[i].status = status; machineSubmissions[key]?[i].recoverable = recoverable
+            machineSubmissions[key] = Self.retainedSubmissions(machineSubmissions[key] ?? [])
+            saveSubmissions()
         }
     }
     func restore(_ submission: Submission) {
-        guard submissions.first(where: { $0.id == submission.id })?.status != "Sending" else { error = "Wait for this message's delivery result before restoring it."; return }
-        let files = (submission.attachments ?? []).filter { file in !attachments.contains(where: { $0.id == file.id }) }
+        guard let saved = submissions.first(where: { $0.id == submission.id }), saved.status != "Sending" else { error = "Wait for this message's delivery result before restoring it."; return }
+        let files = (saved.attachments ?? []).filter { file in !attachments.contains(where: { $0.id == file.id }) }
         guard attachments.count + files.count <= 4, (attachments + files).reduce(0, { $0 + $1.data.count }) <= 512 * 1024 else { error = "Remove a draft attachment before restoring these files."; return }
-        var state = DraftState(text: draft); state.restore(submission.text); draft = state.text; attachments += files; submissions.removeAll { $0.id == submission.id }
+        var state = DraftState(text: draft); state.restore(saved.text); draft = state.text; attachments += files; submissions.removeAll { $0.id == submission.id }
     }
     func dismissSubmission(_ id: String) {
         guard submissions.first(where: { $0.id == id })?.status != "Sending" else { error = "Wait for this message's delivery result before dismissing it."; return }
         submissions.removeAll { $0.id == id }
     }
     func useEditorOffer() { guard let offer = editorOffer else { return }; var state = DraftState(text: draft); state.restore(offer); draft = state.text; editorOffer = nil }
-    func stop() async -> Bool {
+    func stop(selection: Int? = nil) async -> Bool {
+        if let selection, !isSelected(selection) { return false }
+        let current = generation
         guard let state = snapshot, let run = state.runId else { return !busy }
         do {
             _ = try await call("stop", fields: ["epoch": state.epoch, "runId": run])
-            try await syncState(); return true
-        } catch { self.error = error.localizedDescription; return false }
+            guard current == generation else { return false }; try await syncState(); return true
+        } catch { if current == generation { self.error = error.localizedDescription }; return false }
     }
-    func loadConversations() async {
+    func loadConversations(selection: Int? = nil) async {
+        if let selection, !isSelected(selection) { return }
+        let current = generation
         if demo { conversations = [Conversation(id: "previous", title: "A previous thought", date: nil)]; return }
-        do { let value = try await call("sessions")["sessions"]; conversations = try await Task.detached(priority: .userInitiated) { try value.decode([Conversation].self) }.value } catch { self.error = error.localizedDescription }
+        do { let value = try await call("sessions")["sessions"]; let result = try await Task.detached(priority: .userInitiated) { try value.decode([Conversation].self) }.value; guard current == generation else { return }; conversations = result } catch { if current == generation { self.error = error.localizedDescription } }
     }
-    func browse(_ conversation: Conversation) async {
+    func browse(_ conversation: Conversation, selection: Int? = nil) async {
+        if let selection, !isSelected(selection) { return }
+        let current = generation
         if demo { browsing = History(sessionId: conversation.id, title: conversation.title, messages: [ChatMessage(id: "old", role: "assistant", text: "There is room here for a fresh idea.")]); return }
-        do { let value = try await call("history", fields: ["sessionId": conversation.id]); browsing = try await Task.detached(priority: .userInitiated) { try value.decode(History.self) }.value } catch { self.error = error.localizedDescription }
+        do { let value = try await call("history", fields: ["sessionId": conversation.id]); let result = try await Task.detached(priority: .userInitiated) { try value.decode(History.self) }.value; guard current == generation else { return }; browsing = result } catch { if current == generation { self.error = error.localizedDescription } }
     }
-    func changeSession(to id: String? = nil, stopFirst: Bool = false) async {
-        guard !changingSession, let state = snapshot else { return }; changingSession = true; defer { changingSession = false }
+    func changeSession(to id: String? = nil, stopFirst: Bool = false, selection: Int? = nil) async {
+        if let selection, !isSelected(selection) { return }
+        let current = generation
+        guard !changingSession, let state = snapshot else { return }; changingSession = true; defer { if current == generation { changingSession = false } }
         if busy { guard stopFirst, await stop() else { return } }
+        guard current == generation else { return }
         do {
             var fields: [String: Any] = ["epoch": state.epoch]; if let id { fields["sessionId"] = id }
             _ = try await call(id == nil ? "new" : "resume", fields: fields)
-            try await syncState(); browsing = nil
-        } catch { self.error = error.localizedDescription }
+            guard current == generation else { return }; try await syncState(); browsing = nil
+        } catch { if current == generation { self.error = error.localizedDescription } }
     }
-    func answer(_ dialog: ExtensionDialog, value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) async {
-        guard let state = snapshot else { return }
+    func answer(_ dialog: ExtensionDialog, value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false, selection: Int? = nil) async {
+        if let selection, !isSelected(selection) { return }
+        let current = generation
+        guard let state = snapshot, state.dialogs.contains(where: { $0.id == dialog.id }) else { return }
         var fields: [String: Any] = ["epoch": state.epoch, "dialogId": dialog.id, "cancelled": cancelled]; if let optionId { fields["optionId"] = optionId }; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
-        do { _ = try await call("answer", fields: fields) } catch { self.error = error.localizedDescription }
+        do { _ = try await call("answer", fields: fields) } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func exploreDemo() {
         disconnect(); demo = true; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()

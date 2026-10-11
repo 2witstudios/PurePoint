@@ -100,6 +100,8 @@ jobs:
           swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o "$RUNNER_TEMP/mobile-responsiveness"
           "$RUNNER_TEMP/mobile-responsiveness"
           sh verification/check-recovery.sh
+          sh verification/check-machines.sh
+          python3 verification/check-machine-network.py
           python3 verification/check-trust.py
           swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
           swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift

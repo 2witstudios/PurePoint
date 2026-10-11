@@ -92,7 +92,7 @@ struct ConversationSidebar: View {
                 }.padding(.horizontal, 8).padding(.bottom, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .refreshable { await model.loadConversations() }
+            .refreshable { await model.loadConversations(selection: selection) }
             Button(action: connection) {
                 HStack(spacing: 8) {
                     Image("PurePointLogo").resizable().scaledToFit().frame(width: 20, height: 20).accessibilityHidden(true)
@@ -112,10 +112,11 @@ struct ConversationSidebar: View {
 struct ConnectionView: View {
     @ObservedObject var model: ChatModel
     @Environment(\.dismiss) private var dismiss
-    @State private var endpoint = ""
     @State private var enrollment = ""
     @State private var showScanner = false
     @State private var requestingCamera = false
+    @State private var renaming: SavedMachine?
+    @State private var machineName = ""
     var body: some View {
         NavigationStack {
             Form {
@@ -125,45 +126,73 @@ struct ConnectionView: View {
                         Text("PurePoint").font(.title2.weight(.semibold))
                     }.padding(.vertical, 8)
                 }
-                Section {
+                if !model.machines.isEmpty {
+                    Section("Your Macs") {
+                        ForEach(model.machines) { machine in
+                            HStack {
+                                Button { model.selectMachine(machine.id) } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(machine.name).foregroundStyle(.primary)
+                                            Text(machine.endpoint).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                            if model.selectedMachine?.id == machine.id { Text(model.connectionStatus).font(.caption).foregroundStyle(.secondary) }
+                                        }
+                                        Spacer()
+                                        if model.selectedMachine?.id == machine.id { Image(systemName: "checkmark.circle.fill").accessibilityLabel("Selected Mac") }
+                                    }
+                                }.buttonStyle(.plain)
+                                Button { machineName = machine.name; renaming = machine } label: { Image(systemName: "pencil") }
+                                    .buttonStyle(.borderless).accessibilityLabel("Rename " + machine.name)
+                            }
+                        }
+                    }
+                }
+                Section("Connect another Mac") {
                     Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder") }
                         .disabled(requestingCamera || model.pairing)
                     DisclosureGroup("Paste Mac pairing code") {
                         TextField("Enrollment QR contents", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Enrollment code")
                         Button("Pair") {
-                            guard let code = PairingCode.parse(enrollment) else { model.error = "Paste a current Mac enrollment code. Legacy pairing secrets are no longer supported."; return }
+                            guard let code = PairingCode.parse(enrollment) else { model.pairingError = "Paste a current Mac enrollment code. Legacy pairing secrets are no longer supported."; return }
                             model.pair(code)
                         }.disabled(model.pairing)
                     }
-                    if model.pairing { ProgressView("Pairing with your Mac…") }
-
+                    if model.pairing {
+                        ProgressView("Pairing with your Mac…")
+                        Button("Cancel pairing", role: .cancel) { model.cancelPairing() }
+                    }
+                    if let error = model.pairingError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 }
                 if let error = model.error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
-                Section {
-                    HStack { Text(model.connectionStatus); Spacer(); if model.connected && !model.demo { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) } }
-                    if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
-                    Button("Reconnect") { model.connect() }.disabled(endpoint.isEmpty)
+                if !model.endpoint.isEmpty {
+                    Section {
+                        if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
+                        Button("Reconnect") { model.connect() }
+                    }
                 }
             }
-            .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
-            .task { endpoint = model.endpoint }
-            .onChange(of: model.connected) { _, connected in if connected && !model.demo { dismiss() } }
+            .navigationTitle("Connections").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelPairing(); dismiss() } } }
+            .onDisappear { model.cancelPairing() }
+            .alert("Mac name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField("Name", text: $machineName)
+                Button("Save") { if let machine = renaming { model.renameMachine(machine.id, name: machineName) }; renaming = nil }
+                Button("Cancel", role: .cancel) { renaming = nil }
+            }
             .sheet(isPresented: $showScanner) {
                 PairingScannerView { code in
-                    endpoint = code.endpoint; showScanner = false
-                    model.pair(code)
+                    showScanner = false; model.pair(code)
                 }
             }
         }
     }
     @MainActor private func openScanner() async {
-        guard DataScannerViewController.isSupported else { model.error = "QR scanning is unavailable on this device. Paste the Mac enrollment code below (including in the simulator)."; return }
+        guard DataScannerViewController.isSupported else { model.pairingError = "QR scanning is unavailable on this device. Paste the Mac enrollment code below (including in the simulator)."; return }
         requestingCamera = true
         defer { requestingCamera = false }
         let allowed = await AVCaptureDevice.requestAccess(for: .video)
-        guard allowed else { model.error = "Allow camera access for PurePoint in iPhone Settings to scan, or paste the Mac enrollment code."; return }
-        guard DataScannerViewController.isAvailable else { model.error = "The camera is unavailable. Try again or paste the Mac enrollment code."; return }
+        guard allowed else { model.pairingError = "Allow camera access for PurePoint in iPhone Settings to scan, or paste the Mac enrollment code."; return }
+        guard DataScannerViewController.isAvailable else { model.pairingError = "The camera is unavailable. Try again or paste the Mac enrollment code."; return }
         showScanner = true
     }
 }
@@ -235,6 +264,7 @@ private struct QRScanner: UIViewControllerRepresentable {
 }
 struct ConversationView: View {
     @ObservedObject var model: ChatModel
+    let selection: Int
     @Environment(\.dismiss) private var dismiss
     @State private var confirmResume = false
     @State private var search = ""
@@ -245,18 +275,18 @@ struct ConversationView: View {
                     ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.padding(20) }
                         .safeAreaInset(edge: .bottom) {
                             Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
-                                if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId); if model.browsing == nil { dismiss() } } }
+                                if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { dismiss() } } }
                             }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession).padding().frame(maxWidth: .infinity).background(Color(uiColor: .systemBackground))
                         }
                 } else {
                     List {
                         if model.conversations.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right") }
                         ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
-                            Button { Task { await model.browse(conversation) } } label: {
+                            Button { Task { await model.browse(conversation, selection: selection) } } label: {
                                 VStack(alignment: .leading, spacing: 6) { Text(conversation.title).foregroundStyle(.primary).lineLimit(2); if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) } }.padding(.vertical, 6)
                             }
                         }
-                    }.searchable(text: $search, prompt: "Find a conversation").refreshable { await model.loadConversations() }
+                    }.searchable(text: $search, prompt: "Find a conversation").refreshable { await model.loadConversations(selection: selection) }
                 }
             }
             .safeAreaInset(edge: .top) { if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(12).frame(maxWidth: .infinity).background(.bar) } }
@@ -266,7 +296,7 @@ struct ConversationView: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.browsing = nil; dismiss() } }
             }
             .confirmationDialog("Stop Pi and resume this conversation?", isPresented: $confirmResume, titleVisibility: .visible) {
-                Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true); if model.browsing == nil { dismiss() } } } }
+                Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true, selection: selection); if model.browsing == nil { dismiss() } } } }
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be recoverable. Delegated workers keep running.") }
         }
@@ -285,6 +315,7 @@ struct NeutralPrimaryButtonStyle: ButtonStyle {
 struct ExtensionDialogView: View {
     @ObservedObject var model: ChatModel
     let dialog: ExtensionDialog
+    let selection: Int
     @State private var text = ""
     @State private var answering = false
     var body: some View {
@@ -295,7 +326,7 @@ struct ExtensionDialogView: View {
                     Section { ForEach(Array((dialog.options ?? []).enumerated()), id: \.offset) { index, option in
                         Button(option) {
                             if let ids = dialog.optionIds, ids.indices.contains(index) { answer(optionId: ids[index]) }
-                            else { model.error = "This dialog has no option ID. Refresh the conversation." }
+                            else if model.isSelected(selection) { model.error = "This dialog has no option ID. Refresh the conversation." }
                         }.disabled(answering)
                     } }
                 } else if dialog.method == "confirm" {
@@ -315,6 +346,6 @@ struct ExtensionDialogView: View {
         }
     }
     private func answer(value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false) {
-        answering = true; Task { await model.answer(dialog, value: value, optionId: optionId, confirmed: confirmed, cancelled: cancelled); answering = false }
+        answering = true; Task { await model.answer(dialog, value: value, optionId: optionId, confirmed: confirmed, cancelled: cancelled, selection: selection); answering = false }
     }
 }
