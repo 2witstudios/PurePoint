@@ -131,6 +131,7 @@ test(
     rpc = launch();
     let state = await rpc.call("get_state");
     assert.equal(state.model.provider, "pointguard-proof");
+    assert.deepEqual((await rpc.call("get_messages")).messages, []);
     const commands = await rpc.call("get_commands");
     assert.ok(commands.commands.some((c) => c.name === "pointguard"));
     await rpc.call("prompt", { message: "/pointguard info" });
@@ -224,6 +225,8 @@ test(
     const saved = state.sessionFile;
     assert.ok(saved);
     await rpc.call("new_session");
+    // Diagnostics belong to the old conversation; starting a chat must be empty.
+    assert.deepEqual((await rpc.call("get_messages")).messages, []);
     await run("new session");
     assert.match((await report()).prompt, /CURRENT PREFERENCE/);
     await rpc.call("switch_session", { sessionPath: saved });

@@ -26,7 +26,6 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                                 Text("Conversations").font(.system(size: 12, weight: .semibold)).lineLimit(1)
                             }
                             Spacer(minLength: 0)
-                            if width >= 80 { actions() }
                         }
                         Button {
                             isExpanded.toggle()
@@ -60,7 +59,19 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                             .onEnded { _ in resizeStart = nil }
                     )
 
-                content()
+                VStack(spacing: 0) {
+                    HStack {
+                        Spacer(minLength: 0)
+                        actions()
+                    }
+                    .font(.system(size: 12))
+                    .buttonStyle(.borderless)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    Divider()
+                    content()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                     .frame(width: max(0, available - width - dividerWidth), height: geometry.size.height)
                     .clipped()
             }
