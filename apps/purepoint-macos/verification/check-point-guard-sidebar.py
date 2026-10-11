@@ -30,4 +30,4 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(app / "verification/PointGuardSidebarChecks.swift"),
         "-o", str(executable),
     ], check=True)
-    subprocess.run([str(executable)], env=dict(os.environ, CFFIXED_USER_HOME=folder), check=True, timeout=30)
+    subprocess.run([str(executable)], env=dict(os.environ, CFFIXED_USER_HOME=folder), check=True, timeout=60)

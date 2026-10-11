@@ -107,6 +107,20 @@ struct Fixture: View {
         }
     }
 }
+struct CompactFixture: View {
+    @ObservedObject var state: LayoutState
+    let probes: Probes
+    var body: some View {
+        PointGuardConversationLayout(isExpanded: $state.expanded, compact: true) {
+            Button {} label: { Label("New Pi Chat", systemImage: "square.and.pencil") }
+                .background(Probe(name: "newChat", probes: probes))
+        } sidebar: {
+            Probe(name: "history", probes: probes)
+        } content: {
+            Probe(name: "transcript", probes: probes)
+        }
+    }
+}
 struct ChatFixture: View {
     let probes: Probes
     let focusLeft: Bool
@@ -227,6 +241,23 @@ struct PaneGridView: View {
                 }
             }
         }
+        // The inspector gives either history or chat its entire width. Check
+        // binding-driven presentation changes at every supported sidebar size.
+        for width: CGFloat in [240, 360, 640] {
+            window.setContentSize(NSSize(width: width, height: 600))
+            host.rootView = AnyView(CompactFixture(state: state, probes: probes))
+            state.expanded = false
+            settle()
+            precondition(abs(frame("transcript").width - width) < 1, "Compact chat lost composer width")
+            precondition(frame("newChat").minX >= 0 && frame("newChat").maxX <= width,
+                         "Compact new-chat action escapes sidebar")
+            state.expanded = true
+            settle()
+            precondition(abs(frame("history").width - width) < 1, "Compact history lost sidebar width")
+            state.expanded = false
+            settle()
+            precondition(abs(frame("transcript").width - width) < 1, "Returning to chat reduced composer width")
+        }
         // Exercise the actual chat and its AppStorage/notification wrapper with two
         // visible chat splits, using disconnected Pi and isolated preferences/storage.
         let suite = "PointGuardSidebarChecks-" + UUID().uuidString
@@ -287,6 +318,7 @@ struct PaneGridView: View {
         precondition(defaults.bool(forKey: preference), "No-project chat fallback did not handle history shortcut")
         print("Point Guard sidebar layout checks passed (real toggle clicks, repeated open/close, narrow panes and sibling splits)")
         print("Production chat integration checks passed (local controls, two chats, focused terminal/file, hidden chat, no-project fallback)")
+        print("Compact sidebar checks passed (240/360/640pt, full-width history/chat and repeated presentation changes)")
         window.contentView = nil
     }
 }

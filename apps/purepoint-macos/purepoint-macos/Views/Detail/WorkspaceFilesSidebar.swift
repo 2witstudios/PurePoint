@@ -33,8 +33,11 @@ struct WorkspaceFilesSidebar: View {
             .frame(height: PaneTabBar.height)
             Divider()
             if state.mode == .pointGuard {
-                PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showConversations, isFocused: false)
-                    .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+                PiPointGuardChatView(
+                    model: appState.pointGuardChat, showSidebar: $showConversations, isFocused: false, compact: true)
+                    .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
+                        showConversations.toggle()
+                    }
             } else {
                 fileContent
             }

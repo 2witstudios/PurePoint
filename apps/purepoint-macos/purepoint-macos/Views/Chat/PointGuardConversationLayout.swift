@@ -4,6 +4,7 @@ import SwiftUI
 /// proposed width when their children have competing minimum sizes.
 struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>: View {
     @Binding var isExpanded: Bool
+    var compact = false
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let content: () -> Content
@@ -11,6 +12,47 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
     @State private var resizeStart: CGFloat?
 
     var body: some View {
+        if compact {
+            compactLayout
+        } else {
+            splitLayout
+        }
+    }
+
+    /// History replaces chat in the workspace inspector, leaving the composer
+    /// the full sidebar width when the user returns to the conversation.
+    private var compactLayout: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    Image(systemName: isExpanded ? "bubble.left.and.bubble.right" : "sidebar.left")
+                        .frame(width: 24, height: 24)
+                }
+                .help("Toggle conversations (Command-Shift-S)")
+                .accessibilityLabel(isExpanded ? "Back to chat" : "Show conversations")
+                Spacer(minLength: 0)
+                actions()
+            }
+            .font(.system(size: 12))
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            Divider()
+            Group {
+                if isExpanded {
+                    sidebar()
+                } else {
+                    content()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var splitLayout: some View {
         GeometryReader { geometry in
             let available = max(0, geometry.size.width)
             // Even a heavily compressed pane keeps enough rail for the toggle.
