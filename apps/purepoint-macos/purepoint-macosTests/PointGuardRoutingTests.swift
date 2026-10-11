@@ -123,6 +123,31 @@ private struct PointGuardRoutingService: WorkspaceService {
         }
     }
 
+    @Test func removingConfiguredFolderBeforeWorkspaceLoadsRetainsItsState() throws {
+        try withState { state, registry, root in
+            state.openProject(root)
+            let owner = try #require(state.projectState(forRoot: root))
+            #expect(registry.workspacesByProject[root] == nil)
+            #expect(state.closeProject(root) == false)
+            #expect(state.projectState(forRoot: root) === owner)
+            #expect(UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") == [root])
+        }
+    }
+
+    @Test func removingHistoricalVisibleFolderBeforeLayoutRestoresRetainsItsState() throws {
+        try withState { state, registry, root in
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+            UserDefaults.standard.set([root], forKey: "PurePointOpenProjects")
+            UserDefaults.standard.set([root], forKey: "PurePointPointGuardFolders")
+            state.restoreProjects()
+            state.updatePointGuardRoot(root + "-next")
+            let owner = try #require(state.projectState(forRoot: root))
+            #expect(registry.workspacesByProject[root] == nil)
+            #expect(state.closeProject(root) == false)
+            #expect(state.projectState(forRoot: root) === owner)
+        }
+    }
+
     @Test func removingPointGuardProjectPreservesOwnerAndSelectsAnotherVisibleProject() throws {
         try withState { state, _, root in
             _ = try #require(state.activatePointGuardWorkspace())

@@ -9,6 +9,8 @@ final class AppState {
     var projects: [ProjectState] = []
     /// Folder-backed daemon state for Point Guard, kept out of the project sidebar.
     private var pointGuardProjects: [String: ProjectState] = [:]
+    /// Ownership survives project promotion and lazy workspace restoration.
+    private var pointGuardFolders = Set<String>()
     /// Unknown until Pi reports its actual configured folder.
     var pointGuardRoot: String?
 
@@ -79,7 +81,10 @@ final class AppState {
     func closeProject(_ root: String) -> Bool {
         guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return false }
         let project = projects.remove(at: index)
-        if registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true {
+        if root == pointGuardRoot || pointGuardFolders.contains(root)
+            || registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true
+        {
+            pointGuardFolders.insert(root)
             pointGuardProjects[root] = project
         } else {
             project.stopWatching()
@@ -95,12 +100,13 @@ final class AppState {
     func restoreProjects() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
         // Opening projects persists current state, so snapshot both saved lists first.
-        let pointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
+        let savedPointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
+        pointGuardFolders.formUnion(savedPointGuardFolders)
         for path in paths {
             guard FileManager.default.fileExists(atPath: path) else { continue }
             openProject(path)
         }
-        for root in pointGuardFolders {
+        for root in savedPointGuardFolders {
             guard FileManager.default.fileExists(atPath: root) else { continue }
             ensurePointGuardProject(root: root)
         }
@@ -148,13 +154,14 @@ final class AppState {
     }
 
     private func ensurePointGuardProject(root: String) {
+        pointGuardFolders.insert(root)
+        UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
         guard projectState(forRoot: root) == nil else { return }
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
         pointGuardProjects[root] = project
         startProject(project)
         startBinaryWatcherIfNeeded()
-        UserDefaults.standard.set(Array(pointGuardProjects.keys), forKey: "PurePointPointGuardFolders")
     }
 
     @discardableResult
@@ -297,7 +304,7 @@ final class AppState {
     private func persistOpenProjects() {
         let paths = projects.map(\.projectRoot)
         UserDefaults.standard.set(paths, forKey: Self.openProjectsKey)
-        UserDefaults.standard.set(Array(pointGuardProjects.keys), forKey: "PurePointPointGuardFolders")
+        UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
     }
 
     private func startBinaryWatcherIfNeeded() {
