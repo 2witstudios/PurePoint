@@ -44,12 +44,13 @@ with a placeholder navigation column. It clicks the real SwiftUI toggle at the h
 sidebar's top-right corner and on its collapsed rail, and measures history/transcript
 bounds across repeated open/close cycles, narrow widths and sibling splits. It briefly
 opens an isolated test window and uses no daemon or app build phases.
-It also compiles the production chat model, chat view and surface wrapper to verify
-local controls and shared-preference shortcuts with two visible chat splits and either
-pane focused. Pi stays disconnected; preferences and recovery storage are isolated.
+It also compiles the production chat model, chat view, workspace view and pane controls
+to verify local controls and shared-preference shortcuts with two visible chats, a
+focused terminal/file sibling, hidden chat tabs and the no-project fallback. The daemon
+environment/setup sheets are stubbed; Pi stays disconnected and storage is isolated.
 In Xcode, also verify that the toggle stays at the history sidebar's top-right corner
 and remains available on its collapsed rail, that dragging the divider resizes history,
-and that Command-Shift-S toggles once with multiple chat splits visible.
+and that Command-Shift-S toggles once with multiple chats or a terminal/file sibling focused.
 
 1. Build/run the macOS target in Xcode. Open Settings → Point Guard, set the address of the running Pi bridge and its local pairing secret file, and Connect. Keep the phone connected too; both use /v1 and share one live Pi session.
 2. Inspect chat/sidebar/composer in light and dark appearance and at the minimum window size. Search, hide/show the sidebar (Command-Shift-S), start/resume history and browse during a run.

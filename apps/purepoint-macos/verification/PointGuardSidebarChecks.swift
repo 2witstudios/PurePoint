@@ -2,12 +2,62 @@ import AppKit
 import SwiftUI
 
 enum PaneSplitNode { enum Axis { case vertical, horizontal } }
-// Only the app environment is stubbed. The chat model, surface wrapper,
-// conversation layout and pane splitter compiled by the runner are production code.
+// The daemon/workspace environment and setup sheets are stubbed. The production
+// chat model, PointGuardView, conversation layout and pane splitter remain real.
 @MainActor @Observable final class AppState {
     var showSettings = false
+    var activeProjectRoot: String? = "/fixture"
+    var projects = [ProjectFixture(projectRoot: "/fixture")]
     let pointGuardChat: PiChatModel
+    let pointGuardService = ServiceFixture()
     init(chat: PiChatModel) { pointGuardChat = chat }
+    func projectState(forRoot root: String) -> ProjectFixture? { projects.first { $0.projectRoot == root } }
+}
+struct ProjectFixture { let projectRoot: String }
+@MainActor final class ServiceFixture {
+    func start(chat: PiChatModel) {}
+    func connectPhone() async {}
+}
+enum SidebarSelection { case fixture }
+enum SurfaceContent { case pointGuard, agent }
+struct Surface { let content: SurfaceContent }
+struct Pane { let activeTab: Surface? }
+struct Workspace {
+    let id = "fixture"
+    let isPointGuard = true
+    var panes: [Int: Pane]
+}
+@MainActor @Observable final class WorkspaceRegistry {
+    let probes: Probes
+    let focusLeft: Bool
+    let showRightChat: Bool
+    let showLeftChat: Bool
+    var activeWorkspaceId: String?
+    var layoutErrorsByProject: [String: String] = [:]
+    var workspacesByProject: [String: [Workspace]] {
+        ["/fixture": [Workspace(panes: [
+            0: Pane(activeTab: Surface(content: showLeftChat ? .pointGuard : .agent)),
+            1: Pane(activeTab: Surface(content: showRightChat ? .pointGuard : .agent))
+        ])]]
+    }
+    init(probes: Probes, focusLeft: Bool, showRightChat: Bool, showLeftChat: Bool) {
+        self.probes = probes
+        self.focusLeft = focusLeft
+        self.showRightChat = showRightChat
+        self.showLeftChat = showLeftChat
+    }
+    func ensurePointGuardWorkspace(projectRoot: String) throws -> String { "fixture" }
+    func activate(workspaceId: String) { activeWorkspaceId = workspaceId }
+}
+struct PointGuardSetupView: View {
+    let service: ServiceFixture
+    let chat: PiChatModel
+    var body: some View { Color.clear }
+}
+struct PointGuardPhoneView: View {
+    let service: ServiceFixture
+    @Binding var isPresented: Bool
+    var body: some View { Color.clear }
 }
 extension Notification.Name {
     static let toggleChatSidebar = Notification.Name("PP_toggleChatSidebar")
@@ -57,24 +107,43 @@ struct Fixture: View {
 struct ChatFixture: View {
     let probes: Probes
     let focusLeft: Bool
+    var showRightChat = true
+    var showLeftChat = true
     var body: some View {
         NavigationSplitView {
             Probe(name: "navigation", probes: probes)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 200, max: 200)
         } detail: {
-            DraggableSplit(axis: .vertical, ratio: 0.5, onRatioChanged: { _ in }) {
-                VStack(spacing: 0) {
-                    Color.gray.frame(height: 30)
-                    PointGuardChatSurfaceView(isFocused: focusLeft)
-                }
-            } second: {
-                VStack(spacing: 0) {
-                    Color.gray.frame(height: 30)
-                    PointGuardChatSurfaceView(isFocused: !focusLeft)
+            PointGuardView(selection: .constant(nil))
+                .environment(WorkspaceRegistry(
+                    probes: probes, focusLeft: focusLeft, showRightChat: showRightChat, showLeftChat: showLeftChat))
+        }
+    }
+}
+struct PaneGridView: View {
+    let workspaceId: String
+    @Environment(WorkspaceRegistry.self) private var registry
+    var body: some View {
+        DraggableSplit(axis: .vertical, ratio: 0.5, onRatioChanged: { _ in }) {
+            VStack(spacing: 0) {
+                Color.gray.frame(height: 30)
+                if registry.showLeftChat {
+                    PointGuardChatSurfaceView(isFocused: registry.focusLeft)
+                } else {
+                    Color.clear
                 }
             }
-            .background(Probe(name: "grid", probes: probes))
+        } second: {
+            VStack(spacing: 0) {
+                Color.gray.frame(height: 30)
+                if registry.showRightChat {
+                    PointGuardChatSurfaceView(isFocused: !registry.focusLeft)
+                } else {
+                    Color.clear // Represents a terminal/file sibling with workspace focus.
+                }
+            }
         }
+        .background(Probe(name: "grid", probes: registry.probes))
     }
 }
 @main struct Checks {
@@ -173,8 +242,31 @@ struct ChatFixture: View {
         NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
         settle()
         precondition(!defaults.bool(forKey: preference), "Focused right chat did not close history exactly once")
+        host.rootView = AnyView(
+            ChatFixture(probes: probes, focusLeft: false, showRightChat: false)
+                .environment(appState).defaultAppStorage(defaults))
+        settle()
+        NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
+        settle()
+        precondition(defaults.bool(forKey: preference), "Focused terminal/file sibling prevented history from opening")
+        NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
+        settle()
+        precondition(!defaults.bool(forKey: preference), "Focused terminal/file sibling prevented history from closing")
+        host.rootView = AnyView(
+            ChatFixture(probes: probes, focusLeft: false, showRightChat: false, showLeftChat: false)
+                .environment(appState).defaultAppStorage(defaults))
+        settle()
+        NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
+        settle()
+        precondition(!defaults.bool(forKey: preference), "Hidden chat tabs handled the history shortcut")
+        appState.activeProjectRoot = nil
+        appState.projects = []
+        settle()
+        NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
+        settle()
+        precondition(defaults.bool(forKey: preference), "No-project chat fallback did not handle history shortcut")
         print("Point Guard sidebar layout checks passed (real toggle clicks, repeated open/close, narrow panes and sibling splits)")
-        print("Production chat integration checks passed (local controls, shared preferences, focused split shortcuts)")
+        print("Production chat integration checks passed (local controls, two chats, focused terminal/file, hidden chat, no-project fallback)")
         window.contentView = nil
     }
 }

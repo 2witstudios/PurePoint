@@ -5,6 +5,7 @@ struct PointGuardView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
+    @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
 
     private var projectRoot: String? {
         appState.activeProjectRoot.flatMap { appState.projectState(forRoot: $0) != nil ? $0 : nil }
@@ -13,6 +14,10 @@ struct PointGuardView: View {
 
     private var workspace: Workspace? {
         projectRoot.flatMap { root in registry.workspacesByProject[root]?.first(where: \.isPointGuard) }
+    }
+
+    private var hasVisibleChat: Bool {
+        projectRoot == nil || workspace?.panes.values.contains(where: { $0.activeTab?.content == .pointGuard }) == true
     }
 
     var body: some View {
@@ -40,6 +45,11 @@ struct PointGuardView: View {
         .onAppear(perform: activateWorkspace)
         .onChange(of: projectRoot) { _, _ in activateWorkspace() }
         .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
+            // The workspace owns this shared setting once, even when a terminal
+            // or file sibling has focus. Background chat tabs don't handle it.
+            if hasVisibleChat { showSidebar.toggle() }
+        }
     }
 
     private func activateWorkspace() {
@@ -59,10 +69,5 @@ struct PointGuardChatSurfaceView: View {
 
     var body: some View {
         PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused)
-            .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
-                // Multiple chat splits share this preference; only the focused one
-                // handles the shortcut so they don't toggle it back off.
-                if isFocused { showSidebar.toggle() }
-            }
     }
 }
