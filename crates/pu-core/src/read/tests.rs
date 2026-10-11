@@ -286,3 +286,40 @@ fn given_claude_or_opencode_compaction_metadata_should_invalidate_cursors() {
         ReadError::StaleCursor
     );
 }
+
+#[test]
+fn given_malformed_tool_records_should_reject_missing_identity_input_and_status() {
+    // given / when / then
+    for (runtime, input) in [
+        (
+            Runtime::Claude,
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\"}]}}\n",
+        ),
+        (
+            Runtime::Pi,
+            "{\"type\":\"message\",\"id\":\"a\",\"parentId\":null,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\"}]}}\n",
+        ),
+        (
+            Runtime::Codex,
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\"}}\n",
+        ),
+    ] {
+        assert!(parse_jsonl(runtime, input.as_bytes()).is_err());
+    }
+    for block in [
+        serde_json::json!({"type":"tool"}),
+        serde_json::json!({"type":"tool","id":"c","name":"bash","state":{"status":"future_status","input":{}}}),
+        serde_json::json!({"type":"tool","id":"c","name":"bash","state":{"status":"completed","input":{}}}),
+    ] {
+        assert!(
+            parse_opencode(
+                &serde_json::json!({"messages":[{"id":"a","type":"assistant","content":[block]}]})
+            )
+            .is_err()
+        );
+    }
+    for status in ["pending", "running"] {
+        let valid = serde_json::json!({"messages":[{"id":"a","type":"assistant","content":[{"type":"tool","id":"c","name":"bash","state":{"status":status,"input":{}}}]}]});
+        assert_eq!(parse_opencode(&valid).unwrap().records.len(), 1);
+    }
+}

@@ -68,6 +68,37 @@ fn required_text<'a>(value: &'a Value, key: &str) -> Result<&'a str, ReadError> 
         .ok_or_else(|| ReadError::InvalidRecord(format!("missing or invalid {key}")))
 }
 
+fn required_id(value: &Value, key: &str) -> Result<String, ReadError> {
+    let text = required_text(value, key)?;
+    if text.is_empty() {
+        return Err(ReadError::InvalidRecord(format!("empty {key}")));
+    }
+    Ok(text.into())
+}
+
+fn required_value<'a>(value: &'a Value, key: &str) -> Result<&'a Value, ReadError> {
+    value
+        .get(key)
+        .ok_or_else(|| ReadError::InvalidRecord(format!("missing {key}")))
+}
+
+fn object_input<'a>(value: &'a Value, key: &str) -> Result<&'a Value, ReadError> {
+    let input = required_value(value, key)?;
+    if !input.is_object() {
+        return Err(ReadError::InvalidRecord(format!("{key} is not an object")));
+    }
+    Ok(input)
+}
+
+fn output_content(value: &Value) -> Result<String, ReadError> {
+    if !value.is_string() && !value.is_array() {
+        return Err(ReadError::InvalidRecord(
+            "output is not text or content blocks".into(),
+        ));
+    }
+    Ok(content_text(value))
+}
+
 fn string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_owned)
 }
@@ -174,18 +205,22 @@ fn claude_message(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadEr
         let r = match block["type"].as_str() {
             Some("text") => record(block_id, kind, required_text(block, "text")?),
             Some("tool_use") => {
-                let mut r = record(block_id, RecordKind::ToolCall, &block["input"].to_string());
-                r.tool_name = string(block, "name");
-                r.tool_call_id = string(block, "id");
+                let mut r = record(
+                    block_id,
+                    RecordKind::ToolCall,
+                    &object_input(block, "input")?.to_string(),
+                );
+                r.tool_name = Some(required_id(block, "name")?);
+                r.tool_call_id = Some(required_id(block, "id")?);
                 r
             }
             Some("tool_result") => {
                 let mut r = record(
                     block_id,
                     RecordKind::ToolResult,
-                    &content_text(&block["content"]),
+                    &output_content(required_value(block, "content")?)?,
                 );
-                r.tool_call_id = string(block, "tool_use_id");
+                r.tool_call_id = Some(required_id(block, "tool_use_id")?);
                 r.is_error = block["is_error"].as_bool();
                 r
             }
@@ -328,10 +363,10 @@ fn pi_message(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadError>
         let mut r = record(
             id,
             RecordKind::ToolResult,
-            &content_text(&message["content"]),
+            &output_content(required_value(message, "content")?)?,
         );
-        r.tool_name = string(message, "toolName");
-        r.tool_call_id = string(message, "toolCallId");
+        r.tool_name = Some(required_id(message, "toolName")?);
+        r.tool_call_id = Some(required_id(message, "toolCallId")?);
         r.is_error = message["isError"].as_bool();
         return Ok(vec![r]);
     }
@@ -352,9 +387,13 @@ fn pi_message(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadError>
         match block["type"].as_str() {
             Some("text") => result.push(record(id, kind, required_text(block, "text")?)),
             Some("toolCall") => {
-                let mut r = record(id, RecordKind::ToolCall, &block["arguments"].to_string());
-                r.tool_name = string(block, "name");
-                r.tool_call_id = string(block, "id");
+                let mut r = record(
+                    id,
+                    RecordKind::ToolCall,
+                    &object_input(block, "arguments")?.to_string(),
+                );
+                r.tool_name = Some(required_id(block, "name")?);
+                r.tool_call_id = Some(required_id(block, "id")?);
                 result.push(r);
             }
             Some("image") => result.push(record(id, RecordKind::Notice, "Attachment: image")),
@@ -501,15 +540,24 @@ fn codex_item(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadError>
             let input = item
                 .get("arguments")
                 .or_else(|| item.get("input"))
-                .unwrap_or(&Value::Null);
+                .ok_or_else(|| ReadError::InvalidRecord("missing tool input".into()))?;
+            if !input.is_string() {
+                return Err(ReadError::InvalidRecord(
+                    "Codex tool input is not text".into(),
+                ));
+            }
             let mut r = record(id, RecordKind::ToolCall, &content_text(input));
-            r.tool_name = string(item, "name");
-            r.tool_call_id = string(item, "call_id");
+            r.tool_name = Some(required_id(item, "name")?);
+            r.tool_call_id = Some(required_id(item, "call_id")?);
             Ok(vec![r])
         }
         Some("function_call_output" | "custom_tool_call_output") => {
-            let mut r = record(id, RecordKind::ToolResult, &content_text(&item["output"]));
-            r.tool_call_id = string(item, "call_id");
+            let mut r = record(
+                id,
+                RecordKind::ToolResult,
+                &output_content(required_value(item, "output")?)?,
+            );
+            r.tool_call_id = Some(required_id(item, "call_id")?);
             Ok(vec![r])
         }
         Some("agent_message") => Ok(vec![record(
@@ -569,27 +617,44 @@ pub fn parse_opencode(snapshot: &Value) -> Result<Transcript, ReadError> {
                     }
                     Some("tool") => {
                         let state = &block["state"];
-                        let tool_name = string(block, "tool").or_else(|| string(block, "name"));
-                        let call_id = string(block, "callID").or_else(|| string(block, "id"));
+                        let tool_name = Some(required_id(
+                            block,
+                            if block.get("tool").is_some() {
+                                "tool"
+                            } else {
+                                "name"
+                            },
+                        )?);
+                        let call_id = Some(required_id(
+                            block,
+                            if block.get("callID").is_some() {
+                                "callID"
+                            } else {
+                                "id"
+                            },
+                        )?);
+                        let status = required_text(state, "status")?;
+                        if !matches!(status, "pending" | "running" | "completed" | "error") {
+                            return Err(ReadError::UnsupportedSchema(format!(
+                                "OpenCode tool status {status}"
+                            )));
+                        }
                         let mut call = record(
                             format!("{block_id}:call"),
                             RecordKind::ToolCall,
-                            &state["input"].to_string(),
+                            &object_input(state, "input")?.to_string(),
                         );
                         call.tool_name = tool_name.clone();
                         call.tool_call_id = call_id.clone();
                         result.records.push(call);
                         if matches!(state["status"].as_str(), Some("completed" | "error")) {
                             let error = state["status"] == "error";
-                            let output = if error {
-                                &state["error"]
-                            } else {
-                                &state["output"]
-                            };
+                            let output =
+                                required_value(state, if error { "error" } else { "output" })?;
                             let mut r = record(
                                 format!("{block_id}:result"),
                                 RecordKind::ToolResult,
-                                &content_text(output),
+                                &output_content(output)?,
                             );
                             r.tool_name = tool_name;
                             r.tool_call_id = call_id;

@@ -554,10 +554,10 @@ impl Engine {
             };
         }
 
-        if let Some(binding) = initial_binding {
-            if let Err(e) = crate::read_source::save_binding(root_path, &agent_id, &binding) {
-                tracing::warn!(agent_id, error = %e, "native binding could not be persisted");
-            }
+        if let Some(binding) = initial_binding
+            && let Err(e) = crate::read_source::save_binding(root_path, &agent_id, &binding)
+        {
+            tracing::warn!(agent_id, error = %e, "native binding could not be persisted");
         }
         self.notify_status_change(&project_root).await;
 
