@@ -323,3 +323,27 @@ fn given_malformed_tool_records_should_reject_missing_identity_input_and_status(
         assert_eq!(parse_opencode(&valid).unwrap().records.len(), 1);
     }
 }
+
+#[test]
+fn given_nested_tool_result_blocks_should_validate_text_and_label_attachments() {
+    // given / when / then
+    for (runtime, line) in [
+        (
+            Runtime::Claude,
+            serde_json::json!({"type":"user","uuid":"u","message":{"content":[{"type":"tool_result","tool_use_id":"call","content":[{"type":"text"}]}]}}),
+        ),
+        (
+            Runtime::Pi,
+            serde_json::json!({"type":"message","id":"m","parentId":null,"message":{"role":"toolResult","toolName":"bash","toolCallId":"call","content":[{"type":"text"}]}}),
+        ),
+        (
+            Runtime::Codex,
+            serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call","output":[{"type":"text"}]}}),
+        ),
+    ] {
+        assert!(parse_jsonl(runtime, format!("{line}\n").as_bytes()).is_err());
+    }
+    let image = serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call","output":[{"type":"input_image","image_url":"PRIVATE"}]}});
+    let result = parse_jsonl(Runtime::Codex, format!("{image}\n").as_bytes()).unwrap();
+    assert_eq!(result.records[0].text, "Attachment: image");
+}

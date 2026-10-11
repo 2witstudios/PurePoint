@@ -91,12 +91,31 @@ fn object_input<'a>(value: &'a Value, key: &str) -> Result<&'a Value, ReadError>
 }
 
 fn output_content(value: &Value) -> Result<String, ReadError> {
-    if !value.is_string() && !value.is_array() {
-        return Err(ReadError::InvalidRecord(
-            "output is not text or content blocks".into(),
-        ));
+    if let Some(text) = value.as_str() {
+        return Ok(text.into());
     }
-    Ok(content_text(value))
+    let blocks = value
+        .as_array()
+        .ok_or_else(|| ReadError::InvalidRecord("output is not text or content blocks".into()))?;
+    blocks
+        .iter()
+        .map(|block| match block["type"].as_str() {
+            Some("text" | "input_text" | "output_text") => {
+                Ok(required_text(block, "text")?.to_owned())
+            }
+            Some("image" | "input_image" | "image_url") => Ok("Attachment: image".into()),
+            Some("audio" | "input_audio" | "output_audio") => Ok("Attachment: audio".into()),
+            Some("document" | "file") => Ok("Attachment: file".into()),
+            Some("tool_reference") => Ok(format!(
+                "Tool reference: {}",
+                required_id(block, "tool_name")?
+            )),
+            other => Err(ReadError::UnsupportedSchema(format!(
+                "tool output block {other:?}"
+            ))),
+        })
+        .collect::<Result<Vec<String>, ReadError>>()
+        .map(|parts| parts.join("\n"))
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {
@@ -563,7 +582,7 @@ fn codex_item(value: &Value, index: usize) -> Result<Vec<ReadRecord>, ReadError>
         Some("agent_message") => Ok(vec![record(
             id,
             RecordKind::Assistant,
-            &content_text(&item["content"]),
+            &output_content(required_value(item, "content")?)?,
         )]),
         Some("reasoning" | "compaction") => Ok(vec![]),
         other => Err(ReadError::UnsupportedSchema(format!(
