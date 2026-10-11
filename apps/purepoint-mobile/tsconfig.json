@@ -9,6 +9,11 @@
     "strict": false,
     "skipLibCheck": true
   },
-  "include": ["bridge/*.js"],
-  "exclude": ["bridge/*.test.js"]
+  "include": [
+    "bridge/*.js",
+    "support/pointguard/**/*.js"
+  ],
+  "exclude": [
+    "bridge/*.test.js"
+  ]
 }
