@@ -1,10 +1,17 @@
 {
   "schemaVersion": 1,
-  "version": 3,
+  "version": 4,
   "sources": {
     "pu": "purepoint/pu skill 0.1.0",
     "pu-cli": "PurePoint CLI skill reference 2026-10-10",
-    "instructions": "PRPG r3"
+    "instructions": "PGSET-SOUL-1",
+    "pointguard-workflows": "pointguard a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f"
   },
-  "files": ["pu/SKILL.md", "pu-cli/SKILL.md", "../docs/point-guard.md"]
+  "files": [
+    "pu/SKILL.md",
+    "pu-cli/SKILL.md",
+    "../docs/point-guard.md",
+    "pointguard/package.json",
+    "pointguard-workflows/package.json"
+  ]
 }

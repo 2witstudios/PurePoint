@@ -1,0 +1,76 @@
+# Point Guard soul and native workflows delivery
+
+Owner-authorized implementation, 2026-10-10. Builder ag-3sz6gpfv, worktree wt-z992ujay, branch pu/pointguard-soul-skills. Base d90ceaefd305feca63c9e4cc8393252836818252. Parent ID unavailable: no parent message will be sent to an invented recipient.
+
+## Plan and contract
+
+Point Guard is a general personal assistant: evidence-based mundane answers, actual computer tools, adaptable checkpoints and complete coding delivery. No rigid autonomy modes, sports role, emotional machinery, automatic soul rewriting or background preference extraction.
+
+1. Update scoped PGSET spec before implementation. Use pinned Pi 1.1.0 declarations and installed docs as runtime truth; preserve native prompt/tool/skill sections, sessions, auth, trust and queue/cancellation.
+2. Main builder owns bridge/setup.js, runtime.js child environment, private seed/read support, bundled SOUL.md/USER.md and operating guidance, and a small native extension using structured before_agent_start sections and RPC-compatible info/reload. Seed absent personal files in managed private state; refresh at safe prompt boundaries. Native reload only, no watchers or in-flight mutation.
+3. Separate native PurePoint worker owns support Pointguard workflow package, reproducible pinned import tooling and package tooling/tests. Import complete shared skills plus codex plan/orchestrate from pointguard a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f unchanged, including licenses/references/scripts. Pi adapters are separate and explicit about unavailable AIDD/PageSpace/Codex requirements. Package local source override selects one counterpart; native progressive discovery/dedup handles skills. No shared source edits anticipated.
+4. Tests use Node/static checks and disposable package/RPC fixtures with clean HOME and relocated resources. Prove pinned extension loading, info/reload, sections across new/resume/compaction, dialogs/tool calls/cancellation/teardown where fixture permits. Qualify published web/desktop candidates against exact runtime; do not activate/install into personal state or silently provision credentials.
+5. Compose producer branch into this isolated receiving branch only; independent exact-head native PurePoint review, fix material findings, commit/push normal PR. No main merge. Human Xcode, architecture/signing and device permission acceptance recorded NOT RUN.
+
+## Coordination and protected resources
+
+Voice worker ag-cvxdmaj0, wt-87ojn6x8, pu/voice-mode notified of ownership before edits. Avoid iOS UI. Any overlapping bridge/spec changes need reconciliation at integration; no writes to its worktree. Never change parent-main dirty project.pbxproj, Info.plist, untracked AGENTS.md. Never build macOS with xcodebuild/swift build, overwrite installed binaries, reset/force push, activate production or kill unrelated agents.
+
+## Evidence / administration
+
+PageSpace drive nmyzsuuo4kc1u4y2e9vsndft and existing pre-release epic ewlm575eb9hjwcpkze4z1xoj reused. New leaf PRPG-6 task page n0p4dusmgzrdahlp2vt1pvdh (task yoteclf7lwuiyv4w33shuyi7) records this distinct owner-authorized delivery. Plan/handoff ewfk1i72rw19bxnuqgsznr5o; prompt g6uaqj90lnnsvszytooaz4ih. Status In Progress until candidate delivery. No self-Done.
+
+Independent plan feedback: package worker ag-z6w5838y (wt-raqizid5, pu/pointguard-package) reviewed before implementation; four additions applied (native package-root override, immutable source/ref relocation, default prompt preservation across resumed/compacted sessions, truthful optional dependencies). Producer c252776bf77beea8f15979763a10e494bb29f08f composed via ordinary merge 014f3e3ab5da0a44e28631cfa5527db81d5e4c41. Live GitHub default main, classic branch protection only main, no rulesets; receiving pu/pointguard-soul-skills is unprotected. No external source change/dependency.
+
+PASS: Node22.23.3 exact SHA256-verified Darwin arm64 runtime, Pi1.1.0. Personal seeding/private refusal/edit preservation; native package-root override; real relocated RPC native module aliases, 17 skills, info/reload, four dialogs, bash df evidence, write artifact, new/resume/compaction prompt refresh, cancellation and teardown; full bridge suite 164/164 before final added collision/source cases. PASS Python 4 source/package-copy tests (25 original file bytes/modes and 15 workflow adapters), existing package regression, native loader relocation/override/symlink/collision script, tsc. Latest exact final check counts will be recorded externally in PR/handoff after commit.
+
+Intermediate FAIL: initial full suite lacked POINT_GUARD_LOCK_HELPER_PATH and failed/timed out existing lifecycle/ownership fixtures. Stopped only that owned failed test runner's traced descendants and reran with a disposable copy of existing target/debug helper; 164/164 PASS. No build or installed artifact write. Initial RPC compaction fixture was too short; corrected fixture settings and passed actual native compaction. Two mistargeted cwd commands failed before edits/checks; corrected and verified. Full diff whitespace flags only upstream review-example.md preserved Markdown trailing spaces (262-263); authored files pass.
+
+Published marketplace artifact qualification: runtime/MARKETPLACE.md and marketplace-qualification.json. pi-web-access 0.38.0, pi-playwright 0.1.2, @amaster.ai/pi-computer-use 0.1.24 PASS only pinned-runtime package/registration/RPC-startup/command/teardown checks; pi-agent-browser-native 0.9.4 rejected Node>=24.21.0. Real web/browser/desktop actions, credentials and macOS driver permission/signing acceptance NOT RUN. No third-party package shipped/activated; no configuration/provisioning.
+
+NOT RUN (owner/package acceptance): macOS app Xcode build/test (prohibited here), both-architecture complete app executable/ad-hoc signature/Developer ID/notarization/update artifact proofs, phone/device integration, genuine hosted-model behavioral acceptance for ordinary storage/noncoding/checkpoints/coding delivery and browser/desktop setup. Node RPC uses deterministic provider to prove mechanisms/tools, not model judgment. Responsible: owner/release integrator before main/production acceptance. Immature daemon memory architecture untouched. Exact-head independent source review pending; no main acceptance or production claim.
+
+Final diagnostic refinement: /pointguard info uses Pi's native DefaultPackageManager + loadSkills with current live catalog winners first and onMissing=skip; no registry, extension factories, installs or credential reads. Native temporary --extension packages take precedence over user auto skills (different from settings-packages ordering); the real RPC collision fixture initially expected the wrong winner, failed, and now asserts native temporary winner/user loser. Optional workflows remain in catalog. Direct core support JavaScript is included in tsc checks.
+
+Builder final inspection found FIFO SOUL.md could block open before regular-file validation. Added O_NONBLOCK with a bounded disposable subprocess FIFO test: RED ETIMEDOUT before fix; GREEN after fix. Independent reviewer notified; final exact-head delta review required. No change to regular file reads or permissions.
+
+## PR204 review triage — 2026-10-10
+
+Owner requested triage after initial b5f18f6 complete source approval. All three
+open CodeRabbit threads were read with pagination (no further pages); findings
+4240056847, 4240056851 and 4240056852 are valid tooling issues: required candidate
+capabilities absent could pass, teardown was sampled before child exit, and FAIL
+records still exited zero. Review-body inventory nit is valid too. No product
+scope change or runtime activation. Producer ag-z6w5838y notified before touching
+receiving workflow verifier/tests; immutable upstream unchanged.
+
+Fix: explicit pinned candidate capability sets checked against real native tool/
+skill catalog; bounded exit confirmation after Rpc.close, failure on unconfirmed
+teardown and owned child SIGKILL cleanup; diagnostic JSON written before nonzero
+shell status on failed qualifications. Intended engine REJECT remains a diagnostic
+nonexecution rather than a failed probe. Offline workflow verifier rejects extra
+files and any skills-tree symlink. Public helper comments explain proof semantics.
+
+PASS: Node22.23.3 runtime/qualification-result.test.mjs 4/4, including real Pi1.1.0
+RPC CLI success then malformed playwright skill and extension lifecycle failure
+with JSON output/nonzero status, plus actual delayed/stubborn child exit tests.
+Python workflow tests 5/5 with explicit POINTGUARD_TEST_SOURCE. Stray-file test
+first reproduced RED on old verifier (three subtest failures), then GREEN. Initial
+unittest discover command matched no hyphenated module (0 tests, not evidence);
+corrected direct invocation used. Existing 166 bridge tests at b5f18f6 remain
+prior-head evidence, not a claim for this new candidate. Independent delta review,
+exact new SHA, static/package proofs and thread replies recorded in live handoff.
+Docstring coverage percentage is bot policy advice; added helper docblocks only
+where useful, no blanket documentation rewrite or upstream edits.
+
+All previous NOT RUN human Xcode/app/both-architecture/signing/update/device,
+hosted-model behavior and real web/browser/desktop actions/grants remain. No
+app build/live binary write/main merge. Marketplace snapshot remains historical
+published-artifact evidence; new regression fixtures are not new qualification
+of real packages. Task remains In Review pending acceptance.
+
+Triage final focused proofs: native loader/catalog/relocation/symlink/collision PASS;
+tsc PASS; existing package download regression PASS. Initial native loader invocation
+omitted mandatory explicit Pi package root and failed preflight, then corrected
+explicit-root invocation PASS. Actual Rpc.close SIGTERM fallback additionally
+confirmed with a real owned child (four Node tests total).

@@ -4,6 +4,7 @@ import {
   stat,
   lstat,
   access,
+  realpath,
   mkdir,
   writeFile,
   link,
@@ -102,25 +103,26 @@ export async function launchArguments(cwd, env) {
   await access(cli);
   if (!(await stat(cwd)).isDirectory())
     throw new Error("PI_MOBILE_CWD must be an existing directory.");
-  const skills = env.PI_MOBILE_PU_SKILL
-    ? [path.resolve(env.PI_MOBILE_PU_SKILL)]
-    : [
-        path.join(root, "support/pu/SKILL.md"),
-        path.join(root, "support/pu-cli/SKILL.md"),
-      ];
-  if (!skills.length)
-    throw new Error(
-      "No installed pu skill/reference found. Install Point Guard pu skills or set PI_MOBILE_PU_SKILL to its SKILL.md.",
-    );
-  for (const skill of skills) await access(skill);
+  const bundledPackage = path.join(root, "support/pointguard");
+  const configured = env.POINT_GUARD_WORKFLOW_SOURCE;
+  if (configured && !path.isAbsolute(configured))
+    throw new Error("POINT_GUARD_WORKFLOW_SOURCE must be an absolute Pi package root.");
+  const workflowPackage = await realpath(configured ?? path.join(root, "support/pointguard-workflows"));
+  const manifest = JSON.parse(await readFile(path.join(workflowPackage, "package.json"), "utf8"));
+  if (!manifest.pi || !Array.isArray(manifest.pi.skills))
+    throw new Error("Point Guard workflow source must be a Pi package root declaring pi.skills.");
+  await access(path.join(bundledPackage, "package.json"));
   const args = [
-    cli,
-    "--mode",
-    "rpc",
-    ...skills.flatMap((s) => ["--skill", s]),
-    "--append-system-prompt",
-    path.join(root, "docs/point-guard.md"),
+    cli, "--mode", "rpc",
+    "--extension", bundledPackage,
+    "--extension", workflowPackage,
   ];
+  // Explicit legacy custom pu skill remains supported without scanning developer homes.
+  if (env.PI_MOBILE_PU_SKILL) {
+    const skill = path.resolve(env.PI_MOBILE_PU_SKILL);
+    await access(skill);
+    args.push("--skill", skill);
+  }
   if (env.PI_MOBILE_SESSION) args.push("--session", env.PI_MOBILE_SESSION);
   return args;
 }

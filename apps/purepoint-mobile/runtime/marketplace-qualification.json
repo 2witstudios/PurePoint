@@ -1,0 +1,127 @@
+{
+  "qualifiedAt": "2026-10-10",
+  "piVersion": "1.1.0",
+  "nodeVersion": "22.23.3",
+  "scope": "Published integrity-verified tarballs, disposable dependency trees, empty HOME, restricted PATH; native package resolution and real RPC startup/catalog/command/owned teardown. No credentials, user settings edits or desktop permission grants. Real web/browser/desktop actions NOT RUN. No third-party package included or activated.",
+  "candidates": [
+    {
+      "name": "pi-web-access",
+      "version": "0.38.0",
+      "node": "v22.23.3",
+      "pi": "1.1.0",
+      "engines": {
+        "node": ">=22.19.0"
+      },
+      "extensions": [
+        "dist/index.js"
+      ],
+      "skills": [],
+      "catalog": {
+        "active": [
+          "read",
+          "bash",
+          "edit",
+          "write",
+          "web_search",
+          "source_check",
+          "fetch_content",
+          "get_search_content"
+        ],
+        "skills": [],
+        "registeredTools": 15
+      },
+      "extensionErrors": [],
+      "result": "PASS native RPC startup, catalog and command output; real integration actions NOT RUN",
+      "teardown": true,
+      "integrity": "sha512-8AHja5tlOoGlrtmOsB+zy/MpMeE/fdXQd4UDDs7yg6viaElmNOyNJjNUj+LrgMgMA78ct8xLEKlAI7l9rC8DIw==",
+      "tarball": "https://registry.npmjs.org/pi-web-access/-/pi-web-access-0.38.0.tgz"
+    },
+    {
+      "name": "pi-playwright",
+      "version": "0.1.2",
+      "node": "v22.23.3",
+      "pi": "1.1.0",
+      "engines": {
+        "node": ">=20"
+      },
+      "extensions": [],
+      "skills": [
+        "skills/playwright-browser/SKILL.md"
+      ],
+      "catalog": {
+        "active": [
+          "read",
+          "bash",
+          "edit",
+          "write"
+        ],
+        "skills": [
+          "playwright-browser"
+        ],
+        "registeredTools": 10
+      },
+      "extensionErrors": [],
+      "result": "PASS native RPC startup, catalog and command output; real integration actions NOT RUN",
+      "teardown": true,
+      "integrity": "sha512-qEPjJpN0XLGEyURzv9x8Mrp5jMFsxq3lTdii5MeeCIV1WqrCsXY6D0ABjtLE+cgYXJ6aR5C44mXQJJhAe5fKVw==",
+      "tarball": "https://registry.npmjs.org/pi-playwright/-/pi-playwright-0.1.2.tgz"
+    },
+    {
+      "name": "pi-agent-browser-native",
+      "version": "0.9.4",
+      "node": "v22.23.3",
+      "pi": "1.1.0",
+      "engines": {
+        "node": ">=24.21.0"
+      },
+      "extensions": [
+        "dist/extensions/agent-browser/index.js"
+      ],
+      "skills": [],
+      "result": "REJECT: published Node >=24.21.0 exceeds pinned Node22.23.3; not executed",
+      "integrity": "sha512-jIqi9Y0LljmeUUGH88ABk7g6RvjdgAkKKMObiChLPnSOawfLTYwIywhGmoUXMNNdeQbNuvA6WuDdR2WIhwtfaA==",
+      "tarball": "https://registry.npmjs.org/pi-agent-browser-native/-/pi-agent-browser-native-0.9.4.tgz"
+    },
+    {
+      "name": "@amaster.ai/pi-computer-use",
+      "version": "0.1.24",
+      "node": "v22.23.3",
+      "pi": "1.1.0",
+      "engines": null,
+      "extensions": [
+        "dist/index.js"
+      ],
+      "skills": [],
+      "catalog": {
+        "active": [
+          "read",
+          "bash",
+          "edit",
+          "write",
+          "computer_use_tools",
+          "computer_use_list_apps",
+          "computer_use_get_window_state",
+          "computer_use_verify_state",
+          "computer_use_launch_app",
+          "computer_use_click",
+          "computer_use_double_click",
+          "computer_use_right_click",
+          "computer_use_drag",
+          "computer_use_type_text",
+          "computer_use_press_key",
+          "computer_use_hotkey",
+          "computer_use_set_value",
+          "computer_use_scroll",
+          "computer_use_zoom"
+        ],
+        "skills": [],
+        "registeredTools": 69
+      },
+      "extensionErrors": [],
+      "result": "PASS native RPC startup, catalog and command output; real integration actions NOT RUN",
+      "teardown": true,
+      "integrity": "sha512-auIFxAJmj0qijqO0r2cji5s0N2aqDgHcrL39cliKu32fMal2ZxoNhgEoAUu2vA9Q6jiKSzTs+y54QXypHoa/TA==",
+      "tarball": "https://registry.npmjs.org/@amaster.ai/pi-computer-use/-/pi-computer-use-0.1.24.tgz"
+    }
+  ]
+}
