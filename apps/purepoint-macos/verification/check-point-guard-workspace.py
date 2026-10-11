@@ -47,4 +47,9 @@ let package = Package(
         "WorkspaceReconcilerTests.swift", "WorkspaceModelTests.swift"
     ]:
         shutil.copyfile(app / "purepoint-macosTests" / name, tests / name)
+    # Include the production persistence suite that also runs in the app's CI target.
+    app_tests = (app / "purepoint-macosTests/purepoint_macosTests.swift").read_text()
+    persistence_tests = app_tests[app_tests.index("struct GridLayoutPersistenceTests {"):]
+    (tests / "GridLayoutPersistenceTests.swift").write_text(
+        "import Foundation\nimport Testing\n@testable import PurePoint\n" + persistence_tests)
     subprocess.run(["xcrun", "swift", "test", "--package-path", str(package)], check=True)

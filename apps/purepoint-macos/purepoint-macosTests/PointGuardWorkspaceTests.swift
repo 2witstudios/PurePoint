@@ -139,6 +139,66 @@ import Testing
         }
     }
 
+    @Test func copiedProjectRekeysPointGuardBeforeGlobalLookupsAndMutations() throws {
+        try withRegistry { registry, root in
+            let copiedRoot = root + "-copy"
+            defer { registry.forgetProject(copiedRoot); try? FileManager.default.removeItem(atPath: copiedRoot) }
+            var original = Workspace.pointGuard(projectRoot: root)
+            original.split(leafId: 0, axis: .vertical, content: .file(path: nil))
+            original.newTab(leafId: original.focusedLeafId, content: .file(path: root + "/notes.md"))
+            WorkspacePersistence.save([original], projectRoot: root, activeWorkspaceId: original.id)
+            let copiedURL = URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: copiedRoot))
+            try FileManager.default.createDirectory(
+                at: copiedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(
+                atPath: WorkspacePersistence.filePath(projectRoot: root), toPath: copiedURL.path)
+
+            let originalId = registry.ensurePointGuardWorkspace(projectRoot: root)
+            // Reconcile is also a first-load path, before the chat view has appeared.
+            registry.reconcile(projectRoot: copiedRoot, rootAgents: [], worktrees: [])
+            let copiedId = registry.ensurePointGuardWorkspace(projectRoot: copiedRoot)
+            let migrated = try JSONDecoder().decode(
+                PersistedWorkspaceDocument.self, from: Data(contentsOf: copiedURL))
+            #expect(migrated.activeWorkspaceId == copiedId)
+            #expect(migrated.workspaces.map(\.id) == [copiedId])
+            #expect(copiedId == Workspace.pointGuard(projectRoot: copiedRoot).id)
+            #expect(copiedId != originalId)
+            #expect(registry.projectRoot(forWorkspace: originalId) == root)
+            #expect(registry.projectRoot(forWorkspace: copiedId) == copiedRoot)
+            let restored = try #require(registry.workspace(id: copiedId))
+            #expect(restored.root == original.root)
+            #expect(restored.panes == original.panes)
+            #expect(restored.focusedLeafId == original.focusedLeafId)
+            #expect(restored.nextLeafId == original.nextLeafId)
+            #expect(restored.nextSurfaceId == original.nextSurfaceId)
+
+            registry.newTab(
+                workspaceId: copiedId, leafId: restored.focusedLeafId, content: .file(path: copiedRoot + "/copy.md"))
+            #expect(registry.workspace(id: originalId) == original)
+            #expect(registry.workspace(id: copiedId)?.tabCount == original.tabCount + 1)
+            registry.saveAll()
+            #expect(WorkspacePersistence.load(projectRoot: copiedRoot) == [registry.workspace(id: copiedId)!])
+        }
+    }
+
+    @Test func renamedProjectLoadsExistingLayoutWithCurrentProjectId() throws {
+        try withRegistry { registry, root in
+            let renamedRoot = root + "-renamed"
+            defer { registry.forgetProject(renamedRoot); try? FileManager.default.removeItem(atPath: renamedRoot) }
+            var original = Workspace.pointGuard(projectRoot: root)
+            original.newTab(leafId: 0, content: .agent("ag-terminal"))
+            WorkspacePersistence.save([original], projectRoot: root)
+            try FileManager.default.moveItem(atPath: root, toPath: renamedRoot)
+
+            let renamedId = registry.ensurePointGuardWorkspace(projectRoot: renamedRoot)
+            let restored = try #require(registry.workspace(id: renamedId))
+            #expect(renamedId == Workspace.pointGuard(projectRoot: renamedRoot).id)
+            #expect(registry.workspace(id: original.id) == nil)
+            #expect(restored.panes == original.panes)
+            #expect(restored.root == original.root)
+        }
+    }
+
     @Test func worktreeAgentsCannotBeClaimedByPointGuard() {
         var workspace = Workspace.pointGuard(projectRoot: "/tmp/project")
         workspace.newTab(leafId: 0, content: .agent("ag-worktree"))

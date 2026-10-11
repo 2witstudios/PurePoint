@@ -94,7 +94,8 @@ final class WorkspaceRegistry {
         if loadedProjects.insert(projectRoot).inserted, workspacesByProject[projectRoot] == nil {
             workspacesByProject[projectRoot] = WorkspacePersistence.load(projectRoot: projectRoot)
         }
-        if let workspace = workspacesByProject[projectRoot]?.first(where: \.isPointGuard) {
+        let id = Workspace.pointGuardId(projectRoot: projectRoot)
+        if let workspace = workspacesByProject[projectRoot]?.first(where: { $0.id == id }) {
             if !workspace.surfaces.contains(where: { $0.surface.content == .pointGuard }) {
                 mutate(workspace.id) { $0.newTab(leafId: $0.focusedLeafId, content: .pointGuard) }
             }

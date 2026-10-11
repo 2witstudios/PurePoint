@@ -117,9 +117,13 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     /// The Point Guard navigation item owns a root workspace for each open project.
     var isPointGuard: Bool { id.hasPrefix("ws-point-guard:") }
 
+    static func pointGuardId(projectRoot: String) -> String {
+        "ws-point-guard:" + projectRoot
+    }
+
     static func pointGuard(projectRoot: String) -> Workspace {
         Workspace(
-            id: "ws-point-guard:" + projectRoot, container: .projectRoot, root: .leaf(id: 0),
+            id: pointGuardId(projectRoot: projectRoot), container: .projectRoot, root: .leaf(id: 0),
             panes: [0: Pane(tabs: [Surface(id: 0, content: .pointGuard)], activeTabId: 0)],
             focusedLeafId: 0, nextLeafId: 1, nextSurfaceId: 1)
     }

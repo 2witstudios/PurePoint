@@ -413,7 +413,7 @@ struct GridLayoutPersistenceTests {
         let data = try JSONEncoder().encode(persisted)
         let decoded = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
         let workspace = try #require(decoded.workspaces.first)
-        #expect(decoded.version == 3)
+        #expect(decoded.version == PersistedWorkspaceDocument.currentVersion)
         #expect(workspace.id == "ws-owner")
         #expect(workspace.focusedLeafId == 1)
         #expect(workspace.nextSurfaceId == 2)

@@ -175,12 +175,20 @@ nonisolated enum WorkspacePersistence {
         if let data = try? Data(contentsOf: url),
             let document = try? JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
         {
-            return document.workspaces.map(workspace(from:))
+            let restored = document.workspaces.map { workspace(from: $0, projectRoot: projectRoot) }
+            // Copied/renamed project directories keep their layout, but must not publish an
+            // ID belonging to another open project. Persist the new ID for CLI routing too.
+            if zip(document.workspaces, restored).contains(where: { $0.id != $1.id }) {
+                let activeId = zip(document.workspaces, restored)
+                    .first(where: { $0.0.id == document.activeWorkspaceId })?.1.id
+                save(restored, projectRoot: projectRoot, activeWorkspaceId: activeId)
+            }
+            return restored
         }
         return migrateLegacyLayout(projectRoot: projectRoot)
     }
 
-    private static func workspace(from persisted: PersistedWorkspace) -> Workspace {
+    private static func workspace(from persisted: PersistedWorkspace, projectRoot: String) -> Workspace {
         var nextLeafId = persisted.nextLeafId
         var nextSurfaceId = persisted.nextSurfaceId ?? 0
         let filePaths = Dictionary(
@@ -190,7 +198,8 @@ nonisolated enum WorkspacePersistence {
             from: persisted.tree, panes: &panes, legacyFilePaths: filePaths,
             nextLeafId: &nextLeafId, nextSurfaceId: &nextSurfaceId)
         return Workspace(
-            id: persisted.id,
+            id: persisted.id.hasPrefix("ws-point-guard:")
+                ? Workspace.pointGuardId(projectRoot: projectRoot) : persisted.id,
             container: persisted.worktreeId.map { .worktree($0) } ?? .projectRoot,
             root: root,
             panes: panes,
