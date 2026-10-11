@@ -14,24 +14,22 @@ struct MessageStreamView: View {
     }
 
     private var userMessage: some View {
-        HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.accentColor)
-                .frame(width: PurePointTheme.accentBarWidth)
+        HStack {
+            Spacer(minLength: 48)
             VStack(alignment: .leading, spacing: 4) {
-                Text("You")
-                    .font(PurePointTheme.chatLabelFont)
-                    .foregroundStyle(.secondary)
                 ForEach(message.contentBlocks) { block in
                     if case .text(_, let text) = block {
                         Text(text)
-                            .font(PurePointTheme.chatFont)
+                            .font(PurePointTheme.chatFont).lineSpacing(3)
                             .textSelection(.enabled)
                     }
                 }
             }
+            .padding(.horizontal, 17).padding(.vertical, 13)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 22))
+            .accessibilityLabel("Your message")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private var assistantMessage: some View {

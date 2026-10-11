@@ -80,6 +80,10 @@ struct SidebarFooter: View {
     }
 
     private func showCommandPalette() {
+        if selection == .nav(.dashboard) || appState.registry?.activeWorkspace?.isPointGuard == true {
+            appState.newPointGuardTab()
+            return
+        }
         guard let project = activeProject else { return }
         let sel = selection
         let hub = appState.agentsHubState

@@ -37,7 +37,10 @@ enum PurePointTheme {
     static let smallFont = Font.system(size: 11)
 
     // MARK: - Chat Stream
-    static let turnSpacing: CGFloat = 20
+    static let chatContentWidth: CGFloat = 720
+    static let chatHorizontalPadding: CGFloat = 24
+    static let composerCornerRadius: CGFloat = 24
+    static let turnSpacing: CGFloat = 24
     static let inlineSpacing: CGFloat = 4
     static let accentBarWidth: CGFloat = 2
     static let chatFont = Font.system(size: 14)

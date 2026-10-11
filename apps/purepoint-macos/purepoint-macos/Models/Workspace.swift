@@ -16,6 +16,8 @@ nonisolated enum WorkspaceContainer: Equatable, Hashable, Sendable {
 nonisolated enum SurfaceContent: Equatable, Sendable {
     /// A tab waiting for the palette: spawn an agent, open a file, or stay empty.
     case empty
+    /// The shared Point Guard chat, retained by AppState while this tab is hidden.
+    case pointGuard
     case agent(String)
     /// The file navigator/editor. `path` is the absolute file to show; `nil` opens the navigator alone.
     case file(path: String?)
@@ -112,6 +114,28 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
         )
     }
 
+    /// The Point Guard navigation item owns a root workspace for each open project.
+    var isPointGuard: Bool { id.hasPrefix("ws-point-guard:") }
+
+    static func pointGuard(projectRoot: String) -> Workspace {
+        Workspace(
+            id: "ws-point-guard:" + projectRoot, container: .projectRoot, root: .leaf(id: 0),
+            panes: [0: Pane(tabs: [Surface(id: 0, content: .pointGuard)], activeTabId: 0)],
+            focusedLeafId: 0, nextLeafId: 1, nextSurfaceId: 1)
+    }
+
+    /// Closing the final tab returns the built-in workspace to chat. Keep counters growing
+    /// so an outstanding spawn can never bind to a newly created tab with a recycled ID.
+    mutating func resetToPointGuard() {
+        let leafId = nextLeafId
+        nextLeafId += 1
+        root = .leaf(id: leafId)
+        let surface = makeSurface(.pointGuard)
+        panes = [leafId: Pane(tabs: [surface], activeTabId: surface.id)]
+        focusedLeafId = leafId
+        container = .projectRoot
+    }
+
     // MARK: - Queries
 
     var paneCount: Int { root.leafCount }
@@ -143,9 +167,10 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
     /// none). Such a workspace is a ghost row and goes away — unless a spawn is pending into
     /// one of its empty tabs, which the caller knows and this type does not.
     var isGhost: Bool {
-        !surfaces.contains { surface in
+        if isPointGuard { return false }
+        return !surfaces.contains { surface in
             switch surface.surface.content {
-            case .agent, .file: true
+            case .agent, .file, .pointGuard: true
             case .empty: false
             }
         }
@@ -352,6 +377,7 @@ nonisolated struct Workspace: Identifiable, Equatable, Sendable {
 
     /// Re-establish internal consistency after any structural edit.
     mutating func normalize() {
+        if isPointGuard { container = .projectRoot }
         let ids = root.allLeafIds
         let live = Set(ids)
         panes = panes.filter { live.contains($0.key) }
@@ -437,14 +463,21 @@ nonisolated enum WorkspaceReconciler {
             var staleSurfaceIds = Set<Int>()
             for (_, surface) in workspace.surfaces {
                 guard let agentId = surface.content.agentId else { continue }
-                if containerByAgent[agentId] == nil || !claimed.insert(agentId).inserted {
+                if containerByAgent[agentId] == nil
+                    || (workspace.isPointGuard && containerByAgent[agentId] != .projectRoot)
+                    || !claimed.insert(agentId).inserted
+                {
                     staleSurfaceIds.insert(surface.id)
                 }
             }
 
             if !staleSurfaceIds.isEmpty {
-                guard workspace.removeSurfaces(where: { staleSurfaceIds.contains($0.id) }) else {
-                    continue  // every pane went away — the workspace goes with it
+                if !workspace.removeSurfaces(where: { staleSurfaceIds.contains($0.id) }) {
+                    if workspace.isPointGuard {
+                        workspace.resetToPointGuard()
+                    } else {
+                        continue  // every pane went away — the workspace goes with it
+                    }
                 }
             }
 

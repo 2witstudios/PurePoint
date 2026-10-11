@@ -87,6 +87,25 @@ final class WorkspaceRegistry {
         activeWorkspaceId.flatMap { workspace(id: $0) }
     }
 
+    /// Uses the same registry and persistence as agent workspaces. The navigation item is
+    /// this workspace's sidebar entry, so it does not also appear under the project.
+    @discardableResult
+    func ensurePointGuardWorkspace(projectRoot: String) -> String {
+        if loadedProjects.insert(projectRoot).inserted, workspacesByProject[projectRoot] == nil {
+            workspacesByProject[projectRoot] = WorkspacePersistence.load(projectRoot: projectRoot)
+        }
+        if let workspace = workspacesByProject[projectRoot]?.first(where: \.isPointGuard) {
+            if !workspace.surfaces.contains(where: { $0.surface.content == .pointGuard }) {
+                mutate(workspace.id) { $0.newTab(leafId: $0.focusedLeafId, content: .pointGuard) }
+            }
+            return workspace.id
+        }
+        let workspace = Workspace.pointGuard(projectRoot: projectRoot)
+        workspacesByProject[projectRoot, default: []].append(workspace)
+        scheduleSave(projectRoot: projectRoot)
+        return workspace.id
+    }
+
     // MARK: - Reconcile
 
     /// Fold a project's manifest into the stored layout and publish the canonical result.
@@ -215,7 +234,7 @@ final class WorkspaceRegistry {
     /// with no second click. Which tab each pane shows is left alone.
     func activate(workspaceId: String) {
         activeWorkspaceId = workspaceId
-        guard let target = workspace(id: workspaceId), target.focusedAgentId == nil,
+        guard let target = workspace(id: workspaceId), !target.isPointGuard, target.focusedAgentId == nil,
             let leafId = target.root.allLeafIds.first(where: { target.panes[$0]?.activeTab?.content.agentId != nil })
         else { return }
         setFocus(workspaceId: workspaceId, leafId: leafId)
@@ -288,6 +307,13 @@ final class WorkspaceRegistry {
             target.leafId(ofSurface: surfaceId) != nil
         else { return }
 
+        if target.isPointGuard,
+            let liveAgent = liveByProject[projectRoot]?.first(where: { $0.id == agentId }),
+            liveAgent.container != .projectRoot
+        {
+            return
+        }
+
         var stored: [Workspace] = []
         for var workspace in list {
             if workspace.id == workspaceId {
@@ -322,6 +348,9 @@ final class WorkspaceRegistry {
         let killed = body(&list[index])
         for surfaceId in surfaceIds {
             dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, surfaceId: surfaceId)
+        }
+        if list[index].isPointGuard && list[index].panes.isEmpty {
+            list[index].resetToPointGuard()
         }
         if list[index].isGhost, !reservedWorkspaceIds(projectRoot: projectRoot).contains(workspaceId) {
             list.remove(at: index)

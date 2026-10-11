@@ -10,91 +10,43 @@ struct ToolCallCardView: View {
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let input, !input.isEmpty { detail(input, label: "Input") }
+                if let output, !output.isEmpty { detail(output, label: "Output") }
+                if (input ?? "").isEmpty && (output ?? "").isEmpty {
+                    Text("No output").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: toolIcon)
-                        .font(.system(size: 12))
-                        .foregroundStyle(iconColor)
-                        .frame(width: 16)
-
-                    if let name {
-                        Text(name)
-                            .font(.system(size: 12, weight: .medium))
-                    } else {
-                        Text("Result")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-
-                    Spacer()
-
-                    statusIndicator
-                }
-                .padding(.vertical, 6)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let input {
-                        Text(input)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(10)
-                            .textSelection(.enabled)
-                    }
-                    if let output {
-                        Text(output)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(isError ? .red : .secondary)
-                            .lineLimit(20)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(.leading, 24)
-            }
+            }.padding(.top, 8).padding(.bottom, 4)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(name ?? "Result").font(.system(size: 13, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(statusLabel).font(.system(size: 11)).foregroundStyle(.secondary)
+            }.foregroundStyle(isError || status == .failed ? Color.red : Color.secondary)
         }
+        .padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityHint("Expand to inspect tool input and output")
     }
 
-    private var toolIcon: String {
-        guard let name else { return "arrow.turn.down.left" }
-        switch name {
-        case "Bash": return "terminal"
-        case "Read": return "doc.text"
-        case "Edit", "Write": return "pencil"
-        case "Glob": return "magnifyingglass"
-        case "Grep": return "text.magnifyingglass"
-        case "Agent": return "person.2"
-        default: return "wrench"
-        }
-    }
-
-    private var iconColor: Color {
+    private var statusLabel: String {
+        if isError { return "Failed" }
         switch status {
-        case .running: .blue
-        case .completed: .green
-        case .failed: .red
+        case .running: return "Running"
+        case .completed: return "Done"
+        case .failed: return "Failed"
         }
     }
 
-    @ViewBuilder
-    private var statusIndicator: some View {
-        switch status {
-        case .running:
-            ProgressView()
-                .controlSize(.mini)
-        case .completed:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.green)
-        case .failed:
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.red)
+    private func detail(_ text: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 11)).foregroundStyle(.secondary)
+            ScrollView(.horizontal) {
+                Text(text).font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(label == "Output" && isError ? Color.red : Color.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 }

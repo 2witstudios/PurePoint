@@ -37,6 +37,9 @@ struct PaneCellView: View {
                 Color(nsColor: TerminalTheme.background)
                     .onTapGesture(perform: focus)
             }
+        case .pointGuard:
+            PointGuardChatSurfaceView(isFocused: isFocused)
+                .simultaneousGesture(TapGesture().onEnded { _ in focus() })
         case .file(let path):
             if let rootPath = fileRootPath, let surface = activeTab {
                 FilePaneView(
@@ -135,13 +138,13 @@ private struct EmptyTabView: View {
             else { return }
 
             switch result {
-            case .spawnBuiltIn(let variant, let prompt, _):
+            case .spawnBuiltIn(let variant, let prompt, let name):
                 project.spawnAgentForSurface(
-                    agent: variant.id, prompt: prompt ?? "", workspaceId: wsId, surfaceId: sid)
+                    agent: variant.id, prompt: prompt ?? "", workspaceId: wsId, surfaceId: sid, name: name)
             case .spawnAgentDef(let def, let prompt):
                 project.spawnAgentForSurface(
                     agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "",
-                    workspaceId: wsId, surfaceId: sid)
+                    workspaceId: wsId, surfaceId: sid, command: def.command)
             case .runSwarm, .createWorktree:
                 break
             case .openFilePane(let path):

@@ -22,6 +22,7 @@ import Testing
             case .agent(let id): id
             case .file(let path): path ?? "files"
             case .empty: "+"
+            case .pointGuard: "Point Guard"
             }
         } ?? []
     }
@@ -189,14 +190,16 @@ import Testing
 
     @Test func moveBeforeEarlierTabInSamePane() {
         var workspace = stacked()
-        workspace.moveTab(workspace.location(ofAgent: "C")!.surfaceId, before: workspace.location(ofAgent: "A")!.surfaceId)
+        workspace.moveTab(
+            workspace.location(ofAgent: "C")!.surfaceId, before: workspace.location(ofAgent: "A")!.surfaceId)
         #expect(labels(workspace, 0) == ["C", "A", "B"])
     }
 
     @Test func moveBeforeTabInAnotherPane() {
         var workspace = stacked()
         workspace.split(leafId: 0, axis: .vertical, content: .agent("D"))
-        workspace.moveTab(workspace.location(ofAgent: "B")!.surfaceId, before: workspace.location(ofAgent: "D")!.surfaceId)
+        workspace.moveTab(
+            workspace.location(ofAgent: "B")!.surfaceId, before: workspace.location(ofAgent: "D")!.surfaceId)
         #expect(labels(workspace, 0) == ["A", "C"])
         #expect(labels(workspace, 1) == ["B", "D"])
     }
@@ -284,7 +287,8 @@ import Testing
             id: "ws", container: .projectRoot,
             root: .split(axis: .vertical, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1)),
             panes: [
-                0: Pane(tabs: [Surface(id: 3, content: .agent("A")), Surface(id: 3, content: .agent("B"))], activeTabId: 3),
+                0: Pane(
+                    tabs: [Surface(id: 3, content: .agent("A")), Surface(id: 3, content: .agent("B"))], activeTabId: 3),
                 7: Pane(tabs: [Surface(id: 9, content: .agent("Z"))], activeTabId: 9),
             ],
             focusedLeafId: 5, nextLeafId: 0)

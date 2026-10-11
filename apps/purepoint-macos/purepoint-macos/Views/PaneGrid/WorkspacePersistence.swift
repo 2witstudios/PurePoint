@@ -40,7 +40,7 @@ nonisolated final class GridLayoutNode: Codable, Sendable {
     }
 }
 
-/// One tab as written to disk. `kind` is `agent`, `file` or `empty`; an unknown kind
+/// One tab as written to disk. `kind` is `agent`, `file`, `point_guard` or `empty`; an unknown kind
 /// (a newer app's file) loads as an empty tab rather than failing the whole document.
 nonisolated struct PersistedSurface: Codable, Sendable, Equatable {
     let id: Int
@@ -52,6 +52,7 @@ nonisolated struct PersistedSurface: Codable, Sendable, Equatable {
         id = surface.id
         switch surface.content {
         case .empty: (kind, agentId, path) = ("empty", nil, nil)
+        case .pointGuard: (kind, agentId, path) = ("point_guard", nil, nil)
         case .agent(let agentId): (kind, self.agentId, path) = ("agent", agentId, nil)
         case .file(let path): (kind, agentId, self.path) = ("file", nil, path)
         }
@@ -61,6 +62,7 @@ nonisolated struct PersistedSurface: Codable, Sendable, Equatable {
         switch kind {
         case "agent": Surface(id: id, content: agentId.map { .agent($0) } ?? .empty)
         case "file": Surface(id: id, content: .file(path: path))
+        case "point_guard": Surface(id: id, content: .pointGuard)
         default: Surface(id: id, content: .empty)
         }
     }

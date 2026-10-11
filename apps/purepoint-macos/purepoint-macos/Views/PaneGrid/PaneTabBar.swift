@@ -37,7 +37,9 @@ struct PaneTabBar: View {
                 guard let surfaceId = items.lazy.compactMap(TabDragPayload.surfaceId(from:)).first else { return false }
                 registry.moveTab(workspaceId: workspaceId, surfaceId: surfaceId, toLeaf: leafId)
                 return true
-            } isTargeted: { isDropTargeted = $0 }
+            } isTargeted: {
+                isDropTargeted = $0
+            }
 
             Divider()
             actions
@@ -50,6 +52,9 @@ struct PaneTabBar: View {
 
     private var actions: some View {
         HStack(spacing: 2) {
+            if pane?.activeTab?.content == .pointGuard {
+                PointGuardPaneControls(model: appState.pointGuardChat)
+            }
             TabBarButton(icon: "plus", help: "New Tab") { newTab() }
             if let workspace, workspace.root.canSplit(axis: .vertical) {
                 TabBarButton(icon: "rectangle.split.2x1", help: "Split Right") { split(.vertical) }
@@ -144,7 +149,9 @@ private struct PaneTab: View {
             else { return false }
             registry.moveTab(workspaceId: workspaceId, surfaceId: moved, before: surface.id)
             return true
-        } isTargeted: { isDropTargeted = $0 }
+        } isTargeted: {
+            isDropTargeted = $0
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel(helpText)
@@ -165,6 +172,8 @@ private struct PaneTab: View {
             } else {
                 Image(systemName: "sparkle").foregroundStyle(Color(nsColor: .systemGreen))
             }
+        case .pointGuard:
+            Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
         case .file:
             Image(systemName: "doc.text").foregroundStyle(.secondary)
         case .empty:
@@ -196,6 +205,8 @@ private struct PaneTab: View {
         switch surface.content {
         case .agent(let agentId):
             return agent?.displayName ?? agentId
+        case .pointGuard:
+            return "Point Guard"
         case .file(let path):
             return path.map { ($0 as NSString).lastPathComponent } ?? "Files"
         case .empty:
