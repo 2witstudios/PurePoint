@@ -204,7 +204,7 @@ private enum GitReviewChecks {
         """, "prs.json", at: path)
         let patch = "diff --git a/remote.txt b/remote.txt\nnew file mode 100644\n--- /dev/null\n+++ b/remote.txt\n@@ -0,0 +1 @@\n+remote first\n"
         try write(patch, "pr.patch", at: path)
-        let state = DiffState(gitService: GitService(ghPath: fake))
+        let state = DiffState(gitService: GitService(ghPath: fake), observeChanges: false)
         let worktree = WorktreeModel(id: "test", name: "test", path: path, branch: "feature", status: "active", agents: [], baseBranch: "main")
         state.loadForWorktree(worktree)
         try await settle(state)
@@ -255,7 +255,7 @@ private enum GitReviewChecks {
     @MainActor static func emptyRefreshChecks() async throws {
         let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
         try write("root\n", "root.txt", at: path); try commit("root", at: path)
-        let state = DiffState(gitService: GitService(ghPath: "/usr/bin/false"))
+        let state = DiffState(gitService: GitService(ghPath: "/usr/bin/false"), observeChanges: false)
         defer { state.stopWatching() }
         state.loadForProject(root: path)
         try require(state.isInitiallyLoadingBranch && state.isInitiallyLoadingUnstaged, "new project shows initial loading")
