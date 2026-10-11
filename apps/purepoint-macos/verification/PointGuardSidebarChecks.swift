@@ -6,11 +6,13 @@ enum PaneSplitNode { enum Axis { case vertical, horizontal } }
 // chat model, PointGuardView, conversation layout and pane splitter remain real.
 @MainActor @Observable final class AppState {
     var showSettings = false
+    var pointGuardRoot: String? = "/fixture"
     var activeProjectRoot: String? = "/fixture"
     var projects = [ProjectFixture(projectRoot: "/fixture")]
     let pointGuardChat: PiChatModel
     let pointGuardService = ServiceFixture()
     init(chat: PiChatModel) { pointGuardChat = chat }
+    func activatePointGuardWorkspace() {}
     func projectState(forRoot root: String) -> ProjectFixture? { projects.first { $0.projectRoot == root } }
 }
 struct ProjectFixture { let projectRoot: String }
@@ -261,6 +263,14 @@ struct PaneGridView: View {
         precondition(!defaults.bool(forKey: preference), "Hidden chat tabs handled the history shortcut")
         appState.activeProjectRoot = nil
         appState.projects = []
+        host.rootView = AnyView(
+            ChatFixture(probes: probes, focusLeft: true).environment(appState).defaultAppStorage(defaults))
+        settle()
+        NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
+        settle()
+        precondition(defaults.bool(forKey: preference), "Folder-backed chat without a selected project did not handle history shortcut")
+        defaults.set(false, forKey: preference)
+        appState.pointGuardRoot = nil
         settle()
         NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
         settle()

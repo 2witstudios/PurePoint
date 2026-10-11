@@ -7,6 +7,7 @@ import tempfile
 
 app = Path(__file__).resolve().parents[1]
 source = app / "purepoint-macos"
+markdown = app.parent / "shared/ChatMarkdown"
 with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder:
     executable = Path(folder) / "checks"
     subprocess.run([
@@ -17,6 +18,8 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(source / "Services/PiAttachmentImport.swift"),
         str(source / "Theme/PurePointTheme.swift"),
         str(source / "Views/DaemonErrorBanner.swift"),
+        str(markdown / "ChatMarkdown.swift"),
+        str(markdown / "ChatMarkdownView.swift"),
         str(source / "Views/Chat/MarkdownTextView.swift"),
         str(source / "Views/Chat/CodeBlockView.swift"),
         str(source / "Views/Chat/PiPointGuardChatView.swift"),
