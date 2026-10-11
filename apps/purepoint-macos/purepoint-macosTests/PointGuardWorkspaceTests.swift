@@ -95,10 +95,35 @@ import Testing
             registry.openFile(workspaceId: id, surfaceId: file, path: root + "/notes.md")
             registry.activeWorkspaceId = id
             registry.saveAll()
+            let data = try Data(contentsOf: URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: root)))
+            let document = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
+            // Version 3 builds must recognize this as newer and leave it untouched.
+            #expect(document.version == 4)
             let restored = WorkspacePersistence.load(projectRoot: root)
             #expect(restored == [registry.workspace(id: id)!])
             #expect(restored.first?.isPointGuard == true)
             #expect(WorkspaceReconciler.reconcile(stored: restored, live: []) == restored)
+        }
+    }
+
+    @Test func versionThreeTabLayoutsStillLoadAndUpgradeWithoutLosingIds() throws {
+        try withRegistry { _, root in
+            var original = Workspace.adopting(agentId: "ag-existing", container: .projectRoot)
+            original.newTab(leafId: 0, content: .file(path: root + "/notes.md"))
+            original.split(leafId: 0, axis: .vertical, content: .agent("ag-sibling"))
+            let url = URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: root))
+            WorkspacePersistence.save([original], projectRoot: root, activeWorkspaceId: original.id)
+            var document = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+            document["version"] = 3
+            try JSONSerialization.data(withJSONObject: document).write(to: url)
+
+            let restored = WorkspacePersistence.load(projectRoot: root)
+            #expect(restored == [original])
+            WorkspacePersistence.save(restored, projectRoot: root, activeWorkspaceId: original.id)
+            let upgraded = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: Data(contentsOf: url))
+            #expect(upgraded.version == 4)
+            #expect(upgraded.activeWorkspaceId == original.id)
+            #expect(WorkspacePersistence.load(projectRoot: root) == [original])
         }
     }
 

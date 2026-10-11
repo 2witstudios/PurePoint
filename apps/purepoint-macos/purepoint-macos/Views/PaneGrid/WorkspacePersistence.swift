@@ -91,7 +91,8 @@ nonisolated struct PersistedFilePane: Codable, Sendable, Equatable {
 /// The whole per-project layout document. This file is the only place pane grouping
 /// is stored — there is no second copy to drift from.
 nonisolated struct PersistedWorkspaceDocument: Codable, Sendable {
-    static let currentVersion = 3
+    // Version 4 adds Point Guard tabs. Older version 3 builds must not overwrite them.
+    static let currentVersion = 4
 
     let version: Int
     let workspaces: [PersistedWorkspace]
