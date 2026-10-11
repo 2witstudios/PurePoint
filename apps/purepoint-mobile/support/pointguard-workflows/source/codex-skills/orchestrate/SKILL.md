@@ -34,7 +34,7 @@ reviewer uses them. Branch feedback informs development and cannot grant main
 acceptance. Builders resolve findings and obtain independent delta review without
 round limits or owner relays. Main requires completed transitions, contract and
 security reconciliation, migration integrity and independent exact-head review
-under required checks. Autonomous agents never merge directly.
+under required checks. Autonomous agents never merge directly into main/default/protected release targets.
 
 Preserve production identity, secret, deployment and data sign-offs. Escalate
 changed product intent, scope cuts, real conflicts or protected actions, and
@@ -42,3 +42,29 @@ continue unaffected work. Report final delivery to the original spawning parent;
 do not require routine acknowledgment or duplicate every task update in channels.
 Never clean/kill another session without authorization. Context exhaustion means
 record progress and continue/delegate remaining scope, not abandon the outcome.
+
+## Receiving branch authority
+
+Within owner-authorized work, owners, point guards, root/main-level agents and
+worktree agents may merge producers into their own allocated unprotected
+non-main receiving branch. Root agents use an isolated receiving checkout, never
+the parent-main checkout. Coordinate actual writers/resources; ordinary merges
+and conflict resolution are allowed, never another agent's checkout/branch,
+force-push, history rewrite, reset or dirty-work loss. Resolve symbolic default
+and live branch protection/rulesets before acting; main, default and protected
+release targets retain acceptance/human protections, other protected targets
+follow their policy, and unknown protection facts refuse integration. Before PR
+merge automation, re-read live repository/base/head and verify the candidate
+and intended delivery target: the allocated receiving branch for producer
+integration, or the repository's resolved default branch for main acceptance.
+Compare the live base with that selected target; refuse mismatches or changed
+targets.
+
+Non-main integration needs no global Done, separate producer approval, green
+whole-app CI or per-step root permission. Pin source/integration SHAs and gaps,
+record failed/deferred checks honestly, and preserve security/tests. One
+short-lived integration branch and umbrella PR may compose children before they
+are main-ready. Integration grants neither Done nor main acceptance. Autonomous
+agents never merge directly into main/default/protected release targets; request
+main auto-merge only under the live required review-record ruleset and applicable
+checks, otherwise report ready for owner merge. Production retains human gates.

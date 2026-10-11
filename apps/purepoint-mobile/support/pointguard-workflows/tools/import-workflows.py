@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 
-PIN = 'a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f'
+PIN = 'a12cecee28e8c22c250da6c30aecbdcad2f38fe5'
 ROOT = Path(__file__).resolve().parents[1]
 
 

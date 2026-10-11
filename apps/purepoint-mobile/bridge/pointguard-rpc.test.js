@@ -143,7 +143,7 @@ test(
     const details = JSON.parse(info.content);
     assert.equal(
       details.workflowPackage.provenance.commit,
-      "a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f",
+      "a12cecee28e8c22c250da6c30aecbdcad2f38fe5",
     );
     assert.equal(details.dependencies.pagespace, null);
     assert.equal(details.skills.length, 17);

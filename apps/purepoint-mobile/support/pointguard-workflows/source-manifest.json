@@ -1,8 +1,12 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/2witstudios/pointguard",
-  "commit": "a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f",
+  "commit": "a12cecee28e8c22c250da6c30aecbdcad2f38fe5",
   "files": {
+    ".gitignore": {
+      "sha256": "b9fe433193e704dc4499a6474b6779f97d66546b68ebb33225eeb6cb3e88697f",
+      "mode": "644"
+    },
     "LICENSE": {
       "sha256": "b71f362baf2151efe53352d11e19eb83230fa9d311a2fa636590e2f53380d6a1",
       "mode": "644"
@@ -16,7 +20,7 @@
       "mode": "644"
     },
     "codex-skills/orchestrate/SKILL.md": {
-      "sha256": "fe518a433e2c4166f8faf4d9005f19011f0072e93623ec0f6193e5756dab0a2e",
+      "sha256": "6993032575aef11ffa64f610f6869aa2b1e6c57e5210776bb31961d4c024eb0d",
       "mode": "644"
     },
     "codex-skills/plan/SKILL.md": {
@@ -44,7 +48,7 @@
       "mode": "644"
     },
     "skills/handoff/SKILL.md": {
-      "sha256": "32371d2d659e594aa7ee397ce5388420dd115f1aa38bdbfe428adfe89f63508f",
+      "sha256": "9d010d31198cc4ee3df307b60780e21a497de5e4eea3e9b94237f9ac47640f6d",
       "mode": "644"
     },
     "skills/pagespace-canvas-websites/SKILL.md": {
@@ -76,11 +80,11 @@
       "mode": "644"
     },
     "skills/pr/SKILL.md": {
-      "sha256": "2204b0ac23225b4c0e7b3926b5508a9c0da31f7c12cc62685c4c709875926551",
+      "sha256": "3e39807430b4a2c0cb13d1e09a119b45c79bc8e0db5f56627f4a017877b39f9a",
       "mode": "644"
     },
     "skills/review/SKILL.md": {
-      "sha256": "020ac2766b5d922dea08d28fa6412cf4a8ff1a21b6aa1f6b559a425eb05f69aa",
+      "sha256": "517f9e58362e2a403a3f28727ec914ce7904ef1193c16769bc9f539aec7d9160",
       "mode": "644"
     },
     "skills/review/references/review-example.md": {
@@ -92,7 +96,7 @@
       "mode": "644"
     },
     "skills/task/SKILL.md": {
-      "sha256": "a08ba2b3bf7e9d13aec16208413d03c6959e6fb4bf2eb5647cab995d998886e4",
+      "sha256": "bcc4d4d07b4dfff1215807e4b0e10df3bd4dd8aa1a74e1d710fab8e692c11fb9",
       "mode": "644"
     },
     "skills/triage/README.md": {
@@ -100,7 +104,7 @@
       "mode": "644"
     },
     "skills/triage/SKILL.md": {
-      "sha256": "192b6ca5a989c315499c793d54e9f52c9097bbb0c2073819164af3045f1f6dae",
+      "sha256": "a47c95275064e053181c2174dd6a19995defe2928141b58bfac59f36d62c866b",
       "mode": "644"
     }
   }

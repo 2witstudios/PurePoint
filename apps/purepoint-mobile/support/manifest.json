@@ -5,7 +5,7 @@
     "pu": "purepoint/pu skill 0.1.0",
     "pu-cli": "PurePoint CLI skill reference 2026-10-10",
     "instructions": "PGSET-SOUL-1",
-    "pointguard-workflows": "pointguard a130ad906a0cac5e9183e5b9d0bf4b0b78f8921f"
+    "pointguard-workflows": "pointguard a12cecee28e8c22c250da6c30aecbdcad2f38fe5"
   },
   "files": [
     "pu/SKILL.md",
