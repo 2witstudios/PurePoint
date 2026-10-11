@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001; };
+		BB1122334455667788990000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000; };
 		FB0A00012F60000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00022F60000000000001 /* SwiftTerm */; };
 		FB0A00062F60000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00072F60000000000002 /* Sparkle */; };
 		FB57075A2F6834CC0077135F /* TreeSitterPHP in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707592F6834CC0077135F /* TreeSitterPHP */; };
@@ -51,6 +53,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AA1122334455667788990001 /* ChatMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdownView.swift; path = ../shared/ChatMarkdown/ChatMarkdownView.swift; sourceTree = SOURCE_ROOT; };
+		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
 		FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "purepoint-macos.app"; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFC72F53F1FE00F8E0A1 /* purepoint-macosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFD12F53F1FE00F8E0A1 /* purepoint-macosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -126,6 +130,8 @@
 		FBC7CFB12F53F1FD00F8E0A1 = {
 			isa = PBXGroup;
 			children = (
+				AA1122334455667788990001 /* ChatMarkdownView.swift */,
+				AA1122334455667788990000 /* ChatMarkdown.swift */,
 				FBC7CFBC2F53F1FD00F8E0A1 /* purepoint-macos */,
 				FBC7CFCA2F53F1FE00F8E0A1 /* purepoint-macosTests */,
 				FBC7CFD42F53F1FE00F8E0A1 /* purepoint-macosUITests */,
@@ -370,6 +376,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */,
+				BB1122334455667788990000 /* ChatMarkdown.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

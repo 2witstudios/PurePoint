@@ -9,7 +9,7 @@ from pathlib import Path
 
 def components(paths):
     shared = any(
-        path in {".github/workflows/macos.yml", ".github/workflows/release-proof.yml", ".github/workflows/release.yml"} or path.startswith(".github/scripts/")
+        path in {".github/workflows/macos.yml", ".github/workflows/release-proof.yml", ".github/workflows/release.yml"} or path.startswith((".github/scripts/", "apps/shared/ChatMarkdown/"))
         for path in paths
     )
     packaged_rust = any(

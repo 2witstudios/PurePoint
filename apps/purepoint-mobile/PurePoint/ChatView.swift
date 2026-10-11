@@ -19,6 +19,9 @@ struct ChatView: View {
     @State private var attachmentSelection = 0
     @State private var presentedDialog: ExtensionDialog?
     @State private var following = true
+    @State private var draggingTranscript = false
+    @State private var transcriptBottom: CGFloat = 0
+    @State private var viewportBottom: CGFloat = 0
     @FocusState private var composerFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -88,7 +91,7 @@ struct ChatView: View {
             }
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
             .onAppear { LaunchLog.logger.notice("Chat view appeared") }
-            .task { if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
+            .task { guard !model.demo else { return }; if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
             .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
             .onChange(of: selectedPhoto) { _, item in
                 guard let item else { return }
@@ -187,10 +190,43 @@ struct ChatView: View {
                         ForEach(model.transcriptRows) { row in TranscriptRowView(row: row).equatable() }
                         if model.busy { HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Working…").font(.callout).foregroundStyle(.secondary) }.accessibilityElement(children: .combine) }
                         ForEach(Array((model.snapshot?.notices ?? []).enumerated()), id: \.offset) { _, notice in Text(notice).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
-                        Color.clear.frame(height: 1).id("bottom").onAppear { following = true }.onDisappear { following = false }
-                    }.padding(.horizontal, 20).padding(.vertical, 24)
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(GeometryReader { geometry in
+                                Color.clear.preference(key: TranscriptBottomKey.self, value: geometry.frame(in: .global).maxY)
+                            })
+                    }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.vertical, 24)
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: TranscriptHeightKey.self, value: geometry.size.height)
+                        })
+                }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: TranscriptViewportKey.self, value: geometry.frame(in: .global).maxY)
+                })
+                .onPreferenceChange(TranscriptViewportKey.self) { bottom in
+                    viewportBottom = bottom
+                }
+                .onPreferenceChange(TranscriptBottomKey.self) { bottom in
+                    guard bottom != 0 else { return } // LazyVStack may omit the offscreen sentinel.
+                    let previousBottom = transcriptBottom
+                    transcriptBottom = bottom
+                    // Resume only when scrolling back to the end, not while a flick
+                    // away from the end is still decelerating after DragGesture ends.
+                    if !draggingTranscript && bottom < previousBottom && bottom <= viewportBottom + 1 { following = true }
+                }
+                .onPreferenceChange(TranscriptHeightKey.self) { _ in
+                    // Keep following when parsed Markdown changes the reply's height.
+                    if following && !draggingTranscript { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 .contentShape(Rectangle())
+                .simultaneousGesture(DragGesture().onChanged { value in
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                    draggingTranscript = true; following = false
+                }.onEnded { value in
+                    guard draggingTranscript else { return }
+                    draggingTranscript = false
+                    // A slow drag back to the end may have no later geometry event.
+                    if value.translation.height < 0 && transcriptBottom != 0 && transcriptBottom <= viewportBottom + 1 { following = true }
+                })
                 .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
                 .scrollDismissesKeyboard(.interactively)
                 .accessibilityAction(named: "Dismiss keyboard") { composerFocused = false }
@@ -301,29 +337,8 @@ struct MessageView: View {
 }
 struct RichText: View, Equatable {
     let text: String
-    @State private var rendered: [RenderedMarkdownBlock]?
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if rendered == nil { Text(text).font(.body).lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-            ForEach(Array((rendered ?? []).enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .prose(let prose): Text(prose).font(.body).lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                case .code(let language, let code):
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack { Text(language.isEmpty ? "Code" : language).font(.caption).foregroundStyle(.secondary); Spacer(); Button { UIPasteboard.general.string = code; UIAccessibility.post(notification: .announcement, argument: "Code copied") } label: { Label("Copy", systemImage: "doc.on.doc").font(.caption) }.accessibilityLabel("Copy code") }
-                        ScrollView(.horizontal) { Text(code).font(.system(.callout, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: true, vertical: false) }
-                    }.padding(14).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-                }
-            }
-        }
-        .task(id: text) {
-            let source = text
-            let blocks = await Task.detached(priority: .userInitiated) { MarkdownBlocks.render(source) }.value
-            guard !Task.isCancelled else { return }
-            rendered = blocks
-        }
-    }
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
+    var body: some View { ChatMarkdownView(text: text).equatable() }
 }
 struct ToolView: View {
     let tool: ToolActivity
@@ -373,3 +388,17 @@ struct ToolGroupView: View {
     }
 }
 #Preview { let model = ChatModel(); model.exploreDemo(); return ChatView(model: model) }
+
+// Geometry preferences support iOS 17 without treating streaming layout as a user scroll.
+private struct TranscriptBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct TranscriptViewportKey: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct TranscriptHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}

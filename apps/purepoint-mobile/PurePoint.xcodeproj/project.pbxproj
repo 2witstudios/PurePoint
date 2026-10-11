@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001; };
+		BB1122334455667788990000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000; };
 		03A1BD6E1882C4B943D28330 /* PairingSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9011667ABD8DFEEFEECB394 /* PairingSecret.swift */; };
 		12D470CE39B24951FAF76E04 /* ChatDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 273E7B0E984A3DD6E2D1A676 /* ChatDomain.swift */; };
 		1642213AB225045F66717EA3 /* PurePointApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7EDD619AA16E0B012865022 /* PurePointApp.swift */; };
@@ -28,6 +30,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AA1122334455667788990001 /* ChatMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdownView.swift; path = ../shared/ChatMarkdown/ChatMarkdownView.swift; sourceTree = SOURCE_ROOT; };
+		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
 		1A15C1FE727B85D6A19B0C9E /* SetupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupViews.swift; sourceTree = "<group>"; };
 		273E7B0E984A3DD6E2D1A676 /* ChatDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDomain.swift; sourceTree = "<group>"; };
 		49197345D553FC30BF042262 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -62,6 +66,8 @@
 		452638CCE5B924A906BF0695 = {
 			isa = PBXGroup;
 			children = (
+				AA1122334455667788990001 /* ChatMarkdownView.swift */,
+				AA1122334455667788990000 /* ChatMarkdown.swift */,
 				B8979D755044D1B143B016DD /* PurePoint */,
 				FAF7CC0931F49DBAE1F444E2 /* PurePointTests */,
 				49E15581A88655E81B8BC22E /* Products */,
@@ -198,6 +204,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */,
+				BB1122334455667788990000 /* ChatMarkdown.swift in Sources */,
 				12D470CE39B24951FAF76E04 /* ChatDomain.swift in Sources */,
 				C59583F7E18B4596597BEDDA /* ChatModel.swift in Sources */,
 				7DBBAA5038C8CBDCAD663A2A /* ChatView.swift in Sources */,
