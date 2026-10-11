@@ -33,6 +33,8 @@ Desktop App
 
 ## Decisions
 
+! [APP-013] Point Guard exposes a labeled New Pi Chat button above the transcript in both expanded and collapsed conversation-sidebar states. It creates a native Pi session, using the existing explicit Stop confirmation when Pi is busy. The pane tab strip's plus button continues to create workspace tabs; Point Guard tabs share the current global Pi conversation and its persisted messages, including explicitly requested /pointguard info reports. Startup and new-session hooks seed personal files without emitting diagnostics.
+
 ! [APP-001] Multi-project: AppState holds array of ProjectState, one per git root. Cross-project queries via `agent(byId:)`. Project persistence via UserDefaults. Unified state with per-project instances.
 
 ! [APP-002] Daemon required. Auto-started on project open via `DaemonLifecycle` with `--managed` flag. On app quit, sends `Request::Shutdown` to stop the daemon and all agents. Graceful degradation when daemon is unreachable — sidebar shows empty state, project picker available.

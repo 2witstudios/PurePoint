@@ -22,9 +22,11 @@ struct PiPointGuardChatView: View {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
             } label: {
-                Image(systemName: "square.and.pencil")
+                Label("New Pi Chat", systemImage: "square.and.pencil")
             }
-            .help("New conversation").disabled(!model.connected || model.changingSession)
+            .help("Start a new Pi conversation")
+            .accessibilityLabel("New Pi Chat")
+            .disabled(!model.connected || model.changingSession)
         } sidebar: {
             sidebar
         } content: {

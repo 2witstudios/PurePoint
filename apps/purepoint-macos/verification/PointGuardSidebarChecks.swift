@@ -92,7 +92,8 @@ struct Fixture: View {
                 VStack(spacing: 0) {
                     Color.gray.frame(height: 30)
                     PointGuardConversationLayout(isExpanded: $state.expanded) {
-                        Button {} label: { Image(systemName: "square.and.pencil") }
+                        Button {} label: { Label("New Pi Chat", systemImage: "square.and.pencil") }
+                            .background(Probe(name: "newChat", probes: probes))
                     } sidebar: {
                         Probe(name: "history", probes: probes)
                     } content: {
@@ -201,6 +202,10 @@ struct PaneGridView: View {
                     precondition(history.minX >= grid.minX - 1, "History overlaps navigation: \(history)")
                     precondition(history.width > 0, "History is hidden")
                     precondition(transcript.minX >= history.maxX, "Transcript overlaps history")
+                    if transcript.width >= 160 {
+                        precondition(frame("newChat").minX >= transcript.minX, "New chat button escapes transcript")
+                        precondition(frame("newChat").maxX <= transcript.maxX, "New chat button escapes pane")
+                    }
                     precondition(abs(transcript.maxX - paneEnd) < 1, "Chat escapes pane: \(transcript), \(paneEnd)")
                     if split {
                         precondition(transcript.maxX <= frame("sibling").minX, "Chat overlaps sibling pane")
@@ -212,6 +217,11 @@ struct PaneGridView: View {
                     precondition(abs(collapsed.minX - grid.minX - 37) < 1, "Collapsed rail moved: \(collapsed)")
                     precondition(abs(collapsed.maxX - paneEnd) < 1, "Collapsed chat escapes pane")
                     precondition(collapsed.width >= transcript.width, "Closing history reduced chat space")
+                    if collapsed.width >= 160 {
+                        precondition(frame("newChat").width > 0, "New chat button disappeared with sidebar closed")
+                        precondition(frame("newChat").minX >= collapsed.minX, "Collapsed new chat button escapes transcript")
+                        precondition(frame("newChat").maxX <= collapsed.maxX, "Collapsed new chat button escapes pane")
+                    }
                     clickToggle(atX: grid.minX + 18)
                     precondition(state.expanded, "Collapsed sidebar toggle did not reopen history")
                 }
