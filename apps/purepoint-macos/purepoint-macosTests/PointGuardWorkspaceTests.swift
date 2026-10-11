@@ -199,6 +199,43 @@ import Testing
         }
     }
 
+    @Test func newerCopiedDocumentRekeysIdsWithoutDowngradingOrDroppingUnknownData() throws {
+        try withRegistry { registry, root in
+            let original = Workspace.pointGuard(projectRoot: root + "-original")
+            WorkspacePersistence.save([original], projectRoot: root, activeWorkspaceId: original.id)
+            let url = URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: root))
+            var future = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+            future["version"] = PersistedWorkspaceDocument.currentVersion + 1
+            future["futureDocument"] = ["value": "preserve", "number": 42]
+            var workspaces = try #require(future["workspaces"] as? [[String: Any]])
+            workspaces[0]["futureWorkspace"] = ["enabled": true]
+            var tree = try #require(workspaces[0]["tree"] as? [String: Any])
+            tree["futureTree"] = ["layout": "new"]
+            var tabs = try #require(tree["tabs"] as? [[String: Any]])
+            tabs[0]["futureSurface"] = ["content": "opaque"]
+            tabs.append(["id": 10, "kind": "future_browser", "url": "https://example.com"])
+            tree["tabs"] = tabs
+            workspaces[0]["tree"] = tree
+            future["workspaces"] = workspaces
+            try JSONSerialization.data(withJSONObject: future).write(to: url)
+
+            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+            #expect(id != original.id)
+            workspaces[0]["id"] = id
+            future["workspaces"] = workspaces
+            future["activeWorkspaceId"] = id
+            let migratedData = try Data(contentsOf: url)
+            let migrated = try #require(JSONSerialization.jsonObject(with: migratedData) as? NSDictionary)
+            #expect(migrated == future as NSDictionary)
+            #expect(WorkspacePersistence.isNewerThanSupported(projectRoot: root))
+
+            registry.newTab(workspaceId: id, leafId: 0)
+            registry.saveAll()
+            // Only identity migration is allowed; regular saves must retain the future schema.
+            #expect(try Data(contentsOf: url) == migratedData)
+        }
+    }
+
     @Test func worktreeAgentsCannotBeClaimedByPointGuard() {
         var workspace = Workspace.pointGuard(projectRoot: "/tmp/project")
         workspace.newTab(leafId: 0, content: .agent("ag-worktree"))
