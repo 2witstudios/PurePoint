@@ -158,7 +158,22 @@ enum Commands {
         /// Agent ID
         agent_id: String,
     },
-    /// View agent output logs
+    /// Read an agent's native conversation (or rendered terminal text)
+    Read {
+        agent_id: String,
+        /// Maximum records; initial read returns the latest records
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        /// Continue forward from a cursor returned by --json
+        #[arg(long)]
+        since: Option<String>,
+        /// Bind an existing agent to its exact native session ID
+        #[arg(long = "session")]
+        session_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Deprecated: raw terminal bytes; use read for conversations
     Logs {
         /// Agent ID
         agent_id: String,
@@ -809,6 +824,13 @@ async fn main() {
             json,
         } => commands::kill::run(&socket, agent, worktree, all, include_root, json).await,
         Commands::Attach { agent_id } => commands::attach::run(&socket, &agent_id).await,
+        Commands::Read {
+            agent_id,
+            limit,
+            since,
+            session_id,
+            json,
+        } => commands::read::run(&socket, &agent_id, limit, since, session_id, json).await,
         Commands::Logs {
             agent_id,
             tail,
@@ -1032,6 +1054,25 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_read_command_should_accept_native_session_and_incremental_cursor() {
+        // given / when
+        let cli = Cli::try_parse_from([
+            "pu",
+            "read",
+            "ag-one",
+            "--session",
+            "exact",
+            "--since",
+            "cursor",
+            "--limit",
+            "10",
+            "--json",
+        ]);
+        // then
+        assert!(cli.is_ok());
+    }
 
     #[test]
     fn given_global_queries_and_explicit_scope_should_parse_without_ambiguous_scope() {

@@ -4,7 +4,8 @@ pu spawn,Spawn,1,Most complex command — worktree + agents
 pu status,Status,1,Returns full workspace state from daemon
 pu kill,Kill,1,Stop agents; optionally remove worktrees
 pu attach,Attach,1,Enters interactive attach mode via daemon IPC
-pu logs,Logs,1,One-shot pane output capture
+pu read,Read,1,Exact native conversation or labeled terminal text
+pu logs,Logs,1,Deprecated raw terminal byte diagnostics
 pu aggregate,Aggregate,1,Collect result files from agents
 pu merge,Merge,1,Squash/no-ff merge worktree back to base
 pu swarm,Swarm,1,Spawn from swarm template

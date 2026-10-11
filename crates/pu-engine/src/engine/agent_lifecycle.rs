@@ -489,6 +489,13 @@ impl Engine {
         let (command, mut args) = Self::parse_agent_command(agent_cfg, agent_type)?;
         let launch_args =
             pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
+        let mut policy_args = args.clone();
+        policy_args.extend(launch_args.clone());
+        crate::read_source::prepare_session_args(agent_type, &mut policy_args, "validation")
+            .map_err(|e| Response::Error {
+                code: "INVALID_ARGUMENT".into(),
+                message: e.to_string(),
+            })?;
         match agent_type {
             "claude" => {
                 let sid = session_id.ok_or_else(|| Response::Error {
@@ -503,14 +510,24 @@ impl Engine {
             "codex" => {
                 // Top-level flags (e.g. --sandbox) must precede the subcommand
                 args.extend(launch_args);
+                let sid = session_id.filter(|id| crate::read_source::valid_session_id(id)).ok_or_else(|| Response::Error {
+                    code: "READ_IDENTITY_UNAVAILABLE".into(), message: "cannot resume without an exact native session; bind it with pu read --session ID".into(),
+                })?;
+                if !args.iter().any(|arg| arg == "--no-daemon") {
+                    args.push("--no-daemon".into());
+                }
                 args.push("resume".into());
-                args.push("--last".into());
-                Ok((command, args, None))
+                args.push(sid.into());
+                Ok((command, args, Some(sid.into())))
             }
             "opencode" => {
                 args.extend(launch_args);
-                args.push("--continue".into());
-                Ok((command, args, None))
+                let sid = session_id.filter(|id| crate::read_source::valid_session_id(id)).ok_or_else(|| Response::Error {
+                    code: "READ_IDENTITY_UNAVAILABLE".into(), message: "cannot resume without an exact native session; bind it with pu read --session ID".into(),
+                })?;
+                args.push("--session".into());
+                args.push(sid.into());
+                Ok((command, args, Some(sid.into())))
             }
             _ => {
                 // Terminal / unknown: fresh shell in same directory
@@ -589,8 +606,16 @@ mod resume_command_tests {
         let engine = Engine::new();
         for (agent_type, session_id, resume_args) in [
             ("claude", Some("sess-123"), vec!["--resume", "sess-123"]),
-            ("codex", None, vec!["resume", "--last"]),
-            ("opencode", None, vec!["--continue"]),
+            (
+                "codex",
+                Some("sess-123"),
+                vec!["--no-daemon", "resume", "sess-123"],
+            ),
+            (
+                "opencode",
+                Some("ses_exact"),
+                vec!["--session", "ses_exact"],
+            ),
         ] {
             let cfg = pu_core::types::AgentConfig {
                 name: agent_type.into(),

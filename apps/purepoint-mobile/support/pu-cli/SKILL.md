@@ -68,7 +68,10 @@ pu status --json                   # machine-readable
 
 ### Read agent output
 ```bash
-pu logs <agent_id>                 # last 500 bytes of PTY output
+pu read <agent_id>                 # latest 50 native conversation records
+pu read <agent_id> --json          # records, source, next_cursor
+pu read <agent_id> --since CURSOR --json # new records; restart read if stale
+pu logs <agent_id>                 # deprecated: last 500 raw PTY bytes
 pu logs <agent_id> --tail 2000     # more context
 pu logs <agent_id> --json          # { "agent_id": "...", "data": "..." }
 ```
@@ -260,7 +263,7 @@ Use with: `pu spawn --template code-review --var BRANCH=main`
 
 ## Reading Conversation History
 
-Claude agents have a `session_id` visible in `pu status --json`. Session transcripts are stored at `~/.claude/projects/{project-hash}/*.jsonl`. You can grep for the session ID to find the right transcript, or use `pu logs <agent_id>` to read the PTY output directly.
+Claude agents have a `session_id` visible in `pu status --json`. Session transcripts are stored at `~/.claude/projects/{project-hash}/*.jsonl`. You can grep for the session ID to find the right transcript, or use `pu read <agent_id>` to read the bound native conversation.
 
 ## `--json` Flag
 

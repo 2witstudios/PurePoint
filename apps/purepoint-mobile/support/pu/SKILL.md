@@ -34,7 +34,7 @@ PurePoint tasks are expected to be **completed fully**. This means:
 
 - **Commit messages**: Clear, descriptive. Reference the task or spec you're implementing.
 - **Code comments**: Only where logic isn't self-evident. Don't narrate — explain the WHY.
-- **If you're stuck**: Say so explicitly in your output. The point guard monitors via `pu logs`.
+- **If you're stuck**: Say so explicitly in your output. The point guard monitors via `pu read`.
 
 ## Key Rules
 
@@ -52,7 +52,8 @@ Read `../pu-cli/SKILL.md` for the full CLI reference. Key commands:
 - `pu agents list --global --json` — agent instances with project/worktree ownership
 - `pu worktrees list --json` — all known worktrees
 - `pu status` — see agents and worktrees in the current project
-- `pu logs <agent_id>` — read agent output
+- `pu read <agent_id>` — read the exact agent conversation; `--json` returns records and cursor
+- `pu logs <agent_id>` — deprecated raw terminal diagnostics
 - `pu send <agent_id> "message"` — send input to an agent
 - `pu spawn "prompt" --name <name>` — spawn a new agent
 - `pu kill --agent <agent_id>` — stop an agent

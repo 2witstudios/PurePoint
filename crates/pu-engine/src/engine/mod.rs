@@ -4,6 +4,7 @@ mod definitions;
 mod helpers;
 mod inventory;
 mod pty_operations;
+mod read;
 mod scheduler;
 mod session_repair;
 mod spawn;
@@ -437,6 +438,22 @@ impl Engine {
                 agent_id,
             } => self.handle_resume(&project_root, &agent_id).await,
             Request::Logs { agent_id, tail } => self.handle_logs(&agent_id, tail).await,
+            Request::Read {
+                project_root,
+                agent_id,
+                limit,
+                since,
+                session_id,
+            } => {
+                self.handle_read(
+                    &project_root,
+                    &agent_id,
+                    limit,
+                    since.as_deref(),
+                    session_id.as_deref(),
+                )
+                .await
+            }
             Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
             Request::Input {
                 agent_id,

@@ -164,6 +164,9 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
                 error.as_deref(),
             );
         }
+        Response::ReadResult(report) => {
+            print!("{}", crate::commands::read::format_report(report));
+        }
         Response::LogsResult { agent_id, data } => {
             agents::print_logs_result(agent_id, data);
         }

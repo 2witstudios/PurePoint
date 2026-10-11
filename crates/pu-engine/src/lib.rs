@@ -8,6 +8,7 @@ pub mod git;
 pub mod ipc_server;
 pub mod output_buffer;
 pub mod pty_manager;
+pub mod read_source;
 pub mod screen;
 
 #[cfg(test)]

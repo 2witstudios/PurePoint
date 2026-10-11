@@ -118,6 +118,9 @@ impl Engine {
     }
 
     pub(super) async fn handle_resize(&self, agent_id: &str, cols: u16, rows: u16) -> Response {
+        if let Some(handle) = self.sessions.lock().await.get(agent_id) {
+            handle.output_buffer.resize_terminal(rows, cols);
+        }
         // Clone the fd Arc under the lock, then drop the lock before the blocking ioctl
         let master_fd = {
             let sessions = self.sessions.lock().await;

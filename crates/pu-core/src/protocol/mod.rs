@@ -18,11 +18,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    Read {
+        project_root: String,
+        agent_id: String,
+        limit: usize,
+        #[serde(default)]
+        since: Option<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+    },
     ChannelRead {
         project_root: String,
         #[serde(default)]
@@ -442,6 +451,7 @@ pub enum Response {
         agent_id: String,
         data: String,
     },
+    ReadResult(crate::read::ReadReport),
     AttachReady {
         buffered_bytes: usize,
     },
@@ -584,7 +594,8 @@ impl Request {
     /// Mutable project scope for legacy project-scoped operations.
     pub fn project_root_mut(&mut self) -> Option<&mut String> {
         match self {
-            Self::ChannelRead { project_root, .. }
+            Self::Read { project_root, .. }
+            | Self::ChannelRead { project_root, .. }
             | Self::ChannelSend { project_root, .. }
             | Self::ChannelEdit { project_root, .. }
             | Self::ChannelReact { project_root, .. }
