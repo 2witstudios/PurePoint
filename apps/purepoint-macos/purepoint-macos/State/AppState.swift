@@ -20,7 +20,8 @@ final class AppState {
         }
     }
     var activeProjectRoot: String?
-    var activeSidebarSelection: SidebarSelection?
+    // ContentView starts on Dashboard before its first selection-change callback.
+    var activeSidebarSelection: SidebarSelection? = .nav(.dashboard)
     var daemonError: String?
     var showSettings = false
     /// Agent ID a spawn just returned. Resolved to its workspace once the manifest lands.

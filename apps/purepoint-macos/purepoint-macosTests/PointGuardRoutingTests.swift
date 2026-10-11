@@ -29,6 +29,19 @@ private struct PointGuardRoutingService: WorkspaceService {
         try body(state, registry, root)
     }
 
+    @Test func startupUsesPointGuardNewTabRoutingBeforePiReportsItsFolder() throws {
+        try withState { state, registry, root in
+            state.updatePointGuardRoot("")
+            state.openProject(root + "-project")
+            #expect(state.activeSidebarSelection == .nav(.dashboard))
+            #expect(state.activeProjectRoot == root + "-project")
+            state.newPointGuardTab()
+            #expect(registry.activeWorkspaceId == nil)
+            #expect(registry.workspacesByProject.isEmpty)
+            #expect(state.projects.map(\.projectRoot) == [root + "-project"])
+        }
+    }
+
     @Test func paletteQueriesPointGuardFolderWithAndWithoutVisibleProjects() throws {
         try withState { state, _, root in
             let id = try #require(state.activatePointGuardWorkspace())
