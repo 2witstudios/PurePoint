@@ -46,6 +46,7 @@ extension ChatModel {
     func verifiedForChecks(_ trust: TrustedHost) throws { try bindVerifiedHost(trust); clientId = trust.clientId }
     func pairedForChecks(_ trust: TrustedHost) { activatePairedHost(trust) }
     func stateForChecks(_ state: Snapshot) throws { try apply(state) }
+    func queuedReceiptForChecks(_ id: String, machine: String) { updateSubmission(id, status: "Queued", recoverable: false, machine: machine) }
     func receiptForChecks(_ id: String, machine: String) { updateSubmission(id, status: "Delivery uncertain", recoverable: true, machine: machine) }
     var noTransportForChecks: Bool { socket == nil && pending.isEmpty }
     var intentForChecks: Bool { wantsConnection }
@@ -98,12 +99,25 @@ extension ChatModel {
         model.selectMachine(hostA); model.setForeground(false)
         precondition(model.draft == "A edited" && model.attachments.first?.id == "A" && model.submissions.contains { $0.id == "legacy" && $0.recoverable }, "Given switching back, should restore A text/files/recovery")
         model.renameMachine(hostA, name: "Same name"); model.renameMachine(hostB, name: "Same name")
+        model.submissions.append(Submission(id: "old-queued", text: "Old principal queued", sessionId: "A session", status: "Queued", recoverable: false, attachments: [fileA], clientId: a.clientId))
+        model.editorOffer = "A pending editor"
+        model.selectMachine(hostB); model.setForeground(false)
+        precondition(model.editorOffer == nil, "Given B selected, should not show A's pending editor")
+        model.selectMachine(hostA); model.setForeground(false)
+        precondition(model.editorOffer == "A pending editor", "Given returning to A, should retain its pending offer")
+        model.editorOffer = nil
+        model.selectMachine(hostB); model.setForeground(false); model.selectMachine(hostA); model.setForeground(false)
+        precondition(model.editorOffer == nil, "Given explicit dismissal, should not resurrect an editor offer")
         let moved = trust(hostA, endpoint: "wss://100.64.0.3:9443/v1", device: "55555555-5555-4555-8555-555555555555")
         model.pairedForChecks(moved); model.setForeground(false)
         precondition(model.machines.count == 2 && model.selectedMachine?.name == "Same name" && model.machineKey == a.endpoint && model.draft == "A edited" && model.submissions.contains { $0.id == "legacy" }, "Given same-host re-pair/address/principal change, should deduplicate while preserving names and prior principal's local recovery")
+        precondition(model.submissions.contains { $0.id == "old-queued" && $0.recoverable && $0.attachments?.first?.id == "A" }, "Given re-pair with a new principal, should retain old queued text/files as uncertain recovery")
+        model.queuedReceiptForChecks("old-queued", machine: a.endpoint)
+        precondition(model.submissions.contains { $0.id == "old-queued" && $0.recoverable }, "Given late old-principal queued completion, should not hide recovery")
         await model.flushMachinesForChecks()
         let restarted = ChatModel(defaults: defaults, trustLoader: { vault.read($0) }); restarted.setForeground(false); await restarted.hydrateMachinesForChecks()
         precondition(restarted.selectedMachine?.id == hostA && restarted.endpoint == moved.endpoint && restarted.draft == "A edited" && restarted.attachments.first?.id == "A", "Given relaunch, should retain selected machine and per-session drafts")
+        precondition(restarted.submissions.contains { $0.id == "old-queued" && $0.recoverable && $0.clientId == a.clientId }, "Given restart after re-pair, should preserve old receipt provenance and recovery")
         restarted.selectMachine(hostB); restarted.setForeground(false)
         precondition(restarted.draft == "B edited" && restarted.attachments.first?.id == "B" && restarted.submissions.first?.text == "B session canceled", "Given relaunch then B, should restore only B state")
 
@@ -116,6 +130,14 @@ extension ChatModel {
         precondition(delayed.selectedMachine?.id == hostB && delayed.draft == "New B edit" && delayed.attachments.isEmpty && delayed.submissions.map(\.text) == ["B recovery"], "Given late startup hydration after switch and edit/removal, should preserve B choice/edits and scope recovery")
         delayed.selectMachine(hostA); delayed.setForeground(false)
         precondition(delayed.attachments.first?.id == "A" && delayed.submissions.first?.text == "A recovery" && delayed.noTransportForChecks, "Given switching back after delayed hydration, should restore A without replay")
+
+        // Late disk hydration must also apply a principal change that already succeeded.
+        let principalGate = MachineGate<([String: [ComposerAttachment]], [String: [Submission]])>()
+        let principalDelay = ChatModel(defaults: defaults, trustLoader: { vault.read($0) }, recoveryLoader: { await principalGate.wait() })
+        principalDelay.setForeground(false); principalDelay.pairedForChecks(moved)
+        await principalGate.open(([:], [a.endpoint: [Submission(id: "late-old-queued", text: "Late old queue", sessionId: "A session", status: "Queued", recoverable: false, attachments: [fileA], clientId: a.clientId)]]))
+        await principalDelay.hydrateMachinesForChecks()
+        precondition(principalDelay.submissions.contains { $0.id == "late-old-queued" && $0.recoverable && $0.attachments?.first?.id == "A" && $0.clientId == a.clientId }, "Given late hydration after re-pair, should retain old-principal queue as recovery without replay")
 
         // A remains usable across enrollment failure, mismatched identity, and late canceled success.
         let pairDefaults = MachineDefaults(suiteName: UUID().uuidString)!

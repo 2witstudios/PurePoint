@@ -38,10 +38,9 @@ enum PairingSecret {
             if status == errSecSuccess { throw TrustFailure("Mac pairing was interrupted before trust finalized. Scan a new QR code deliberately.") }
             throw MobileError("Unlock this phone to access its saved Mac trust, then reconnect.")
         }
-        return try readTrustForTransaction(endpoint: endpoint)
+        return try readTrustRecord(endpoint: endpoint)
     }
-    // Only the serialized enrollment transaction can inspect a quarantined previous record.
-    static func readTrustForTransaction(endpoint: String) throws -> TrustedHost? {
+    private static func readTrustRecord(endpoint: String) throws -> TrustedHost? {
         var attributes = query(endpoint: endpoint)
         attributes[kSecReturnData as String] = true; attributes[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
@@ -51,17 +50,38 @@ enum PairingSecret {
         guard let data = item as? Data, let record = try? JSONDecoder().decode(TrustedHost.self, from: data), record.valid, record.endpoint == endpoint else { throw TrustFailure("Saved Mac trust is invalid. Scan a new Mac QR code deliberately.") }
         return record
     }
+    // Back up bytes and quarantine provenance without interpreting or authorizing them.
+    // A deliberate enrollment can repair corrupt/unknown records; cancellation restores
+    // exactly the prior fail-closed state, including a preexisting pending marker.
+    static func backupTrust(endpoint: String) throws -> (@Sendable () throws -> Void) {
+        var attributes = query(endpoint: endpoint); attributes[kSecReturnData as String] = true
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(attributes as CFDictionary, &item)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace Mac trust.") }
+        let previous = item as? Data
+        guard status == errSecItemNotFound || previous != nil else { throw MobileError("Could not preserve previous Mac trust.") }
+        let pending = SecItemCopyMatching(pendingQuery(endpoint: endpoint) as CFDictionary, nil)
+        guard pending == errSecSuccess || pending == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace Mac trust.") }
+        let wasPending = pending == errSecSuccess
+        return {
+            if let previous { try writeTrustData(previous, endpoint: endpoint) } else { try removeTrust(endpoint: endpoint) }
+            if wasPending { try beginTrustChange(endpoint: endpoint) } else { try finishTrustChange(endpoint: endpoint) }
+        }
+    }
+    private static func writeTrustData(_ data: Data, endpoint: String) throws {
+        let attributes: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let identity = query(endpoint: endpoint)
+        var status = SecItemUpdate(identity as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound { status = SecItemAdd(identity.merging(attributes) { _, new in new } as CFDictionary, nil) }
+        guard status == errSecSuccess else { throw MobileError("Could not save Mac trust in Keychain (\(status)). Create a new QR and try again.") }
+    }
     static func removeTrust(endpoint: String) throws {
         let status = SecItemDelete(query(endpoint: endpoint) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not discard canceled Mac trust. Unlock this phone and try again.") }
     }
     static func saveTrust(_ record: TrustedHost) throws {
         guard record.valid else { throw TrustFailure("The Mac returned invalid device trust. Scan a new QR code.") }
-        let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(record), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let identity = query(endpoint: record.endpoint)
-        var status = SecItemUpdate(identity as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound { status = SecItemAdd(identity.merging(attributes) { _, new in new } as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw MobileError("Could not save Mac trust in Keychain (\(status)). Create a new QR and try again.") }
+        try writeTrustData(JSONEncoder().encode(record), endpoint: record.endpoint)
     }
 }
 // Invalidation is immediate. All writes and rollback run on one queue; a canceled
@@ -72,6 +92,7 @@ final class PairingTrustWriter: @unchecked Sendable {
     private var generation = 0
     private var rollback: (@Sendable () throws -> Void)?
     private var pendingEndpoint: String?
+    private let backup: (@Sendable (String) throws -> (@Sendable () throws -> Void))?
     private let begin: @Sendable (String) throws -> Void
     private let finish: @Sendable (String) throws -> Void
     private let save: @Sendable (TrustedHost) throws -> Void
@@ -81,8 +102,9 @@ final class PairingTrustWriter: @unchecked Sendable {
          load: @escaping @Sendable (String) throws -> TrustedHost? = { try PairingSecret.readTrust(endpoint: $0) },
          remove: @escaping @Sendable (String) throws -> Void = { try PairingSecret.removeTrust(endpoint: $0) },
          begin: @escaping @Sendable (String) throws -> Void = { _ in },
-         finish: @escaping @Sendable (String) throws -> Void = { _ in }) {
-        self.save = save; self.load = load; self.remove = remove; self.begin = begin; self.finish = finish
+         finish: @escaping @Sendable (String) throws -> Void = { _ in },
+         backup: (@Sendable (String) throws -> (@Sendable () throws -> Void))? = nil) {
+        self.save = save; self.load = load; self.remove = remove; self.begin = begin; self.finish = finish; self.backup = backup
     }
     func advance(to generation: Int) {
         lock.lock(); self.generation = generation
@@ -105,13 +127,19 @@ final class PairingTrustWriter: @unchecked Sendable {
             queue.async {
                 guard self.current(generation) else { continuation.resume(throwing: CancellationError()); return }
                 do {
-                    let previous = try self.load(record.endpoint)
-                    let undo: @Sendable () throws -> Void = {
-                        if let previous { try self.save(previous) } else { try self.remove(record.endpoint) }
-                        try self.finish(record.endpoint)
+                    let undo: @Sendable () throws -> Void
+                    if let backup = self.backup { undo = try backup(record.endpoint) }
+                    else {
+                        let previous = try self.load(record.endpoint)
+                        undo = {
+                            if let previous { try self.save(previous) } else { try self.remove(record.endpoint) }
+                            try self.finish(record.endpoint)
+                        }
                     }
+                    guard self.current(generation) else { throw CancellationError() }
                     try self.begin(record.endpoint)
-                    try self.save(record)
+                    do { try self.save(record) }
+                    catch { try? undo(); throw error } // failed rollback leaves quarantine closed
                     self.lock.lock()
                     let valid = self.generation == generation
                     if valid { self.rollback = undo; self.pendingEndpoint = record.endpoint }

@@ -17,4 +17,10 @@ with tempfile.TemporaryDirectory(prefix='pg-machine-network-', dir='/tmp') as di
         subprocess.run([str(temp / 'checks'), directory], env=env, check=True, timeout=35)
     finally:
         if fixture.poll() is None:
-            fixture.stdin.write('stop\n'); fixture.stdin.flush(); fixture.wait(timeout=10)
+            try:
+                fixture.stdin.write('stop\n')
+                fixture.stdin.flush()
+                fixture.wait(timeout=10)
+            except (BrokenPipeError, subprocess.TimeoutExpired):
+                fixture.kill()
+                fixture.wait()

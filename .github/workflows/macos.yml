@@ -101,6 +101,7 @@ jobs:
           "$RUNNER_TEMP/mobile-responsiveness"
           sh verification/check-recovery.sh
           sh verification/check-machines.sh
+          sh verification/check-trust-rollback.sh
           python3 verification/check-machine-network.py
           python3 verification/check-trust.py
           swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift

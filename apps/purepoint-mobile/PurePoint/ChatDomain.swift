@@ -230,7 +230,7 @@ struct Snapshot: Codable, Sendable {
 struct Conversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String? }
 struct History: Codable, Sendable { let sessionId: String; let title: String; let messages: [ChatMessage] }
 struct Submission: Codable, Identifiable, Sendable {
-    let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool; var attachments: [ComposerAttachment]? = nil
+    let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool; var attachments: [ComposerAttachment]? = nil; var clientId: String? = nil
 }
 // Receipts are deliberately independent of transcript rows: acceptance does not imply completion.
 enum JSONValue: Codable, Sendable {

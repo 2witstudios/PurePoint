@@ -59,6 +59,8 @@ final class DelayedTrustRead: @unchecked Sendable {
         try mark("broadcast-A"); await history.value; await sessions.value; await answer.value
         try await Task.sleep(nanoseconds: 80_000_000)
         precondition(model.snapshot?.title == "B" && model.conversations.isEmpty && model.browsing == nil && model.editorOffer == nil && model.error == nil, "Given old receipts/history/editor/errors after switching, should leave B untouched")
+        let stopped = await model.stop(selection: aToken)
+        precondition(!stopped, "Given queued A Stop after switching to B, should reject old selection before sending")
         await model.answer(dialogA, confirmed: true, selection: aToken)
         precondition(model.error == nil && model.networkPendingForChecks == 0, "Given reused dialog IDs on B, should ignore old A dialog provenance")
         model.selectMachine(a.hostId); try await wait { model.connected && model.snapshot?.title == "A" }

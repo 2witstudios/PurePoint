@@ -151,9 +151,9 @@ struct ChatView: View {
         if model.connectionStatus.hasPrefix("Connection lost") { return "Offline" }
         return "Not connected"
     }
-    private func openSidebar() { let token = model.selectionToken; composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { if model.isSelected(token) { await model.loadConversations() } } }
+    private func openSidebar() { let token = model.selectionToken; composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { if model.isSelected(token) { await model.loadConversations(selection: token) } } }
     private func closeSidebar() { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = false } }
-    private func newConversation() { let token = model.selectionToken; closeSidebar(); if model.busy { confirmNew = true } else { Task { if model.isSelected(token) { await model.changeSession() } } } }
+    private func newConversation() { let token = model.selectionToken; closeSidebar(); if model.busy { confirmNew = true } else { Task { if model.isSelected(token) { await model.changeSession(selection: token) } } } }
     private func selectConversation(_ conversation: Conversation) {
         let token = model.selectionToken
         closeSidebar()
@@ -251,7 +251,7 @@ struct ChatView: View {
                             Button("Steer") { model.submit(mode: "steer"); following = true }
                             Button("After reply") { model.submit(mode: "after"); following = true }
                         } label: { Text("Send options").font(.callout.weight(.medium)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
-                        Button { Task { _ = await model.stop() } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
+                        Button { let token = model.selectionToken; Task { _ = await model.stop(selection: token) } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
                     } else {
                         Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend && !importingAttachment ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.canSend || importingAttachment).accessibilityLabel("Send message")
                     }

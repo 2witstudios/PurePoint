@@ -24,15 +24,27 @@ final class ChatDomainTests: XCTestCase {
         let first = TrustedHost(version: 1, endpoint: endpoint, hostId: host, certificateSHA256: String(repeating: "a", count: 64), deviceId: device, clientId: device, credential: String(repeating: "b", count: 43))
         let updated = TrustedHost(version: 1, endpoint: endpoint, hostId: host, certificateSHA256: first.certificateSHA256, deviceId: device, clientId: device, credential: String(repeating: "c", count: 43))
         try PairingSecret.saveTrust(first)
-        let writer = PairingTrustWriter(save: { try PairingSecret.saveTrust($0) }, load: { try PairingSecret.readTrustForTransaction(endpoint: $0) }, remove: { try PairingSecret.removeTrust(endpoint: $0) }, begin: { try PairingSecret.beginTrustChange(endpoint: $0) }, finish: { try PairingSecret.finishTrustChange(endpoint: $0) })
+        let writer = PairingTrustWriter(save: { try PairingSecret.saveTrust($0) }, load: { try PairingSecret.readTrust(endpoint: $0) }, remove: { try PairingSecret.removeTrust(endpoint: $0) }, begin: { try PairingSecret.beginTrustChange(endpoint: $0) }, finish: { try PairingSecret.finishTrustChange(endpoint: $0) }, backup: { try PairingSecret.backupTrust(endpoint: $0) })
         writer.advance(to: 1); try await writer.commit(updated, generation: 1)
         XCTAssertThrowsError(try PairingSecret.readTrust(endpoint: endpoint), "Unaccepted replacement must not release a credential")
         writer.advance(to: 2); await writer.drain()
         XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, first.credential, "Cancellation restores original trust")
         try PairingSecret.beginTrustChange(endpoint: endpoint); try PairingSecret.saveTrust(updated)
         XCTAssertThrowsError(try PairingSecret.readTrust(endpoint: endpoint), "An interrupted process leaves a durable quarantine")
-        try await writer.commit(first, generation: 2); XCTAssertTrue(writer.accept(generation: 2)); await writer.drain()
+        try await writer.commit(first, generation: 2); writer.advance(to: 3); await writer.drain()
+        XCTAssertThrowsError(try PairingSecret.readTrust(endpoint: endpoint), "Canceled re-pair must preserve preexisting quarantine")
+        try await writer.commit(first, generation: 3); XCTAssertTrue(writer.accept(generation: 3)); await writer.drain()
         XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, first.credential, "Deliberate accepted re-pair can finalize quarantined trust")
+        let corrupt = Data("unknown or corrupt previous trust".utf8)
+        let identity = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PiMobile.TrustedHost.v1", kSecAttrAccount as String: endpoint]
+        XCTAssertEqual(SecItemUpdate(identity as CFDictionary, [kSecValueData as String: corrupt] as CFDictionary), errSecSuccess)
+        writer.advance(to: 4); try await writer.commit(updated, generation: 4); writer.advance(to: 5); await writer.drain()
+        var query = identity; query[kSecReturnData as String] = true; var restored: CFTypeRef?
+        XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &restored), errSecSuccess)
+        XCTAssertEqual(restored as? Data, corrupt, "Canceled repair preserves exact opaque previous bytes")
+        XCTAssertThrowsError(try PairingSecret.readTrust(endpoint: endpoint), "Corrupt old bytes never authorize a connection")
+        try await writer.commit(updated, generation: 5); XCTAssertTrue(writer.accept(generation: 5)); await writer.drain()
+        XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, updated.credential, "Deliberate repair must not require decoding old bytes")
     }
 
     func testGivenRepeatedFailuresShouldBoundReconnectAndResetOnNetworkChange() {

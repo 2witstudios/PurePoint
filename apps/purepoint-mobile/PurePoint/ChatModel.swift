@@ -16,7 +16,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     @Published var submissions: [Submission] = [] {
         didSet {
             if !normalizingSubmissions {
-                if submissions.filter({ $0.recoverable || $0.status == "Sending" }).count > 50 {
+                if submissions.filter({ $0.recoverable || $0.status == "Sending" || $0.status == "Queued" }).count > 50 {
                     error = "Message recovery is full. Older recovery receipts could not be retained; inspect native history before sending again. Restore or dismiss saved recovery to make room."
                 }
                 normalizingSubmissions = true
@@ -44,6 +44,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var machineSubmissions: [String: [Submission]] = [:]
     private var machineCanceledIds: [String: [String]] = [:]
     private var cachedSnapshots: [String: Snapshot] = [:]
+    private var machineEditorOffers: [String: String] = [:]
+    private var machinePrincipals: [String: String] = [:]
+    private var repairedMachines: Set<String> = []
     private var machineEditorIds: [String: Set<String>] = [:]
     private var machineSessions: [String: String] = [:]
 
@@ -97,7 +100,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if let trustSaver {
             self.trustWriter = PairingTrustWriter(save: trustSaver, load: trustLoader, remove: trustRemover)
         } else {
-            self.trustWriter = PairingTrustWriter(save: { try PairingSecret.saveTrust($0) }, load: { try PairingSecret.readTrustForTransaction(endpoint: $0) }, remove: trustRemover, begin: { try PairingSecret.beginTrustChange(endpoint: $0) }, finish: { try PairingSecret.finishTrustChange(endpoint: $0) })
+            self.trustWriter = PairingTrustWriter(save: { try PairingSecret.saveTrust($0) }, load: { try PairingSecret.readTrust(endpoint: $0) }, remove: trustRemover, begin: { try PairingSecret.beginTrustChange(endpoint: $0) }, finish: { try PairingSecret.finishTrustChange(endpoint: $0) }, backup: { try PairingSecret.backupTrust(endpoint: $0) })
         }
         self.enrollment = enrollment
         self.recoverySaver = recoverySaver
@@ -144,7 +147,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                     let currentIds = Set(current.map(\.id))
                     self.machineSubmissions[key] = Self.retainedSubmissions(items.filter { !currentIds.contains($0.id) }.map { item in
                         var item = item
-                        if item.status == "Sending" { item.status = "Delivery uncertain"; item.recoverable = true }
+                        if item.status == "Sending" || (item.status == "Queued" && (self.repairedMachines.contains(key) || (item.clientId != nil && self.machinePrincipals[key] != nil && item.clientId != self.machinePrincipals[key]))) { item.status = "Delivery uncertain · Inspect Mac history"; item.recoverable = true }
                         return item
                     } + current)
                 }
@@ -180,7 +183,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private static func retainedSubmissions(_ items: [Submission]) -> [Submission] {
         // In-flight sends outrank recovery, which outranks settled receipts. Within
         // each priority retain the newest, then preserve chronological display order.
-        func priority(_ item: Submission) -> Int { item.status == "Sending" ? 2 : item.recoverable ? 1 : 0 }
+        func priority(_ item: Submission) -> Int { item.status == "Sending" ? 2 : (item.recoverable || item.status == "Queued") ? 1 : 0 }
         let kept = Set(items.indices.sorted {
             let left = priority(items[$0]), right = priority(items[$1])
             return left == right ? $0 > $1 : left > right
@@ -188,7 +191,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         return items.enumerated().compactMap { index, item in
             guard kept.contains(index) else { return nil }
             var item = item
-            if !item.recoverable && item.status != "Sending" { item.attachments = nil }
+            if !item.recoverable && item.status != "Sending" && item.status != "Queued" { item.attachments = nil }
             return item
         }
     }
@@ -248,6 +251,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func saveActiveMachine() {
         saveDraft(); saveAttachmentDraft(); saveSubmissions(); saveCanceledIds()
         machineEditorIds[machineKey] = seenEditorIds
+        machineEditorOffers[machineKey] = editorOffer
         if let state = snapshot {
             cachedSnapshots[machineKey] = Snapshot(version: state.version, epoch: state.epoch, revision: state.revision, busy: false, sessionId: state.sessionId, title: state.title, messages: state.messages, tools: state.tools, queue: [], dialogs: [], notices: [], capabilities: state.capabilities)
         }
@@ -259,18 +263,30 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
             registry = MachineRegistry.migrate(endpoint: endpoint); registryUnavailable = false
         }
         let machine = registry.remember(hostId: trust.hostId, endpoint: trust.endpoint)
+        adoptPrincipal(trust.clientId, machine: machine.stateKey, pairedAgain: true)
         activateMachine(machine)
     }
     private func activateMachine(_ machine: SavedMachine) {
         retryTask?.cancel(); detach(); selectionGeneration += 1; switchingMachine = true
         endpoint = machine.endpoint; demo = false; clientId = ""; wantsConnection = false
-        snapshot = cachedSnapshots[machineKey]; cursor.reset(); conversations = []; browsing = nil; editorOffer = nil
+        snapshot = cachedSnapshots[machineKey]; cursor.reset(); conversations = []; browsing = nil; editorOffer = machineEditorOffers[machineKey]
         seenEditorIds = machineEditorIds[machineKey] ?? []; changingSession = false; error = nil; pairingError = nil
         canceledIdHistory = Self.recentCanceledIds(machineCanceledIds[machineKey] ?? [])
         seenCanceledIds = Set(canceledIdHistory)
         submissions = machineSubmissions[machineKey] ?? []
         draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []
-        switchingMachine = false; persistRegistry(); connect()
+        switchingMachine = false; saveSubmissions(); persistRegistry(); connect()
+    }
+    private func adoptPrincipal(_ principal: String, machine: String, pairedAgain: Bool = false) {
+        machinePrincipals[machine] = principal
+        if pairedAgain { repairedMachines.insert(machine) }
+        machineSubmissions[machine] = (machineSubmissions[machine] ?? []).map { item in
+            var item = item
+            if (item.status == "Queued" || item.status == "Sending") && (pairedAgain || (item.clientId != nil && item.clientId != principal)) {
+                item.status = "Delivery uncertain after re-pair · Inspect Mac history"; item.recoverable = true
+            }
+            return item
+        }
     }
     // Bind migrated metadata only after the saved credential and pin verify this identity.
     private func bindVerifiedHost(_ trust: TrustedHost) throws {
@@ -358,6 +374,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 guard verified.version == 1, verified.hostId == saved.hostId, verified.deviceId == saved.deviceId, verified.clientId == saved.clientId else { throw TrustFailure("Saved Mac identity changed. Scan a new QR code deliberately.") }
                 guard !Task.isCancelled, current == self.generation, self.foreground, self.wantsConnection, self.endpoint == address else { connection.invalidateAndCancel(); return }
                 try self.bindVerifiedHost(saved)
+                self.adoptPrincipal(saved.clientId, machine: self.machineKey)
+                self.submissions = self.machineSubmissions[self.machineKey] ?? self.submissions
                 self.connectionTask = nil; self.clientId = saved.clientId; self.hostSession = connection; self.hostPin = delegate
                 self.startConnection(url: url, credential: saved.credential, session: connection)
             } catch {
@@ -466,7 +484,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         projectingSnapshot = false
         let previousCanceled = canceledIdHistory
         for canceled in state.canceled ?? [] where canceled.clientId == clientId && !seenCanceledIds.contains(canceled.id) {
-            submissions.append(Submission(id: canceled.id, text: canceled.text, sessionId: canceled.sessionId, status: "Canceled by Stop", recoverable: true))
+            submissions.append(Submission(id: canceled.id, text: canceled.text, sessionId: canceled.sessionId, status: "Canceled by Stop", recoverable: true, clientId: canceled.clientId))
             seenCanceledIds.insert(canceled.id)
         }
         // Refresh the current snapshot's IDs in wire order so older history
@@ -519,7 +537,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
     func submit(mode: String) {
         guard canSend, let state = snapshot else { return }
-        guard submissions.filter({ $0.recoverable || $0.status == "Sending" }).count < 50 else {
+        guard submissions.filter({ $0.recoverable || $0.status == "Sending" || $0.status == "Queued" }).count < 50 else {
             error = "Message recovery is full. Restore or dismiss a saved recovery before sending another message."
             return
         }
@@ -530,7 +548,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         guard content.images.isEmpty || demo || state.capabilities?.contains("images") == true else { error = "Restart the updated Mac bridge before sending images."; return }
         let id = UUID().uuidString
         let origin = machineKey; let token = selectionGeneration; let transport = generation
-        submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files)); draft = ""; attachments = []
+        submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files, clientId: clientId)); draft = ""; attachments = []
         Task {
             // Hydration and confirmed persistence precede any transmission, while
             // the composer remains editable. Sending receipts cannot be dismissed.
@@ -556,12 +574,17 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
     private func updateSubmission(_ id: String, status: String, recoverable: Bool, machine: String? = nil) {
         let key = machine ?? machineKey
-        if key == machineKey {
-            if let i = submissions.firstIndex(where: { $0.id == id }) {
-                var item = submissions[i]; item.status = status; item.recoverable = recoverable; submissions[i] = item
+        func updated(_ item: Submission) -> Submission {
+            var item = item; item.status = status; item.recoverable = recoverable
+            if status == "Queued", let principal = machinePrincipals[key], item.clientId != principal {
+                item.status = "Delivery uncertain after re-pair · Inspect Mac history"; item.recoverable = true
             }
-        } else if let i = machineSubmissions[key]?.firstIndex(where: { $0.id == id }) {
-            machineSubmissions[key]?[i].status = status; machineSubmissions[key]?[i].recoverable = recoverable
+            return item
+        }
+        if key == machineKey {
+            if let i = submissions.firstIndex(where: { $0.id == id }) { submissions[i] = updated(submissions[i]) }
+        } else if let i = machineSubmissions[key]?.firstIndex(where: { $0.id == id }), let item = machineSubmissions[key]?[i] {
+            machineSubmissions[key]?[i] = updated(item)
             machineSubmissions[key] = Self.retainedSubmissions(machineSubmissions[key] ?? [])
             saveSubmissions()
         }
