@@ -58,7 +58,30 @@ nonisolated enum ChatMarkdown {
         return ChatMarkdownDocument(blocks: blocks, inlineContent: inlineContent)
     }
     static func parse(_ source: String) -> [ChatMarkdownBlock] {
-        parse(source, nesting: 0)
+        var remainingBlocks = 256, remainingCells = 1_200, truncated = false
+        func bounded(_ blocks: [ChatMarkdownBlock]) -> [ChatMarkdownBlock] {
+            var result: [ChatMarkdownBlock] = []
+            for block in blocks {
+                guard remainingBlocks > 0 else { truncated = true; break }
+                remainingBlocks -= 1
+                switch block {
+                case .quote(let nested): result.append(.quote(bounded(nested)))
+                case .listContinuation(let depth, let nested): result.append(.listContinuation(depth: depth, blocks: bounded(nested)))
+                case .table(let headers, let alignments, let rows):
+                    guard remainingCells >= headers.count else { truncated = true; continue }
+                    remainingCells -= headers.count
+                    let count = min(rows.count, remainingCells / headers.count)
+                    remainingCells -= count * headers.count
+                    if count < rows.count { truncated = true }
+                    result.append(.table(headers: headers, alignments: alignments, rows: Array(rows.prefix(count))))
+                default: result.append(block)
+                }
+            }
+            return result
+        }
+        var blocks = bounded(parse(source, nesting: 0))
+        if truncated { blocks.append(.paragraph("Markdown preview limited to 256 blocks and 1,200 table cells.")) }
+        return blocks
     }
     private static func parse(_ source: String, nesting: Int) -> [ChatMarkdownBlock] {
         guard !Task.isCancelled else { return [] }
@@ -215,18 +238,16 @@ nonisolated enum ChatMarkdown {
         if line.hasSuffix("|"), !line.hasSuffix("\\|") { line.removeLast() }
         let characters = Array(line)
         var result: [String] = [], cell = "", escaped = false, delimiter = 0, index = 0
-        func hasClosingRun(_ length: Int, after start: Int) -> Bool {
-            var cursor = start
-            while cursor < characters.count {
-                guard !Task.isCancelled else { return false }
-                if characters[cursor] == "`" {
-                    var end = cursor
-                    while end < characters.count, characters[end] == "`" { end += 1 }
-                    if end - cursor == length { return true }
-                    cursor = end
-                } else { cursor += 1 }
-            }
-            return false
+        // Index the last run of each length once. Looking for a matching close
+        // must not rescan the suffix for every unmatched opening delimiter.
+        var lastRun: [Int: Int] = [:], cursor = 0
+        while cursor < characters.count {
+            guard !Task.isCancelled else { return [] }
+            if characters[cursor] == "`" {
+                let start = cursor
+                while cursor < characters.count, characters[cursor] == "`" { cursor += 1 }
+                lastRun[cursor - start] = start
+            } else { cursor += 1 }
         }
         while index < characters.count {
             guard !Task.isCancelled else { return [] }
@@ -239,7 +260,7 @@ nonisolated enum ChatMarkdown {
                 while index < characters.count, characters[index] == "`" { index += 1 }
                 let length = index - start
                 if delimiter == length { delimiter = 0 }
-                else if delimiter == 0, hasClosingRun(length, after: index) { delimiter = length }
+                else if delimiter == 0, (lastRun[length] ?? -1) >= index { delimiter = length }
                 cell += String(repeating: "`", count: length)
                 continue
             }

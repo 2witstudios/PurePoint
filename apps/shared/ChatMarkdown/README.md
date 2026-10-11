@@ -28,7 +28,8 @@ continuation text remains with its item, and nested code/quotes get their own in
 closing delimiters and incomplete streamed blocks. Raw HTML is text. Links only
 activate HTTP, HTTPS and mailto; standalone Markdown images load HTTP(S) URLs.
 Tables and code scroll horizontally rather than widening the transcript. Table previews
-are capped at 100 body rows and 12 columns with a visible notice when truncated.
+are capped at 100 body rows and 12 columns, with document-wide limits of 256 blocks
+and 1,200 table cells (including headers). Visible notices explain truncation.
 Block and inline parsing run on a serial background worker; canceled streaming
 revisions are skipped, and native inline parse calls cannot overlap.
 

@@ -95,10 +95,11 @@ final class ChatMarkdownTests: XCTestCase {
         guard case .table(let headers, let alignments, let rows) = blocks.first else { return XCTFail("Expected table") }
         XCTAssertEqual(headers.count, 12)
         XCTAssertEqual(alignments.count, 12)
-        XCTAssertEqual(rows.count, 100)
+        XCTAssertEqual(rows.count, 99)
         XCTAssertTrue(rows.allSatisfy { $0.count == 12 })
         XCTAssertEqual(rows.last?.last, "Cell 12")
-        XCTAssertEqual(blocks.last, .paragraph("Table preview limited to 100 rows and 12 columns."))
+        XCTAssertTrue(blocks.contains(.paragraph("Table preview limited to 100 rows and 12 columns.")))
+        XCTAssertEqual(blocks.last, .paragraph("Markdown preview limited to 256 blocks and 1,200 table cells."))
     }
     func testGivenCancelledQueuedPreparationShouldSkipInlineParsing() async {
         let result = await Task.detached {
@@ -107,6 +108,20 @@ final class ChatMarkdownTests: XCTestCase {
         }.value
         XCTAssertTrue(result.blocks.isEmpty)
         XCTAssertTrue(result.inlineContent.isEmpty)
+    }
+
+    func testGivenManyBlocksShouldBoundTheCompleteDocumentAndExplainTruncation() {
+        let blocks = ChatMarkdown.parse(String(repeating: "---\n", count: 10_000))
+        XCTAssertEqual(blocks.count, 257)
+        XCTAssertEqual(blocks.last, .paragraph("Markdown preview limited to 256 blocks and 1,200 table cells."))
+        let nested = ChatMarkdown.parse(String(repeating: "> ---\n", count: 10_000))
+        guard case .quote(let children) = nested.first else { return XCTFail("Expected quote") }
+        XCTAssertEqual(children.count, 255)
+        XCTAssertEqual(nested.last, blocks.last)
+    }
+    func testGivenUnmatchedDelimiterRunsShouldRetainTableCellSeparators() {
+        let cell = (1...1_000).map { String(repeating: "`", count: $0) + "x" }.joined()
+        XCTAssertEqual(ChatMarkdown.cells(cell + " | end"), [cell, "end"])
     }
 
 }
