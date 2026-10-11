@@ -39,6 +39,10 @@ final class SettingsState {
         didSet { defaults.set(launchAtLogin, forKey: "PP_launchAtLogin") }
     }
 
+    var usePointGuardNames: Bool = true {
+        didSet { defaults.set(usePointGuardNames, forKey: "PP_usePointGuardNames") }
+    }
+
     var commandPaletteOrder: [String] = [] {
         didSet { defaults.set(commandPaletteOrder, forKey: "PP_commandPaletteOrder") }
     }
@@ -77,6 +81,9 @@ final class SettingsState {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        if defaults.object(forKey: "PP_usePointGuardNames") != nil {
+            usePointGuardNames = defaults.bool(forKey: "PP_usePointGuardNames")
+        }
         commandPaletteOrder = defaults.stringArray(forKey: "PP_commandPaletteOrder") ?? []
 
         if defaults.object(forKey: "PP_restoreProjectsOnLaunch") != nil {

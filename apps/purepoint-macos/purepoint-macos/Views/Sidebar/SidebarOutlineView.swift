@@ -31,14 +31,27 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
                     preferredOrder: settingsState.commandPaletteOrder
                 )
 
-                CommandPalettePanel.show(relativeTo: window, items: items) { result in
+                CommandPalettePanel.show(
+                    relativeTo: window, items: items, usePointGuardNames: settingsState.usePointGuardNames
+                ) { result in
                     project.handlePaletteResult(result, selection: sel, hub: hub)
                 }
             }
         }
 
         vc.onAddTerminal = { project, worktree in
-            project.createAgent(agent: "terminal", prompt: "", selection: .worktree(worktree.id))
+            if settingsState.usePointGuardNames {
+                project.createAgent(agent: "terminal", prompt: "", selection: .worktree(worktree.id))
+            } else {
+                CommandPalettePanel.requestOpen {
+                    CommandPalettePanel.show(
+                        relativeTo: NSApp.keyWindow, items: [.builtIn(.terminal)],
+                        usePointGuardNames: false, initialItem: .builtIn(.terminal)
+                    ) { result in
+                        project.handlePaletteResult(result, selection: .worktree(worktree.id), hub: hub)
+                    }
+                }
+            }
         }
 
         // Closing the row closes everything in it — agent tabs (killed via the registry's

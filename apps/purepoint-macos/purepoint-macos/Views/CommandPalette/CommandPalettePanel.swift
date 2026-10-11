@@ -90,6 +90,8 @@ class CommandPalettePanel: NSPanel {
         relativeTo window: NSWindow?,
         items: [CommandPaletteItem] = CommandPaletteItem.buildItems(
             builtInVariants: AgentVariant.allVariants, agents: [], swarms: []),
+        usePointGuardNames: Bool = true,
+        initialItem: CommandPaletteItem? = nil,
         onSelect: @escaping (CommandPaletteResult) -> Void
     ) -> CommandPalettePanel {
         if let existing = current, existing.isVisible {
@@ -107,8 +109,11 @@ class CommandPalettePanel: NSPanel {
         vc.onDismiss = { [weak panel] in
             panel?.dismiss()
         }
+        vc.usePointGuardNames = usePointGuardNames
+        _ = vc.view
         vc.setItems(items)
         panel.showRelativeTo(window: window)
+        if let initialItem { vc.selectItem(initialItem) }
         current = panel
         return panel
     }
@@ -123,10 +128,17 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     private enum Phase {
         case selection
+        case naming(CommandPaletteItem)
         case prompt(CommandPaletteItem)
     }
 
     private var phase: Phase = .selection
+    var usePointGuardNames = true
+    private var draftItemID: String?
+
+    private func requiresName(_ item: CommandPaletteItem) -> Bool {
+        !usePointGuardNames && item.isIndividualLaunch
+    }
 
     // Phase 1 — Selection
     private let searchField = NSTextField()
@@ -406,6 +418,41 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         }
     }
 
+    private func showNamingPhase(item: CommandPaletteItem) {
+        showPromptPhase(item: item)
+        phase = .naming(item)
+        promptHeaderLabel.stringValue = "Name \(item.displayName)"
+        nameLabel.isHidden = false
+        nameField.isHidden = false
+        nameField.placeholderString = "e.g., Fix authentication"
+        slugPreview.isHidden = false
+        slugPreview.stringValue = "Enter to continue"
+        NSLayoutConstraint.activate(nameFieldConstraints)
+        promptScrollView.isHidden = true
+        promptHint.isHidden = true
+        resizePanelHeight(to: 150)
+        DispatchQueue.main.async { [weak self] in
+            self?.view.window?.makeFirstResponder(self?.nameField)
+        }
+    }
+
+    private func submitName() {
+        guard case .naming(let item) = phase else { return }
+        let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            slugPreview.stringValue = "Enter a name to continue"
+            return
+        }
+        nameField.stringValue = name
+        if item.skipsPromptPhase {
+            if case .agentDef(let def) = item {
+                onSelect?(.spawnAgentDef(def: def, prompt: nil, name: name))
+            }
+        } else {
+            showPromptPhase(item: item)
+        }
+    }
+
     private func showPromptPhase(item: CommandPaletteItem) {
         phase = .prompt(item)
 
@@ -418,14 +465,18 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHeaderIcon.contentTintColor = .labelColor
         promptHeaderLabel.stringValue = item.displayName
 
-        promptTextView.string = ""
+        if draftItemID != item.id {
+            promptTextView.string = ""
+            nameField.stringValue = ""
+            draftItemID = item.id
+        }
         promptTextView.setPlaceholder(item.promptPlaceholder)
 
         let showName = item.showsNameField
         nameLabel.isHidden = !showName
         nameField.isHidden = !showName
         slugPreview.isHidden = !showName
-        nameField.stringValue = ""
+        nameField.placeholderString = "e.g., fix-auth-bug"
         slugPreview.stringValue = ""
 
         // Swap the dynamic top constraint for promptScrollView
@@ -560,10 +611,16 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private func selectCurrentItem() {
         guard selectedIndex >= 0, selectedIndex < filteredItems.count else { return }
         let item = filteredItems[selectedIndex]
-        if item.skipsPromptPhase {
+        selectItem(item)
+    }
+
+    func selectItem(_ item: CommandPaletteItem) {
+        if requiresName(item) {
+            showNamingPhase(item: item)
+        } else if item.skipsPromptPhase {
             let result: CommandPaletteResult
             switch item {
-            case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: nil)
+            case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: nil, name: nil)
             case .swarm(let s): result = .runSwarm(def: s)
             case .files: result = .openFilePane(path: nil)
             case .file(let f): result = .openFilePane(path: f.absolutePath)
@@ -578,7 +635,9 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private func submitPrompt() {
         guard case .prompt(let item) = phase else { return }
         let prompt = promptTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = nameField.isHidden ? nil : nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = (item.showsNameField || requiresName(item))
+            ? nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        guard !requiresName(item) || name?.isEmpty == false else { return }
         let promptOrNil = prompt.isEmpty ? nil : prompt
         let nameOrNil = name?.isEmpty == true ? nil : name
 
@@ -590,7 +649,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
             } else {
                 result = .spawnBuiltIn(variant: v, prompt: promptOrNil, name: nameOrNil)
             }
-        case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: promptOrNil)
+        case .agentDef(let d): result = .spawnAgentDef(def: d, prompt: promptOrNil, name: nameOrNil)
         case .swarm(let s): result = .runSwarm(def: s)
         case .files: result = .openFilePane(path: nil)
         case .file(let f): result = .openFilePane(path: f.absolutePath)
@@ -602,8 +661,10 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         switch phase {
         case .selection:
             onDismiss?()
-        case .prompt:
+        case .naming:
             showSelectionPhase()
+        case .prompt(let item):
+            if requiresName(item) { showNamingPhase(item: item) } else { showSelectionPhase() }
         }
     }
 
@@ -622,7 +683,11 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         if field === searchField {
             filterItems(query: field.stringValue)
         } else if field === nameField {
-            updateSlugPreview()
+            if case .naming = phase {
+                slugPreview.stringValue = "Enter to continue"
+            } else {
+                updateSlugPreview()
+            }
         }
     }
 
@@ -696,7 +761,9 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
     private func handleNameFieldKey(_ command: KeyCommand) -> Bool {
         switch command {
         case .enter:
-            if case .prompt(let item) = phase, !item.showsPromptField {
+            if case .naming = phase {
+                submitName()
+            } else if case .prompt(let item) = phase, !item.showsPromptField {
                 submitPrompt()
             } else {
                 view.window?.makeFirstResponder(promptTextView)
