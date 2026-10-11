@@ -220,8 +220,10 @@ struct ChatView: View {
                 .contentShape(Rectangle())
                 .simultaneousGesture(DragGesture().onChanged { _ in
                     draggingTranscript = true; following = false
-                }.onEnded { _ in
+                }.onEnded { value in
                     draggingTranscript = false
+                    // A slow drag back to the end may have no later geometry event.
+                    if value.translation.height < 0 && transcriptBottom != 0 && transcriptBottom <= viewportBottom + 1 { following = true }
                 })
                 .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
                 .scrollDismissesKeyboard(.interactively)
