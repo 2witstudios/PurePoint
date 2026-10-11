@@ -218,9 +218,11 @@ struct ChatView: View {
                     if following && !draggingTranscript { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
                 .contentShape(Rectangle())
-                .simultaneousGesture(DragGesture().onChanged { _ in
+                .simultaneousGesture(DragGesture().onChanged { value in
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
                     draggingTranscript = true; following = false
                 }.onEnded { value in
+                    guard draggingTranscript else { return }
                     draggingTranscript = false
                     // A slow drag back to the end may have no later geometry event.
                     if value.translation.height < 0 && transcriptBottom != 0 && transcriptBottom <= viewportBottom + 1 { following = true }

@@ -15,7 +15,41 @@ indirect enum ChatMarkdownBlock: Equatable, Sendable {
 }
 enum ChatTableAlignment: Sendable { case leading, center, trailing }
 
+nonisolated struct ChatMarkdownDocument: Sendable {
+    let blocks: [ChatMarkdownBlock]
+    let inlineContent: [String: AttributedString]
+}
+
 nonisolated enum ChatMarkdown {
+    static func document(_ source: String) -> ChatMarkdownDocument {
+        let blocks = parse(source)
+        var inlineContent: [String: AttributedString] = [:]
+        func prepare(_ text: String) {
+            guard !Task.isCancelled, inlineContent[text] == nil else { return }
+            var content = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+            for run in content.runs {
+                if let url = run[AttributeScopes.FoundationAttributes.LinkAttribute.self], !["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+                    content[run.range][AttributeScopes.FoundationAttributes.LinkAttribute.self] = nil
+                }
+            }
+            inlineContent[text] = content
+        }
+        func visit(_ blocks: [ChatMarkdownBlock]) {
+            for block in blocks {
+                guard !Task.isCancelled else { return }
+                switch block {
+                case .paragraph(let text), .heading(_, let text), .listItem(_, _, _, let text): prepare(text)
+                case .quote(let nested), .listContinuation(_, let nested): visit(nested)
+                case .table(let headers, _, let rows):
+                    for cell in headers { prepare(cell) }
+                    for row in rows { for cell in row { prepare(cell) } }
+                case .code, .rule, .image: break
+                }
+            }
+        }
+        visit(blocks)
+        return ChatMarkdownDocument(blocks: blocks, inlineContent: inlineContent)
+    }
     static func parse(_ source: String) -> [ChatMarkdownBlock] {
         parse(source, nesting: 0)
     }

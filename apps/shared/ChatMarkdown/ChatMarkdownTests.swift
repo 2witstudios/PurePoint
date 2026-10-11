@@ -78,4 +78,13 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertTrue(result.isEmpty)
     }
 
+    func testGivenDocumentShouldPrepareInlineContentForNestedBlocksAndTables() {
+        let document = ChatMarkdown.document("# **Heading**\n> - *Nested*\n\nA | B\n--- | ---\n`code` | [safe](https://example.com)\n\n[unsafe](file:///tmp/private)")
+        XCTAssertEqual(String(document.inlineContent["**Heading**"]!.characters), "Heading")
+        XCTAssertEqual(String(document.inlineContent["*Nested*"]!.characters), "Nested")
+        XCTAssertEqual(String(document.inlineContent["`code`"]!.characters), "code")
+        XCTAssertEqual(document.inlineContent["[safe](https://example.com)"]!.runs.first?.link, URL(string: "https://example.com"))
+        XCTAssertNil(document.inlineContent["[unsafe](file:///tmp/private)"]!.runs.first?.link)
+    }
+
 }

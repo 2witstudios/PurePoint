@@ -9,7 +9,7 @@ import AppKit
 struct ChatMarkdownView: View, Equatable {
     let text: String
     @State private var document: Document?
-    private struct Document { let blocks: [ChatMarkdownBlock] }
+    private struct Document { let blocks: [ChatMarkdownBlock]; let inlineContent: [String: AttributedString] }
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
     var body: some View {
         Group {
@@ -19,14 +19,14 @@ struct ChatMarkdownView: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: text) {
             let source = text
-            let parser = Task.detached(priority: .userInitiated) { ChatMarkdown.parse(source) }
-            let blocks = await withTaskCancellationHandler {
+            let parser = Task.detached(priority: .userInitiated) { ChatMarkdown.document(source) }
+            let prepared = await withTaskCancellationHandler {
                 await parser.value
             } onCancel: {
                 parser.cancel()
             }
             guard !Task.isCancelled else { return }
-            document = Document(blocks: blocks)
+            document = Document(blocks: prepared.blocks, inlineContent: prepared.inlineContent.mapValues(styledInline))
         }
     }
     private func blocksView(_ blocks: [ChatMarkdownBlock]) -> some View {
@@ -114,7 +114,10 @@ struct ChatMarkdownView: View, Equatable {
         switch level { case 1: .title2.weight(.bold); case 2: .title3.weight(.semibold); default: .headline }
     }
     private func inline(_ text: String) -> AttributedString {
-        var result = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        document?.inlineContent[text] ?? AttributedString(text)
+    }
+    private func styledInline(_ content: AttributedString) -> AttributedString {
+        var result = content
         for run in result.runs {
             if run[AttributeScopes.FoundationAttributes.InlinePresentationIntentAttribute.self]?.contains(.code) == true {
                 result[run.range][AttributeScopes.SwiftUIAttributes.FontAttribute.self] = .system(.callout, design: .monospaced)
