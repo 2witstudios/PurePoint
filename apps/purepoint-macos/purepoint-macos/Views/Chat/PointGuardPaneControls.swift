@@ -1,22 +1,14 @@
 import SwiftUI
 
-/// Chat controls live in the standard tab strip instead of a separate header.
+/// Connection controls live in the standard tab strip; history controls stay in the sidebar.
 struct PointGuardPaneControls: View {
     @ObservedObject var model: PiChatModel
     @Environment(AppState.self) private var appState
-    @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
     @State private var showSetup = false
     @State private var showPhone = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Button {
-                showSidebar.toggle()
-            } label: {
-                Image(systemName: "sidebar.left").frame(width: 24, height: 22)
-            }
-            .help("Toggle conversations (Command-Shift-S)")
-            .accessibilityLabel(showSidebar ? "Hide conversations" : "Show conversations")
             Group {
                 if model.busy {
                     ProgressView().controlSize(.mini)

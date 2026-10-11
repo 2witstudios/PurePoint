@@ -33,6 +33,24 @@ The temporary package runs the existing pane stack, workspace reconciliation, mo
 
 Owner acceptance:
 
+The nested conversation sidebar has a standalone rendered layout check:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer python3 apps/purepoint-macos/verification/check-point-guard-sidebar.py
+```
+
+It hosts the actual sidebar layout and pane splitter inside a native `NavigationSplitView`,
+with a placeholder navigation column. It clicks the real SwiftUI toggle at the history
+sidebar's top-right corner and on its collapsed rail, and measures history/transcript
+bounds across repeated open/close cycles, narrow widths and sibling splits. It briefly
+opens an isolated test window and uses no daemon or app build phases.
+It also compiles the production chat model, chat view and surface wrapper to verify
+local controls and shared-preference shortcuts with two visible chat splits and either
+pane focused. Pi stays disconnected; preferences and recovery storage are isolated.
+In Xcode, also verify that the toggle stays at the history sidebar's top-right corner
+and remains available on its collapsed rail, that dragging the divider resizes history,
+and that Command-Shift-S toggles once with multiple chat splits visible.
+
 1. Build/run the macOS target in Xcode. Open Settings → Point Guard, set the address of the running Pi bridge and its local pairing secret file, and Connect. Keep the phone connected too; both use /v1 and share one live Pi session.
 2. Inspect chat/sidebar/composer in light and dark appearance and at the minimum window size. Search, hide/show the sidebar (Command-Shift-S), start/resume history and browse during a run.
 3. Send multiline text with Return; use Shift-Return for a newline. Keep typing during delivery. Select prose, copy fenced code and expand running/completed/failed tool output.

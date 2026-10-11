@@ -212,6 +212,8 @@ jobs:
         run: python3 apps/purepoint-macos/verification/check-point-guard.py
       - name: Check managed Point Guard service model
         run: python3 apps/purepoint-macos/verification/check-point-guard-service.py
+      - name: Check pane-local Point Guard conversation sidebar
+        run: python3 apps/purepoint-macos/verification/check-point-guard-sidebar.py
 
       - name: Compile app and test bundles
         timeout-minutes: 18

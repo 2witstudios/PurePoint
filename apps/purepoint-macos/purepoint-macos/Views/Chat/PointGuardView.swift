@@ -59,6 +59,10 @@ struct PointGuardChatSurfaceView: View {
 
     var body: some View {
         PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused)
-            .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in showSidebar.toggle() }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
+                // Multiple chat splits share this preference; only the focused one
+                // handles the shortcut so they don't toggle it back off.
+                if isFocused { showSidebar.toggle() }
+            }
     }
 }

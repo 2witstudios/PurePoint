@@ -17,8 +17,16 @@ struct PiPointGuardChatView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        HSplitView {
-            if showSidebar { sidebar.frame(minWidth: 180, idealWidth: 210, maxWidth: 280) }
+        PointGuardConversationLayout(isExpanded: $showSidebar) {
+            Button {
+                if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
+            } label: {
+                Image(systemName: "square.and.pencil")
+            }
+            .help("New conversation").disabled(!model.connected || model.changingSession)
+        } sidebar: {
+            sidebar
+        } content: {
             VStack(spacing: 0) {
                 transcript
                 if let error = model.error {
@@ -26,7 +34,7 @@ struct PiPointGuardChatView: View {
                 }
                 if model.browsing == nil { composer }
             }
-            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
             result in
@@ -63,22 +71,6 @@ struct PiPointGuardChatView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Conversations").font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Button {
-                    showSidebar = false
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .help("Hide conversations")
-                Button {
-                    if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .help("New conversation").disabled(!model.connected || model.changingSession)
-            }.buttonStyle(.borderless).padding(12)
             TextField("Search conversations", text: $search).textFieldStyle(.roundedBorder)
                 .padding(.horizontal, 10).padding(.bottom, 10)
             List(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) {
