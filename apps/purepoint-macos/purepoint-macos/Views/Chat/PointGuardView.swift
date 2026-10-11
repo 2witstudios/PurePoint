@@ -1,313 +1,64 @@
-import SwiftTerm
 import SwiftUI
 
+/// Point Guard is a root workspace, using the same tabs, splits and palette as agents.
 struct PointGuardView: View {
     @Binding var selection: SidebarSelection?
     @Environment(AppState.self) private var appState
-    @Environment(SettingsState.self) private var settingsState
-    @State private var sessionList = SessionListState()
-    @State private var showSidebar = true
-    @AppStorage("PP_pointGuardShowShell") private var showShell = false
-    @State private var shellAgentId: String?
-    @State private var selectedSessionId: String?
-    @State private var shellError: String?
-    @State private var showSetup = false
-    @State private var showPhone = false
+    @Environment(WorkspaceRegistry.self) private var registry
+
+    private var projectRoot: String? {
+        appState.activeProjectRoot.flatMap { appState.projectState(forRoot: $0) != nil ? $0 : nil }
+            ?? appState.projects.first?.projectRoot
+    }
+
+    private var workspace: Workspace? {
+        projectRoot.flatMap { root in registry.workspacesByProject[root]?.first(where: \.isPointGuard) }
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Picker("Point Guard mode", selection: $showShell) {
-                    Text("Chat").tag(false)
-                    Text("Shell").tag(true)
+        Group {
+            if let projectRoot, let error = registry.layoutErrorsByProject[projectRoot] {
+                ContentUnavailableView {
+                    Label("Could not restore layout", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Retry", action: activateWorkspace)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 160)
-                Spacer()
-                if !showShell {
-                    Button("Connect phone") { showPhone = true; Task { await appState.pointGuardService.connectPhone() } }
-                    Button("Setup") { showSetup = true }
+            } else if let workspace {
+                PaneGridView(workspaceId: workspace.id)
+            } else if projectRoot == nil {
+                VStack(spacing: 0) {
+                    PointGuardPaneControls(model: appState.pointGuardChat)
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(8)
+                    PointGuardChatSurfaceView(isFocused: true)
                 }
-                Text("Point Guard")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(10)
-            Divider()
-            if showShell {
-                shellContent
             } else {
-                PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar)
+                Color.clear
             }
         }
+        .onAppear(perform: activateWorkspace)
+        .onChange(of: projectRoot) { _, _ in activateWorkspace() }
         .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
-        .sheet(isPresented: $showSetup) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Point Guard setup").font(.headline)
-                    Spacer()
-                    Button("Done") { showSetup = false }.keyboardShortcut(.cancelAction)
-                }.padding()
-                Divider()
-                ScrollView { PointGuardSetupView(service: appState.pointGuardService, chat: appState.pointGuardChat).padding(24) }
-            }
-                .frame(width: 620, height: 650)
-        }
-        .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: appState.pointGuardService, isPresented: $showPhone) }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
-            showSidebar.toggle()
-        }
     }
 
-    private var shellContent: some View {
-        HSplitView {
-            if showSidebar {
-                ConversationSidebarView(
-                    sessionList: sessionList,
-                    showSidebar: $showSidebar,
-                    selectedSessionId: selectedSessionId,
-                    onSelect: { session in
-                        selectedSessionId = session.id
-                        Task {
-                            await resumeConversation(session)
-                        }
-                    },
-                    onNewConversation: {
-                        selectedSessionId = nil
-                        Task { await respawnShell(cwd: NSHomeDirectory()) }
-                    }
-                )
-                .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
-            }
-
-            ZStack {
-                PointGuardTerminalView(agentId: shellAgentId, onAgentGone: {
-                    appState.pointGuardShellId = nil
-                    shellAgentId = nil
-                    Task { await spawnShell() }
-                })
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if shellAgentId == nil {
-                    VStack(spacing: 12) {
-                        if let shellError {
-                            Text(shellError)
-                                .foregroundStyle(.secondary)
-                                .font(.system(size: 13))
-                            Button("Retry") {
-                                Task { await spawnShell() }
-                            }
-                            .buttonStyle(.bordered)
-                        } else {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Starting terminal...")
-                                .foregroundStyle(.secondary)
-                                .font(.system(size: 13))
-                        }
-                    }
-                }
-            }
-        }
-        .toolbar {
-            if !showSidebar {
-                ToolbarItem(placement: .navigation) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showSidebar = true
-                        }
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                    }
-                    .help("Show conversations (Command+Shift+S)")
-                }
-            }
-        }
-        .task {
-            await spawnShell()
-        }
-    }
-
-    /// Build the claude launch command from settings.
-    private var launchCommand: String? {
-        let cmd = settingsState.pointGuardLaunchCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty else { return nil }
-        if settingsState.pointGuardSkipPermissions {
-            return "\(cmd) --dangerously-skip-permissions"
-        }
-        return cmd
-    }
-
-    private func resumeConversation(_ session: Conversation) async {
-        let cmd: String
-        switch session.agentSource {
-        case .claude:
-            if settingsState.pointGuardSkipPermissions {
-                cmd = "claude --dangerously-skip-permissions --resume \(session.sessionId)"
-            } else {
-                cmd = "claude --resume \(session.sessionId)"
-            }
-        case .codex:
-            cmd = "codex -s workspace-write -a on-request resume \(session.sessionId)"
-        case .opencode:
-            cmd = "opencode --session \(session.sessionId)"
-        }
-        let cwd = (session.projectPath?.isEmpty ?? true) ? NSHomeDirectory() : session.projectPath!
-        await respawnShell(cwd: cwd, then: cmd)
-    }
-
-    private func spawnShell() async {
-        if let existingId = appState.pointGuardShellId {
-            shellAgentId = existingId
-            await sessionList.refreshSessions()
+    private func activateWorkspace() {
+        guard let projectRoot else { return }
+        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: projectRoot) else {
+            registry.activeWorkspaceId = nil
             return
         }
-        await respawnShell(cwd: NSHomeDirectory(), then: launchCommand)
-    }
-
-    /// Kill the current shell, spawn a new one at `cwd`, optionally run a command.
-    private func respawnShell(cwd: String, then command: String? = nil) async {
-        shellError = nil
-
-        // Tell existing shell to exit: Ctrl-C anything running, then `exit`
-        if let oldId = shellAgentId {
-            shellAgentId = nil
-            appState.pointGuardShellId = nil
-            let client = DaemonClient()
-            _ = try? await client.send(.input(agentId: oldId, data: Data([0x03])))  // Ctrl-C
-            try? await Task.sleep(for: .milliseconds(50))
-            _ = try? await client.send(.input(agentId: oldId, data: Data("exit\n".utf8)))
-        }
-
-        do {
-            try await DaemonLifecycle.ensureDaemon()
-            let client = DaemonClient()
-            let response = try await client.send(.spawnShell(cwd: cwd))
-            if case .spawnResult(_, let agentId, _) = response {
-                shellAgentId = agentId
-                appState.pointGuardShellId = agentId
-                if let command {
-                    // Brief delay for shell to initialize before sending command
-                    try await Task.sleep(for: .milliseconds(300))
-                    _ = try? await client.send(.input(agentId: agentId, data: Data("clear && \(command)\n".utf8)))
-                }
-            } else if case .error(_, let message) = response {
-                shellError = message
-            }
-        } catch {
-            shellError = error.localizedDescription
-        }
+        registry.activate(workspaceId: id)
     }
 }
 
-/// NSViewRepresentable that hosts a ScrollableTerminal connected to a shell agent.
-struct PointGuardTerminalView: NSViewRepresentable {
-    let agentId: String?
-    var onAgentGone: (() -> Void)?
+struct PointGuardChatSurfaceView: View {
+    let isFocused: Bool
+    @Environment(AppState.self) private var appState
+    @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
 
-    func makeNSView(context: Context) -> PointGuardTerminalNSView {
-        PointGuardTerminalNSView()
-    }
-
-    func updateNSView(_ nsView: PointGuardTerminalNSView, context: Context) {
-        nsView.onAgentGone = onAgentGone
-        if let agentId, nsView.currentAgentId != agentId {
-            nsView.attach(agentId: agentId)
-        }
-    }
-
-    static func dismantleNSView(_ nsView: PointGuardTerminalNSView, coordinator: ()) {
-        nsView.tearDown()
-    }
-}
-
-class PointGuardTerminalNSView: NSView {
-    private(set) var currentAgentId: String?
-    private var terminal: ScrollableTerminal?
-    private var attachTask: Task<Void, Never>?
-    var onAgentGone: (() -> Void)?
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = TerminalTheme.background.cgColor
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func ensureTerminal() {
-        guard terminal == nil else { return }
-        let tv = ScrollableTerminal(frame: bounds)
-        tv.wantsLayer = true
-        tv.layer?.masksToBounds = true
-        tv.pinToEdges(of: self)
-        terminal = tv
-    }
-
-    override func layout() {
-        super.layout()
-        if window != nil && terminal == nil && bounds.width > 1 {
-            ensureTerminal()
-        }
-        // Start attach once terminal has a real frame
-        if let agentId = currentAgentId, let tv = terminal, tv.bounds.width > 1, attachTask == nil {
-            startAttach(agentId: agentId)
-        }
-    }
-
-    func attach(agentId: String) {
-        currentAgentId = agentId
-        guard let tv = terminal, tv.bounds.width > 1 else {
-            // Terminal not ready yet; layout() will start attach
-            return
-        }
-        startAttach(agentId: agentId)
-    }
-
-    private func startAttach(agentId: String) {
-        attachTask?.cancel()
-        if let old = terminal?.attachSession {
-            Task { await old.stop() }
-        }
-
-        guard let tv = terminal else { return }
-
-        // Clear terminal buffer so old shell output doesn't linger
-        tv.terminalView.getTerminal().resetToInitialState()
-
-        let session = DaemonAttachSession(agentId: agentId, terminalView: tv.terminalView)
-        tv.attachSession = session
-
-        attachTask = Task { [weak self] in
-            await session.start()
-            if session.isAgentGone {
-                await MainActor.run { self?.onAgentGone?() }
-            }
-        }
-
-        // Focus the terminal
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !InlineRenameFocus.isActive else { return }
-            self.window?.makeFirstResponder(tv.terminalView)
-        }
-    }
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        if !InlineRenameFocus.isActive, let tv = terminal?.terminalView {
-            window?.makeFirstResponder(tv)
-        }
-        super.mouseDown(with: event)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        layer?.backgroundColor = TerminalTheme.background.cgColor
-    }
-
-    func tearDown() {
-        attachTask?.cancel()
-        attachTask = nil
-        terminal?.tearDown()
+    var body: some View {
+        PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused)
+            .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in showSidebar.toggle() }
     }
 }

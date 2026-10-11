@@ -309,6 +309,10 @@ struct purepoint_macosApp: App {
     // MARK: - Command Palette
 
     private func showNewAgentPalette() {
+        if registry.activeWorkspace?.isPointGuard == true || appState.activeSidebarSelection == .nav(.dashboard) {
+            appState.newPointGuardTab()
+            return
+        }
         let project: ProjectState?
         if let root = appState.activeProjectRoot {
             project = appState.projectState(forRoot: root)
@@ -415,4 +419,3 @@ struct purepoint_macosApp: App {
         }
     }
 }
-

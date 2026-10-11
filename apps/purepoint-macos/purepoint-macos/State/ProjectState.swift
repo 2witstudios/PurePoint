@@ -36,7 +36,8 @@ final class ProjectState: Identifiable {
     /// How long to keep retrying daemon start + init before surfacing an error.
     private static let daemonConnectBudget: Duration = .seconds(20)
 
-    init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil) {
+    init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil)
+    {
         self.projectRoot = projectRoot
         self.channel = channel ?? ChannelState(projectRoot: projectRoot)
         self.service = service
@@ -206,7 +207,10 @@ final class ProjectState: Identifiable {
     /// The tab is reserved before the request goes out, so whichever arrives first — the
     /// manifest write or the spawn response — the agent lands in this tab and never
     /// surfaces as a workspace of its own.
-    func spawnAgentForSurface(agent: String, prompt: String, workspaceId: String, surfaceId: Int) {
+    func spawnAgentForSurface(
+        agent: String, prompt: String, workspaceId: String, surfaceId: Int,
+        name: String? = nil, command: String? = nil
+    ) {
         guard let registry, let workspace = registry.workspace(id: workspaceId) else { return }
         let root = projectRoot
         let spawnWorktree = workspace.container.worktreeId
@@ -216,7 +220,7 @@ final class ProjectState: Identifiable {
         sendDaemonRequest(
             .spawn(
                 projectRoot: root, prompt: prompt, agent: agent,
-                root: spawnWorktree == nil, worktree: spawnWorktree
+                name: name, root: spawnWorktree == nil, worktree: spawnWorktree, command: command
             ),
             onFailure: { [weak registry] in
                 registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)

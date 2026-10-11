@@ -152,12 +152,14 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     private func buildProjectNode(from project: ProjectState) -> SidebarNode {
         let workspaces = workspacesByProject[project.projectRoot] ?? []
 
-        var projectChildren: [SidebarNode] = workspaces
-            .filter { $0.container == .projectRoot }
+        var projectChildren: [SidebarNode] =
+            workspaces
+            .filter { $0.container == .projectRoot && !$0.isPointGuard }
             .map { SidebarNode(kind: .workspace($0)) }
 
         for worktree in project.worktrees {
-            let children = workspaces
+            let children =
+                workspaces
                 .filter { $0.container == .worktree(worktree.id) }
                 .map { SidebarNode(kind: .workspace($0)) }
             projectChildren.append(SidebarNode(kind: .worktree(worktree), children: children))
@@ -187,15 +189,17 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let projectStates = projects.map { project in
             let workspaces = workspacesByProject[project.projectRoot] ?? []
 
-            let rootWorkspaces = workspaces
-                .filter { $0.container == .projectRoot }
+            let rootWorkspaces =
+                workspaces
+                .filter { $0.container == .projectRoot && !$0.isPointGuard }
                 .map { renderState(for: $0, in: project) }
 
             let worktrees = project.worktrees.map { worktree in
                 WorktreeRenderState(
                     id: worktree.id,
                     branch: worktree.branch,
-                    workspaces: workspaces
+                    workspaces:
+                        workspaces
                         .filter { $0.container == .worktree(worktree.id) }
                         .map { renderState(for: $0, in: project) }
                 )

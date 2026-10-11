@@ -1,6 +1,6 @@
 # Point Guard standalone verification
 
-The desktop chat adapts the merged mobile bridge v1 model and protocol, with desktop names, separate recovery storage/preferences and a separate Keychain service. Neither UI owns Pi's native sessions or starts/stops the bridge. Pi chat state belongs to AppState and survives view navigation; workspace and shell terminals continue through daemon IPC.
+The desktop chat adapts the merged mobile bridge v1 model and protocol, with desktop names, separate recovery storage/preferences and a separate Keychain service. Point Guard uses the standard pane grid as a project-root workspace: chat, terminals, agents and files are tabs and splits, without Chat/Shell modes. Neither UI owns Pi's native sessions or starts/stops the bridge. Pi chat state belongs to AppState and survives view navigation; workspace and shell terminals continue through daemon IPC.
 
 From the repository root:
 
@@ -23,6 +23,14 @@ Validation performed during implementation:
 
 A full app build, XCTest and visual verification remain owner-run in Xcode, per the repository's macOS build-safety rules. Standalone checks do not establish complete target compilation or actual window layout.
 
+Point Guard pane checks can run without the app build phases:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer python3 apps/purepoint-macos/verification/check-point-guard-workspace.py
+```
+
+The temporary package runs the existing pane stack, workspace reconciliation, model and grid-persistence tests plus Point Guard workspace tests against the actual registry and persistence code. Only file-editor storage is stubbed; these checks do not start a daemon, spawn agents, test the palette UI, or replace installed binaries. The Point Guard checks cover root-only agent placement, closing/reopening chat, fresh IDs after closing the last tab, retained focus, distinct project layouts, restart persistence and isolation after copying or renaming a project directory. Restored Point Guard IDs and the persisted active workspace are re-keyed to the current project path while preserving the pane layout. Identity-only migration also preserves newer schema versions and unknown fields; ordinary layout saves still refuse newer documents. If identity migration cannot be written, the registry publishes no layout for that project, shows a retryable error and retries after storage becomes writable. Permission and disk-full failures are injected in the isolated tests. Retry immediately reconciles the latest manifest received during a failed load, removing stale source-project agent tabs and adopting current destination agents.
+
 Owner acceptance:
 
 1. Build/run the macOS target in Xcode. Open Settings → Point Guard, set the address of the running Pi bridge and its local pairing secret file, and Connect. Keep the phone connected too; both use /v1 and share one live Pi session.
@@ -30,5 +38,5 @@ Owner acceptance:
 3. Send multiline text with Return; use Shift-Return for a newline. Keep typing during delivery. Select prose, copy fenced code and expand running/completed/failed tool output.
 4. Scroll up during streaming: output must not pull you away; Latest returns to the live end. Check native confirm/select/input/editor dialogs and suggested draft text.
 5. Queue After reply and Steer, then Stop. Restore canceled text alongside a newer draft. Disconnect/reconnect during a reply without resending. Navigate to another workspace and back while work runs.
-6. Switch to Shell, run commands, return to chat, and confirm both continue. Verify existing desktop split panes, ordinary shell tabs, file tabs and terminal history still work.
+6. In Point Guard, use Cmd+N, Cmd+T, the tab strip plus and both split controls. Choose Terminal, a built-in agent, a custom agent command and Files. Verify they run at the project root outside worktrees and share the Point Guard grid without duplicate sidebar rows. Switch tabs, move tabs between panes, navigate away and back, and restart; chat drafts, terminal scrollback, file edits and layout should survive. Close chat without stopping Pi; closing the final tab returns to chat. Verify ordinary worktree pane behavior still works.
 7. Keep both connected and send from either. Race dialog answers/session changes; verify one winner. Queue from both and Stop from the other device; verify canceled recovery goes only to the submitter. Disconnect/reconnect one while the other continues.

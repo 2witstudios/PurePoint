@@ -48,7 +48,10 @@ struct ChatAreaView: View {
                             .id(chatState.messages[index].id)
                     }
                 }
-                .padding(20)
+                .frame(maxWidth: PurePointTheme.chatContentWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, PurePointTheme.chatHorizontalPadding)
+                .padding(.vertical, 24)
             }
             .onChange(of: chatState.messages.count) { _, _ in
                 lastKnownBlockCount = 0

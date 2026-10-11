@@ -83,6 +83,22 @@ struct ContentView: View {
 
             // Selecting a workspace shows its grid and focuses a pane. A single-pane
             // workspace is a grid of one, so one click lands the user in the terminal.
+            if newValue == .nav(.dashboard) {
+                if let root = appState.activeProjectRoot.flatMap({
+                    appState.projectState(forRoot: $0) != nil ? $0 : nil
+                })
+                    ?? appState.projects.first?.projectRoot
+                {
+                    if let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) {
+                        registry.activate(workspaceId: id)
+                    } else {
+                        registry.activeWorkspaceId = nil
+                    }
+                } else {
+                    registry.activeWorkspaceId = nil
+                }
+                return
+            }
             guard case .workspace(let workspaceId) = newValue else {
                 registry.activeWorkspaceId = nil
                 return
@@ -94,7 +110,8 @@ struct ContentView: View {
     /// Restore the last session's workspace as soon as reconcile has produced it.
     private func selectPendingWorkspaceIfReady() {
         guard let workspaceId = appState.resolvePendingWorkspaceSelection() else { return }
-        selection = .workspace(workspaceId)
+        selection =
+            registry.workspace(id: workspaceId)?.isPointGuard == true ? .nav(.dashboard) : .workspace(workspaceId)
     }
 
     /// Resolve a just-spawned agent to the workspace that now holds it.
@@ -105,7 +122,8 @@ struct ContentView: View {
 
         appState.pendingSelectAgentId = nil
         appState.pendingFocusAgentId = agentId
-        selection = .workspace(workspaceId)
+        selection =
+            registry.workspace(id: workspaceId)?.isPointGuard == true ? .nav(.dashboard) : .workspace(workspaceId)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             appState.pendingFocusAgentId = nil
         }
@@ -150,7 +168,8 @@ struct ContentView: View {
             // (A workspace left with nothing open is removed; the selection then falls back
             // to the dashboard via the workspacesByProject observer.)
             guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface,
-                TabCloseConfirmation.confirm(closing: [surface], in: workspace.id, appState: appState, registry: registry)
+                TabCloseConfirmation.confirm(
+                    closing: [surface], in: workspace.id, appState: appState, registry: registry)
             else { break }
             registry.closeTab(workspaceId: workspace.id, surfaceId: surface.id)
 

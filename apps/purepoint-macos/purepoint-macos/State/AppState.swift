@@ -20,7 +20,6 @@ final class AppState {
 
     @ObservationIgnored lazy var pointGuardChat = PiChatModel()
     @ObservationIgnored lazy var pointGuardService = PointGuardServiceModel()
-    var pointGuardShellId: String?
 
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
@@ -112,6 +111,21 @@ final class AppState {
         if activeProjectRoot == nil {
             activeProjectRoot = root
         }
+    }
+
+    /// Cmd+N in Point Guard opens the normal palette in a new root-workspace tab.
+    func newPointGuardTab() {
+        guard let registry,
+            let root = activeProjectRoot.flatMap({ projectState(forRoot: $0) != nil ? $0 : nil })
+                ?? projects.first?.projectRoot
+        else { return }
+        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) else {
+            registry.activeWorkspaceId = nil
+            return
+        }
+        registry.activate(workspaceId: id)
+        guard let workspace = registry.workspace(id: id) else { return }
+        registry.pendingPaletteSurfaceId = registry.newTab(workspaceId: id, leafId: workspace.focusedLeafId)
     }
 
     // MARK: - Cross-Project Queries

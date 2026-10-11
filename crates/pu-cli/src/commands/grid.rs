@@ -273,6 +273,7 @@ fn render_tabs(leaf: &serde_json::Value) -> Vec<String> {
 
 fn tab_content(tab: &serde_json::Value) -> String {
     match tab.get("kind").and_then(|k| k.as_str()) {
+        Some("point_guard") => "Point Guard".to_string(),
         Some("agent") => tab
             .get("agentId")
             .and_then(|a| a.as_str())
@@ -332,6 +333,19 @@ mod tests {
         assert_eq!(
             rendered,
             "ws-ag-x\n  0 ▸ [1 ag-a #0 │ 2* README.md #1 │ 3 (empty) #2]\n  1   [1* ag-b #3]\n"
+        );
+    }
+
+    #[test]
+    fn given_point_guard_tab_should_distinguish_chat_from_empty_tabs() {
+        let layout = json!({"version":4,"activeWorkspaceId":"ws-point-guard:/project","workspaces":[
+            {"id":"ws-point-guard:/project","focusedLeafId":0,
+             "tree":{"type":"leaf","leafId":0,"activeTabId":0,"tabs":[
+                {"id":0,"kind":"point_guard"}, {"id":1,"kind":"empty"}]}}]});
+
+        assert_eq!(
+            render_grid(&layout),
+            "ws-point-guard:/project  (active)\n  0 ▸ [1* Point Guard #0 │ 2 (empty) #1]\n"
         );
     }
 

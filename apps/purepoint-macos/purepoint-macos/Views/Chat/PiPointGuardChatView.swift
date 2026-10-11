@@ -1,14 +1,18 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Native presentation of the same authoritative Pi session used by the phone.
 struct PiPointGuardChatView: View {
     @ObservedObject var model: PiChatModel
     @Binding var showSidebar: Bool
+    var isFocused = true
     @State private var search = ""
     @State private var pendingSession: PiConversation?
     @State private var confirmNew = false
     @State private var confirmResume = false
     @State private var followOutput = true
+    @State private var showFiles = false
+    @State private var importingAttachment = false
     @FocusState private var composerFocused: Bool
     @Environment(AppState.self) private var appState
 
@@ -16,8 +20,6 @@ struct PiPointGuardChatView: View {
         HSplitView {
             if showSidebar { sidebar.frame(minWidth: 180, idealWidth: 210, maxWidth: 280) }
             VStack(spacing: 0) {
-                header
-                Divider()
                 transcript
                 if let error = model.error {
                     InlineErrorBanner(message: error) { model.error = nil }
@@ -25,6 +27,10 @@ struct PiPointGuardChatView: View {
                 if model.browsing == nil { composer }
             }
             .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
+            result in
+            importAttachment(result)
         }
         .task { if model.connected { await model.loadConversations() } }
         .onChange(of: model.connected) { _, connected in
@@ -53,42 +59,6 @@ struct PiPointGuardChatView: View {
                     }
                 })
         ) { dialog in PiDialogView(model: model, dialog: dialog).id(dialog.id) }
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            if !showSidebar {
-                Button {
-                    showSidebar = true
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .help("Show conversations")
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.snapshot?.title == "Pi" ? "Point Guard" : model.snapshot?.title ?? "Point Guard")
-                    .font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                Text(model.connectionStatus).font(.system(size: 11)).foregroundStyle(.secondary)
-                if let root = appState.activeProjectRoot {
-                    Text("Workspace: " + URL(fileURLWithPath: root).lastPathComponent)
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                        .help("Pi is a global assistant. Name the project when directing work.")
-                }
-            }
-            Spacer()
-            if model.busy {
-                ProgressView().controlSize(.small)
-                Text("Working").font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            Button {
-                if model.connected { model.disconnect() } else { model.connect() }
-            } label: {
-                Image(systemName: model.connected ? "bolt.slash" : "bolt")
-            }
-            .help(model.connected ? "Disconnect this view; Pi and other clients keep running" : "Connect to Pi")
-        }
-        .buttonStyle(.borderless)
-        .padding(12)
     }
 
     private var sidebar: some View {
@@ -146,7 +116,7 @@ struct PiPointGuardChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
+                LazyVStack(alignment: .leading, spacing: 24) {
                     if let history = model.browsing {
                         HStack {
                             Text("Reading: " + history.title).font(.system(size: 12, weight: .medium))
@@ -161,7 +131,12 @@ struct PiPointGuardChatView: View {
                             }
                             Button("Back to live") { model.browsing = nil }
                         }
-                        ForEach(history.messages) { message in messageView(message) }
+                        ForEach(PiTranscriptRows.make(messages: history.messages, tools: [])) { row in
+                            switch row {
+                            case .message(let message): messageView(message)
+                            case .activity(let tools): PiToolActivityView(tools: tools)
+                            }
+                        }
                     } else if model.transcriptRows.isEmpty {
                         emptyState.padding(.vertical, 70)
                     } else {
@@ -179,9 +154,10 @@ struct PiPointGuardChatView: View {
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: PurePointTheme.chatContentWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
-                .padding(24)
+                .padding(.horizontal, PurePointTheme.chatHorizontalPadding)
+                .padding(.vertical, 24)
             }
             .onScrollPhaseChange { oldPhase, phase, context in
                 if phase == .tracking || phase == .interacting { followOutput = false }
@@ -225,13 +201,24 @@ struct PiPointGuardChatView: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
     private func messageView(_ message: PiChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(message.role == "user" ? "You" : message.role == "assistant" ? "Point Guard" : message.role)
-                .font(PurePointTheme.chatLabelFont).foregroundStyle(.secondary)
-            if message.role == "user" {
-                Text(message.text).font(.system(size: 14)).textSelection(.enabled)
-            } else {
+        if message.role == "user" {
+            HStack {
+                Spacer(minLength: 48)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(message.text).font(PurePointTheme.chatFont).lineSpacing(3).textSelection(.enabled)
+                    if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                }
+                .padding(.horizontal, 17).padding(.vertical, 13)
+                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 22))
+                .accessibilityLabel("You: " + message.text)
+            }
+        } else if message.role == "notice" {
+            Label(message.text, systemImage: "text.alignleft")
+                .font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
                 ForEach(Array(PiMarkdownBlocks.split(message.text).enumerated()), id: \.offset) { _, block in
                     switch block {
                     case .prose(let text): MarkdownTextView(text: text)
@@ -239,9 +226,9 @@ struct PiPointGuardChatView: View {
                         CodeBlockView(language: language.isEmpty ? nil : language, code: text)
                     }
                 }
-            }
-            if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+                if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var composer: some View {
@@ -265,74 +252,199 @@ struct PiPointGuardChatView: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if model.editorOffer != nil { Button("Add suggested text to draft") { model.useEditorOffer() } }
-            HStack(alignment: .bottom, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
+                if !model.attachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(model.attachments) { file in
+                                PiAttachmentChip(file: file) { model.attachments.removeAll { $0.id == file.id } }
+                            }
+                        }
+                    }
+                }
                 TextField("Message Point Guard…", text: $model.draft, axis: .vertical)
-                    .textFieldStyle(.plain).font(.system(size: 14)).lineLimit(1...10).focused($composerFocused)
+                    .textFieldStyle(.plain).font(.system(size: 14)).lineLimit(1...8).focused($composerFocused)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4).frame(minHeight: 34, alignment: .center)
+                    .accessibilityLabel("Message draft")
                     .onKeyPress(keys: [.return], phases: .down) { press in
                         if press.modifiers.contains(.shift) { return .ignored }
-                        if model.canSend { model.submit(mode: model.busy ? "after" : "send") }
+                        if model.canSend && !importingAttachment { submitDraft() }
                         return .handled
                     }
-                if model.busy {
+                HStack(spacing: 12) {
                     Button {
-                        Task { _ = await model.stop() }
+                        showFiles = true
                     } label: {
-                        Image(systemName: "stop.fill")
+                        Group {
+                            if importingAttachment {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "plus").font(.system(size: 18))
+                            }
+                        }.frame(width: 34, height: 34).contentShape(Rectangle())
                     }
-                    .help("Stop Pi and queued messages; delegated workers keep running").disabled(!model.connected)
-                    Menu {
-                        Button("Send after reply") { model.submit(mode: "after") }
-                        Button("Steer current work") { model.submit(mode: "steer") }
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
+                    .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
+                    .accessibilityLabel("Add attachment").help("Attach an image, text file, or PDF")
+                    Spacer(minLength: 0)
+                    if model.busy {
+                        Menu {
+                            Button("Send after reply") { submitDraft(mode: "after") }
+                            Button("Steer current work") { submitDraft(mode: "steer") }
+                        } label: {
+                            Text("Send options").font(.system(size: 12, weight: .medium))
+                        }
+                        .menuStyle(.borderlessButton).fixedSize()
+                        .disabled(!model.canSend || importingAttachment).help("Choose when to send your draft")
+                        Button {
+                            Task { _ = await model.stop() }
+                        } label: {
+                            composerActionIcon("stop.fill", enabled: model.connected)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop Point Guard")
+                        .help("Stop Pi and queued messages; delegated workers keep running").disabled(!model.connected)
+                    } else {
+                        Button {
+                            submitDraft()
+                        } label: {
+                            composerActionIcon("arrow.up", enabled: model.canSend && !importingAttachment)
+                        }
+                        .buttonStyle(.plain).disabled(!model.canSend || importingAttachment)
+                        .accessibilityLabel("Send message").help("Send message (Return)")
                     }
-                    .disabled(!model.canSend).help("Send options")
-                } else {
-                    Button {
-                        model.submit(mode: "send")
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 24))
-                    }
-                    .buttonStyle(.plain).disabled(!model.canSend).help("Send message (Return)")
+                }
+                if model.busy && !model.attachments.isEmpty {
+                    Text("Attachments are ready for your next message.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
-            .padding(14)
-            .background(Color(NSColor.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.1)))
-            Text("Return to send · Shift-Return for a new line").font(.system(size: 10)).foregroundStyle(.tertiary)
+            .padding(12)
+            .background(
+                Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
+                    .strokeBorder(composerFocused ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08))
+            }
         }
-        .frame(maxWidth: 760).frame(maxWidth: .infinity).padding(.horizontal, 24).padding(.bottom, 16)
-        .onAppear { composerFocused = true }
+        .frame(maxWidth: PurePointTheme.chatContentWidth).frame(maxWidth: .infinity)
+        .padding(.horizontal, PurePointTheme.chatHorizontalPadding).padding(.top, 8).padding(.bottom, 16)
+        .onAppear { composerFocused = isFocused }
+        .onChange(of: isFocused) { _, focused in
+            if !focused { composerFocused = false }
+        }
+    }
+
+    private func importAttachment(_ result: Result<URL, Error>) {
+        let draftKey = model.draftKey
+        Task {
+            importingAttachment = true
+            defer { importingAttachment = false }
+            do {
+                let url = try result.get()
+                let file = try await Task.detached(priority: .userInitiated) { try PiAttachmentImport.file(url) }.value
+                guard model.draftKey == draftKey else {
+                    model.error = "The conversation changed. Attach the file again to your current draft."
+                    return
+                }
+                model.addAttachment(file)
+                composerFocused = true
+            } catch {
+                let failure = error as NSError
+                if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError {
+                    model.error = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func submitDraft(mode: String? = nil) {
+        followOutput = true
+        model.submit(mode: mode ?? (model.busy ? "after" : "send"))
+        composerFocused = true
+    }
+
+    private func composerActionIcon(_ name: String, enabled: Bool) -> some View {
+        Image(systemName: name).font(.system(size: 14, weight: .semibold))
+            .frame(width: 34, height: 34)
+            .foregroundStyle(Color(NSColor.controlBackgroundColor))
+            .background(enabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
+            .contentShape(Circle())
+    }
+}
+
+private struct PiAttachmentChip: View {
+    let file: PiComposerAttachment
+    let remove: () -> Void
+    var body: some View {
+        HStack(spacing: 8) {
+            if file.isImage, let image = NSImage(data: file.data) {
+                Image(nsImage: image).resizable().scaledToFill().frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 6)).accessibilityHidden(true)
+            } else {
+                Image(systemName: "doc.text").frame(width: 24, height: 32).accessibilityHidden(true)
+            }
+            Text(file.name).font(.system(size: 12)).lineLimit(1).frame(maxWidth: 140, alignment: .leading)
+            Button(action: remove) {
+                Image(systemName: "xmark").font(.system(size: 10)).frame(width: 24, height: 24)
+            }.buttonStyle(.plain).accessibilityLabel("Remove " + file.name)
+        }
+        .padding(8).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
 private struct PiToolActivityView: View {
     let tools: [PiToolActivity]
+    @State private var expanded = false
+    private var running: Int { tools.filter { $0.state == "running" }.count }
+    private var failed: Int { tools.filter { $0.state == "failed" }.count }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
+                    if index > 0 { Divider() }
+                    PiToolDetailView(tool: tool)
+                }
+            }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("\(tools.count) tool call\(tools.count == 1 ? "" : "s")")
+                    .font(.system(size: 12, weight: .medium))
+                if running > 0 {
+                    Text("Working").font(.system(size: 11)).foregroundStyle(.secondary)
+                } else if failed > 0 {
+                    Text("\(failed) failed").font(.system(size: 11)).foregroundStyle(.red)
+                }
+            }.foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4).frame(minHeight: 36)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityHint("Expand to inspect tool calls and their output")
+    }
+}
+
+private struct PiToolDetailView: View {
+    let tool: PiToolActivity
     var body: some View {
         DisclosureGroup {
-            ForEach(tools) { tool in
-                DisclosureGroup {
-                    ScrollView(.horizontal) {
-                        Text(tool.text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).padding(
-                            .vertical, 6)
-                    }
-                } label: {
-                    Label(
-                        tool.name + " · " + tool.state,
-                        systemImage: tool.state == "running"
-                            ? "gearshape" : tool.state == "finished" ? "checkmark.circle" : "exclamationmark.circle"
-                    )
-                    .font(.system(size: 12))
-                }.padding(.vertical, 4)
+            ScrollView(.horizontal) {
+                Text(tool.text.isEmpty ? "No output" : tool.text)
+                    .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8).padding(.bottom, 4)
             }
         } label: {
-            Label(
-                "\(tools.count) \(tools.count == 1 ? "tool" : "tools")"
-                    + (tools.contains { $0.state == "running" } ? " working" : " used"),
-                systemImage: "wrench.and.screwdriver"
-            )
-            .font(.system(size: 12)).foregroundStyle(.secondary)
-        }.padding(12).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(tool.name).font(.system(size: 13, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(tool.state == "finished" ? "Done" : tool.state.capitalized)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }.foregroundStyle(tool.state == "failed" ? Color.red : Color.secondary)
+        }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

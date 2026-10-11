@@ -40,7 +40,7 @@ nonisolated final class GridLayoutNode: Codable, Sendable {
     }
 }
 
-/// One tab as written to disk. `kind` is `agent`, `file` or `empty`; an unknown kind
+/// One tab as written to disk. `kind` is `agent`, `file`, `point_guard` or `empty`; an unknown kind
 /// (a newer app's file) loads as an empty tab rather than failing the whole document.
 nonisolated struct PersistedSurface: Codable, Sendable, Equatable {
     let id: Int
@@ -52,6 +52,7 @@ nonisolated struct PersistedSurface: Codable, Sendable, Equatable {
         id = surface.id
         switch surface.content {
         case .empty: (kind, agentId, path) = ("empty", nil, nil)
+        case .pointGuard: (kind, agentId, path) = ("point_guard", nil, nil)
         case .agent(let agentId): (kind, self.agentId, path) = ("agent", agentId, nil)
         case .file(let path): (kind, agentId, self.path) = ("file", nil, path)
         }
@@ -61,6 +62,7 @@ nonisolated struct PersistedSurface: Codable, Sendable, Equatable {
         switch kind {
         case "agent": Surface(id: id, content: agentId.map { .agent($0) } ?? .empty)
         case "file": Surface(id: id, content: .file(path: path))
+        case "point_guard": Surface(id: id, content: .pointGuard)
         default: Surface(id: id, content: .empty)
         }
     }
@@ -89,7 +91,8 @@ nonisolated struct PersistedFilePane: Codable, Sendable, Equatable {
 /// The whole per-project layout document. This file is the only place pane grouping
 /// is stored — there is no second copy to drift from.
 nonisolated struct PersistedWorkspaceDocument: Codable, Sendable {
-    static let currentVersion = 3
+    // Version 4 adds Point Guard tabs. Older version 3 builds must not overwrite them.
+    static let currentVersion = 4
 
     let version: Int
     let workspaces: [PersistedWorkspace]
@@ -168,16 +171,53 @@ nonisolated enum WorkspacePersistence {
     // MARK: - Load
 
     static func load(projectRoot: String) -> [Workspace] {
+        (try? loadForRegistry(projectRoot: projectRoot)) ?? []
+    }
+
+    /// Registry loading must distinguish an unavailable identity migration from no layout.
+    /// Never publish a new identity until its atomic write has succeeded.
+    static func loadForRegistry(
+        projectRoot: String,
+        writeMigration: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
+    ) throws -> [Workspace] {
         let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
         if let data = try? Data(contentsOf: url),
             let document = try? JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
         {
-            return document.workspaces.map(workspace(from:))
+            let restored = document.workspaces.map { workspace(from: $0, projectRoot: projectRoot) }
+            // Copied/renamed project directories keep their layout, but must not publish an
+            // ID belonging to another open project. Persist the new ID for CLI routing too.
+            if zip(document.workspaces, restored).contains(where: { $0.id != $1.id }) {
+                try migrateWorkspaceIds(in: data, to: restored, at: url, write: writeMigration)
+            }
+            return restored
         }
         return migrateLegacyLayout(projectRoot: projectRoot)
     }
 
-    private static func workspace(from persisted: PersistedWorkspace) -> Workspace {
+    /// Identity-only migration also works for decodable newer documents. Re-encoding the
+    /// typed model would drop unknown fields and surface kinds, so patch the raw JSON and
+    /// retain its version. Normal layout saves still refuse to overwrite a newer schema.
+    private static func migrateWorkspaceIds(
+        in data: Data, to restored: [Workspace], at url: URL, write: (Data, URL) throws -> Void
+    ) throws {
+        guard var document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            var workspaces = document["workspaces"] as? [[String: Any]],
+            workspaces.count == restored.count
+        else { throw CocoaError(.fileReadCorruptFile) }
+        let activeId = document["activeWorkspaceId"] as? String
+        for index in workspaces.indices {
+            if workspaces[index]["id"] as? String == activeId, activeId != nil {
+                document["activeWorkspaceId"] = restored[index].id
+            }
+            workspaces[index]["id"] = restored[index].id
+        }
+        document["workspaces"] = workspaces
+        let migrated = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        try write(migrated, url)
+    }
+
+    private static func workspace(from persisted: PersistedWorkspace, projectRoot: String) -> Workspace {
         var nextLeafId = persisted.nextLeafId
         var nextSurfaceId = persisted.nextSurfaceId ?? 0
         let filePaths = Dictionary(
@@ -187,7 +227,8 @@ nonisolated enum WorkspacePersistence {
             from: persisted.tree, panes: &panes, legacyFilePaths: filePaths,
             nextLeafId: &nextLeafId, nextSurfaceId: &nextSurfaceId)
         return Workspace(
-            id: persisted.id,
+            id: persisted.id.hasPrefix("ws-point-guard:")
+                ? Workspace.pointGuardId(projectRoot: projectRoot) : persisted.id,
             container: persisted.worktreeId.map { .worktree($0) } ?? .projectRoot,
             root: root,
             panes: panes,

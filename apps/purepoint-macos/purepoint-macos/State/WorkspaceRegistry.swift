@@ -54,6 +54,26 @@ final class WorkspaceRegistry {
     @ObservationIgnored private var liveByProject: [String: [LiveAgent]] = [:]
     @ObservationIgnored private var loadedProjects = Set<String>()
     @ObservationIgnored private var saveWorkItems: [String: DispatchWorkItem] = [:]
+    private(set) var layoutErrorsByProject: [String: String] = [:]
+    @ObservationIgnored private let loadWorkspaces: (String) throws -> [Workspace]
+
+    init(loadWorkspaces: @escaping (String) throws -> [Workspace] = { try WorkspacePersistence.loadForRegistry(projectRoot: $0) }) {
+        self.loadWorkspaces = loadWorkspaces
+    }
+
+    private func loadProjectIfNeeded(_ projectRoot: String) throws -> Bool {
+        guard !loadedProjects.contains(projectRoot) else { return false }
+        do {
+            let restored = try loadWorkspaces(projectRoot)
+            workspacesByProject[projectRoot] = restored
+            loadedProjects.insert(projectRoot)
+            layoutErrorsByProject[projectRoot] = nil
+            return true
+        } catch {
+            layoutErrorsByProject[projectRoot] = "Could not restore this project's layout: " + error.localizedDescription
+            throw error
+        }
+    }
 
     // MARK: - Queries
 
@@ -87,6 +107,29 @@ final class WorkspaceRegistry {
         activeWorkspaceId.flatMap { workspace(id: $0) }
     }
 
+    /// Uses the same registry and persistence as agent workspaces. The navigation item is
+    /// this workspace's sidebar entry, so it does not also appear under the project.
+    @discardableResult
+    func ensurePointGuardWorkspace(projectRoot: String) throws -> String {
+        let didLoad = try loadProjectIfNeeded(projectRoot)
+        // Restore/retry must apply the retained manifest. Ordinary visits must not replay
+        // a snapshot that can predate a spawn response already bound to one of these tabs.
+        if didLoad, let live = liveByProject[projectRoot] {
+            publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
+        }
+        let id = Workspace.pointGuardId(projectRoot: projectRoot)
+        if let workspace = workspacesByProject[projectRoot]?.first(where: { $0.id == id }) {
+            if !workspace.surfaces.contains(where: { $0.surface.content == .pointGuard }) {
+                mutate(workspace.id) { $0.newTab(leafId: $0.focusedLeafId, content: .pointGuard) }
+            }
+            return workspace.id
+        }
+        let workspace = Workspace.pointGuard(projectRoot: projectRoot)
+        workspacesByProject[projectRoot, default: []].append(workspace)
+        scheduleSave(projectRoot: projectRoot)
+        return workspace.id
+    }
+
     // MARK: - Reconcile
 
     /// Fold a project's manifest into the stored layout and publish the canonical result.
@@ -95,12 +138,10 @@ final class WorkspaceRegistry {
     /// here on first sight of a project — the old code persisted a layout that nothing ever
     /// read back, so every restart silently dissolved the grouping.
     func reconcile(projectRoot: String, rootAgents: [AgentModel], worktrees: [WorktreeModel]) {
-        if loadedProjects.insert(projectRoot).inserted, workspacesByProject[projectRoot] == nil {
-            workspacesByProject[projectRoot] = WorkspacePersistence.load(projectRoot: projectRoot)
-        }
-
         let live = WorkspaceReconciler.liveAgents(rootAgents: rootAgents, worktrees: worktrees)
+        // A failed restore must still retain the current manifest for a later Retry.
         liveByProject[projectRoot] = live
+        do { _ = try loadProjectIfNeeded(projectRoot) } catch { return }
         publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
     }
 
@@ -215,7 +256,7 @@ final class WorkspaceRegistry {
     /// with no second click. Which tab each pane shows is left alone.
     func activate(workspaceId: String) {
         activeWorkspaceId = workspaceId
-        guard let target = workspace(id: workspaceId), target.focusedAgentId == nil,
+        guard let target = workspace(id: workspaceId), !target.isPointGuard, target.focusedAgentId == nil,
             let leafId = target.root.allLeafIds.first(where: { target.panes[$0]?.activeTab?.content.agentId != nil })
         else { return }
         setFocus(workspaceId: workspaceId, leafId: leafId)
@@ -288,6 +329,13 @@ final class WorkspaceRegistry {
             target.leafId(ofSurface: surfaceId) != nil
         else { return }
 
+        if target.isPointGuard,
+            let liveAgent = liveByProject[projectRoot]?.first(where: { $0.id == agentId }),
+            liveAgent.container != .projectRoot
+        {
+            return
+        }
+
         var stored: [Workspace] = []
         for var workspace in list {
             if workspace.id == workspaceId {
@@ -322,6 +370,9 @@ final class WorkspaceRegistry {
         let killed = body(&list[index])
         for surfaceId in surfaceIds {
             dropReservation(projectRoot: projectRoot, workspaceId: workspaceId, surfaceId: surfaceId)
+        }
+        if list[index].isPointGuard && list[index].panes.isEmpty {
+            list[index].resetToPointGuard()
         }
         if list[index].isGhost, !reservedWorkspaceIds(projectRoot: projectRoot).contains(workspaceId) {
             list.remove(at: index)
@@ -467,6 +518,7 @@ final class WorkspaceRegistry {
         workspacesByProject[projectRoot] = nil
         reservationsByProject[projectRoot] = nil
         liveByProject[projectRoot] = nil
+        layoutErrorsByProject[projectRoot] = nil
         loadedProjects.remove(projectRoot)
         pruneActiveSelection()
     }

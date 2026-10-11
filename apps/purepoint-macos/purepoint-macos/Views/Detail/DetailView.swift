@@ -33,7 +33,9 @@ struct DetailView: View {
         // Every workspace renders as a grid. A one-pane workspace is a grid of one, which
         // is why selecting its row drops the user straight into the terminal.
         case .workspace(let id):
-            if registry.workspace(id: id) != nil {
+            if registry.workspace(id: id)?.isPointGuard == true {
+                PointGuardView(selection: $selection)
+            } else if registry.workspace(id: id) != nil {
                 if let rootPath = appState.fileRoot(forWorkspace: id, registry: registry) {
                     WorkspaceFilesLayout(rootPath: rootPath) {
                         PaneGridView(workspaceId: id)
@@ -63,8 +65,11 @@ struct DetailView: View {
             }
 
         case .channel(let root):
-            if let project = appState.projectState(forRoot: root) { ProjectChannelView(project: project) }
-            else { placeholderView(icon: "bubble.left.and.bubble.right", title: "Project channel") }
+            if let project = appState.projectState(forRoot: root) {
+                ProjectChannelView(project: project)
+            } else {
+                placeholderView(icon: "bubble.left.and.bubble.right", title: "Project channel")
+            }
         case .project(let root):
             if let project = appState.projectState(forRoot: root) {
                 ProjectDetailView(project: project, selection: $selection)
