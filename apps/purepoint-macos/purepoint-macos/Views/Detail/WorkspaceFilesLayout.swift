@@ -34,8 +34,8 @@ struct WorkspaceFilesLayout<Content: View>: View {
                 } label: {
                     Image(systemName: "sidebar.right")
                 }
-                .help(showSidebar ? "Hide changes and files" : "Show changes and files")
-                .accessibilityLabel(showSidebar ? "Hide changes and files" : "Show changes and files")
+                .help(showSidebar ? "Hide workspace sidebar" : "Show workspace sidebar")
+                .accessibilityLabel(showSidebar ? "Hide workspace sidebar" : "Show workspace sidebar")
             }
         }
     }

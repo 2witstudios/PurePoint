@@ -4,6 +4,8 @@ import SwiftUI
 /// A file's body expands in place in the same scroll view as its filename.
 struct WorkspaceFilesSidebar: View {
     @Bindable var state: WorkspaceFilesState
+    @Environment(AppState.self) private var appState
+    @State private var showConversations = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,29 +32,38 @@ struct WorkspaceFilesSidebar: View {
             .padding(.horizontal, 10)
             .frame(height: PaneTabBar.height)
             Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        if state.mode == .changes {
-                            changes
-                        } else {
-                            ForEach(state.fileTree.rootNodes, id: \.relativePath) { node in
-                                InlineFileTreeRow(node: node, state: state, depth: 0)
-                            }
-                            if state.fileTree.rootNodes.isEmpty { message("No files") }
-                        }
-                    }
-                }
-                .onChange(of: state.expandedFiles) { previous, current in
-                    guard state.mode == .changes else { return }
-                    if let collapsed = previous.subtracting(current).sorted().first {
-                        proxy.scrollTo(collapsed, anchor: .top)
-                    }
-                }
+            if state.mode == .pointGuard {
+                PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showConversations, isFocused: false)
+                    .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+            } else {
+                fileContent
             }
         }
         .background(Color(nsColor: Theme.cardBackground))
         .task { await state.observe() }
+    }
+
+    private var fileContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    if state.mode == .changes {
+                        changes
+                    } else {
+                        ForEach(state.fileTree.rootNodes, id: \.relativePath) { node in
+                            InlineFileTreeRow(node: node, state: state, depth: 0)
+                        }
+                        if state.fileTree.rootNodes.isEmpty { message("No files") }
+                    }
+                }
+            }
+            .onChange(of: state.expandedFiles) { previous, current in
+                guard state.mode == .changes else { return }
+                if let collapsed = previous.subtracting(current).sorted().first {
+                    proxy.scrollTo(collapsed, anchor: .top)
+                }
+            }
+        }
     }
 
     @ViewBuilder
