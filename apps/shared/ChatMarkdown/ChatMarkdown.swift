@@ -119,7 +119,7 @@ nonisolated enum ChatMarkdown {
             if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
                 flush(); blocks.append(.heading(level: hashes, text: String(trimmed.dropFirst(hashes + 1)))); i += 1; continue
             }
-            if isRule(trimmed) { flush(); blocks.append(.rule); i += 1; continue }
+            if isRule(trimmed) { orderedCounters.removeAll(); flush(); blocks.append(.rule); i += 1; continue }
             if trimmed.hasPrefix(">") {
                 flush(); var quoted: [String] = []
                 while i < lines.count {

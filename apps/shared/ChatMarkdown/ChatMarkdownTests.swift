@@ -133,4 +133,12 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(markers, ["3.", "1.", "2.", "4.", "5.", "7."])
     }
 
+    func testGivenSpacedRuleShouldRestartOrderedListNumbering() {
+        for rule in ["* * *", "- - -"] {
+            XCTAssertEqual(ChatMarkdown.parse("1. Before\n\n" + rule + "\n\n1. After"), [
+                .listItem(depth: 0, marker: "1.", checked: nil, text: "Before"), .rule,
+                .listItem(depth: 0, marker: "1.", checked: nil, text: "After")])
+        }
+    }
+
 }
