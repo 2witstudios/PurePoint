@@ -26,7 +26,8 @@ The renderer supports chat-oriented block Markdown and Foundation inline Markdow
 not the full CommonMark specification. Nested list rows retain indentation;
 continuation text remains with its item, and nested code/quotes get their own indented blocks. Fences support backticks/tildes, longer
 closing delimiters and incomplete streamed blocks. Raw HTML is text. Links only
-activate HTTP, HTTPS and mailto; standalone Markdown images load HTTP(S) URLs.
+activate HTTP, HTTPS and mailto; standalone Markdown images show the destination host and require a Load image tap
+before requesting HTTP(S) URLs. Assistant content never automatically loads images.
 Tables and code scroll horizontally rather than widening the transcript. Table previews
 are capped at 100 body rows and 12 columns, with document-wide limits of 256 blocks
 and 1,200 table cells (including headers). Visible notices explain truncation.

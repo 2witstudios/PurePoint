@@ -9,6 +9,7 @@ import AppKit
 struct ChatMarkdownView: View, Equatable {
     let text: String
     @State private var document: Document?
+    @State private var requestedImages: Set<URL> = []
     private struct Document { let blocks: [ChatMarkdownBlock]; let inlineContent: [String: AttributedString] }
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text }
     var body: some View {
@@ -38,13 +39,23 @@ struct ChatMarkdownView: View, Equatable {
         switch block {
         case .image(let alt, let url):
             return AnyView(VStack(alignment: .leading, spacing: 8) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable().scaledToFit().frame(maxHeight: 420).accessibilityLabel(alt.isEmpty ? "Image" : alt)
-                    case .failure: Label("Image unavailable", systemImage: "photo").font(.callout).foregroundStyle(.secondary)
-                    default: ProgressView().frame(height: 80).frame(maxWidth: .infinity)
-                    }
-                }.clipShape(RoundedRectangle(cornerRadius: 12))
+                if requestedImages.contains(url) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image): image.resizable().scaledToFit().frame(maxHeight: 420).accessibilityLabel(alt.isEmpty ? "Image" : alt)
+                        case .failure: Label("Image unavailable", systemImage: "photo").font(.callout).foregroundStyle(.secondary)
+                        default: ProgressView().frame(height: 80).frame(maxWidth: .infinity)
+                        }
+                    }.clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
+                    Button { requestedImages.insert(url) } label: {
+                        Label("Load image", systemImage: "photo").font(.callout)
+                            .frame(maxWidth: .infinity, minHeight: 80)
+                            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+                    }.buttonStyle(.plain)
+                        .accessibilityHint("Requests an image from \(url.host ?? "the linked host")")
+                    if let host = url.host { Text(host).font(.caption).foregroundStyle(.secondary) }
+                }
                 if !alt.isEmpty { Text(alt).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                 Link("Open image", destination: url).font(.caption)
             })
