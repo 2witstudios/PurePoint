@@ -61,13 +61,14 @@ final class WorkspaceRegistry {
         self.loadWorkspaces = loadWorkspaces
     }
 
-    private func loadProjectIfNeeded(_ projectRoot: String) throws {
-        guard !loadedProjects.contains(projectRoot) else { return }
+    private func loadProjectIfNeeded(_ projectRoot: String) throws -> Bool {
+        guard !loadedProjects.contains(projectRoot) else { return false }
         do {
             let restored = try loadWorkspaces(projectRoot)
             workspacesByProject[projectRoot] = restored
             loadedProjects.insert(projectRoot)
             layoutErrorsByProject[projectRoot] = nil
+            return true
         } catch {
             layoutErrorsByProject[projectRoot] = "Could not restore this project's layout: " + error.localizedDescription
             throw error
@@ -110,7 +111,12 @@ final class WorkspaceRegistry {
     /// this workspace's sidebar entry, so it does not also appear under the project.
     @discardableResult
     func ensurePointGuardWorkspace(projectRoot: String) throws -> String {
-        try loadProjectIfNeeded(projectRoot)
+        let didLoad = try loadProjectIfNeeded(projectRoot)
+        // Restore/retry must apply the retained manifest. Ordinary visits must not replay
+        // a snapshot that can predate a spawn response already bound to one of these tabs.
+        if didLoad, let live = liveByProject[projectRoot] {
+            publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
+        }
         let id = Workspace.pointGuardId(projectRoot: projectRoot)
         if let workspace = workspacesByProject[projectRoot]?.first(where: { $0.id == id }) {
             if !workspace.surfaces.contains(where: { $0.surface.content == .pointGuard }) {
@@ -132,10 +138,10 @@ final class WorkspaceRegistry {
     /// here on first sight of a project — the old code persisted a layout that nothing ever
     /// read back, so every restart silently dissolved the grouping.
     func reconcile(projectRoot: String, rootAgents: [AgentModel], worktrees: [WorktreeModel]) {
-        do { try loadProjectIfNeeded(projectRoot) } catch { return }
-
         let live = WorkspaceReconciler.liveAgents(rootAgents: rootAgents, worktrees: worktrees)
+        // A failed restore must still retain the current manifest for a later Retry.
         liveByProject[projectRoot] = live
+        do { _ = try loadProjectIfNeeded(projectRoot) } catch { return }
         publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
     }
 

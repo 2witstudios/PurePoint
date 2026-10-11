@@ -281,6 +281,51 @@ import Testing
         }
     }
 
+    @Test func successfulRetryReconcilesTheLatestManifestWithoutWaitingForAnotherEvent() throws {
+        try withRegistry { _, root in
+            var canWrite = false
+            let registry = WorkspaceRegistry { projectRoot in
+                try WorkspacePersistence.loadForRegistry(projectRoot: projectRoot) { data, url in
+                    if !canWrite { throw CocoaError(.fileWriteNoPermission) }
+                    try data.write(to: url, options: .atomic)
+                }
+            }
+            defer { registry.forgetProject(root) }
+            var original = Workspace.pointGuard(projectRoot: root + "-source")
+            original.newTab(leafId: 0, content: .agent("ag-source"))
+            WorkspacePersistence.save([original], projectRoot: root)
+            func agent(_ id: String) -> AgentModel {
+                AgentModel(id: id, name: id, agentType: "terminal", status: .running, prompt: "", startedAt: "")
+            }
+            registry.reconcile(projectRoot: root, rootAgents: [agent("ag-previous")], worktrees: [])
+            registry.reconcile(projectRoot: root, rootAgents: [agent("ag-current")], worktrees: [])
+            #expect(registry.workspacesByProject[root] == nil)
+
+            canWrite = true
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
+            #expect(registry.workspace(id: id)?.surfaces.map(\.surface.content) == [.pointGuard])
+            #expect(registry.workspaceId(forAgent: "ag-source") == nil)
+            #expect(registry.workspaceId(forAgent: "ag-previous") == nil)
+            let current = try #require(registry.workspaceId(forAgent: "ag-current"))
+            #expect(registry.projectRoot(forWorkspace: current) == root)
+            #expect(registry.layoutErrorsByProject[root] == nil)
+        }
+    }
+
+    @Test func revisitingPointGuardDoesNotPruneASpawnResponseBeforeManifestArrival() throws {
+        try withRegistry { registry, root in
+            registry.reconcile(projectRoot: root, rootAgents: [], worktrees: [])
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
+            let surface = try #require(registry.newTab(workspaceId: id, leafId: 0))
+            registry.reserveSurface(projectRoot: root, workspaceId: id, surfaceId: surface)
+            registry.fulfillReservation(projectRoot: root, workspaceId: id, surfaceId: surface, agentId: "ag-new")
+
+            #expect(try registry.ensurePointGuardWorkspace(projectRoot: root) == id)
+            #expect(registry.workspaceId(forAgent: "ag-new") == id)
+            #expect(registry.workspace(id: id)?.focusedSurface?.content == .agent("ag-new"))
+        }
+    }
+
     @Test func worktreeAgentsCannotBeClaimedByPointGuard() throws {
         var workspace = Workspace.pointGuard(projectRoot: "/tmp/project")
         workspace.newTab(leafId: 0, content: .agent("ag-worktree"))
