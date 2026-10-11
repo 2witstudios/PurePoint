@@ -1,5 +1,10 @@
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import os from "node:os";
+import {
+  catalogResult,
+  confirmExit,
+  qualificationFailed,
+} from "./qualification-result.mjs";
 import path from "node:path";
 const mobile = path.resolve(process.argv[2]);
 const artifacts = path.resolve(process.argv[3]);
@@ -104,21 +109,25 @@ try {
       record.extensionErrors = events.filter(
         (e) => e.type === "extension_error",
       );
-      record.result = record.extensionErrors.length
-        ? "FAIL extension lifecycle"
-        : "PASS native RPC startup, catalog and command output; real integration actions NOT RUN";
+      record.result = catalogResult(record);
     } catch (e) {
       record.result = "FAIL native RPC startup: " + e.message;
       record.stderr = stderr.slice(0, 3000);
     } finally {
       await rpc.close();
-      record.teardown =
-        rpc.child.exitCode !== null || rpc.child.signalCode !== null;
+      record.teardown = await confirmExit(rpc.child);
+      if (!record.teardown) {
+        record.result = "FAIL unconfirmed child teardown; " + record.result;
+        // This is our disposable child only. Reap it even when qualification fails.
+        rpc.child.kill("SIGKILL");
+        await confirmExit(rpc.child);
+      }
     }
     output.push(record);
   }
   await writeFile(resultFile, JSON.stringify(output, null, 2) + "\n");
   console.log(JSON.stringify(output, null, 2));
+  if (qualificationFailed(output)) process.exitCode = 1;
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }

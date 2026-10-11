@@ -140,7 +140,10 @@ def verify(root=ROOT):
             expected_skills.add(adapter_path)
             if adapter_path.read_bytes() != expected:
                 raise ValueError('Adapter differs from reproducible import: ' + skill_name)
-    if set((root / 'skills').rglob('SKILL.md')) != expected_skills:
+    skills = root / 'skills'
+    if skills.is_symlink() or any(p.is_symlink() for p in skills.rglob('*')):
+        raise ValueError('Native skill tree contains a symlink')
+    if {p for p in skills.rglob('*') if p.is_file()} != expected_skills:
         raise ValueError('Native skill inventory mismatch')
     for name in ('LICENSE', 'NOTICE.md'):
         if (root / name).read_bytes() != (source / name).read_bytes():

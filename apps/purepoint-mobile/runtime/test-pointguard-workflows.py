@@ -101,6 +101,26 @@ class WorkflowPackageTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(sentinel.read_text(), 'existing package')
 
+    def test_stray_adapter_files_and_symlinks_fail_verification(self):
+        with tempfile.TemporaryDirectory(prefix='workflow-stray-') as folder:
+            relocated = Path(folder) / 'workflows'
+            shutil.copytree(PACKAGE, relocated)
+            for kind in ('reference', 'nested', 'symlink'):
+                with self.subTest(kind=kind):
+                    stray = relocated / 'skills' / ('stray-' + kind)
+                    if kind == 'symlink':
+                        stray.symlink_to('missing-target')
+                    else:
+                        stray.mkdir()
+                        (stray / 'reference.md').write_text('unexpected shipped file')
+                    result = subprocess.run(['python3', str(relocated / 'tools/import-workflows.py'),
+                                             '--verify'], capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0, kind)
+                    if stray.is_symlink():
+                        stray.unlink()
+                    else:
+                        shutil.rmtree(stray)
+
     def test_complete_pinned_source_and_relocation(self):
         with tempfile.TemporaryDirectory(prefix='workflow-relocated-') as folder:
             relocated = Path(folder) / 'resources with spaces/workflows'

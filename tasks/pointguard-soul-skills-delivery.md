@@ -33,3 +33,44 @@ NOT RUN (owner/package acceptance): macOS app Xcode build/test (prohibited here)
 Final diagnostic refinement: /pointguard info uses Pi's native DefaultPackageManager + loadSkills with current live catalog winners first and onMissing=skip; no registry, extension factories, installs or credential reads. Native temporary --extension packages take precedence over user auto skills (different from settings-packages ordering); the real RPC collision fixture initially expected the wrong winner, failed, and now asserts native temporary winner/user loser. Optional workflows remain in catalog. Direct core support JavaScript is included in tsc checks.
 
 Builder final inspection found FIFO SOUL.md could block open before regular-file validation. Added O_NONBLOCK with a bounded disposable subprocess FIFO test: RED ETIMEDOUT before fix; GREEN after fix. Independent reviewer notified; final exact-head delta review required. No change to regular file reads or permissions.
+
+## PR204 review triage — 2026-10-10
+
+Owner requested triage after initial b5f18f6 complete source approval. All three
+open CodeRabbit threads were read with pagination (no further pages); findings
+4240056847, 4240056851 and 4240056852 are valid tooling issues: required candidate
+capabilities absent could pass, teardown was sampled before child exit, and FAIL
+records still exited zero. Review-body inventory nit is valid too. No product
+scope change or runtime activation. Producer ag-z6w5838y notified before touching
+receiving workflow verifier/tests; immutable upstream unchanged.
+
+Fix: explicit pinned candidate capability sets checked against real native tool/
+skill catalog; bounded exit confirmation after Rpc.close, failure on unconfirmed
+teardown and owned child SIGKILL cleanup; diagnostic JSON written before nonzero
+shell status on failed qualifications. Intended engine REJECT remains a diagnostic
+nonexecution rather than a failed probe. Offline workflow verifier rejects extra
+files and any skills-tree symlink. Public helper comments explain proof semantics.
+
+PASS: Node22.23.3 runtime/qualification-result.test.mjs 4/4, including real Pi1.1.0
+RPC CLI success then malformed playwright skill and extension lifecycle failure
+with JSON output/nonzero status, plus actual delayed/stubborn child exit tests.
+Python workflow tests 5/5 with explicit POINTGUARD_TEST_SOURCE. Stray-file test
+first reproduced RED on old verifier (three subtest failures), then GREEN. Initial
+unittest discover command matched no hyphenated module (0 tests, not evidence);
+corrected direct invocation used. Existing 166 bridge tests at b5f18f6 remain
+prior-head evidence, not a claim for this new candidate. Independent delta review,
+exact new SHA, static/package proofs and thread replies recorded in live handoff.
+Docstring coverage percentage is bot policy advice; added helper docblocks only
+where useful, no blanket documentation rewrite or upstream edits.
+
+All previous NOT RUN human Xcode/app/both-architecture/signing/update/device,
+hosted-model behavior and real web/browser/desktop actions/grants remain. No
+app build/live binary write/main merge. Marketplace snapshot remains historical
+published-artifact evidence; new regression fixtures are not new qualification
+of real packages. Task remains In Review pending acceptance.
+
+Triage final focused proofs: native loader/catalog/relocation/symlink/collision PASS;
+tsc PASS; existing package download regression PASS. Initial native loader invocation
+omitted mandatory explicit Pi package root and failed preflight, then corrected
+explicit-root invocation PASS. Actual Rpc.close SIGTERM fallback additionally
+confirmed with a real owned child (four Node tests total).
