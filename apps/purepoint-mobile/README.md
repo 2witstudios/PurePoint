@@ -38,6 +38,8 @@ Agents never run local app build phases. Full app/XCTest and temporary ad-hoc ar
 
 ## Mobile conversation controls
 
+To name your computers, tap the PurePoint chat header to open **Connections**, then tap the pencil beside a Mac under **Your Macs**. Enter a name and tap **Save**. Names are saved on this iPhone, shown in the picker and chat header, and retained when you pair the same Mac again. The address beneath each name distinguishes Macs with matching names.
+
 The compact left sidebar contains title-only conversation history, inline search, a header new-chat action and connection settings in its PurePoint footer. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs. Tap the conversation area to dismiss the keyboard for reading; interactive scroll dismissal also remains available. Connection/loading status occupies the single subtitle beneath PurePoint in the header, so reconnecting does not move the composer. Tap that header to open connection settings.
 
 The composer’s **+** menu offers **Photos** and **Files**. Images are prepared as JPEG and sent through native Pi RPC to an image-capable model. Text files and PDFs with selectable text are sent as named text; PDF binaries/layout and scanned PDF pages are not uploaded. Attachment chips show `Image` or `Text`, and can be removed before sending. Up to four files fit a 512 KiB prepared-data budget; each text attachment is at most 32 KiB and all prompt text at most 64 KiB. PDFs are limited to 30 pages. Attachments wait locally if Pi is busy; ordinary text can still use Send options → Steer / After reply.

@@ -6,6 +6,10 @@ struct SavedMachine: Codable, Identifiable, Equatable, Sendable {
     var endpoint: String
     var name: String
     let stateKey: String // retained through re-pair/address changes, including legacy drafts
+    static func normalizedName(_ name: String) -> String {
+        String(name.filter { !$0.isNewline && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }
+            .trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
+    }
 }
 struct MachineRegistry: Codable, Sendable {
     var version = 1

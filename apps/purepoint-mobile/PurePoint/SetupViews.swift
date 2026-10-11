@@ -178,7 +178,10 @@ struct ConnectionView: View {
             .alert("Mac name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $machineName)
                 Button("Save") { if let machine = renaming { model.renameMachine(machine.id, name: machineName) }; renaming = nil }
+                    .disabled(SavedMachine.normalizedName(machineName).isEmpty)
                 Button("Cancel", role: .cancel) { renaming = nil }
+            } message: {
+                Text("Choose a name to recognize this Mac on your iPhone. Up to 60 characters.")
             }
             .sheet(isPresented: $showScanner) {
                 PairingScannerView { code in
