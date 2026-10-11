@@ -141,4 +141,14 @@ final class ChatMarkdownTests: XCTestCase {
         }
     }
 
+    func testGivenExactBlockBudgetShouldAvoidFalseTruncationAndCountContainers() {
+        let exact = ChatMarkdown.parse(String(repeating: "---\n", count: 256))
+        XCTAssertEqual(exact.count, 256)
+        XCTAssertTrue(exact.allSatisfy { $0 == .rule })
+        let source = String(repeating: "---\n", count: 253) + "- Item\n  > Advice\nAfter"
+        let blocks = ChatMarkdown.parse(source)
+        XCTAssertEqual(blocks.count, 256)
+        XCTAssertEqual(blocks.last, .paragraph("Markdown preview limited to 256 blocks and 1,200 table cells."))
+    }
+
 }

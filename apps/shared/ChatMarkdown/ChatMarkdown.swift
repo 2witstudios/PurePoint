@@ -57,7 +57,9 @@ nonisolated enum ChatMarkdown {
         visit(blocks)
         return ChatMarkdownDocument(blocks: blocks, inlineContent: inlineContent)
     }
+    private struct ParseBudget { var remaining = 256; var cells = 1_200; var truncated = false }
     static func parse(_ source: String) -> [ChatMarkdownBlock] {
+        var budget = ParseBudget()
         var remainingBlocks = 256, remainingCells = 1_200, truncated = false
         func bounded(_ blocks: [ChatMarkdownBlock]) -> [ChatMarkdownBlock] {
             var result: [ChatMarkdownBlock] = []
@@ -80,31 +82,44 @@ nonisolated enum ChatMarkdown {
             }
             return result
         }
-        let parsed = parse(source, nesting: 0)
+        let parsed = parse(source, nesting: 0, budget: &budget)
         guard !Task.isCancelled else { return [] }
         var blocks = bounded(parsed)
-        if truncated { blocks.append(.paragraph("Markdown preview limited to 256 blocks and 1,200 table cells.")) }
+        if truncated || budget.truncated { blocks.append(.paragraph("Markdown preview limited to 256 blocks and 1,200 table cells.")) }
         return blocks
     }
-    private static func parse(_ source: String, nesting: Int) -> [ChatMarkdownBlock] {
+    private static func parse(_ source: String, nesting: Int, budget: inout ParseBudget) -> [ChatMarkdownBlock] {
         guard !Task.isCancelled else { return [] }
         // Replies are untrusted content. Keep parser and SwiftUI recursion bounded.
-        guard nesting < 32 else { return source.isEmpty ? [] : [.paragraph(source)] }
+        guard !source.isEmpty else { return [] }
+        guard budget.remaining > 0 else { budget.truncated = true; return [] }
+        guard nesting < 32 else { budget.remaining -= 1; return [.paragraph(source)] }
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         var blocks: [ChatMarkdownBlock] = []
         var paragraph: [String] = []
         var orderedCounters: [Int: Int] = [:]
         var i = 0
+        func append(_ block: ChatMarkdownBlock) {
+            guard budget.remaining > 0 else { budget.truncated = true; return }
+            budget.remaining -= 1
+            blocks.append(block)
+        }
         func flush() {
-            if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
+            if !paragraph.isEmpty { append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
+        }
+        func flushForBlock() -> Bool {
+            flush()
+            guard budget.remaining > 0 else { budget.truncated = true; return false }
+            return true
         }
         while i < lines.count {
             guard !Task.isCancelled else { return [] }
             let line = lines[i], trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { flush(); i += 1; continue }
+            guard budget.remaining > 0, !budget.truncated else { budget.truncated = true; break }
             if listItem(line) == nil { orderedCounters.removeAll() }
             if let fence = fence(trimmed) {
-                flush(); i += 1
+                guard flushForBlock() else { break }; i += 1
                 var code: [String] = []
                 while i < lines.count {
                     guard !Task.isCancelled else { return [] }
@@ -113,15 +128,15 @@ nonisolated enum ChatMarkdown {
                     if run.count >= fence.count && candidate.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty { i += 1; break }
                     code.append(lines[i]); i += 1
                 }
-                blocks.append(.code(language: fence.language, text: code.joined(separator: "\n"))); continue
+                append(.code(language: fence.language, text: code.joined(separator: "\n"))); continue
             }
             let hashes = trimmed.prefix(while: { $0 == "#" }).count
             if (1...6).contains(hashes), trimmed.dropFirst(hashes).first == " " {
-                flush(); blocks.append(.heading(level: hashes, text: String(trimmed.dropFirst(hashes + 1)))); i += 1; continue
+                guard flushForBlock() else { break }; append(.heading(level: hashes, text: String(trimmed.dropFirst(hashes + 1)))); i += 1; continue
             }
-            if isRule(trimmed) { orderedCounters.removeAll(); flush(); blocks.append(.rule); i += 1; continue }
+            if isRule(trimmed) { orderedCounters.removeAll(); guard flushForBlock() else { break }; append(.rule); i += 1; continue }
             if trimmed.hasPrefix(">") {
-                flush(); var quoted: [String] = []
+                guard flushForBlock() else { break }; var quoted: [String] = []
                 while i < lines.count {
                     guard !Task.isCancelled else { return [] }
                     let current = lines[i].trimmingCharacters(in: .whitespaces)
@@ -130,30 +145,40 @@ nonisolated enum ChatMarkdown {
                     if content.first == " " { content = content.dropFirst() }
                     quoted.append(String(content)); i += 1
                 }
-                blocks.append(.quote(parse(quoted.joined(separator: "\n"), nesting: nesting + 1))); continue
+                budget.remaining -= 1 // Reserve the quote container before its children.
+                let nested = parse(quoted.joined(separator: "\n"), nesting: nesting + 1, budget: &budget)
+                blocks.append(.quote(nested)); continue
             }
             if i + 1 < lines.count, trimmed.contains("|"), let alignments = tableDelimiter(lines[i + 1]), alignments.count == cells(trimmed).count {
-                flush(); let headers = Array(cells(trimmed).prefix(12)); i += 2
+                guard flushForBlock() else { break }
+                let headers = Array(cells(trimmed).prefix(12))
+                guard !headers.isEmpty else { return [] }
+                guard budget.cells >= headers.count else { budget.truncated = true; break }
+                budget.cells -= headers.count
+                let rowLimit = min(100, budget.cells / headers.count)
+                i += 2
                 var rows: [[String]] = [], rowCount = 0
                 while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
                     guard !Task.isCancelled else { return [] }
-                    if rows.count < 100 {
+                    if rows.count < rowLimit {
                         let row = Array(cells(lines[i]).prefix(headers.count))
                         rows.append(row + Array(repeating: "", count: headers.count - row.count))
                     }
                     rowCount += 1; i += 1
                 }
-                blocks.append(.table(headers: headers, alignments: Array(alignments.prefix(headers.count)), rows: rows))
+                budget.cells -= rows.count * headers.count
+                if rowCount > rowLimit && rowLimit < 100 { budget.truncated = true }
+                append(.table(headers: headers, alignments: Array(alignments.prefix(headers.count)), rows: rows))
                 if rowCount > 100 || alignments.count > 12 {
-                    blocks.append(.paragraph("Table preview limited to 100 rows and 12 columns."))
+                    append(.paragraph("Table preview limited to 100 rows and 12 columns."))
                 }
                 continue
             }
             if let image = image(trimmed) {
-                flush(); blocks.append(.image(alt: image.alt, url: image.url)); i += 1; continue
+                guard flushForBlock() else { break }; append(.image(alt: image.alt, url: image.url)); i += 1; continue
             }
             if let item = listItem(line) {
-                flush(); i += 1
+                guard flushForBlock() else { break }; i += 1
                 var continuation: [String] = []
                 var activeFence: (character: Character, count: Int, language: String)?
                 while i < lines.count {
@@ -184,12 +209,16 @@ nonisolated enum ChatMarkdown {
                 } else { orderedCounters[depth] = nil }
                 let margin = continuation.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map(indentation) ?? 0
                 let body = continuation.map { removingIndent($0, columns: margin) }.joined(separator: "\n")
-                let contents = parse(body, nesting: nesting + 1)
-                if case .paragraph(let continued) = contents.first, contents.count == 1 {
-                    blocks.append(.listItem(depth: depth, marker: marker, checked: item.checked, text: item.text + "\n" + continued))
-                } else {
-                    blocks.append(.listItem(depth: depth, marker: marker, checked: item.checked, text: item.text))
-                    if !contents.isEmpty { blocks.append(.listContinuation(depth: min(depth + 1, 8), blocks: contents)) }
+                append(.listItem(depth: depth, marker: marker, checked: item.checked, text: item.text))
+                if !body.isEmpty {
+                    guard budget.remaining > 0 else { budget.truncated = true; break }
+                    budget.remaining -= 1 // Reserve the continuation container.
+                    let contents = parse(body, nesting: nesting + 1, budget: &budget)
+                    if case .paragraph(let continued) = contents.first, contents.count == 1 {
+                        blocks[blocks.count - 1] = .listItem(depth: depth, marker: marker, checked: item.checked, text: item.text + "\n" + continued)
+                        budget.remaining += 2 // Fold the paragraph and container into the item.
+                    } else if contents.isEmpty { budget.remaining += 1 }
+                    else { blocks.append(.listContinuation(depth: min(depth + 1, 8), blocks: contents)) }
                 }
                 continue
             }
@@ -197,7 +226,7 @@ nonisolated enum ChatMarkdown {
             if i + 1 < lines.count {
                 let underline = lines[i + 1].trimmingCharacters(in: .whitespaces)
                 if underline.count >= 3, underline.allSatisfy({ $0 == "=" }) || (underline.count >= 3 && underline.allSatisfy({ $0 == "-" })) {
-                    flush(); blocks.append(.heading(level: underline.first == "=" ? 1 : 2, text: trimmed)); i += 2; continue
+                    guard flushForBlock() else { break }; append(.heading(level: underline.first == "=" ? 1 : 2, text: trimmed)); i += 2; continue
                 }
             }
             paragraph.append(line); i += 1

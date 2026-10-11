@@ -31,7 +31,8 @@ before requesting HTTP(S) URLs. Assistant content never automatically loads imag
 Tables and code scroll horizontally rather than widening the transcript. Table previews
 are capped at 100 body rows and 12 columns, with document-wide limits of 256 blocks
 and 1,200 table cells (including headers). Visible notices explain truncation.
-Block and inline parsing run on a serial background worker; canceled streaming
+The recursive parser stops constructing blocks at the shared limit and skips
+cell parsing beyond the shared table budget. Block and inline parsing run on a serial background worker; canceled streaming
 revisions are skipped, and native inline parse calls cannot overlap.
 
 Final acceptance requires building/running both apps in Xcode per AGENTS.md.
