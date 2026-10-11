@@ -94,7 +94,8 @@ just build-app
 | `pu kill` | Kill agents (by agent, worktree, or all) |
 | `pu clean` | Remove worktrees, kill agents, delete branches |
 | `pu attach <agent>` | Attach to an agent's terminal |
-| `pu logs <agent>` | View agent output logs |
+| `pu read <agent>` | Read native agent conversation records |
+| `pu logs <agent>` | Deprecated raw terminal diagnostics |
 | `pu send <agent> <text>` | Send text or keys to an agent's terminal |
 | `pu health` | Check daemon health |
 | `pu pulse` | Workspace pulse — agents, runtimes, git stats |

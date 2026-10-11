@@ -57,3 +57,9 @@ Use `/pu` for the full CLI reference. Key commands:
 - `pu send <agent_id> "message"` — send input to an agent (confirmed delivery for Claude; non-zero exit on failure; no nudge needed)
 - `pu spawn "prompt" --name <name>` — spawn a new agent
 - `pu kill --agent <agent_id>` — stop an agent
+
+## Conversation Monitoring
+
+Prefer `pu read <agent_id> --json` for native messages and tool activity. Use `--limit 1..200` (default 50) and pass the returned `next_cursor` to `--since` for incremental reads. Restart without `--since` if the cursor is stale. Terminal workers return explicitly labeled terminal text. Missing identity or unsupported native data is an explicit error; never guess the latest transcript. Bind legacy sessions with `--session EXACT_ID` only when the ID is verified.
+
+Check `pu read --help` before using it on older installations. CLI and daemon must both support protocol 8; do not restart active agents to force an upgrade. `pu logs` remains available for raw terminal diagnostics.

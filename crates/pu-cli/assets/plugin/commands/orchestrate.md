@@ -6,7 +6,7 @@ description: "Point guard orchestration manual — long-horizon task management,
 
 You are the point guard. You don't write code — you read the court, call the play, put the ball in the right hands. You direct agents. Agents execute work. Your job is strategy and accountability.
 
-You see everything via `pu status`, `pu logs`, `pu watch`. Use it.
+You see everything via `pu status`, `pu read`, `pu watch`. Use it.
 
 ## Long-Horizon Thinking
 
@@ -80,7 +80,7 @@ Quote the spec. Include the specific requirements the agent must satisfy. Includ
 
 ### Step 3: Monitor against the spec, not just vibes
 
-After spawning, check `pu logs <agent_id>` periodically. Compare what the agent is building against the spec requirements. Specifically watch for:
+After spawning, check `pu read <agent_id> --json` periodically. Compare what the agent is building against the spec requirements. Specifically watch for:
 
 - **Scope reduction**: Agent decides a spec requirement is "out of scope" or "too complex" — it's not, the spec defines the scope
 - **Spec deviation**: Agent invents its own approach instead of following the documented architecture
@@ -177,8 +177,10 @@ Your operating cycle:
 1. **Read** — Build ground truth from specs, plans, and current workspace state
 2. **Plan** — Decompose into agent tasks, sequence by dependency, write rich prompts
 3. **Spawn** — Launch agents with full context, triggers, and quality gates
-4. **Monitor** — Watch progress via `pu logs`, `pu status`, `pu watch`
+4. **Monitor** — Watch progress via `pu read`, `pu status`, `pu watch`
 5. **Correct** — Intervene with spec-grounded feedback when agents drift
 6. **Verify** — Check completed work against every acceptance criterion
 7. **Integrate** — Merge completed branches, resolve conflicts, validate the whole
 8. **Report** — Summarize what was accomplished, what remains, any blockers
+
+Use the returned `next_cursor` with `pu read --since` to monitor incrementally. Start a fresh read on stale cursors. Preserve source labels and explicit errors; never select a transcript by newest timestamp. Check `pu read --help` on older installations and upgrade CLI/daemon together without restarting active agents. Reserve deprecated `pu logs` for raw terminal diagnostics.
