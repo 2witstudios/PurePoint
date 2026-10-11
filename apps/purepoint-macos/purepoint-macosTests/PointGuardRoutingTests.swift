@@ -29,6 +29,50 @@ private struct PointGuardRoutingService: WorkspaceService {
         try body(state, registry, root)
     }
 
+    @Test func restoringOpenProjectsRetainsSavedHiddenPointGuardFolders() throws {
+        try withState { state, _, root in
+            try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(atPath: root + "-project", withIntermediateDirectories: true)
+            UserDefaults.standard.set([root + "-project"], forKey: "PurePointOpenProjects")
+            UserDefaults.standard.set([root], forKey: "PurePointPointGuardFolders")
+            state.restoreProjects()
+            #expect(state.projects.map(\.projectRoot) == [root + "-project"])
+            #expect(state.projectState(forRoot: root) != nil)
+            #expect(UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") == [root])
+        }
+    }
+
+    @Test func workspaceCreationWaitsForPiWorkingFolder() {
+        let registry = WorkspaceRegistry()
+        var startedRoots: [String] = []
+        let state = AppState(service: PointGuardRoutingService(), startProject: {
+            startedRoots.append($0.projectRoot)
+        })
+        state.registry = registry
+        state.updatePointGuardRoot("")
+        #expect(state.pointGuardRoot == nil)
+        #expect(state.activatePointGuardWorkspace() == nil)
+        state.newPointGuardTab()
+        #expect(startedRoots.isEmpty)
+        #expect(registry.workspacesByProject.isEmpty)
+        #expect(registry.activeWorkspaceId == nil)
+    }
+
+    @Test func restoringOrSelectingPointGuardPreservesVisibleCodingProject() throws {
+        try withState { state, registry, root in
+            state.openProject(root + "-project")
+            let id = try #require(state.activatePointGuardWorkspace())
+            state.pendingSelectWorkspaceId = id
+            #expect(state.resolvePendingWorkspaceSelection() == id)
+            #expect(state.activeProjectRoot == root + "-project")
+            state.updateActiveProject(for: .workspace(id))
+            #expect(state.activeProjectRoot == root + "-project")
+            state.updateActiveProject(for: .nav(.dashboard))
+            #expect(state.activeProjectRoot == root + "-project")
+            #expect(registry.projectRoot(forWorkspace: id) == root)
+        }
+    }
+
     @Test func splitsUsePiFolderDespiteSelectedProject() throws {
         try withState { state, registry, root in
             state.openProject(root + "-project")

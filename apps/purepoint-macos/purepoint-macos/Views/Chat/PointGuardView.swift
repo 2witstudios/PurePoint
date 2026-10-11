@@ -6,15 +6,15 @@ struct PointGuardView: View {
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
 
-    private var projectRoot: String { appState.pointGuardRoot }
+    private var projectRoot: String? { appState.pointGuardRoot }
 
     private var workspace: Workspace? {
-        registry.workspacesByProject[projectRoot]?.first(where: \.isPointGuard)
+        projectRoot.flatMap { registry.workspacesByProject[$0]?.first(where: \.isPointGuard) }
     }
 
     var body: some View {
         Group {
-            if let error = registry.layoutErrorsByProject[projectRoot] {
+            if let projectRoot, let error = registry.layoutErrorsByProject[projectRoot] {
                 ContentUnavailableView {
                     Label("Could not restore layout", systemImage: "exclamationmark.triangle")
                 } description: {
@@ -24,6 +24,12 @@ struct PointGuardView: View {
                 }
             } else if let workspace {
                 PaneGridView(workspaceId: workspace.id)
+            } else if projectRoot == nil {
+                VStack(spacing: 0) {
+                    PointGuardPaneControls(model: appState.pointGuardChat)
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(8)
+                    PointGuardChatSurfaceView(isFocused: true)
+                }
             } else {
                 Color.clear
             }

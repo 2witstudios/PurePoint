@@ -9,7 +9,8 @@ final class AppState {
     var projects: [ProjectState] = []
     /// Folder-backed daemon state for Point Guard, kept out of the project sidebar.
     private var pointGuardProjects: [String: ProjectState] = [:]
-    var pointGuardRoot = FileManager.default.homeDirectoryForCurrentUser.path
+    /// Unknown until Pi reports its actual configured folder.
+    var pointGuardRoot: String?
 
     private var managedProjects: [ProjectState] {
         projects + pointGuardProjects.values.filter { hidden in
@@ -68,12 +69,7 @@ final class AppState {
         startProject(project)
         initializeActiveProjectIfNeeded(root: root)
 
-        // Watch daemon binary for changes (shared — only start once)
-        if binaryWatcher == nil, let binPath = DaemonLifecycle.findBinary() {
-            binaryWatcher = ManifestWatcher(path: binPath) { [weak self] in
-                self?.restartDaemonAndRefresh()
-            }
-        }
+        startBinaryWatcherIfNeeded()
 
         persistOpenProjects()
     }
@@ -92,11 +88,13 @@ final class AppState {
 
     func restoreProjects() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
+        // Opening projects persists current state, so snapshot both saved lists first.
+        let pointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
         for path in paths {
             guard FileManager.default.fileExists(atPath: path) else { continue }
             openProject(path)
         }
-        for root in UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? [] {
+        for root in pointGuardFolders {
             guard FileManager.default.fileExists(atPath: root) else { continue }
             ensurePointGuardProject(root: root)
         }
@@ -114,7 +112,8 @@ final class AppState {
 
         switch selection {
         case .workspace(let id):
-            if let root = registry?.projectRoot(forWorkspace: id) {
+            if registry?.workspace(id: id)?.isPointGuard != true,
+                let root = registry?.projectRoot(forWorkspace: id) {
                 activeProjectRoot = root
             }
         case .worktree(let id):
@@ -148,14 +147,15 @@ final class AppState {
         project.appState = self
         pointGuardProjects[root] = project
         startProject(project)
+        startBinaryWatcherIfNeeded()
         UserDefaults.standard.set(Array(pointGuardProjects.keys), forKey: "PurePointPointGuardFolders")
     }
 
     @discardableResult
     func activatePointGuardWorkspace() -> String? {
-        guard let registry else { return nil }
-        ensurePointGuardProject(root: pointGuardRoot)
-        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: pointGuardRoot) else {
+        guard let registry, let root = pointGuardRoot else { return nil }
+        ensurePointGuardProject(root: root)
+        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) else {
             registry.activeWorkspaceId = nil
             return nil
         }
@@ -275,7 +275,9 @@ final class AppState {
 
         if let root = registry.projectRoot(forWorkspace: pendingId) {
             pendingSelectWorkspaceId = nil
-            activeProjectRoot = root
+            if registry.workspace(id: pendingId)?.isPointGuard != true {
+                activeProjectRoot = root
+            }
             return pendingId
         }
         if managedProjects.allSatisfy({ registry.workspacesByProject[$0.projectRoot] != nil }) {
@@ -290,6 +292,13 @@ final class AppState {
         let paths = projects.map(\.projectRoot)
         UserDefaults.standard.set(paths, forKey: Self.openProjectsKey)
         UserDefaults.standard.set(Array(pointGuardProjects.keys), forKey: "PurePointPointGuardFolders")
+    }
+
+    private func startBinaryWatcherIfNeeded() {
+        guard binaryWatcher == nil, let binPath = DaemonLifecycle.findBinary() else { return }
+        binaryWatcher = ManifestWatcher(path: binPath) { [weak self] in
+            self?.restartDaemonAndRefresh()
+        }
     }
 
     private func restartDaemonAndRefresh() {

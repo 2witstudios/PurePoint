@@ -73,3 +73,8 @@ struct PiPointGuardChatView: View {
 extension Notification.Name {
     static let toggleChatSidebar = Notification.Name("PP_toggleChatSidebar")
 }
+
+struct PointGuardPaneControls: View {
+    let model: PiChatModel
+    var body: some View { EmptyView() }
+}
