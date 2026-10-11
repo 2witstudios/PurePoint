@@ -631,3 +631,75 @@ async fn given_production_daemon_restart_should_restore_registry_without_project
     send(&socket, &Request::Shutdown).await;
     assert!(process.wait().await.unwrap().success());
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_folder() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let root_s = root.to_str().unwrap();
+    let engine = pu_engine::engine::Engine::new();
+    let response = engine
+        .handle_request(Request::Init {
+            project_root: root_s.into(),
+        })
+        .await;
+    assert!(matches!(response, Response::InitResult { .. }));
+    assert!(!root.join(".git").exists());
+
+    let script = root.join("record-directory.sh");
+    std::fs::write(
+        &script,
+        "pwd > \"$PU_PROJECT_ROOT/$PU_AGENT_ID.cwd\"\nexec /bin/sleep 30\n",
+    )
+    .unwrap();
+    let command = format!("/bin/sh {}", script.display());
+    // Exercise a shell, a configured agent and a custom command without invoking providers.
+    std::fs::write(
+        root.join(".pu/config.yaml"),
+        format!(
+            "agents:\n  fixture-agent:\n    name: Fixture\n    command: {}\n    interactive: true\n    launchArgs: []\n",
+            serde_json::to_string(&command).unwrap()
+        ),
+    )
+    .unwrap();
+    for (agent, custom) in [
+        ("terminal", Some(command.as_str())),
+        ("fixture-agent", None),
+    ] {
+        let request = serde_json::from_value(serde_json::json!({
+            "type": "spawn", "project_root": root_s, "agent": agent, "prompt": "",
+            "root": true, "command": custom, "no_trigger": true
+        }))
+        .unwrap();
+        let id = match engine.handle_request(request).await {
+            Response::SpawnResult {
+                agent_id,
+                worktree_id,
+                ..
+            } => {
+                assert!(worktree_id.is_none());
+                agent_id
+            }
+            other => panic!("expected root spawn, got {other:?}"),
+        };
+        let recorded = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Ok(cwd) = std::fs::read_to_string(root.join(format!("{id}.cwd"))) {
+                    break cwd;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        // Always shut down the fixture before asserting.
+        let kill = serde_json::from_value(serde_json::json!({
+            "type": "kill", "project_root": root_s, "target": { "agent": id }
+        }))
+        .unwrap();
+        engine.handle_request(kill).await;
+        assert_eq!(
+            recorded.expect("worker should record its cwd").trim(),
+            root_s
+        );
+    }
+}

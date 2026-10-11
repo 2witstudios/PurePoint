@@ -73,15 +73,15 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         }
 
         vc.onRemoveProject = { [viewCache] project in
-            // Clean up terminal views
+            let projectRoot = project.projectRoot
+
+            // Point Guard can still own this folder after it leaves the project sidebar.
+            // Preserve both daemon files and attached terminal views in that case.
+            guard appState.closeProject(projectRoot) else { return }
+
             for agent in project.allAgents {
                 viewCache.remove(agentId: agent.id)
             }
-
-            let projectRoot = project.projectRoot
-
-            // Remove from app state (updates UserDefaults persistence)
-            appState.closeProject(projectRoot)
 
             // Clean up .pu directory: delete manifest.json and agents/
             let puDir = URL(fileURLWithPath: projectRoot).appendingPathComponent(".pu")

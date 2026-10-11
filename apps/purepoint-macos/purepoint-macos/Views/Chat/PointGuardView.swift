@@ -6,13 +6,10 @@ struct PointGuardView: View {
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
 
-    private var projectRoot: String? {
-        appState.activeProjectRoot.flatMap { appState.projectState(forRoot: $0) != nil ? $0 : nil }
-            ?? appState.projects.first?.projectRoot
-    }
+    private var projectRoot: String? { appState.pointGuardRoot }
 
     private var workspace: Workspace? {
-        projectRoot.flatMap { root in registry.workspacesByProject[root]?.first(where: \.isPointGuard) }
+        projectRoot.flatMap { registry.workspacesByProject[$0]?.first(where: \.isPointGuard) }
     }
 
     var body: some View {
@@ -43,12 +40,7 @@ struct PointGuardView: View {
     }
 
     private func activateWorkspace() {
-        guard let projectRoot else { return }
-        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: projectRoot) else {
-            registry.activeWorkspaceId = nil
-            return
-        }
-        registry.activate(workspaceId: id)
+        appState.activatePointGuardWorkspace()
     }
 }
 

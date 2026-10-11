@@ -13,8 +13,10 @@ import Foundation
     var heldStatus: CheckedContinuation<PiJSONValue, Never>?
     var holdStatus = false
     var savedProviders: [PiJSONValue] = []
+    var runtimeCwd = ""
     func request(_ operation: String, _ fields: [String: PiJSONValue]) async throws -> PiJSONValue {
         switch operation {
+        case "status": return .object(["cwd": .string(runtimeCwd)])
         case "providers": return .object(["providers": .array(savedProviders)])
         case "runtime.stop":
             if failStop { throw PiChatError("Fixture runtime busy or unavailable") }
@@ -43,6 +45,37 @@ import Foundation
         fatalError("fixture timed out")
     }
     @MainActor static func main() async {
+        // Pending setup changes must not route panes away from the still-running Pi.
+        do {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pg-cwd-" + UUID().uuidString)
+            let old = directory.appendingPathComponent("old")
+            let next = directory.appendingPathComponent("next")
+            try! FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+            try! FileManager.default.createDirectory(at: next, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let fixture = AdminFixture()
+            fixture.runtimeCwd = old.path
+            let model = PointGuardServiceModel(requestOverride: { try await fixture.request($0, $1) })
+            await model.configure(cwd: next.path)
+            precondition(model.activeCwd.isEmpty, "Selecting a future startup folder does not establish an active cwd")
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            child.arguments = ["30"]
+            try! child.run()
+            model.fixtureAttach(child)
+            await model.refresh()
+            precondition(model.activeCwd == old.path)
+            await model.configure(cwd: next.path)
+            precondition(model.cwd == next.path && model.restartRequired)
+            precondition(model.activeCwd == old.path, "Pending restart keeps panes at Pi's actual folder")
+            await model.refresh()
+            precondition(model.activeCwd == old.path)
+            fixture.runtimeCwd = next.path
+            await model.refresh()
+            precondition(model.activeCwd == next.path, "Owned runtime status establishes the new active folder")
+            try! await model.stopOwnedForQuit()
+            precondition(model.activeCwd.isEmpty, "Owned exit invalidates the active folder")
+        }
         // Given confirmed OAuth completion, show provider-specific success and no obsolete interaction.
         let successFixture = AdminFixture()
         successFixture.authStatus = .object(["status": .string("complete"), "events": .array([.object(["url": .string("https://example.com/login")])]), "prompt": .object(["id": .string("obsolete")])])

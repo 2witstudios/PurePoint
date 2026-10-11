@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 struct ContentView: View {
@@ -55,6 +56,14 @@ struct ContentView: View {
             guard let action = notification.userInfo?["action"] as? HotkeyAction else { return }
             handleHotkeyAction(action)
         }
+        .onReceive(appState.pointGuardService.$activeCwd.removeDuplicates()) { cwd in
+            let root = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd).standardizedFileURL.path
+            guard root != appState.pointGuardRoot else { return }
+            appState.updatePointGuardRoot(cwd)
+            if selection == .nav(.dashboard) {
+                appState.activatePointGuardWorkspace()
+            }
+        }
         .onChange(of: appState.pendingSelectAgentId) { _, agentId in
             guard agentId != nil else { return }
             selectPendingAgentIfReady()
@@ -84,19 +93,7 @@ struct ContentView: View {
             // Selecting a workspace shows its grid and focuses a pane. A single-pane
             // workspace is a grid of one, so one click lands the user in the terminal.
             if newValue == .nav(.dashboard) {
-                if let root = appState.activeProjectRoot.flatMap({
-                    appState.projectState(forRoot: $0) != nil ? $0 : nil
-                })
-                    ?? appState.projects.first?.projectRoot
-                {
-                    if let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) {
-                        registry.activate(workspaceId: id)
-                    } else {
-                        registry.activeWorkspaceId = nil
-                    }
-                } else {
-                    registry.activeWorkspaceId = nil
-                }
+                appState.activatePointGuardWorkspace()
                 return
             }
             guard case .workspace(let workspaceId) = newValue else {

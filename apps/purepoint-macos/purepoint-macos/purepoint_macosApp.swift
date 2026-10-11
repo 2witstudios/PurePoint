@@ -63,7 +63,6 @@ struct purepoint_macosApp: App {
                     keyBindingState.keyEquivalent(for: .newAgent),
                     modifiers: keyBindingState.eventModifiers(for: .newAgent)
                 )
-                .disabled(appState.projects.isEmpty)
 
                 Button("Open Project\u{2026}") {
                     openProjectWithPicker()
@@ -291,7 +290,7 @@ struct purepoint_macosApp: App {
         for (i, arg) in args.enumerated() {
             if arg == "--project-root", i + 1 < args.count {
                 let path = args[i + 1]
-                appState.openProject(path)
+                appState.restoreProjects(projectRoot: path)
                 return
             }
         }
