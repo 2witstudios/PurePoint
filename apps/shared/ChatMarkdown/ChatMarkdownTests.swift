@@ -151,4 +151,20 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(blocks.last, .paragraph("Markdown preview limited to 256 blocks and 1,200 table cells."))
     }
 
+    func testGivenTruncatedTableShouldRetainFollowingConclusion() {
+        let header = Array(repeating: "Column", count: 12).joined(separator: " | ")
+        let delimiter = Array(repeating: "---", count: 12).joined(separator: " | ")
+        let row = Array(repeating: "Cell", count: 12).joined(separator: " | ")
+        let source = ([header, delimiter] + Array(repeating: row, count: 100) + ["", "Important conclusion.", "", header, delimiter, row, "", "Final advice."]).joined(separator: "\n")
+        let blocks = ChatMarkdown.parse(source)
+        XCTAssertTrue(blocks.contains(.paragraph("Important conclusion.")))
+        XCTAssertTrue(blocks.contains(.paragraph("Final advice.")))
+        XCTAssertEqual(blocks.last, .paragraph("Markdown preview limited to 256 blocks and 1,200 table cells."))
+    }
+    func testGivenFinalListItemShouldMergeProseWithoutAdditionalBlocks() {
+        let blocks = ChatMarkdown.parse(String(repeating: "---\n", count: 255) + "- Item\n  continued")
+        XCTAssertEqual(blocks.count, 256)
+        XCTAssertEqual(blocks.last, .listItem(depth: 0, marker: "•", checked: nil, text: "Item\ncontinued"))
+    }
+
 }

@@ -116,7 +116,7 @@ nonisolated enum ChatMarkdown {
             guard !Task.isCancelled else { return [] }
             let line = lines[i], trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { flush(); i += 1; continue }
-            guard budget.remaining > 0, !budget.truncated else { budget.truncated = true; break }
+            guard budget.remaining > 0 else { budget.truncated = true; break }
             if listItem(line) == nil { orderedCounters.removeAll() }
             if let fence = fence(trimmed) {
                 guard flushForBlock() else { break }; i += 1
@@ -153,7 +153,15 @@ nonisolated enum ChatMarkdown {
                 guard flushForBlock() else { break }
                 let headers = Array(cells(trimmed).prefix(12))
                 guard !headers.isEmpty else { return [] }
-                guard budget.cells >= headers.count else { budget.truncated = true; break }
+                guard budget.cells >= headers.count else {
+                    budget.truncated = true
+                    i += 2
+                    while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                        guard !Task.isCancelled else { return [] }
+                        i += 1
+                    }
+                    continue
+                }
                 budget.cells -= headers.count
                 let rowLimit = min(100, budget.cells / headers.count)
                 i += 2
@@ -211,7 +219,16 @@ nonisolated enum ChatMarkdown {
                 let body = continuation.map { removingIndent($0, columns: margin) }.joined(separator: "\n")
                 append(.listItem(depth: depth, marker: marker, checked: item.checked, text: item.text))
                 if !body.isEmpty {
-                    guard budget.remaining > 0 else { budget.truncated = true; break }
+                    if budget.remaining < 2 {
+                        // Prose merges into the existing item without adding blocks.
+                        // A bounded probe distinguishes it from structural content.
+                        var probe = ParseBudget(remaining: 2, cells: budget.cells)
+                        let contents = parse(body, nesting: nesting + 1, budget: &probe)
+                        if case .paragraph(let continued) = contents.first, contents.count == 1, !probe.truncated {
+                            blocks[blocks.count - 1] = .listItem(depth: depth, marker: marker, checked: item.checked, text: item.text + "\n" + continued)
+                        } else { budget.truncated = true }
+                        continue
+                    }
                     budget.remaining -= 1 // Reserve the continuation container.
                     let contents = parse(body, nesting: nesting + 1, budget: &budget)
                     if case .paragraph(let continued) = contents.first, contents.count == 1 {
