@@ -124,4 +124,13 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(ChatMarkdown.cells(cell + " | end"), [cell, "end"])
     }
 
+    func testGivenRepeatedOrderedMarkersShouldNumberConsecutiveItemsByDepth() {
+        let blocks = ChatMarkdown.parse("3. First\n   1. Nested A\n   1. Nested B\n1. Second\n\n1. Third\n\nNew list:\n7. Restart")
+        let markers = blocks.compactMap { block -> String? in
+            guard case .listItem(_, let marker, _, _) = block else { return nil }
+            return marker
+        }
+        XCTAssertEqual(markers, ["3.", "1.", "2.", "4.", "5.", "7."])
+    }
+
 }

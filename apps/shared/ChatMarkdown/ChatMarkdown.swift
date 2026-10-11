@@ -93,6 +93,7 @@ nonisolated enum ChatMarkdown {
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         var blocks: [ChatMarkdownBlock] = []
         var paragraph: [String] = []
+        var orderedCounters: [Int: Int] = [:]
         var i = 0
         func flush() {
             if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
@@ -101,6 +102,7 @@ nonisolated enum ChatMarkdown {
             guard !Task.isCancelled else { return [] }
             let line = lines[i], trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { flush(); i += 1; continue }
+            if listItem(line) == nil { orderedCounters.removeAll() }
             if let fence = fence(trimmed) {
                 flush(); i += 1
                 var code: [String] = []
@@ -173,13 +175,20 @@ nonisolated enum ChatMarkdown {
                     continuation.append(next); i += 1
                 }
                 let depth = min(item.indent / 2, 8)
+                orderedCounters = orderedCounters.filter { $0.key <= depth }
+                var marker = item.marker
+                if let start = Int(item.marker.dropLast()) {
+                    let number = orderedCounters[depth] ?? start
+                    marker = "\(number)."
+                    orderedCounters[depth] = number + 1
+                } else { orderedCounters[depth] = nil }
                 let margin = continuation.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map(indentation) ?? 0
                 let body = continuation.map { removingIndent($0, columns: margin) }.joined(separator: "\n")
                 let contents = parse(body, nesting: nesting + 1)
                 if case .paragraph(let continued) = contents.first, contents.count == 1 {
-                    blocks.append(.listItem(depth: depth, marker: item.marker, checked: item.checked, text: item.text + "\n" + continued))
+                    blocks.append(.listItem(depth: depth, marker: marker, checked: item.checked, text: item.text + "\n" + continued))
                 } else {
-                    blocks.append(.listItem(depth: depth, marker: item.marker, checked: item.checked, text: item.text))
+                    blocks.append(.listItem(depth: depth, marker: marker, checked: item.checked, text: item.text))
                     if !contents.isEmpty { blocks.append(.listContinuation(depth: min(depth + 1, 8), blocks: contents)) }
                 }
                 continue
