@@ -19,7 +19,7 @@ struct ChatMarkdownView: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: text) {
             let source = text
-            let parser = Task.detached(priority: .userInitiated) { ChatMarkdown.document(source) }
+            let parser = Task.detached(priority: .userInitiated) { await ChatMarkdownPreparation.shared.prepare(source) }
             let prepared = await withTaskCancellationHandler {
                 await parser.value
             } onCancel: {

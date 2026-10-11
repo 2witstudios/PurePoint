@@ -20,6 +20,13 @@ nonisolated struct ChatMarkdownDocument: Sendable {
     let inlineContent: [String: AttributedString]
 }
 
+/// Foundation inline parsing cannot be interrupted mid-call. One serial worker
+/// prevents streamed revisions from starting overlapping full-document parses.
+actor ChatMarkdownPreparation {
+    nonisolated static let shared = ChatMarkdownPreparation()
+    func prepare(_ source: String) -> ChatMarkdownDocument { ChatMarkdown.document(source) }
+}
+
 nonisolated enum ChatMarkdown {
     static func document(_ source: String) -> ChatMarkdownDocument {
         let blocks = parse(source)
@@ -98,13 +105,21 @@ nonisolated enum ChatMarkdown {
                 blocks.append(.quote(parse(quoted.joined(separator: "\n"), nesting: nesting + 1))); continue
             }
             if i + 1 < lines.count, trimmed.contains("|"), let alignments = tableDelimiter(lines[i + 1]), alignments.count == cells(trimmed).count {
-                flush(); let headers = cells(trimmed); i += 2
-                var rows: [[String]] = []
+                flush(); let headers = Array(cells(trimmed).prefix(12)); i += 2
+                var rows: [[String]] = [], rowCount = 0
                 while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
                     guard !Task.isCancelled else { return [] }
-                    let row = cells(lines[i]); rows.append(Array((row + Array(repeating: "", count: headers.count)).prefix(headers.count))); i += 1
+                    if rows.count < 100 {
+                        let row = Array(cells(lines[i]).prefix(headers.count))
+                        rows.append(row + Array(repeating: "", count: headers.count - row.count))
+                    }
+                    rowCount += 1; i += 1
                 }
-                blocks.append(.table(headers: headers, alignments: alignments, rows: rows)); continue
+                blocks.append(.table(headers: headers, alignments: Array(alignments.prefix(headers.count)), rows: rows))
+                if rowCount > 100 || alignments.count > 12 {
+                    blocks.append(.paragraph("Table preview limited to 100 rows and 12 columns."))
+                }
+                continue
             }
             if let image = image(trimmed) {
                 flush(); blocks.append(.image(alt: image.alt, url: image.url)); i += 1; continue

@@ -27,7 +27,10 @@ not the full CommonMark specification. Nested list rows retain indentation;
 continuation text remains with its item, and nested code/quotes get their own indented blocks. Fences support backticks/tildes, longer
 closing delimiters and incomplete streamed blocks. Raw HTML is text. Links only
 activate HTTP, HTTPS and mailto; standalone Markdown images load HTTP(S) URLs.
-Tables and code scroll horizontally rather than widening the transcript.
+Tables and code scroll horizontally rather than widening the transcript. Table previews
+are capped at 100 body rows and 12 columns with a visible notice when truncated.
+Block and inline parsing run on a serial background worker; canceled streaming
+revisions are skipped, and native inline parse calls cannot overlap.
 
 Final acceptance requires building/running both apps in Xcode per AGENTS.md.
 Inspect live replies and history in light/dark appearance, narrow split panes,

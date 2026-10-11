@@ -87,4 +87,26 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertNil(document.inlineContent["[unsafe](file:///tmp/private)"]!.runs.first?.link)
     }
 
+    func testGivenLargeTableShouldBoundNativeGridAndExplainTruncation() {
+        let header = (1...13).map { "Column \($0)" }.joined(separator: " | ")
+        let delimiter = Array(repeating: "---", count: 13).joined(separator: " | ")
+        let row = (1...13).map { "Cell \($0)" }.joined(separator: " | ")
+        let blocks = ChatMarkdown.parse(([header, delimiter] + Array(repeating: row, count: 101)).joined(separator: "\n"))
+        guard case .table(let headers, let alignments, let rows) = blocks.first else { return XCTFail("Expected table") }
+        XCTAssertEqual(headers.count, 12)
+        XCTAssertEqual(alignments.count, 12)
+        XCTAssertEqual(rows.count, 100)
+        XCTAssertTrue(rows.allSatisfy { $0.count == 12 })
+        XCTAssertEqual(rows.last?.last, "Cell 12")
+        XCTAssertEqual(blocks.last, .paragraph("Table preview limited to 100 rows and 12 columns."))
+    }
+    func testGivenCancelledQueuedPreparationShouldSkipInlineParsing() async {
+        let result = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await ChatMarkdownPreparation.shared.prepare("**obsolete**")
+        }.value
+        XCTAssertTrue(result.blocks.isEmpty)
+        XCTAssertTrue(result.inlineContent.isEmpty)
+    }
+
 }
