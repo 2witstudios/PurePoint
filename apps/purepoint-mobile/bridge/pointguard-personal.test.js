@@ -1,4 +1,5 @@
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
@@ -131,4 +132,21 @@ test("explicit local symlink selects one canonical native package instead of bun
   );
   assert.deepEqual(sources, [path.join(root, "support/pointguard"), actual]);
   assert.ok(!args.includes("--append-system-prompt"));
+});
+
+test("unsafe personal FIFO refuses promptly instead of blocking startup", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pointguard-fifo-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fifo = path.join(dir, "SOUL.md");
+  execFileSync("/usr/bin/mkfifo", ["-m", "600", fifo]);
+  const moduleURL = new URL(
+    "../support/pointguard/lib/personal.js",
+    import.meta.url,
+  ).href;
+  const script = `import { readPersonal } from ${JSON.stringify(moduleURL)};
+    try { await readPersonal(process.argv[1]); process.exit(1); }
+    catch (error) { if (!error.message.includes("regular")) throw error; }`;
+  execFileSync(process.execPath, ["--input-type=module", "-e", script, fifo], {
+    timeout: 2000,
+  });
 });

@@ -19,7 +19,10 @@ function validate(info, directory = false) {
     );
 }
 export async function readPersonal(file) {
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await open(
+    file,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
     validate(await handle.stat());
     // Bounded read also handles a concurrent editor growing the file after stat.
