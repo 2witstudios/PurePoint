@@ -36,7 +36,7 @@ final class ChatDomainTests: XCTestCase {
         try await writer.commit(first, generation: 3); XCTAssertTrue(writer.accept(generation: 3)); await writer.drain()
         XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, first.credential, "Deliberate accepted re-pair can finalize quarantined trust")
         let corrupt = Data("unknown or corrupt previous trust".utf8)
-        let identity = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PiMobile.TrustedHost.v1", kSecAttrAccount as String: endpoint]
+        let identity: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PiMobile.TrustedHost.v1", kSecAttrAccount as String: endpoint]
         XCTAssertEqual(SecItemUpdate(identity as CFDictionary, [kSecValueData as String: corrupt] as CFDictionary), errSecSuccess)
         writer.advance(to: 4); try await writer.commit(updated, generation: 4); writer.advance(to: 5); await writer.drain()
         var query = identity; query[kSecReturnData as String] = true; var restored: CFTypeRef?
