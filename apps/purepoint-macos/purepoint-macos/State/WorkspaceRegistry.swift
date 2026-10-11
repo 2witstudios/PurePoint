@@ -54,6 +54,25 @@ final class WorkspaceRegistry {
     @ObservationIgnored private var liveByProject: [String: [LiveAgent]] = [:]
     @ObservationIgnored private var loadedProjects = Set<String>()
     @ObservationIgnored private var saveWorkItems: [String: DispatchWorkItem] = [:]
+    private(set) var layoutErrorsByProject: [String: String] = [:]
+    @ObservationIgnored private let loadWorkspaces: (String) throws -> [Workspace]
+
+    init(loadWorkspaces: @escaping (String) throws -> [Workspace] = { try WorkspacePersistence.loadForRegistry(projectRoot: $0) }) {
+        self.loadWorkspaces = loadWorkspaces
+    }
+
+    private func loadProjectIfNeeded(_ projectRoot: String) throws {
+        guard !loadedProjects.contains(projectRoot) else { return }
+        do {
+            let restored = try loadWorkspaces(projectRoot)
+            workspacesByProject[projectRoot] = restored
+            loadedProjects.insert(projectRoot)
+            layoutErrorsByProject[projectRoot] = nil
+        } catch {
+            layoutErrorsByProject[projectRoot] = "Could not restore this project's layout: " + error.localizedDescription
+            throw error
+        }
+    }
 
     // MARK: - Queries
 
@@ -90,10 +109,8 @@ final class WorkspaceRegistry {
     /// Uses the same registry and persistence as agent workspaces. The navigation item is
     /// this workspace's sidebar entry, so it does not also appear under the project.
     @discardableResult
-    func ensurePointGuardWorkspace(projectRoot: String) -> String {
-        if loadedProjects.insert(projectRoot).inserted, workspacesByProject[projectRoot] == nil {
-            workspacesByProject[projectRoot] = WorkspacePersistence.load(projectRoot: projectRoot)
-        }
+    func ensurePointGuardWorkspace(projectRoot: String) throws -> String {
+        try loadProjectIfNeeded(projectRoot)
         let id = Workspace.pointGuardId(projectRoot: projectRoot)
         if let workspace = workspacesByProject[projectRoot]?.first(where: { $0.id == id }) {
             if !workspace.surfaces.contains(where: { $0.surface.content == .pointGuard }) {
@@ -115,9 +132,7 @@ final class WorkspaceRegistry {
     /// here on first sight of a project — the old code persisted a layout that nothing ever
     /// read back, so every restart silently dissolved the grouping.
     func reconcile(projectRoot: String, rootAgents: [AgentModel], worktrees: [WorktreeModel]) {
-        if loadedProjects.insert(projectRoot).inserted, workspacesByProject[projectRoot] == nil {
-            workspacesByProject[projectRoot] = WorkspacePersistence.load(projectRoot: projectRoot)
-        }
+        do { try loadProjectIfNeeded(projectRoot) } catch { return }
 
         let live = WorkspaceReconciler.liveAgents(rootAgents: rootAgents, worktrees: worktrees)
         liveByProject[projectRoot] = live
@@ -497,6 +512,7 @@ final class WorkspaceRegistry {
         workspacesByProject[projectRoot] = nil
         reservationsByProject[projectRoot] = nil
         liveByProject[projectRoot] = nil
+        layoutErrorsByProject[projectRoot] = nil
         loadedProjects.remove(projectRoot)
         pruneActiveSelection()
     }

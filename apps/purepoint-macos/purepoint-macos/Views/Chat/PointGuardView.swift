@@ -17,7 +17,15 @@ struct PointGuardView: View {
 
     var body: some View {
         Group {
-            if let workspace {
+            if let projectRoot, let error = registry.layoutErrorsByProject[projectRoot] {
+                ContentUnavailableView {
+                    Label("Could not restore layout", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Retry", action: activateWorkspace)
+                }
+            } else if let workspace {
                 PaneGridView(workspaceId: workspace.id)
             } else if projectRoot == nil {
                 VStack(spacing: 0) {
@@ -36,7 +44,11 @@ struct PointGuardView: View {
 
     private func activateWorkspace() {
         guard let projectRoot else { return }
-        registry.activate(workspaceId: registry.ensurePointGuardWorkspace(projectRoot: projectRoot))
+        guard let id = try? registry.ensurePointGuardWorkspace(projectRoot: projectRoot) else {
+            registry.activeWorkspaceId = nil
+            return
+        }
+        registry.activate(workspaceId: id)
     }
 }
 

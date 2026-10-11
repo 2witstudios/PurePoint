@@ -89,7 +89,11 @@ struct ContentView: View {
                 })
                     ?? appState.projects.first?.projectRoot
                 {
-                    registry.activate(workspaceId: registry.ensurePointGuardWorkspace(projectRoot: root))
+                    if let id = try? registry.ensurePointGuardWorkspace(projectRoot: root) {
+                        registry.activate(workspaceId: id)
+                    } else {
+                        registry.activeWorkspaceId = nil
+                    }
                 } else {
                     registry.activeWorkspaceId = nil
                 }

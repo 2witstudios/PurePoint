@@ -171,6 +171,15 @@ nonisolated enum WorkspacePersistence {
     // MARK: - Load
 
     static func load(projectRoot: String) -> [Workspace] {
+        (try? loadForRegistry(projectRoot: projectRoot)) ?? []
+    }
+
+    /// Registry loading must distinguish an unavailable identity migration from no layout.
+    /// Never publish a new identity until its atomic write has succeeded.
+    static func loadForRegistry(
+        projectRoot: String,
+        writeMigration: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
+    ) throws -> [Workspace] {
         let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
         if let data = try? Data(contentsOf: url),
             let document = try? JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data)
@@ -179,7 +188,7 @@ nonisolated enum WorkspacePersistence {
             // Copied/renamed project directories keep their layout, but must not publish an
             // ID belonging to another open project. Persist the new ID for CLI routing too.
             if zip(document.workspaces, restored).contains(where: { $0.id != $1.id }) {
-                migrateWorkspaceIds(in: data, to: restored, at: url)
+                try migrateWorkspaceIds(in: data, to: restored, at: url, write: writeMigration)
             }
             return restored
         }
@@ -189,11 +198,13 @@ nonisolated enum WorkspacePersistence {
     /// Identity-only migration also works for decodable newer documents. Re-encoding the
     /// typed model would drop unknown fields and surface kinds, so patch the raw JSON and
     /// retain its version. Normal layout saves still refuse to overwrite a newer schema.
-    private static func migrateWorkspaceIds(in data: Data, to restored: [Workspace], at url: URL) {
-        guard var document = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+    private static func migrateWorkspaceIds(
+        in data: Data, to restored: [Workspace], at url: URL, write: (Data, URL) throws -> Void
+    ) throws {
+        guard var document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             var workspaces = document["workspaces"] as? [[String: Any]],
             workspaces.count == restored.count
-        else { return }
+        else { throw CocoaError(.fileReadCorruptFile) }
         let activeId = document["activeWorkspaceId"] as? String
         for index in workspaces.indices {
             if workspaces[index]["id"] as? String == activeId, activeId != nil {
@@ -202,9 +213,8 @@ nonisolated enum WorkspacePersistence {
             workspaces[index]["id"] = restored[index].id
         }
         document["workspaces"] = workspaces
-        guard let migrated = try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
-        else { return }
-        try? migrated.write(to: url, options: .atomic)
+        let migrated = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        try write(migrated, url)
     }
 
     private static func workspace(from persisted: PersistedWorkspace, projectRoot: String) -> Workspace {

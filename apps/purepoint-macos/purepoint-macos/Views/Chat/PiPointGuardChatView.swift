@@ -332,7 +332,9 @@ struct PiPointGuardChatView: View {
         .frame(maxWidth: PurePointTheme.chatContentWidth).frame(maxWidth: .infinity)
         .padding(.horizontal, PurePointTheme.chatHorizontalPadding).padding(.top, 8).padding(.bottom, 16)
         .onAppear { composerFocused = isFocused }
-        .onChange(of: isFocused) { _, focused in composerFocused = focused }
+        .onChange(of: isFocused) { _, focused in
+            if !focused { composerFocused = false }
+        }
     }
 
     private func importAttachment(_ result: Result<URL, Error>) {

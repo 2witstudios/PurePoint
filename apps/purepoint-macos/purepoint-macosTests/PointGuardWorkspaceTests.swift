@@ -16,7 +16,7 @@ import Testing
 
     @Test func chatCanSplitAndShareTabsWithRootAgents() throws {
         try withRegistry { registry, root in
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             registry.split(workspaceId: id, leafId: 0, axis: .vertical)
             let target = try #require(registry.workspace(id: id)?.focusedSurface?.id)
             registry.reserveSurface(projectRoot: root, workspaceId: id, surfaceId: target)
@@ -39,12 +39,12 @@ import Testing
 
     @Test func visitingPointGuardKeepsTheFocusedChatAndExistingLayout() throws {
         try withRegistry { registry, root in
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             let terminal = try #require(registry.newTab(workspaceId: id, leafId: 0, content: .agent("ag-terminal")))
             registry.selectTab(workspaceId: id, surfaceId: 0)
             registry.activate(workspaceId: id)
             #expect(registry.activeWorkspace?.focusedSurface?.content == .pointGuard)
-            #expect(registry.ensurePointGuardWorkspace(projectRoot: root) == id)
+            #expect(try registry.ensurePointGuardWorkspace(projectRoot: root) == id)
             #expect(registry.workspace(id: id)?.tabCount == 2)
             registry.selectTab(workspaceId: id, surfaceId: terminal)
             #expect(registry.activeWorkspace?.focusedSurface?.content == .agent("ag-terminal"))
@@ -53,7 +53,7 @@ import Testing
 
     @Test func closingTheLastTabReturnsToChatWithoutReusingSurfaceIds() throws {
         try withRegistry { registry, root in
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             registry.activeWorkspaceId = id
             registry.closeTab(workspaceId: id, surfaceId: 0)
             let workspace = try #require(registry.workspace(id: id))
@@ -63,25 +63,25 @@ import Testing
         }
     }
 
-    @Test func deadTerminalDoesNotRemoveChatOrAdoptItAsAnAgent() {
-        withRegistry { registry, root in
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+    @Test func deadTerminalDoesNotRemoveChatOrAdoptItAsAnAgent() throws {
+        try withRegistry { registry, root in
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             registry.newTab(workspaceId: id, leafId: 0, content: .agent("ag-dead"))
             registry.reconcile(projectRoot: root, rootAgents: [], worktrees: [])
             #expect(registry.workspace(id: id)?.surfaces.map(\.surface.content) == [.pointGuard])
         }
     }
 
-    @Test func closingChatDoesNotKillItsSiblingTerminalAndReopeningRestoresChat() {
-        withRegistry { registry, root in
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+    @Test func closingChatDoesNotKillItsSiblingTerminalAndReopeningRestoresChat() throws {
+        try withRegistry { registry, root in
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             registry.newTab(workspaceId: id, leafId: 0, content: .agent("ag-terminal"))
             var killed: [String] = []
             registry.onCloseAgent = { _, agentId in killed.append(agentId) }
             registry.closeTab(workspaceId: id, surfaceId: 0)
             #expect(killed.isEmpty)
             #expect(registry.workspace(id: id)?.agentIds == ["ag-terminal"])
-            registry.ensurePointGuardWorkspace(projectRoot: root)
+            try registry.ensurePointGuardWorkspace(projectRoot: root)
             #expect(registry.workspace(id: id)?.tabCount == 2)
             #expect(registry.workspace(id: id)?.focusedSurface?.content == .pointGuard)
         }
@@ -89,7 +89,7 @@ import Testing
 
     @Test func chatAndFileTabsPersistAcrossRestart() throws {
         try withRegistry { registry, root in
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             registry.split(workspaceId: id, leafId: 0, axis: .horizontal)
             let file = try #require(registry.workspace(id: id)?.focusedSurface?.id)
             registry.openFile(workspaceId: id, surfaceId: file, path: root + "/notes.md")
@@ -127,12 +127,12 @@ import Testing
         }
     }
 
-    @Test func projectRootsHaveDistinctPointGuardLayouts() {
-        withRegistry { registry, root in
-            let first = registry.ensurePointGuardWorkspace(projectRoot: root)
+    @Test func projectRootsHaveDistinctPointGuardLayouts() throws {
+        try withRegistry { registry, root in
+            let first = try registry.ensurePointGuardWorkspace(projectRoot: root)
             let secondRoot = root + "-second"
             defer { registry.forgetProject(secondRoot); try? FileManager.default.removeItem(atPath: secondRoot) }
-            let second = registry.ensurePointGuardWorkspace(projectRoot: secondRoot)
+            let second = try registry.ensurePointGuardWorkspace(projectRoot: secondRoot)
             #expect(first != second)
             #expect(registry.projectRoot(forWorkspace: first) == root)
             #expect(registry.projectRoot(forWorkspace: second) == secondRoot)
@@ -153,10 +153,10 @@ import Testing
             try FileManager.default.copyItem(
                 atPath: WorkspacePersistence.filePath(projectRoot: root), toPath: copiedURL.path)
 
-            let originalId = registry.ensurePointGuardWorkspace(projectRoot: root)
+            let originalId = try registry.ensurePointGuardWorkspace(projectRoot: root)
             // Reconcile is also a first-load path, before the chat view has appeared.
             registry.reconcile(projectRoot: copiedRoot, rootAgents: [], worktrees: [])
-            let copiedId = registry.ensurePointGuardWorkspace(projectRoot: copiedRoot)
+            let copiedId = try registry.ensurePointGuardWorkspace(projectRoot: copiedRoot)
             let migrated = try JSONDecoder().decode(
                 PersistedWorkspaceDocument.self, from: Data(contentsOf: copiedURL))
             #expect(migrated.activeWorkspaceId == copiedId)
@@ -190,7 +190,7 @@ import Testing
             WorkspacePersistence.save([original], projectRoot: root)
             try FileManager.default.moveItem(atPath: root, toPath: renamedRoot)
 
-            let renamedId = registry.ensurePointGuardWorkspace(projectRoot: renamedRoot)
+            let renamedId = try registry.ensurePointGuardWorkspace(projectRoot: renamedRoot)
             let restored = try #require(registry.workspace(id: renamedId))
             #expect(renamedId == Workspace.pointGuard(projectRoot: renamedRoot).id)
             #expect(registry.workspace(id: original.id) == nil)
@@ -219,7 +219,7 @@ import Testing
             future["workspaces"] = workspaces
             try JSONSerialization.data(withJSONObject: future).write(to: url)
 
-            let id = registry.ensurePointGuardWorkspace(projectRoot: root)
+            let id = try registry.ensurePointGuardWorkspace(projectRoot: root)
             #expect(id != original.id)
             workspaces[0]["id"] = id
             future["workspaces"] = workspaces
@@ -236,7 +236,52 @@ import Testing
         }
     }
 
-    @Test func worktreeAgentsCannotBeClaimedByPointGuard() {
+    @Test func failedIdentityWriteBlocksPublicationAndCanRetryWithoutTouchingOtherProject() throws {
+        for code in [CocoaError.Code.fileWriteNoPermission, .fileWriteOutOfSpace] {
+            try withRegistry { _, root in
+                let copiedRoot = root + "-copy"
+                var canWrite = false
+                let registry = WorkspaceRegistry { projectRoot in
+                    try WorkspacePersistence.loadForRegistry(projectRoot: projectRoot) { data, url in
+                        if !canWrite { throw CocoaError(code) }
+                        try data.write(to: url, options: .atomic)
+                    }
+                }
+                defer {
+                    registry.forgetProject(root)
+                    registry.forgetProject(copiedRoot)
+                    try? FileManager.default.removeItem(atPath: copiedRoot)
+                }
+                let original = Workspace.pointGuard(projectRoot: root)
+                WorkspacePersistence.save([original], projectRoot: root)
+                WorkspacePersistence.save([original], projectRoot: copiedRoot, activeWorkspaceId: original.id)
+                let url = URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: copiedRoot))
+                let before = try Data(contentsOf: url)
+                let originalId = try registry.ensurePointGuardWorkspace(projectRoot: root)
+                registry.activate(workspaceId: originalId)
+
+                registry.reconcile(projectRoot: copiedRoot, rootAgents: [], worktrees: [])
+                #expect(throws: CocoaError.self) { try registry.ensurePointGuardWorkspace(projectRoot: copiedRoot) }
+                #expect(registry.workspacesByProject[copiedRoot] == nil)
+                #expect(registry.workspace(id: Workspace.pointGuardId(projectRoot: copiedRoot)) == nil)
+                #expect(registry.layoutErrorsByProject[copiedRoot] != nil)
+                #expect(registry.workspace(id: originalId) == original)
+                registry.saveAll()
+                #expect(try Data(contentsOf: url) == before)
+
+                canWrite = true
+                let copiedId = try registry.ensurePointGuardWorkspace(projectRoot: copiedRoot)
+                #expect(copiedId != originalId)
+                #expect(registry.projectRoot(forWorkspace: copiedId) == copiedRoot)
+                #expect(registry.layoutErrorsByProject[copiedRoot] == nil)
+                #expect(registry.workspace(id: originalId) == original)
+                let document = try JSONDecoder().decode(PersistedWorkspaceDocument.self, from: Data(contentsOf: url))
+                #expect(document.activeWorkspaceId == copiedId)
+            }
+        }
+    }
+
+    @Test func worktreeAgentsCannotBeClaimedByPointGuard() throws {
         var workspace = Workspace.pointGuard(projectRoot: "/tmp/project")
         workspace.newTab(leafId: 0, content: .agent("ag-worktree"))
         let restored = WorkspaceReconciler.reconcile(
