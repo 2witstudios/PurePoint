@@ -93,6 +93,8 @@ jobs:
           printf 'CARGO_TARGET_DIR=%s/mobile-lock-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           CARGO_TARGET_DIR="$RUNNER_TEMP/mobile-lock-cargo" cargo build --locked -p pu-cli --bin pu-point-guard-lock
           printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/mobile-lock-cargo/debug/pu-point-guard-lock\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Shared chat Markdown parser tests
+        run: python3 ../shared/ChatMarkdown/check-markdown.py
       - name: Swift domain and recovery checks
         run: |
           swiftc PurePoint/ChatDomain.swift verification/LogicChecks.swift -o "$RUNNER_TEMP/mobile-logic"

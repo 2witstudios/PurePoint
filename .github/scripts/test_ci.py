@@ -11,6 +11,7 @@ class RoutingTests(unittest.TestCase):
     def test_docs_mobile_macos_rust_and_workflow_changes(self):
         for paths, expected in (
             (["README.md"], {"macos": False, "mobile": False}),
+            (["apps/shared/ChatMarkdown/ChatMarkdown.swift"], {"macos": True, "mobile": True}),
             (["apps/purepoint-mobile/bridge/core.js"], {"macos": True, "mobile": True}),
             (["apps/purepoint-mobile/runtime/package-runtime.py"], {"macos": True, "mobile": True}),
             (["apps/purepoint-mobile/package-lock.json"], {"macos": True, "mobile": True}),

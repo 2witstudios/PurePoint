@@ -11,6 +11,7 @@ struct PiPointGuardChatView: View {
     @State private var confirmNew = false
     @State private var confirmResume = false
     @State private var followOutput = true
+    @State private var scrollingTranscript = false
     @State private var showFiles = false
     @State private var importingAttachment = false
     @FocusState private var composerFocused: Bool
@@ -159,12 +160,23 @@ struct PiPointGuardChatView: View {
                 .padding(.horizontal, PurePointTheme.chatHorizontalPadding)
                 .padding(.vertical, 24)
             }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 96
+            } action: { _, atBottom in
+                if atBottom && !scrollingTranscript { followOutput = true }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, _ in
+                // Markdown finishes parsing after the snapshot arrives. Follow its final layout too.
+                if followOutput && !scrollingTranscript && model.browsing == nil { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onScrollPhaseChange { oldPhase, phase, context in
-                if phase == .tracking || phase == .interacting { followOutput = false }
+                if phase == .tracking || phase == .interacting { scrollingTranscript = true; followOutput = false }
                 if phase == .idle && oldPhase != .animating {
+                    scrollingTranscript = false
                     let geometry = context.geometry
-                    followOutput =
-                        geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 96
+                    if geometry.containerSize.height > 0 {
+                        followOutput = geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 96
+                    }
                 }
             }
             .onChange(of: model.snapshot?.sessionId) { _, _ in
@@ -219,13 +231,7 @@ struct PiPointGuardChatView: View {
                 .font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
         } else {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(Array(PiMarkdownBlocks.split(message.text).enumerated()), id: \.offset) { _, block in
-                    switch block {
-                    case .prose(let text): MarkdownTextView(text: text)
-                    case .code(let language, let text):
-                        CodeBlockView(language: language.isEmpty ? nil : language, code: text)
-                    }
-                }
+                ChatMarkdownView(text: message.text).equatable()
                 if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -433,7 +439,7 @@ private struct PiToolDetailView: View {
             ScrollView(.horizontal) {
                 Text(tool.text.isEmpty ? "No output" : tool.text)
                     .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .fixedSize(horizontal: true, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8).padding(.bottom, 4)
             }

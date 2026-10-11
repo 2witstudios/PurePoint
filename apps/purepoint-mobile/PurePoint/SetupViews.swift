@@ -273,7 +273,7 @@ struct ConversationView: View {
         NavigationStack {
             Group {
                 if let history = model.browsing {
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.padding(20) }
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(20) }
                         .safeAreaInset(edge: .bottom) {
                             Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
                                 if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { dismiss() } } }
