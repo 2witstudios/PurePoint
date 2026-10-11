@@ -73,7 +73,11 @@ symlink skill dedup, canonical local override and distinct same-name user skill
 collision diagnostics pass. No credentials, model calls or network are needed.
 
 PASS: existing interrupted-native-download cleanup/exact-integrity retry regression.
-PASS: `git diff --check`.
+PASS: whitespace check for authored files (exclude immutable `source/`).
+Full staged whitespace check reports the original review-example.md lines 262–263
+with Markdown trailing spaces. Preserved as required by byte-identical upstream
+import; changing them would violate source integrity. This is a documented source
+formatting exception, not a runtime/test failure.
 RED evidence: initial source integrity test failed because the package provenance
 was absent before implementation. All current focused tests pass.
 
