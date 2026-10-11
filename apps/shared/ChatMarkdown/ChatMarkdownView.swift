@@ -19,7 +19,12 @@ struct ChatMarkdownView: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: text) {
             let source = text
-            let blocks = await Task.detached(priority: .userInitiated) { ChatMarkdown.parse(source) }.value
+            let parser = Task.detached(priority: .userInitiated) { ChatMarkdown.parse(source) }
+            let blocks = await withTaskCancellationHandler {
+                await parser.value
+            } onCancel: {
+                parser.cancel()
+            }
             guard !Task.isCancelled else { return }
             document = Document(blocks: blocks)
         }

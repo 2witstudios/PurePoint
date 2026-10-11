@@ -70,4 +70,12 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(ChatMarkdown.cells("`unfinished | end"), ["`unfinished", "end"])
     }
 
+    func testGivenCancelledParseShouldDiscardObsoleteReply() async {
+        let result = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return ChatMarkdown.parse(String(repeating: "Long obsolete reply\n", count: 10_000))
+        }.value
+        XCTAssertTrue(result.isEmpty)
+    }
+
 }

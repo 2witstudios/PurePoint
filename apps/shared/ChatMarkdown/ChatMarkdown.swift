@@ -20,6 +20,7 @@ nonisolated enum ChatMarkdown {
         parse(source, nesting: 0)
     }
     private static func parse(_ source: String, nesting: Int) -> [ChatMarkdownBlock] {
+        guard !Task.isCancelled else { return [] }
         // Replies are untrusted content. Keep parser and SwiftUI recursion bounded.
         guard nesting < 32 else { return source.isEmpty ? [] : [.paragraph(source)] }
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
@@ -30,12 +31,14 @@ nonisolated enum ChatMarkdown {
             if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
         }
         while i < lines.count {
+            guard !Task.isCancelled else { return [] }
             let line = lines[i], trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { flush(); i += 1; continue }
             if let fence = fence(trimmed) {
                 flush(); i += 1
                 var code: [String] = []
                 while i < lines.count {
+                    guard !Task.isCancelled else { return [] }
                     let candidate = lines[i].trimmingCharacters(in: .whitespaces)
                     let run = candidate.prefix(while: { $0 == fence.character })
                     if run.count >= fence.count && candidate.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty { i += 1; break }
@@ -51,6 +54,7 @@ nonisolated enum ChatMarkdown {
             if trimmed.hasPrefix(">") {
                 flush(); var quoted: [String] = []
                 while i < lines.count {
+                    guard !Task.isCancelled else { return [] }
                     let current = lines[i].trimmingCharacters(in: .whitespaces)
                     guard current.hasPrefix(">") else { break }
                     var content = current.dropFirst()
@@ -63,6 +67,7 @@ nonisolated enum ChatMarkdown {
                 flush(); let headers = cells(trimmed); i += 2
                 var rows: [[String]] = []
                 while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                    guard !Task.isCancelled else { return [] }
                     let row = cells(lines[i]); rows.append(Array((row + Array(repeating: "", count: headers.count)).prefix(headers.count))); i += 1
                 }
                 blocks.append(.table(headers: headers, alignments: alignments, rows: rows)); continue
@@ -75,6 +80,7 @@ nonisolated enum ChatMarkdown {
                 var continuation: [String] = []
                 var activeFence: (character: Character, count: Int, language: String)?
                 while i < lines.count {
+                    guard !Task.isCancelled else { return [] }
                     let next = lines[i], nextTrimmed = next.trimmingCharacters(in: .whitespaces)
                     if let current = activeFence {
                         let run = nextTrimmed.prefix(while: { $0 == current.character })
@@ -163,6 +169,7 @@ nonisolated enum ChatMarkdown {
         func hasClosingRun(_ length: Int, after start: Int) -> Bool {
             var cursor = start
             while cursor < characters.count {
+                guard !Task.isCancelled else { return false }
                 if characters[cursor] == "`" {
                     var end = cursor
                     while end < characters.count, characters[end] == "`" { end += 1 }
@@ -173,6 +180,7 @@ nonisolated enum ChatMarkdown {
             return false
         }
         while index < characters.count {
+            guard !Task.isCancelled else { return [] }
             let character = characters[index]
             index += 1
             if escaped { if character != "|" { cell.append("\\") }; cell.append(character); escaped = false; continue }

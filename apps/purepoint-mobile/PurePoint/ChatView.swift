@@ -204,11 +204,14 @@ struct ChatView: View {
                 })
                 .onPreferenceChange(TranscriptViewportKey.self) { bottom in
                     viewportBottom = bottom
-                    if !draggingTranscript && transcriptBottom <= bottom + 96 { following = true }
                 }
                 .onPreferenceChange(TranscriptBottomKey.self) { bottom in
+                    guard bottom != 0 else { return } // LazyVStack may omit the offscreen sentinel.
+                    let previousBottom = transcriptBottom
                     transcriptBottom = bottom
-                    if !draggingTranscript && bottom <= viewportBottom + 96 { following = true }
+                    // Resume only when scrolling back to the end, not while a flick
+                    // away from the end is still decelerating after DragGesture ends.
+                    if !draggingTranscript && bottom < previousBottom && bottom <= viewportBottom + 1 { following = true }
                 }
                 .onPreferenceChange(TranscriptHeightKey.self) { _ in
                     // Keep following when parsed Markdown changes the reply's height.
@@ -218,7 +221,7 @@ struct ChatView: View {
                 .simultaneousGesture(DragGesture().onChanged { _ in
                     draggingTranscript = true; following = false
                 }.onEnded { _ in
-                    draggingTranscript = false; following = transcriptBottom <= viewportBottom + 96
+                    draggingTranscript = false
                 })
                 .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
                 .scrollDismissesKeyboard(.interactively)
