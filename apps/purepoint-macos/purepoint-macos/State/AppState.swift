@@ -74,8 +74,10 @@ final class AppState {
         persistOpenProjects()
     }
 
-    func closeProject(_ root: String) {
-        guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return }
+    /// Returns true when the root is no longer managed and its local files can be discarded.
+    @discardableResult
+    func closeProject(_ root: String) -> Bool {
+        guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return false }
         let project = projects.remove(at: index)
         if registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true {
             pointGuardProjects[root] = project
@@ -83,7 +85,11 @@ final class AppState {
             project.stopWatching()
             registry?.forgetProject(root)
         }
+        if activeProjectRoot == root {
+            activeProjectRoot = projects.first?.projectRoot
+        }
         persistOpenProjects()
+        return projectState(forRoot: root) == nil
     }
 
     func restoreProjects() {

@@ -123,13 +123,29 @@ private struct PointGuardRoutingService: WorkspaceService {
         }
     }
 
+    @Test func removingPointGuardProjectPreservesOwnerAndSelectsAnotherVisibleProject() throws {
+        try withState { state, _, root in
+            _ = try #require(state.activatePointGuardWorkspace())
+            let owner = try #require(state.projectState(forRoot: root))
+            state.openProject(root)
+            state.openProject(root + "-project")
+            state.activeProjectRoot = root
+            #expect(state.closeProject(root) == false)
+            #expect(state.projectState(forRoot: root) === owner)
+            #expect(state.activeProjectRoot == root + "-project")
+            #expect(state.closeProject(root + "-project") == true)
+            #expect(state.activeProjectRoot == nil)
+        }
+    }
+
     @Test func openingAndClosingPiFolderAsAProjectKeepsTheSameAgentOwner() throws {
         try withState { state, _, root in
             _ = try #require(state.activatePointGuardWorkspace())
             let owner = try #require(state.projectState(forRoot: root))
             state.openProject(root)
             #expect(state.projects.first === owner)
-            state.closeProject(root)
+            #expect(state.closeProject(root) == false)
+            #expect(state.activeProjectRoot == nil)
             #expect(state.projects.isEmpty)
             #expect(state.projectState(forRoot: root) === owner)
         }
