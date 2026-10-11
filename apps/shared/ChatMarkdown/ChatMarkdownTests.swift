@@ -52,4 +52,22 @@ final class ChatMarkdownTests: XCTestCase {
             .listItem(depth: 0, marker: "•", checked: nil, text: "First\ncontinued"),
             .listItem(depth: 0, marker: "•", checked: nil, text: "Second")])
     }
+    func testGivenDeepQuotesShouldBoundNestingAndRetainRemainingText() {
+        let source = String(repeating: ">", count: 3_000) + " text"
+        var blocks = ChatMarkdown.parse(source)
+        var depth = 0
+        while case .quote(let nested) = blocks.first {
+            depth += 1
+            blocks = nested
+        }
+        XCTAssertEqual(depth, 32)
+        XCTAssertEqual(blocks, [.paragraph(String(repeating: ">", count: 2_968) + " text")])
+    }
+    func testGivenTableCodeSpanShouldMatchDelimiterLength() {
+        XCTAssertEqual(ChatMarkdown.parse("A | B\n--- | ---\n``x|y`` | end"), [
+            .table(headers: ["A", "B"], alignments: [.leading, .leading], rows: [["``x|y``", "end"]])])
+        XCTAssertEqual(ChatMarkdown.cells("``x`|y`` | end"), ["``x`|y``", "end"])
+        XCTAssertEqual(ChatMarkdown.cells("`unfinished | end"), ["`unfinished", "end"])
+    }
+
 }

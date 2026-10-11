@@ -17,6 +17,11 @@ enum ChatTableAlignment: Sendable { case leading, center, trailing }
 
 nonisolated enum ChatMarkdown {
     static func parse(_ source: String) -> [ChatMarkdownBlock] {
+        parse(source, nesting: 0)
+    }
+    private static func parse(_ source: String, nesting: Int) -> [ChatMarkdownBlock] {
+        // Replies are untrusted content. Keep parser and SwiftUI recursion bounded.
+        guard nesting < 32 else { return source.isEmpty ? [] : [.paragraph(source)] }
         let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         var blocks: [ChatMarkdownBlock] = []
         var paragraph: [String] = []
@@ -52,7 +57,7 @@ nonisolated enum ChatMarkdown {
                     if content.first == " " { content = content.dropFirst() }
                     quoted.append(String(content)); i += 1
                 }
-                blocks.append(.quote(parse(quoted.joined(separator: "\n")))); continue
+                blocks.append(.quote(parse(quoted.joined(separator: "\n"), nesting: nesting + 1))); continue
             }
             if i + 1 < lines.count, trimmed.contains("|"), let alignments = tableDelimiter(lines[i + 1]), alignments.count == cells(trimmed).count {
                 flush(); let headers = cells(trimmed); i += 2
@@ -89,7 +94,7 @@ nonisolated enum ChatMarkdown {
                 let depth = min(item.indent / 2, 8)
                 let margin = continuation.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }).map(indentation) ?? 0
                 let body = continuation.map { removingIndent($0, columns: margin) }.joined(separator: "\n")
-                let contents = parse(body)
+                let contents = parse(body, nesting: nesting + 1)
                 if case .paragraph(let continued) = contents.first, contents.count == 1 {
                     blocks.append(.listItem(depth: depth, marker: item.marker, checked: item.checked, text: item.text + "\n" + continued))
                 } else {
@@ -153,12 +158,35 @@ nonisolated enum ChatMarkdown {
         var line = source.trimmingCharacters(in: .whitespaces)
         if line.hasPrefix("|") { line.removeFirst() }
         if line.hasSuffix("|"), !line.hasSuffix("\\|") { line.removeLast() }
-        var result: [String] = [], cell = "", escaped = false, code = false
-        for character in line {
+        let characters = Array(line)
+        var result: [String] = [], cell = "", escaped = false, delimiter = 0, index = 0
+        func hasClosingRun(_ length: Int, after start: Int) -> Bool {
+            var cursor = start
+            while cursor < characters.count {
+                if characters[cursor] == "`" {
+                    var end = cursor
+                    while end < characters.count, characters[end] == "`" { end += 1 }
+                    if end - cursor == length { return true }
+                    cursor = end
+                } else { cursor += 1 }
+            }
+            return false
+        }
+        while index < characters.count {
+            let character = characters[index]
+            index += 1
             if escaped { if character != "|" { cell.append("\\") }; cell.append(character); escaped = false; continue }
-            if character == "\\" { escaped = true; continue }
-            if character == "`" { code.toggle() }
-            if character == "|" && !code { result.append(cell.trimmingCharacters(in: .whitespaces)); cell = "" }
+            if character == "\\", delimiter == 0 { escaped = true; continue }
+            if character == "`" {
+                let start = index - 1
+                while index < characters.count, characters[index] == "`" { index += 1 }
+                let length = index - start
+                if delimiter == length { delimiter = 0 }
+                else if delimiter == 0, hasClosingRun(length, after: index) { delimiter = length }
+                cell += String(repeating: "`", count: length)
+                continue
+            }
+            if character == "|" && delimiter == 0 { result.append(cell.trimmingCharacters(in: .whitespaces)); cell = "" }
             else { cell.append(character) }
         }
         if escaped { cell.append("\\") }
