@@ -43,6 +43,7 @@ enum AttachmentImport {
 
 struct ConversationSidebar: View {
     @ObservedObject var model: ChatModel
+    let selection: Int
     let close: () -> Void
     let newConversation: () -> Void
     let select: (Conversation) -> Void

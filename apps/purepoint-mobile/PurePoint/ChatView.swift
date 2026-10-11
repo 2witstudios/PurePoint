@@ -129,7 +129,7 @@ struct ChatView: View {
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close conversations sidebar")
-                        ConversationSidebar(model: model, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
+                        ConversationSidebar(model: model, selection: model.selectionToken, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
                             .frame(width: min(320, geometry.size.width * 0.84), height: geometry.size.height)
                             .transition(.move(edge: .leading))
                             .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })

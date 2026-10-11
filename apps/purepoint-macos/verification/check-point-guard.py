@@ -33,16 +33,11 @@ with tempfile.TemporaryDirectory(prefix='pointguard-checks-', dir='/tmp') as fol
             bridge.kill()
             bridge.wait()
 
-# Run the merged mobile recovery acceptance suite against the actual desktop port.
-# It covers restarts, lost acknowledgements, bounded receipts and storage failure.
-import re
+# Desktop and mobile now have distinct persistence schemas. Keep the existing
+# single-host desktop recovery assertions against its own actual model.
 with tempfile.TemporaryDirectory(prefix='pointguard-checks-', dir='/tmp') as folder:
     temporary = Path(folder)
-    checks = (mobile / 'verification/RecoveryChecks.swift').read_text()
-    names = ['ChatModel', 'Snapshot', 'ComposerAttachment', 'Submission', 'LocalRecoveryStore', 'CanceledText']
-    checks = re.sub(r'\b(' + '|'.join(names) + r')\b', lambda match: 'Pi' + match[0], checks)
-    checks = checks.replace('pi.canceledIds', 'pointguard.canceledIds').replace('pi.endpoint', 'pointguard.endpoint')
-    checks = checks.replace('/tmp/pi-mobile-recovery-', '/tmp/pointguard-checks-').replace('PiMobile/submissions.json', 'PurePoint.PointGuard/submissions.json')
+    checks = (root / 'verification/PiRecoveryChecks.swift').read_text()
     combined = temporary / 'RecoveryModel.swift'
     combined.write_text((source / 'State/PiChatModel.swift').read_text() + '\n' + checks)
     subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors', str(source / 'Models/PiChatDomain.swift'), str(source / 'Services/PiPairingSecret.swift'), str(combined), '-o', str(temporary / 'checks')], check=True)

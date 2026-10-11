@@ -17,6 +17,24 @@ final class ChatDomainTests: XCTestCase {
         XCTAssertThrowsError(try PairingSecret.saveTrust(invalid))
         XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, updated.credential)
     }
+    @MainActor func testGivenInterruptedTrustReplacementShouldQuarantineUntilRollbackOrAcceptance() async throws {
+        let endpoint = "wss://fixture-" + UUID().uuidString.lowercased() + ".ts.net/v1"
+        defer { try? PairingSecret.removeTrust(endpoint: endpoint); try? PairingSecret.finishTrustChange(endpoint: endpoint) }
+        let host = UUID().uuidString; let device = UUID().uuidString
+        let first = TrustedHost(version: 1, endpoint: endpoint, hostId: host, certificateSHA256: String(repeating: "a", count: 64), deviceId: device, clientId: device, credential: String(repeating: "b", count: 43))
+        let updated = TrustedHost(version: 1, endpoint: endpoint, hostId: host, certificateSHA256: first.certificateSHA256, deviceId: device, clientId: device, credential: String(repeating: "c", count: 43))
+        try PairingSecret.saveTrust(first)
+        let writer = PairingTrustWriter(save: { try PairingSecret.saveTrust($0) }, load: { try PairingSecret.readTrustForTransaction(endpoint: $0) }, remove: { try PairingSecret.removeTrust(endpoint: $0) }, begin: { try PairingSecret.beginTrustChange(endpoint: $0) }, finish: { try PairingSecret.finishTrustChange(endpoint: $0) })
+        writer.advance(to: 1); try await writer.commit(updated, generation: 1)
+        XCTAssertThrowsError(try PairingSecret.readTrust(endpoint: endpoint), "Unaccepted replacement must not release a credential")
+        writer.advance(to: 2); await writer.drain()
+        XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, first.credential, "Cancellation restores original trust")
+        try PairingSecret.beginTrustChange(endpoint: endpoint); try PairingSecret.saveTrust(updated)
+        XCTAssertThrowsError(try PairingSecret.readTrust(endpoint: endpoint), "An interrupted process leaves a durable quarantine")
+        try await writer.commit(first, generation: 2); XCTAssertTrue(writer.accept(generation: 2)); await writer.drain()
+        XCTAssertEqual(try PairingSecret.readTrust(endpoint: endpoint)?.credential, first.credential, "Deliberate accepted re-pair can finalize quarantined trust")
+    }
+
     func testGivenRepeatedFailuresShouldBoundReconnectAndResetOnNetworkChange() {
         var budget = ReconnectBudget()
         XCTAssertEqual((0..<5).compactMap { _ in budget.nextDelay() }, [1,2,4,8,16])
@@ -24,8 +42,11 @@ final class ChatDomainTests: XCTestCase {
     }
 
     @MainActor func testGivenExplicitDisconnectShouldStayDisconnectedOnForegroundWithSavedEndpoint() {
-        let model = ChatModel()
-        model.endpoint = "wss://100.100.1.2:8787/v1"
+        let suite = "connection-check-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("wss://100.100.1.2:8787/v1", forKey: "pi.endpoint")
+        let model = ChatModel(defaults: defaults, trustLoader: { _ in nil })
         model.disconnect()
         model.setForeground(false)
         model.setForeground(true)
@@ -34,8 +55,11 @@ final class ChatDomainTests: XCTestCase {
     }
 
     @MainActor func testGivenConnectionIntentShouldReconnectOnForeground() {
-        let model = ChatModel()
-        model.endpoint = "wss://100.100.1.2:8787/v1"
+        let suite = "connection-check-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("wss://100.100.1.2:8787/v1", forKey: "pi.endpoint")
+        let model = ChatModel(defaults: defaults, trustLoader: { _ in nil })
         model.connect()
         model.setForeground(false)
         model.setForeground(true)
