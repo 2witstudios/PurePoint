@@ -33,6 +33,8 @@ Desktop App
 
 ## Decisions
 
+! [APP-014] Settings → General provides “Use point guard names”, enabled by default and persisted in UserDefaults as `PP_usePointGuardNames`. Turning it off requires a custom name before the prompt for each individual macOS launch: built-in agents, terminals and custom agent commands, including pane/split launches and the sidebar's New Terminal action. Names are trimmed at the edges but retain capitalization and spaces. Blank names cannot advance. Escape returns from prompt to naming to selection without spawning, retaining drafts for the same selected item. Definitions with inline prompts launch immediately after naming. Existing agents, worktree naming, swarm naming, CLI and automation are unaffected; the existing daemon spawn name field carries custom names.
+
 ! [APP-013] Point Guard exposes a labeled New Pi Chat button above the transcript in both expanded and collapsed conversation-sidebar states. It creates a native Pi session, using the existing explicit Stop confirmation when Pi is busy. The pane tab strip's plus button continues to create workspace tabs; Point Guard tabs share the current global Pi conversation and its persisted messages, including explicitly requested /pointguard info reports. Startup and new-session hooks seed personal files without emitting diagnostics.
 
 ! [APP-001] Multi-project: AppState holds array of ProjectState, one per git root. Cross-project queries via `agent(byId:)`. Project persistence via UserDefaults. Unified state with per-project instances.

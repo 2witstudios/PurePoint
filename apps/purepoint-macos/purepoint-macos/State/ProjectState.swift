@@ -252,10 +252,10 @@ final class ProjectState: Identifiable {
             createAgent(
                 agent: variant.id, prompt: prompt ?? "", name: name, isWorktree: variant.kind == .worktree,
                 selection: selection)
-        case .spawnAgentDef(let def, let prompt):
+        case .spawnAgentDef(let def, let prompt, let name):
             createAgent(
                 agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "",
-                selection: selection, command: def.command)
+                name: name, selection: selection, command: def.command)
         case .runSwarm(let def):
             let root = projectRoot
             Task { await hub.runSwarm(projectRoot: root, name: def.name) }

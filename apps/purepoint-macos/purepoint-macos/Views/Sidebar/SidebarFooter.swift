@@ -97,7 +97,9 @@ struct SidebarFooter: View {
                 preferredOrder: settingsState.commandPaletteOrder
             )
 
-            CommandPalettePanel.show(relativeTo: window, items: items) { result in
+            CommandPalettePanel.show(
+                relativeTo: window, items: items, usePointGuardNames: settingsState.usePointGuardNames
+            ) { result in
                 project.handlePaletteResult(result, selection: sel, hub: hub)
             }
         }

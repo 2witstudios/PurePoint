@@ -67,3 +67,20 @@ cargo test -p pu-engine --test integration given_point_guard_folder_without_git_
 ```
 
 It uses a shell fixture and a configured fixture agent to record their actual working directories; it does not invoke AI providers or replace installed binaries.
+
+## Command palette naming
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer python3 apps/purepoint-macos/verification/check-command-palette-naming.py
+```
+
+The isolated temporary package tests the production AppKit palette controller, settings,
+agent definitions and palette ordering without running app build phases or a daemon.
+Checks cover preference defaults/persistence, all individual launch types, blank names,
+name-before-prompt transitions, draft preservation, backward navigation/cancellation,
+inline prompt definitions and unchanged automatic naming, worktree and file/swarm flows.
+The package uses the app's MainActor isolation and approachable concurrency settings.
+Point Guard workspace checks also verify explicit names in serialized spawn requests.
+Full target compilation and visual/keyboard acceptance remain owner-run in Xcode:
+turn off Settings → General → Use point guard names, launch via Cmd+N, pane tabs/splits
+and the sidebar's New Terminal action, then verify names and Escape navigation.
