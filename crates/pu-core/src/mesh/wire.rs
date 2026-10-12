@@ -9,6 +9,7 @@ pub const BRIDGE_VERSION: u32 = 1;
 pub const MAX_CONTROL_FRAME: usize = 64 * 1024;
 pub const MAX_BULK_FRAME: usize = 256 * 1024;
 pub const MAX_PROMPT_BYTES: usize = 32 * 1024;
+pub const MAX_INPUT_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum WireError {
@@ -16,6 +17,66 @@ pub enum WireError {
     Invalid,
     #[error("bridge protocol version mismatch")]
     Version,
+}
+
+/// The TLS-authenticated peer is implicit. Bulk sessions additionally name a
+/// live control binding; the server must check it against current authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "role", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Hello {
+    Control {
+        version: u32,
+        target_daemon: String,
+        generation: u64,
+    },
+    Bulk {
+        version: u32,
+        target_daemon: String,
+        generation: u64,
+        incarnation: String,
+        control_binding: String,
+    },
+}
+
+impl Hello {
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.is_empty() || bytes.len() > 2048 {
+            return Err(WireError::Invalid);
+        }
+        let hello: Self = serde_json::from_slice(bytes).map_err(|_| WireError::Invalid)?;
+        let (version, target_daemon, generation) = match &hello {
+            Self::Control {
+                version,
+                target_daemon,
+                generation,
+            } => (version, target_daemon, generation),
+            Self::Bulk {
+                version,
+                target_daemon,
+                generation,
+                incarnation,
+                control_binding,
+            } => {
+                require(valid_identifier(incarnation) && valid_identifier(control_binding))?;
+                (version, target_daemon, generation)
+            }
+        };
+        if *version != BRIDGE_VERSION {
+            return Err(WireError::Version);
+        }
+        require(valid_identifier(target_daemon) && counter(*generation))?;
+        Ok(hello)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Welcome {
+    pub version: u32,
+    pub daemon_id: String,
+    pub generation: u64,
+    pub incarnation: String,
+    pub control_binding: String,
 }
 
 /// No peer identity, authorization policy or paths can be supplied by a request.
@@ -32,6 +93,20 @@ pub struct Request {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Inventory {},
+    Status {
+        export: Export,
+        agent_id: Option<String>,
+    },
+    IssueWindow {
+        ttl_seconds: u32,
+    },
+    CloseWindow {
+        window: u64,
+    },
+    Receipt {
+        export: Export,
+        mutation: Mutation,
+    },
     Spawn {
         mutation: Mutation,
         export: Export,
@@ -39,6 +114,98 @@ pub enum Operation {
         source_commit: String,
         prompt: String,
     },
+    AcquireControl {
+        guard: ControlGuard,
+        mutation: Mutation,
+    },
+    Stop {
+        guard: ControlGuard,
+        mutation: Mutation,
+    },
+    Suspend {
+        guard: ControlGuard,
+        mutation: Mutation,
+    },
+    Resume {
+        guard: ControlGuard,
+        mutation: Mutation,
+        runtime: String,
+        source_commit: String,
+    },
+    OpenWriter {
+        guard: ControlGuard,
+        previous: Option<WriterCheckpoint>,
+    },
+    Input {
+        guard: ControlGuard,
+        writer: u64,
+        sequence: u64,
+        data: Vec<u8>,
+    },
+    InputReceipt {
+        target: AgentTarget,
+        writer: u64,
+        sequence: u64,
+    },
+    Resize {
+        guard: ControlGuard,
+        mutation: Mutation,
+        cols: u16,
+        rows: u16,
+    },
+    SubscribeOutput {
+        target: AgentTarget,
+        cursor: Option<OutputCursor>,
+    },
+    ReadConversation {
+        target: AgentTarget,
+        limit: u16,
+        cursor: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTarget {
+    pub export: Export,
+    pub agent_id: String,
+    pub run_id: String,
+}
+
+impl AgentTarget {
+    fn validate(&self) -> Result<(), WireError> {
+        self.export.validate()?;
+        require(valid_identifier(&self.agent_id) && valid_identifier(&self.run_id))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlGuard {
+    pub target: AgentTarget,
+    pub epoch: u64,
+    pub revision: u64,
+}
+
+impl ControlGuard {
+    fn validate(&self) -> Result<(), WireError> {
+        self.target.validate()?;
+        require(counter(self.epoch) && counter(self.revision))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WriterCheckpoint {
+    pub writer: u64,
+    pub last_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputCursor {
+    pub incarnation: String,
+    pub offset: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +270,16 @@ impl Request {
         }
         match &self.operation {
             Operation::Inventory {} => Ok(()),
+            Operation::Status { export, agent_id } => {
+                export.validate()?;
+                require(agent_id.as_deref().is_none_or(valid_identifier))
+            }
+            Operation::IssueWindow { ttl_seconds } => require((1..=86400).contains(ttl_seconds)),
+            Operation::CloseWindow { window } => require(counter(*window)),
+            Operation::Receipt { export, mutation } => {
+                export.validate()?;
+                mutation.validate()
+            }
             Operation::Spawn {
                 mutation,
                 export,
@@ -117,6 +294,83 @@ impl Request {
                         && exact_commit(source_commit)
                         && prompt.len() <= MAX_PROMPT_BYTES
                         && !prompt.contains('\0'),
+                )
+            }
+            Operation::AcquireControl { guard, mutation }
+            | Operation::Stop { guard, mutation }
+            | Operation::Suspend { guard, mutation } => {
+                guard.validate()?;
+                mutation.validate()
+            }
+            Operation::Resume {
+                guard,
+                mutation,
+                runtime,
+                source_commit,
+            } => {
+                guard.validate()?;
+                mutation.validate()?;
+                require(valid_identifier(runtime) && exact_commit(source_commit))
+            }
+            Operation::OpenWriter { guard, previous } => {
+                guard.validate()?;
+                require(previous.as_ref().is_none_or(|checkpoint| {
+                    counter(checkpoint.writer) && checkpoint.last_sequence <= i64::MAX as u64
+                }))
+            }
+            Operation::Input {
+                guard,
+                writer,
+                sequence,
+                data,
+            } => {
+                guard.validate()?;
+                require(
+                    counter(*writer)
+                        && counter(*sequence)
+                        && !data.is_empty()
+                        && data.len() <= MAX_INPUT_BYTES,
+                )
+            }
+            Operation::InputReceipt {
+                target,
+                writer,
+                sequence,
+            } => {
+                target.validate()?;
+                require(counter(*writer) && counter(*sequence))
+            }
+            Operation::Resize {
+                guard,
+                mutation,
+                cols,
+                rows,
+            } => {
+                guard.validate()?;
+                mutation.validate()?;
+                require((1..=4096).contains(cols) && (1..=4096).contains(rows))
+            }
+            Operation::SubscribeOutput { target, cursor } => {
+                target.validate()?;
+                require(
+                    cursor
+                        .as_ref()
+                        .is_none_or(|cursor| valid_identifier(&cursor.incarnation)),
+                )
+            }
+            Operation::ReadConversation {
+                target,
+                limit,
+                cursor,
+            } => {
+                target.validate()?;
+                require(
+                    (1..=200).contains(limit)
+                        && cursor.as_ref().is_none_or(|cursor| {
+                            !cursor.is_empty()
+                                && cursor.len() <= 4096
+                                && !cursor.chars().any(char::is_control)
+                        }),
                 )
             }
         }
@@ -181,5 +435,86 @@ mod tests {
         }
         invalid["operation"]["command"] = "arbitrary override".into();
         assert!(Request::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    }
+
+    #[test]
+    fn given_bulk_handshake_should_require_control_binding_and_current_version() {
+        // given
+        let bytes = br#"{"role":"bulk","version":1,"target_daemon":"worker-1","generation":4,"incarnation":"boot-1","control_binding":"binding-1"}"#;
+        // when / then
+        assert!(Hello::decode(bytes).is_ok());
+        let original: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        for field in ["control_binding", "incarnation"] {
+            let mut value = original.clone();
+            value.as_object_mut().unwrap().remove(field);
+            assert!(Hello::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+        let mut value = original.clone();
+        value["version"] = 2.into();
+        assert_eq!(
+            Hello::decode(&serde_json::to_vec(&value).unwrap()),
+            Err(WireError::Version)
+        );
+        value = original;
+        value["role"] = "control".into();
+        assert!(Hello::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn given_interactive_input_should_require_exact_run_control_guard_and_bounded_bytes() {
+        // given
+        let mut request = Request {
+            request_id: "request".into(),
+            target_daemon: "worker".into(),
+            operation: Operation::Input {
+                guard: ControlGuard {
+                    target: AgentTarget {
+                        export: Export {
+                            id: "export".into(),
+                            generation: 1,
+                        },
+                        agent_id: "agent".into(),
+                        run_id: "run".into(),
+                    },
+                    epoch: 1,
+                    revision: 1,
+                },
+                writer: 1,
+                sequence: 1,
+                data: vec![0, 255, 13],
+            },
+        };
+        // when / then
+        assert!(request.validate().is_ok());
+        let original_digest = request.payload_digest().unwrap();
+        let Operation::Input { data, .. } = &mut request.operation else {
+            unreachable!()
+        };
+        data.push(10);
+        assert_ne!(original_digest, request.payload_digest().unwrap());
+        let Operation::Input { guard, .. } = &mut request.operation else {
+            unreachable!()
+        };
+        guard.epoch = 0;
+        assert!(request.validate().is_err());
+        let Operation::Input { guard, data, .. } = &mut request.operation else {
+            unreachable!()
+        };
+        guard.epoch = 1;
+        *data = vec![0; MAX_INPUT_BYTES + 1];
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn given_resume_or_bulk_observation_should_reject_unscoped_or_unbounded_requests() {
+        // given
+        let bytes = br#"{"request_id":"req","target_daemon":"worker","operation":{"type":"resume","mutation":{"window":1,"id":"op"},"guard":{"target":{"export":{"id":"export","generation":1},"agent_id":"agent","run_id":"run"},"epoch":2,"revision":3},"runtime":"codex","source_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#;
+        // when / then
+        assert!(Request::decode(bytes).is_ok());
+        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        value["operation"]["guard"]["target"]["run_id"] = "".into();
+        assert!(Request::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+        assert!(Request::decode(&vec![b' '; MAX_CONTROL_FRAME + 1]).is_err());
+        assert!(Request::decode(br#"{"request_id":"req","target_daemon":"worker","operation":{"type":"stop","target":"all"}}"#).is_err());
     }
 }
