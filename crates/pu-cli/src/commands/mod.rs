@@ -11,6 +11,7 @@ pub mod init;
 pub mod inventory;
 pub mod kill;
 pub mod logs;
+pub mod mesh;
 pub mod prompt;
 pub mod pulse;
 pub mod read;
