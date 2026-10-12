@@ -173,16 +173,25 @@ pub enum ConfigAction {
     },
 }
 
+/// What one `pu mesh` command does: every command maps to exactly one plan.
+enum Plan {
+    Admin(MeshAdminRequest),
+    ExportIdentity(PathBuf),
+    Listener,
+    Remote {
+        worker: String,
+        action: super::mesh_remote::RemoteAction,
+    },
+}
+
 impl MeshAction {
-    fn request(self) -> Result<MeshAdminRequest, CliError> {
+    fn plan(self) -> Result<Plan, CliError> {
         let request = match self {
             Self::Identity {
-                action: IdentityAction::Export { .. },
-            }
-            | Self::Listener
-            | Self::Remote { .. } => {
-                return Err(CliError::Other("not a mesh administration request".into()));
-            }
+                action: IdentityAction::Export { out },
+            } => return Ok(Plan::ExportIdentity(out)),
+            Self::Listener => return Ok(Plan::Listener),
+            Self::Remote { worker, action } => return Ok(Plan::Remote { worker, action }),
             Self::Run { action } => match action {
                 RunAction::List => MeshAdminRequest::RunList {},
                 RunAction::Takeover { agent_id } => MeshAdminRequest::RunTakeover { agent_id },
@@ -306,7 +315,7 @@ impl MeshAction {
                 "invalid or unbounded mesh administration request".into(),
             ));
         }
-        Ok(request)
+        Ok(Plan::Admin(request))
     }
 }
 
@@ -351,62 +360,23 @@ async fn local(socket: &Path, request: &Request, json: bool) -> Result<Response,
 }
 
 pub async fn run(socket: &Path, action: MeshAction, json: bool) -> Result<(), CliError> {
-    match action {
-        MeshAction::Identity {
-            action: IdentityAction::Export { out },
-        } => {
-            daemon_ctrl::ensure_daemon(socket).await?;
-            let identity = match local(
-                socket,
-                &Request::MeshAdmin {
-                    request: MeshAdminRequest::IdentityShow {},
-                },
-                json,
-            )
-            .await?
-            {
-                Response::MeshAdmin {
-                    response: pu_core::mesh::admin::MeshAdminResponse::Identity { identity },
-                } => identity,
-                _ => return Err(CliError::Other("unexpected identity response".into())),
-            };
-            write_new_public(&out, &identity.certificate_der)?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "certificate_file": out,
-                        "fingerprint": identity.fingerprint,
-                        "daemon_id": identity.daemon_id,
-                    })
-                );
-            } else {
-                println!("certificate: {}", out.display());
-                println!("fingerprint: {}", identity.fingerprint);
-                println!("daemon id:   {}", identity.daemon_id);
-                println!(
-                    "Verify the fingerprint with the other machine's owner before they enroll it."
-                );
-            }
-            return Ok(());
-        }
-        MeshAction::Listener => {
-            daemon_ctrl::ensure_daemon(socket).await?;
-            let response = local(socket, &Request::MeshListenerStatus {}, json).await?;
-            return output::print_response(&response, json);
-        }
-        MeshAction::Remote { worker, action } => {
-            daemon_ctrl::ensure_daemon(socket).await?;
-            return super::mesh_remote::run(socket, &worker, action, json).await;
-        }
-        _ => {}
-    }
-    let request = action.request()?;
+    let plan = action.plan()?;
     daemon_ctrl::ensure_daemon(socket).await?;
-    let response = output::check_response(
-        client::send_request(socket, &Request::MeshAdmin { request }).await?,
-        json,
-    )?;
+    match plan {
+        Plan::Admin(request) => administer(socket, request, json).await,
+        Plan::ExportIdentity(out) => export_identity(socket, &out, json).await,
+        Plan::Listener => {
+            let response = local(socket, &Request::MeshListenerStatus {}, json).await?;
+            output::print_response(&response, json)
+        }
+        Plan::Remote { worker, action } => {
+            super::mesh_remote::run(socket, &worker, action, json).await
+        }
+    }
+}
+
+async fn administer(socket: &Path, request: MeshAdminRequest, json: bool) -> Result<(), CliError> {
+    let response = local(socket, &Request::MeshAdmin { request }, json).await?;
     if !matches!(response, Response::MeshAdmin { .. }) {
         return Err(CliError::Other(
             "unexpected mesh administration response".into(),
@@ -415,9 +385,49 @@ pub async fn run(socket: &Path, action: MeshAction, json: bool) -> Result<(), Cl
     output::print_response(&response, json)
 }
 
+/// Write the public certificate for a peer's out-of-band enrollment.
+async fn export_identity(socket: &Path, out: &Path, json: bool) -> Result<(), CliError> {
+    let request = Request::MeshAdmin {
+        request: MeshAdminRequest::IdentityShow {},
+    };
+    let identity = match local(socket, &request, json).await? {
+        Response::MeshAdmin {
+            response: pu_core::mesh::admin::MeshAdminResponse::Identity { identity },
+        } => identity,
+        _ => return Err(CliError::Other("unexpected identity response".into())),
+    };
+    write_new_public(out, &identity.certificate_der)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "certificate_file": out,
+                "fingerprint": identity.fingerprint,
+                "daemon_id": identity.daemon_id,
+            })
+        );
+    } else {
+        println!("certificate: {}", out.display());
+        println!("fingerprint: {}", identity.fingerprint);
+        println!("daemon id:   {}", identity.daemon_id);
+        println!("Verify the fingerprint with the other machine's owner before they enroll it.");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl MeshAction {
+        /// The administration request this command plans; panics otherwise.
+        fn request(self) -> Result<MeshAdminRequest, CliError> {
+            match self.plan()? {
+                Plan::Admin(request) => Ok(request),
+                _ => panic!("not an administration command"),
+            }
+        }
+    }
     use clap::Parser;
     #[test]
     fn given_explicit_mesh_cli_should_parse_and_roundtrip_local_request() {

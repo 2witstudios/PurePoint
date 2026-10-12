@@ -176,6 +176,8 @@ host_down ⇒ run continues ; worker_down ⇒ tree terminated ∧ run resolved a
   - A same-account process could pre-write a forged guardian outcome record (consistent with MESH-001).
   - Several unauthenticated hosts working together can slow, but not lock out, an enrolled peer.
   - Once compaction removes a terminal mesh agent from the ledger, its local manifest entry is no longer fenced.
+  - A stop signal targets the guardian's process group after confirming the session has not exited; between the kernel reaping the guardian and the exit being observed (microseconds) the group ID could in theory be reused.
+  - Each guardian scans the owner's processes every 250 ms (process table, plus environment and descriptors of newly started processes), so the cost grows with active runs × processes.
 
 ## Research Notes
 
