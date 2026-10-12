@@ -13,6 +13,10 @@ chrono = { workspace = true }
 indexmap = { workspace = true }
 tokio = { workspace = true }
 nix = { version = "0.31", features = ["term", "signal", "process", "fs", "resource"] }
+rustls.workspace = true
+tokio-rustls.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
 libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
@@ -24,4 +28,5 @@ name = "pu-engine"
 path = "src/main.rs"
 
 [dev-dependencies]
+rustls = { workspace = true, features = ["tls12"] }
 tempfile = "3"

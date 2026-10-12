@@ -21,6 +21,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 uuid = { version = "1", features = ["v4"] }
 indexmap = { version = "2", features = ["serde"] }
 
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "crypto"] }
+sha2 = "0.10"
+
 # No panic = "abort": the daemon catches panics from blocking tasks and
 # recovers poisoned locks.
 [profile.release]

@@ -6,6 +6,7 @@ pub mod engine;
 pub mod gate;
 pub mod git;
 pub mod ipc_server;
+pub mod mesh_transport;
 pub mod output_buffer;
 pub mod pty_manager;
 pub mod read_source;
