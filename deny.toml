@@ -2,7 +2,11 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+  # unsafe-libyaml (via serde_yaml_ng) is archived; no fix exists. Unmaintained,
+  # not a known vulnerability — drop once pu-core moves to a safe-Rust YAML parser.
+  { id = "RUSTSEC-2024-0449", reason = "unmaintained, no safe upgrade; YAML parser migration pending" },
+]
 
 [licenses]
 allow = [
