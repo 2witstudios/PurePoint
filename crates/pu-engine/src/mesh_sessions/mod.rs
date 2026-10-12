@@ -6,11 +6,12 @@
 //! and per-agent dispatch serialization remain the engine's responsibility.
 use crate::{
     daemon_lifecycle::{
+        mesh_exports::{ExportRecord, MeshExports},
         mesh_store::{MeshStore, peer_name},
         owned_work::WorkOwner,
     },
     execution_state::{Caller, Ledger, LocalAdmin, PeerRecord},
-    mesh_transport::{AuthenticatedConnection, MeshTransport, PeerId, Role},
+    mesh_transport::{AuthenticatedConnection, EnrolledPeers, MeshTransport, PeerId, Role},
 };
 use pu_core::mesh::{
     Action, ExportGrant, PeerPolicy,
@@ -51,6 +52,14 @@ pub enum Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Owner-local public identity snapshot. No private key bytes or effect authority.
+#[derive(Clone, Debug)]
+pub struct ReceiverIdentity {
+    pub daemon_id: String,
+    pub certificate_der: Vec<u8>,
+    pub peer_id: PeerId,
+}
+
 /// Demultiplexed result from one Control-role TLS/Hello endpoint. Discovery
 /// means the bounded public response was sent and the transient stream dropped.
 pub enum Accepted<S> {
@@ -67,6 +76,7 @@ enum Ingress {
 struct AuthorityState {
     store: MeshStore,
     ledger: Ledger,
+    exports: MeshExports,
 }
 #[cfg(test)]
 struct ValidationGate {
@@ -129,15 +139,25 @@ pub struct SessionAuthority {
     validation_gate: Mutex<Option<ValidationGate>>,
 }
 impl SessionAuthority {
-    pub fn new(store: MeshStore, ledger: Ledger, limits: SessionLimits) -> Result<Arc<Self>> {
+    pub fn new(
+        store: MeshStore,
+        ledger: Ledger,
+        exports: MeshExports,
+        limits: SessionLimits,
+    ) -> Result<Arc<Self>> {
         limits.validate()?;
-        if store.daemon_id() != ledger.owner_daemon() {
+        if store.daemon_id() != ledger.owner_daemon() || store.daemon_id() != exports.owner_daemon()
+        {
             return Err(Error::Denied);
         }
         Ok(Arc::new(Self {
             daemon: store.daemon_id().into(),
             incarnation: pu_core::id::session_id(),
-            state: Arc::new(RwLock::new(AuthorityState { store, ledger })),
+            state: Arc::new(RwLock::new(AuthorityState {
+                store,
+                ledger,
+                exports,
+            })),
             registry: Mutex::new(Registry::default()),
             control: Arc::new(Semaphore::new(limits.control_total)),
             bulk: Arc::new(Semaphore::new(limits.bulk_total)),
@@ -448,8 +468,11 @@ impl SessionAuthority {
             tokio::task::spawn_blocking(move || {
                 let _work_owner = blocking_work;
                 let mut guard = guard;
-                let closing = AdminFence { authority, peer };
-                let AuthorityState { store, ledger } = &mut *guard;
+                let closing = AdminFence {
+                    authority,
+                    peer: Some(peer),
+                };
+                let AuthorityState { store, ledger, .. } = &mut *guard;
                 let result = change(store, ledger, &admin);
                 // Even a failed/torn policy change closes sessions. Reconnect
                 // checks canonical bytes and durable anchor again.
@@ -496,6 +519,143 @@ impl SessionAuthority {
         })
         .await
     }
+    /// Trusted LOCAL display/setup only. Borrowed stores remain under actual
+    /// owned shared authority in blocking work. Returned metadata is no later
+    /// effect authorization; no raw store/ledger handles escape this API.
+    pub async fn inspect_admin<T, F>(
+        self: &Arc<Self>,
+        work: &Arc<WorkOwner>,
+        admin: LocalAdmin,
+        inspect: F,
+    ) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&MeshStore, &Ledger, &MeshExports, &LocalAdmin) -> Result<T> + Send + 'static,
+    {
+        let authority = self.clone();
+        let blocking_work = work.clone();
+        work.spawn(async move {
+            let guard = authority.state.clone().read_owned().await;
+            tokio::task::spawn_blocking(move || {
+                let _work_owner = blocking_work;
+                inspect(&guard.store, &guard.ledger, &guard.exports, &admin)
+            })
+            .await
+            .map_err(|_| Error::Operation)?
+        })
+        .map_err(|_| Error::Closed)?
+        .await
+        .map_err(|_| Error::Operation)?
+    }
+    /// Public receiver identity only, acquired through the retained admin barrier.
+    pub async fn identity(
+        self: &Arc<Self>,
+        work: &Arc<WorkOwner>,
+        admin: LocalAdmin,
+    ) -> Result<ReceiverIdentity> {
+        self.inspect_admin(work, admin, |store, _, _, _| {
+            Ok(ReceiverIdentity {
+                daemon_id: store.daemon_id().into(),
+                certificate_der: store.identity().certificate_der().to_vec(),
+                peer_id: store.identity().peer_id(),
+            })
+        })
+        .await
+    }
+    /// Handshake setup snapshot only. Every session/send still checks live policy.
+    /// Validate all authoritative ledger records (<=256, explicit overflow reject),
+    /// then retain only active canonical exact certificates. Zero peers denies;
+    /// never export private key bytes, fall back to OS roots or create a listener.
+    pub async fn transport(
+        self: &Arc<Self>,
+        work: &Arc<WorkOwner>,
+        admin: LocalAdmin,
+        now: i64,
+    ) -> Result<MeshTransport> {
+        self.inspect_admin(work, admin, move |store, ledger, _, admin| {
+            let certificates = store
+                .active_peer_certificates(ledger, admin, now)
+                .map_err(|_| Error::Operation)?;
+            if certificates.is_empty() {
+                return Err(Error::Denied);
+            }
+            let peers = EnrolledPeers::new(certificates.iter().map(Vec::as_slice))?;
+            Ok(MeshTransport::new(store.identity(), peers)?)
+        })
+        .await
+    }
+    /// Export changes invalidate every peer binding, including failure/unwind.
+    /// The actual blocking owner retains exclusive authority and WorkOwner after
+    /// its local waiter cancels. No network or PTY wait occurs in a SQL transaction.
+    pub async fn administer_exports<T, F>(
+        self: &Arc<Self>,
+        work: &Arc<WorkOwner>,
+        admin: LocalAdmin,
+        change: F,
+    ) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut MeshExports, &LocalAdmin) -> Result<T> + Send + 'static,
+    {
+        let authority = self.clone();
+        let blocking_work = work.clone();
+        work.spawn(async move {
+            let guard = authority.state.clone().write_owned().await;
+            tokio::task::spawn_blocking(move || {
+                let _work_owner = blocking_work;
+                let mut guard = guard;
+                let closing = AdminFence {
+                    authority,
+                    peer: None,
+                };
+                let result = change(&mut guard.exports, &admin);
+                drop(closing);
+                result
+            })
+            .await
+            .map_err(|_| Error::Operation)?
+        })
+        .map_err(|_| Error::Closed)?
+        .await
+        .map_err(|_| Error::Operation)?
+    }
+    /// Explicit receiver-local export registration, never a remote filesystem root.
+    pub async fn register_export(
+        self: &Arc<Self>,
+        work: &Arc<WorkOwner>,
+        admin: LocalAdmin,
+        path: std::path::PathBuf,
+        label: String,
+    ) -> Result<ExportRecord> {
+        self.administer_exports(work, admin, move |exports, admin| {
+            exports
+                .register(admin, &path, &label)
+                .map_err(|_| Error::Operation)
+        })
+        .await
+    }
+    /// Durable irreversible tombstone. This does not release/terminate worker runs.
+    pub async fn revoke_export(
+        self: &Arc<Self>,
+        work: &Arc<WorkOwner>,
+        admin: LocalAdmin,
+        id: String,
+    ) -> Result<()> {
+        self.administer_exports(work, admin, move |exports, admin| {
+            exports.revoke(admin, &id).map_err(|_| Error::Operation)
+        })
+        .await
+    }
+    fn close_all(&self) {
+        if let Ok(mut registry) = self.registry.lock() {
+            for binding in std::mem::take(&mut registry.controls)
+                .into_values()
+                .filter_map(|binding| binding.upgrade())
+            {
+                binding.close();
+            }
+        }
+    }
     fn close_peer(&self, peer: PeerId) {
         if let Ok(mut registry) = self.registry.lock()
             && let Some(binding) = registry.controls.remove(&peer).and_then(|b| b.upgrade())
@@ -506,11 +666,14 @@ impl SessionAuthority {
 }
 struct AdminFence {
     authority: Arc<SessionAuthority>,
-    peer: PeerId,
+    peer: Option<PeerId>,
 }
 impl Drop for AdminFence {
     fn drop(&mut self) {
-        self.authority.close_peer(self.peer);
+        match self.peer {
+            Some(peer) => self.authority.close_peer(peer),
+            None => self.authority.close_all(),
+        }
     }
 }
 struct CancelFence {
@@ -625,7 +788,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
     /// Per-agent epochs/PTY dispatch require the parent's stronger boundary.
     pub async fn dispatch<F>(&mut self, work: &Arc<WorkOwner>, effect: F) -> Result<()>
     where
-        F: FnOnce(&Ledger, &Caller, &PeerPolicy, &Request) -> Result<Vec<u8>> + Send + 'static,
+        F: FnOnce(&Ledger, &MeshExports, &Caller, &PeerPolicy, &Request) -> Result<Vec<u8>>
+            + Send
+            + 'static,
     {
         let mut fence = CancelFence::new(self.binding.clone());
         let request = match self.read_request().await {
@@ -658,7 +823,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                         .connection_policy(&guard.ledger, &connection, binding.generation, now())
                         .map_err(|_| Error::Denied)?;
                     let caller = authorize_request(&guard, &connection, &binding, &request)?;
-                    let response = effect(&guard.ledger, &caller, &policy, &request)?;
+                    let response =
+                        effect(&guard.ledger, &guard.exports, &caller, &policy, &request)?;
                     // Time may have advanced during the effect. Recheck before send.
                     binding.check()?;
                     guard
@@ -710,7 +876,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         }
         let raw_len = raw_chunk.len();
         let frame = encoded_frame.to_vec();
-        self.send_output_with(subscription, move |_, _| Ok((raw_len, frame)))
+        self.send_output_with(subscription, move |_, _, _| Ok((raw_len, frame)))
             .await
     }
 
@@ -725,7 +891,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
         producer: F,
     ) -> Result<()>
     where
-        F: FnOnce(&Ledger, &Caller) -> Result<(usize, Vec<u8>)> + Send + 'static,
+        F: FnOnce(&Ledger, &MeshExports, &Caller) -> Result<(usize, Vec<u8>)> + Send + 'static,
     {
         if self.role() != Role::Bulk || !Arc::ptr_eq(&self.binding, &subscription.binding) {
             return Err(Error::Denied);
@@ -750,7 +916,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Session<S> {
                     now(),
                 )
                 .map_err(|_| Error::Denied)?;
-            let (raw_len, frame) = producer(&guard.ledger, &caller)?;
+            let (raw_len, frame) = producer(&guard.ledger, &guard.exports, &caller)?;
             if raw_len > limits.output_chunk || frame.is_empty() || frame.len() > limits.bulk_frame
             {
                 return Err(Error::Frame);

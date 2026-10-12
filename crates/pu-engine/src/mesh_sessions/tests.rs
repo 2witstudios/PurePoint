@@ -1,4 +1,5 @@
 use super::*;
+use crate::daemon_lifecycle::mesh_exports::MeshExports;
 use std::time::Duration;
 
 #[test]
@@ -94,7 +95,8 @@ impl Fixture {
                 )
                 .unwrap()
             });
-            let authority = SessionAuthority::new(store, ledger, limits).unwrap();
+            let exports = MeshExports::open(lock.clone(), store.daemon_id(), 16).unwrap();
+            let authority = SessionAuthority::new(store, ledger, exports, limits).unwrap();
             Fixture {
                 _tmp: tmp,
                 _lock: lock,
@@ -283,7 +285,9 @@ async fn given_stalled_bulk_should_preserve_control_latency_and_hold_revoke_barr
     let request = f.inventory();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| Ok(br#"{"ok":true}"#.to_vec()))
+        control.dispatch(&f.work, |_, _exports, _, _, _| Ok(
+            br#"{"ok":true}"#.to_vec()
+        ))
     );
     assert!(dispatch.is_ok());
     assert_eq!(response.unwrap()["ok"], true);
@@ -308,7 +312,9 @@ async fn given_stalled_bulk_should_preserve_control_latency_and_hold_revoke_barr
     ));
     assert!(revoke.await.unwrap().unwrap().revoked);
     assert!(matches!(
-        control.dispatch(&f.work, |_, _, _, _| unreachable!()).await,
+        control
+            .dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
+            .await,
         Err(Error::Closed)
     ));
 }
@@ -339,7 +345,7 @@ async fn given_live_authenticated_stream_should_recheck_expiry_and_generation_an
     let request = f.inventory();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| unreachable!())
+        control.dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
     );
     assert!(response.is_err());
     assert!(dispatch.is_err());
@@ -355,8 +361,10 @@ async fn given_live_authenticated_stream_should_recheck_expiry_and_generation_an
     // independent live peer's idle control read is woken without holding authority
     let (mut idle, _client) = f.control(1).await;
     let work = f.work.clone();
-    let waiter =
-        tokio::spawn(async move { idle.dispatch(&work, |_, _, _, _| unreachable!()).await });
+    let waiter = tokio::spawn(async move {
+        idle.dispatch(&work, |_, _exports, _, _, _| unreachable!())
+            .await
+    });
     tokio::task::yield_now().await;
     f.authority
         .revoke(&f.work, admin(), f.identities[1].peer_id())
@@ -382,7 +390,7 @@ async fn given_cancelled_idle_control_read_should_close_binding_before_bulk_can_
     assert!(
         tokio::time::timeout(
             Duration::from_millis(10),
-            control.dispatch(&f.work, |_, _, _, _| unreachable!())
+            control.dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
         )
         .await
         .is_err()
@@ -411,7 +419,7 @@ async fn given_cancelled_waiter_should_retain_blocking_effect_authority_and_admi
     let work = f.work.clone();
     let dispatch = tokio::spawn(async move {
         control
-            .dispatch(&work, move |ledger, caller, _, _| {
+            .dispatch(&work, move |ledger, _exports, caller, _, _| {
                 ledger.validate_principal(caller).unwrap();
                 entered_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
@@ -553,7 +561,7 @@ async fn given_expiry_after_authentication_should_deny_request_and_output_on_exi
     let request = f.inventory();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| unreachable!())
+        control.dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
     );
     assert!(response.is_err());
     assert!(matches!(dispatch, Err(Error::Denied)));
@@ -614,7 +622,9 @@ async fn given_real_tcp_backpressure_should_keep_control_responsive_and_bound_bu
     let start = std::time::Instant::now();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| Ok(br#"{"ok":true}"#.to_vec()))
+        control.dispatch(&f.work, |_, _exports, _, _, _| Ok(
+            br#"{"ok":true}"#.to_vec()
+        ))
     );
     assert!(dispatch.is_ok());
     assert_eq!(response.unwrap()["ok"], true);
@@ -642,7 +652,7 @@ async fn given_output_producer_should_lookup_and_copy_under_retained_authority()
     let subscription = bulk.subscribe("export".into()).await.unwrap();
     let authority = f.authority.clone();
     // when: parent resource lookup is performed inside the actual send producer
-    let producer = bulk.send_output_with(&subscription, move |ledger, caller| {
+    let producer = bulk.send_output_with(&subscription, move |ledger, _exports, caller| {
         assert!(authority.state.try_write().is_err());
         ledger.validate_principal(caller).unwrap();
         // Parent must additionally check exact export generation and agent/run.
@@ -693,7 +703,7 @@ async fn given_unanchored_or_mismatched_canonical_policy_should_deny_authenticat
     let request = f.inventory();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| unreachable!())
+        control.dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
     );
     assert!(response.is_err());
     assert!(matches!(dispatch, Err(Error::Denied)));
@@ -800,7 +810,7 @@ async fn given_control_tls_disconnect_should_wake_bulk_without_releasing_worker_
     // when / then: actual TLS EOF closes binding and wakes the idle bulk read
     assert!(
         control
-            .dispatch(&f.work, |_, _, _, _| unreachable!())
+            .dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
             .await
             .is_err()
     );
@@ -923,7 +933,7 @@ async fn given_inspect_only_grant_should_allow_input_receipt_reconciliation_with
     // when: inspect-only reconciliation crosses the guarded typed dispatcher
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |ledger, caller, _, request| {
+        control.dispatch(&f.work, |ledger, _exports, caller, _, request| {
             ledger.validate_principal(caller).unwrap();
             assert!(matches!(
                 request.operation,
@@ -967,7 +977,7 @@ async fn given_inspect_only_grant_should_allow_input_receipt_reconciliation_with
     let mut client = client.unwrap();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| unreachable!())
+        control.dispatch(&f.work, |_, _exports, _, _, _| unreachable!())
     );
     assert!(response.is_err());
     assert!(matches!(dispatch, Err(Error::Denied)));
@@ -1002,7 +1012,9 @@ async fn given_control_endpoint_discovery_should_return_only_current_generation_
     let mut control = control;
     let (response, dispatched) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, |_, _, _, _| Ok(br#"{"ok":true}"#.to_vec()))
+        control.dispatch(&f.work, |_, _exports, _, _, _| Ok(
+            br#"{"ok":true}"#.to_vec()
+        ))
     );
     assert!(dispatched.is_ok());
     assert_eq!(response.unwrap()["ok"], true);
@@ -1027,8 +1039,11 @@ impl Fixture {
                 .ok()
                 .expect("no live old sessions or operations");
             let limits = authority.limits;
-            let AuthorityState { store, ledger } =
-                Arc::try_unwrap(authority.state).ok().unwrap().into_inner();
+            let AuthorityState {
+                store,
+                ledger,
+                exports,
+            } = Arc::try_unwrap(authority.state).ok().unwrap().into_inner();
             drop(ledger);
             let ledger = Ledger::open(
                 _tmp.path().join("ledger.sqlite"),
@@ -1039,7 +1054,7 @@ impl Fixture {
             let generations = identities
                 .each_ref()
                 .map(|id| ledger.peer(&peer_name(id.peer_id())).unwrap().generation);
-            let authority = SessionAuthority::new(store, ledger, limits).unwrap();
+            let authority = SessionAuthority::new(store, ledger, exports, limits).unwrap();
             Self {
                 _tmp,
                 _lock,
@@ -1218,7 +1233,7 @@ async fn given_sqlite_restart_should_discover_fresh_generation_and_read_receipts
     let old_guard = launch.guard.clone();
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, move |ledger, caller, _, request| {
+        control.dispatch(&f.work, move |ledger, _exports, caller, _, request| {
             let wire::Operation::InputReceipt {
                 target,
                 writer,
@@ -1292,7 +1307,7 @@ async fn given_sqlite_restart_should_discover_fresh_generation_and_read_receipts
     };
     let (response, dispatch) = tokio::join!(
         client.request::<serde_json::Value>(&request),
-        control.dispatch(&f.work, move |ledger, caller, _, _| {
+        control.dispatch(&f.work, move |ledger, _exports, caller, _, _| {
             assert!(ledger.operation_receipt(caller, &key).unwrap().is_some());
             assert_eq!(
                 ledger.run(&launch.run_id).unwrap().lifecycle,
@@ -1492,4 +1507,445 @@ async fn given_discovery_tls_frames_should_reject_bad_version_and_typed_client_r
         assert!(client.is_err());
     }
     assert_eq!(f.authority.registry.lock().unwrap().controls.len(), 0);
+}
+
+#[tokio::test]
+async fn given_mismatched_export_owner_should_reject_authority_composition() {
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let lock = f._lock.clone();
+    tokio::task::spawn_blocking(move || {
+        use crate::daemon_lifecycle::mesh_exports::MeshExports;
+        let store = MeshStore::open(lock.clone()).unwrap();
+        let ledger = Ledger::in_memory(store.daemon_id(), LedgerLimits::default()).unwrap();
+        let exports = MeshExports::open(lock, "different-owner", 8).unwrap();
+        assert!(matches!(
+            SessionAuthority::new(store, ledger, exports, SessionLimits::default()),
+            Err(Error::Denied)
+        ));
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn given_peer_name_selector_should_parse_exact_lowercase_pin_without_proving_transport_identity() {
+    use crate::daemon_lifecycle::mesh_store::peer_id_from_name;
+    let identity = Identity::generate().unwrap();
+    let name = peer_name(identity.peer_id());
+    assert_eq!(peer_id_from_name(&name).unwrap(), identity.peer_id());
+    assert_eq!(
+        PeerId::from_fingerprint(*identity.peer_id().fingerprint()),
+        identity.peer_id()
+    );
+    for name in [
+        "".into(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+        format!("../{}", "a".repeat(61)),
+    ] {
+        assert!(peer_id_from_name(&name).is_err());
+    }
+    // These values are expected pins only; there is no AuthenticatedConnection
+    // constructor, certificate possession or Caller authority in this API.
+}
+
+#[tokio::test]
+async fn given_export_mutation_should_close_all_peers_even_on_error_under_exclusive_authority() {
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let (control0, client0) = f.control(0).await;
+    let (control1, _client1) = f.control(1).await;
+    let (mut bulk0, _observer0) = f.bulk(&client0).await;
+    let project = f._tmp.path().join("export-project");
+    tokio::task::spawn_blocking({
+        let project = project.clone();
+        move || std::fs::create_dir(project).unwrap()
+    })
+    .await
+    .unwrap();
+    let exported = f
+        .authority
+        .register_export(&f.work, admin(), project, "project".into())
+        .await
+        .unwrap();
+    assert!(matches!(control0.binding.check(), Err(Error::Closed)));
+    assert!(matches!(control1.binding.check(), Err(Error::Closed)));
+    assert!(matches!(bulk0.wait_bulk_close().await, Err(Error::Closed)));
+    drop((control0, control1, bulk0));
+    let (control0, _client0) = f.control(0).await;
+    let (control1, _client1) = f.control(1).await;
+    let authority = f.authority.clone();
+    let id = exported.id.clone();
+    let failed: Result<()> = f
+        .authority
+        .administer_exports(&f.work, admin(), move |exports, admin| {
+            assert!(authority.state.try_read().is_err());
+            exports.revoke(admin, &id).unwrap();
+            Err(Error::Operation) // durable tombstone still fences after later error
+        })
+        .await;
+    assert!(failed.is_err());
+    assert!(control0.binding.check().is_err() && control1.binding.check().is_err());
+    let id = exported.id;
+    let result = f
+        .authority
+        .inspect_admin(&f.work, admin(), move |_, _, exports, _| {
+            Ok(exports.resolve(&id, 1).is_err())
+        })
+        .await
+        .unwrap();
+    assert!(result);
+}
+
+impl Fixture {
+    async fn issued_export(&mut self) -> ExportRecord {
+        let path = self._tmp.path().join("issued-project");
+        tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || std::fs::create_dir(path).unwrap()
+        })
+        .await
+        .unwrap();
+        let record = self
+            .authority
+            .register_export(&self.work, admin(), path, "issued".into())
+            .await
+            .unwrap();
+        for peer in 0..2 {
+            let mut policy = grants();
+            policy[0].export_id = record.id.clone();
+            self.generations[peer] = self
+                .authority
+                .update_policy(
+                    &self.work,
+                    admin(),
+                    self.identities[peer].certificate_der().to_vec(),
+                    self.generations[peer],
+                    policy,
+                    None,
+                )
+                .await
+                .unwrap()
+                .generation;
+        }
+        record
+    }
+}
+
+#[tokio::test]
+async fn given_borrowed_exports_should_resolve_inside_dispatch_and_hold_revocation_through_bounded_bulk_send()
+ {
+    let mut f = Fixture::new(SessionLimits::default(), None).await;
+    let export = f.issued_export().await;
+    let (mut control, mut client) = f.control(0).await;
+    let request = Request {
+        request_id: "status".into(),
+        target_daemon: f.authority.daemon.clone(),
+        operation: wire::Operation::Status {
+            export: wire::Export {
+                id: export.id.clone(),
+                generation: export.generation,
+            },
+            agent_id: None,
+            after_agent: None,
+            limit: 64,
+        },
+    };
+    let authority = f.authority.clone();
+    let (response, dispatch) = tokio::join!(
+        client.request::<serde_json::Value>(&request),
+        control.dispatch(&f.work, move |ledger, exports, caller, _, request| {
+            assert!(authority.state.try_write().is_err());
+            ledger.validate_principal(caller).unwrap();
+            let wire::Operation::Status { export, .. } = &request.operation else {
+                panic!()
+            };
+            let resolved = exports.resolve(&export.id, export.generation).unwrap();
+            exports.revalidate(&resolved).unwrap();
+            Ok(br#"{"checked":true}"#.to_vec())
+        })
+    );
+    assert!(dispatch.is_ok());
+    assert_eq!(response.unwrap()["checked"], true);
+    let (mut bulk, _stalled) = f.bulk(&client).await;
+    let subscription = bulk.subscribe(export.id.clone()).await.unwrap();
+    let id = export.id.clone();
+    let send = tokio::spawn(async move {
+        bulk.send_output_with(&subscription, move |ledger, exports, caller| {
+            ledger.validate_principal(caller).unwrap();
+            let resolved = exports.resolve(&id, 1).unwrap();
+            exports.revalidate(&resolved).unwrap();
+            Ok((32 * 1024, vec![b'x'; wire::MAX_BULK_FRAME]))
+        })
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while f.authority.state.try_write().is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let authority = f.authority.clone();
+    let work = f.work.clone();
+    let id = export.id;
+    let revoke = tokio::spawn(async move { authority.revoke_export(&work, admin(), id).await });
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(!revoke.is_finished());
+    assert!(matches!(
+        send.await.unwrap(),
+        Err(Error::Transport(crate::mesh_transport::Error::Timeout))
+    ));
+    assert!(revoke.await.unwrap().is_ok());
+    assert!(matches!(control.binding.check(), Err(Error::Closed)));
+}
+
+#[tokio::test]
+async fn given_cancelled_export_admin_should_retain_exclusive_guard_and_wake_all_bindings_after_durable_change()
+ {
+    let mut f = Fixture::new(SessionLimits::default(), None).await;
+    let export = f.issued_export().await;
+    let (control0, _client0) = f.control(0).await;
+    let (control1, _client1) = f.control(1).await;
+    let (entered, began) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let authority = f.authority.clone();
+    let work = f.work.clone();
+    let id = export.id.clone();
+    let task = tokio::spawn(async move {
+        authority
+            .administer_exports(&work, admin(), move |exports, admin| {
+                entered.send(()).unwrap();
+                wait.recv().unwrap();
+                exports.revoke(admin, &id).map_err(|_| Error::Operation)
+            })
+            .await
+    });
+    began.await.unwrap();
+    task.abort();
+    let _ = task.await;
+    let held = f.authority.state.try_read().is_err();
+    let live_until_change = control0.binding.check().is_ok() && control1.binding.check().is_ok();
+    release.send(()).unwrap();
+    assert!(held && live_until_change);
+    f.work.wait_idle().await;
+    assert!(control0.binding.check().is_err() && control1.binding.check().is_err());
+    let id = export.id;
+    assert!(
+        f.authority
+            .inspect_admin(&f.work, admin(), move |_, _, exports, _| Ok(exports
+                .resolve(&id, 1)
+                .is_err()))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn given_guarded_admin_transport_snapshot_should_validate_exact_pins_but_never_cache_session_authority()
+ {
+    let mut f = Fixture::new(SessionLimits::default(), None).await;
+    let identity = f.authority.identity(&f.work, admin()).await.unwrap();
+    assert_eq!(identity.daemon_id, f.authority.daemon);
+    assert_eq!(identity.peer_id, f.server_id);
+    assert_eq!(
+        PeerId::from_certificate_der(&identity.certificate_der).unwrap(),
+        f.server_id
+    );
+    let snapshot = f
+        .authority
+        .transport(&f.work, admin(), now())
+        .await
+        .unwrap();
+    let peer = f.identities[0].peer_id();
+    let revoked = f.authority.revoke(&f.work, admin(), peer).await.unwrap();
+    f.generations[0] = revoked.generation;
+    let (server, client) = tokio::io::duplex(4096);
+    let (accepted, client) = tokio::join!(
+        f.authority.accept_incoming(&snapshot, server),
+        ControlClient::connect(
+            &f.clients[0],
+            client,
+            f.server_id,
+            f.authority.daemon.clone(),
+            revoked.generation,
+            f.authority.limits.clone()
+        )
+    );
+    assert!(matches!(accepted, Err(Error::Denied)));
+    assert!(client.is_err());
+    let name = peer_name(peer);
+    let displayed = f
+        .authority
+        .inspect_admin(&f.work, admin(), move |store, ledger, _, admin| {
+            store
+                .admin_peer(ledger, admin, &name)
+                .map_err(|_| Error::Operation)
+        })
+        .await
+        .unwrap();
+    assert!(displayed.0.revoked && displayed.1.revoked);
+    assert_eq!(PeerId::from_certificate_der(&displayed.2).unwrap(), peer);
+    let current_transport = f
+        .authority
+        .transport(&f.work, admin(), now())
+        .await
+        .unwrap();
+    let (server, client) = tokio::io::duplex(4096);
+    let (accepted, _client) = tokio::join!(
+        current_transport.accept(server, Role::Control),
+        f.clients[0].connect(client, Role::Control, f.server_id)
+    );
+    assert!(
+        accepted.is_err(),
+        "new TLS setup includes only active checked pins"
+    );
+    let expired = f
+        .authority
+        .update_policy(
+            &f.work,
+            admin(),
+            f.identities[1].certificate_der().to_vec(),
+            f.generations[1],
+            grants(),
+            Some(now()),
+        )
+        .await
+        .unwrap();
+    f.generations[1] = expired.generation;
+    let name = peer_name(f.identities[1].peer_id());
+    let displayed = f
+        .authority
+        .inspect_admin(&f.work, admin(), move |store, ledger, _, admin| {
+            store
+                .admin_peer(ledger, admin, &name)
+                .map_err(|_| Error::Operation)
+        })
+        .await
+        .unwrap();
+    assert!(displayed.1.expires_at.is_some());
+    assert!(matches!(
+        f.authority.transport(&f.work, admin(), now()).await,
+        Err(Error::Denied)
+    ));
+    let listed = f
+        .authority
+        .inspect_admin(&f.work, admin(), |store, ledger, _, admin| {
+            store
+                .list_admin_peers(ledger, admin, None, 2)
+                .map_err(|_| Error::Operation)
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 2);
+}
+
+#[tokio::test]
+async fn given_damaged_policy_should_deny_admin_snapshots_but_allow_ledger_based_local_revoke() {
+    use crate::daemon_lifecycle::mesh_store::peer_id_from_name;
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let (control, _client) = f.control(0).await;
+    let name = peer_name(f.identities[0].peer_id());
+    let path = f
+        ._tmp
+        .path()
+        .join(format!("scratch.sock.mesh-peer-{name}.json"));
+    tokio::task::spawn_blocking(move || std::fs::write(path, b"{}").unwrap())
+        .await
+        .unwrap();
+    assert!(
+        f.authority
+            .transport(&f.work, admin(), now())
+            .await
+            .is_err()
+    );
+    assert!(
+        f.authority
+            .inspect_admin(&f.work, admin(), |store, ledger, _, admin| store
+                .list_admin_peers(ledger, admin, None, 2)
+                .map_err(|_| Error::Operation))
+            .await
+            .is_err()
+    );
+    let selected = peer_id_from_name(&name).unwrap();
+    let generation = f.generations[0];
+    let revoked = f
+        .authority
+        .administer(&f.work, admin(), selected, move |_, ledger, admin| {
+            assert_eq!(ledger.peer(&name).unwrap().generation, generation);
+            ledger
+                .revoke_peer(admin, &name)
+                .map_err(|_| Error::Operation)
+        })
+        .await
+        .unwrap();
+    assert!(revoked.revoked);
+    assert!(control.binding.check().is_err());
+    // A valid certificate enrollment without an anchor also denies setup/list.
+    let unanchored = Fixture::with_anchor(SessionLimits::default(), None, false).await;
+    assert!(
+        unanchored
+            .authority
+            .transport(&unanchored.work, admin(), now())
+            .await
+            .is_err()
+    );
+    assert!(
+        unanchored
+            .authority
+            .inspect_admin(&unanchored.work, admin(), |store, ledger, _, admin| store
+                .list_admin_peers(ledger, admin, None, 2)
+                .map_err(|_| Error::Operation))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn given_transport_catalog_overflow_should_reject_before_unbounded_policy_or_certificate_reads()
+ {
+    let (authority, work, _tmp, _lock) = tokio::task::spawn_blocking(|| {
+        let tmp = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let lock = Arc::new(
+            try_acquire_daemon_lock(&tmp.path().join("scratch.sock"))
+                .unwrap()
+                .unwrap(),
+        );
+        let store = MeshStore::initialize(lock.clone(), &admin()).unwrap();
+        let ledger = Ledger::open(
+            tmp.path().join("ledger.sqlite"),
+            store.daemon_id(),
+            LedgerLimits {
+                peers: 257,
+                ..LedgerLimits::default()
+            },
+        )
+        .unwrap();
+        for index in 0..257 {
+            ledger
+                .register_peer(&admin(), &format!("{index:064x}"))
+                .unwrap();
+        }
+        let exports = MeshExports::open(lock.clone(), store.daemon_id(), 8).unwrap();
+        let work = WorkOwner::new(&lock);
+        let authority =
+            SessionAuthority::new(store, ledger, exports, SessionLimits::default()).unwrap();
+        (authority, work, tmp, lock)
+    })
+    .await
+    .unwrap();
+    assert!(
+        authority
+            .inspect_admin(&work, admin(), |store, ledger, _, admin| Ok(matches!(
+                store.active_peer_certificates(ledger, admin, now()),
+                Err(crate::daemon_lifecycle::mesh_store::Error::Capacity)
+            )))
+            .await
+            .unwrap()
+    );
+    assert!(authority.transport(&work, admin(), now()).await.is_err());
 }

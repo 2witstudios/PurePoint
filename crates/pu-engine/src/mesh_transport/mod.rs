@@ -35,6 +35,12 @@ pub enum Error {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PeerId([u8; 32]);
 impl PeerId {
+    /// An expected transport pin selector only. This neither proves certificate
+    /// possession nor grants authority and cannot create AuthenticatedConnection.
+    /// Session principals must still derive from actual authenticated TLS.
+    pub fn from_fingerprint(fingerprint: [u8; 32]) -> Self {
+        Self(fingerprint)
+    }
     /// Derive an expected pin from a locally enrolled public certificate. This
     /// parses material only; it neither authenticates possession nor grants access.
     pub fn from_certificate_der(cert: &[u8]) -> Result<Self, Error> {
