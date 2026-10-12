@@ -6,6 +6,27 @@ use tokio::sync::watch;
 
 const DEFAULT_CAPACITY: usize = 4 * 1024 * 1024; // 4MB
 
+/// Leaves room for worst-case JSON byte encoding inside a 256 KiB bulk frame.
+pub const MAX_REPLAY_CHUNK: usize = 32 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputChunk {
+    pub bytes: Vec<u8>,
+    pub start: usize,
+    pub next: usize,
+    pub total: usize,
+    /// The exact unavailable half-open range preceding this chunk.
+    pub gap: Option<std::ops::Range<usize>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum OutputReadError {
+    #[error("output offset is ahead of this buffer")]
+    FutureOffset,
+    #[error("output chunk budget is outside the supported range")]
+    InvalidBudget,
+}
+
 /// Minimum printable characters (after stripping ANSI) for a write to count as
 /// substantive content. Spinner output (1–2 chars) stays below this threshold.
 const SUBSTANTIVE_CONTENT_MIN_CHARS: usize = 5;
@@ -109,6 +130,42 @@ impl OutputBuffer {
     /// written since the last call, eliminating the Notify re-arm gap.
     pub fn subscribe(&self) -> watch::Receiver<usize> {
         self.written_rx.clone()
+    }
+
+    /// Copy one bounded snapshot chunk and explicitly report evicted bytes.
+    /// The bridge must first authorize the resource and bind the offset to the
+    /// current daemon incarnation and agent/run. This method cannot do that from
+    /// an offset alone, and holds no lock while the caller sends the result.
+    pub fn read_range(&self, offset: usize, budget: usize) -> Result<OutputChunk, OutputReadError> {
+        if !(1..=MAX_REPLAY_CHUNK).contains(&budget) {
+            return Err(OutputReadError::InvalidBudget);
+        }
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let total = inner.total_written;
+        if offset > total {
+            return Err(OutputReadError::FutureOffset);
+        }
+        let available_start = total - inner.data.len();
+        let start = offset.max(available_start);
+        let count = (total - start).min(budget);
+        let skip = start - available_start;
+        let (first, second) = inner.data.as_slices();
+        let mut bytes = Vec::with_capacity(count);
+        if skip < first.len() {
+            let first_count = count.min(first.len() - skip);
+            bytes.extend_from_slice(&first[skip..skip + first_count]);
+            bytes.extend_from_slice(&second[..count - first_count]);
+        } else {
+            let second_start = skip - first.len();
+            bytes.extend_from_slice(&second[second_start..second_start + count]);
+        }
+        Ok(OutputChunk {
+            bytes,
+            start,
+            next: start + count,
+            total,
+            gap: (offset < available_start).then_some(offset..available_start),
+        })
     }
 
     /// Current total bytes written (monotonic offset).
@@ -764,5 +821,67 @@ mod tests {
         let (data, _) = buf.read_from(0);
         assert_eq!(data.len(), 10);
         assert_eq!(data, b"4567890abc");
+    }
+}
+
+#[cfg(test)]
+mod bounded_replay_tests {
+    use super::*;
+
+    #[test]
+    fn given_evicted_output_should_report_gap_and_copy_only_one_bounded_chunk() {
+        // given
+        let buffer = OutputBuffer::with_capacity(8);
+        buffer.write(b"123456789abc");
+        // when
+        let chunk = buffer.read_range(0, 3).unwrap();
+        // then
+        assert_eq!(chunk.gap, Some(0..4));
+        assert_eq!(chunk.start, 4);
+        assert_eq!(chunk.next, 7);
+        assert_eq!(chunk.total, 12);
+        assert_eq!(chunk.bytes, b"567");
+        let next = buffer.read_range(chunk.next, 3).unwrap();
+        assert_eq!(next.gap, None);
+        assert_eq!(next.bytes, b"89a");
+        assert_eq!(next.next, 10);
+    }
+
+    #[test]
+    fn given_invalid_cursor_or_budget_should_reject_without_rewinding() {
+        // given
+        let buffer = OutputBuffer::with_capacity(8);
+        buffer.write(b"abc");
+        // when / then
+        assert_eq!(buffer.read_range(4, 3), Err(OutputReadError::FutureOffset));
+        assert_eq!(buffer.read_range(0, 0), Err(OutputReadError::InvalidBudget));
+        assert_eq!(
+            buffer.read_range(0, MAX_REPLAY_CHUNK + 1),
+            Err(OutputReadError::InvalidBudget)
+        );
+        let current = buffer.read_range(3, 3).unwrap();
+        assert_eq!(current.start, 3);
+        assert_eq!(current.next, 3);
+        assert_eq!(current.bytes, b"");
+        assert_eq!(current.gap, None);
+    }
+
+    #[test]
+    fn given_wrapped_or_full_ring_should_replay_in_order_without_copying_entire_history() {
+        // given
+        let wrapped = OutputBuffer::with_capacity(8);
+        wrapped.write(b"123456");
+        wrapped.write(b"789ab");
+        // when / then
+        assert_eq!(wrapped.read_range(3, 8).unwrap().bytes, b"456789ab");
+        assert_eq!(wrapped.read_range(6, 2).unwrap().bytes, b"78");
+
+        let full = OutputBuffer::with_capacity(MAX_REPLAY_CHUNK * 4);
+        full.write(&vec![b'x'; MAX_REPLAY_CHUNK * 4]);
+        let chunk = full.read_range(0, MAX_REPLAY_CHUNK).unwrap();
+        assert_eq!(chunk.bytes.len(), MAX_REPLAY_CHUNK);
+        assert_eq!(chunk.next, MAX_REPLAY_CHUNK);
+        assert_eq!(chunk.total, MAX_REPLAY_CHUNK * 4);
+        assert_eq!(chunk.gap, None);
     }
 }
