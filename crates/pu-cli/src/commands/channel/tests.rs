@@ -175,7 +175,9 @@ fn given_response_should_display_ids_cursors_references_and_reactions() {
 #[tokio::test]
 async fn given_real_ipc_server_should_persist_cli_send_reply_edit_and_reaction() {
     use pu_core::types::Manifest;
+    use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     // Keep the socket path under sockaddr_un's platform length bound.
     let socket = temp.path().join("ipc.sock");
     let root = temp.path().join("project");

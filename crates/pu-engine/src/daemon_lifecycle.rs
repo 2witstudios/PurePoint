@@ -14,8 +14,7 @@ use tokio::net::{UnixListener, UnixSocket};
 
 pub mod mesh_store;
 pub mod owned_work;
-mod private_state;
-use private_state::{Entry, PrivateDir, denied};
+use pu_core::private_fs::{Entry, PrivateDir, denied};
 
 /// Owns the private directory, single-writer lock and exact runtime artifacts.
 /// The lock file is never unlinked: doing so would permit two lock holders.

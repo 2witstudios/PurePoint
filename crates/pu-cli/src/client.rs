@@ -98,6 +98,12 @@ mod tests {
 
     // Helper: start a real pu-engine IPC server for testing
     async fn start_test_server(sock_path: &std::path::Path) -> tokio::task::JoinHandle<()> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            sock_path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         let engine = pu_engine::engine::Engine::new();
         let server = pu_engine::ipc_server::IpcServer::bind(sock_path, engine).unwrap();
         tokio::spawn(async move {

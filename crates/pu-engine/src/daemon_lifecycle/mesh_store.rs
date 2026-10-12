@@ -145,7 +145,7 @@ impl MeshStore {
             .create_new(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(lock.directory.path_for(&path))
+            .open(lock.directory.checked_path_for(&path)?)
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::AlreadyExists {
                     Error::AlreadyInitialized
@@ -153,9 +153,9 @@ impl MeshStore {
                     Error::Io(error)
                 }
             })?;
-        super::private_state::Entry::from_file(&file)?.private_file()?;
+        pu_core::private_fs::Entry::from_file(&file)?.private_file()?;
         lock.directory
-            .require_identity(&path, super::private_state::Entry::from_file(&file)?)?
+            .require_identity(&path, pu_core::private_fs::Entry::from_file(&file)?)?
             .private_file()?;
         file.write_all(&bytes)?;
         file.sync_all()?;
