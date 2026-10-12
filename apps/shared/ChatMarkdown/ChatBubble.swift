@@ -24,6 +24,7 @@ enum ChatBubbleStyle {
 struct ChatBubble<Content: View>: View {
     let sender: ChatBubbleSender
     var compact = false
+    var assistantFill = ChatBubbleStyle.assistantFill
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -35,7 +36,7 @@ struct ChatBubble<Content: View>: View {
                     .foregroundStyle(sender == .user ? Color.white : Color.primary)
                     .tint(sender == .user ? Color.white : Color.accentColor)
                     .background(
-                        sender == .user ? ChatBubbleStyle.userFill : ChatBubbleStyle.assistantFill,
+                        sender == .user ? ChatBubbleStyle.userFill : assistantFill,
                         in: ChatBubbleStyle.shape(sender))
             }
             if sender == .assistant { Spacer(minLength: compact ? 28 : 48) }
@@ -93,12 +94,13 @@ struct TypingDots: View {
 /// Shown at the end of the transcript while Point Guard is working.
 struct TypingIndicatorBubble: View {
     var compact = false
+    var fill = ChatBubbleStyle.assistantFill
 
     var body: some View {
         HStack {
             TypingDots(diameter: compact ? 6 : 7, spacing: compact ? 4 : 5)
                 .padding(.horizontal, compact ? 13 : 16).padding(.vertical, compact ? 11 : 14)
-                .background(ChatBubbleStyle.assistantFill, in: ChatBubbleStyle.shape(.assistant, radius: 18))
+                .background(fill, in: ChatBubbleStyle.shape(.assistant, radius: 18))
             Spacer(minLength: 0)
         }
         .accessibilityElement()

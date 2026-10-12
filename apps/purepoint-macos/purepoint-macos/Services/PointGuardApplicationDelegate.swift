@@ -22,9 +22,9 @@ import AppKit
                 let alert = NSAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "Point Guard is still running"
-                alert.informativeText = "\(error.localizedDescription)\n\nStop Pi and quit ends the current Pi run. Your saved conversation and drafts remain available; uncertain prompts will not be resent. Quit and updates wait until the owned runtime exits."
+                alert.informativeText = "\(error.localizedDescription)\n\nStop Point Guard and Quit ends the current Point Guard run. Your saved conversation and drafts remain available; uncertain prompts will not be resent. Quit and updates wait until the owned runtime exits."
                 alert.addButton(withTitle: "Cancel")
-                alert.addButton(withTitle: "Stop Pi and Quit")
+                alert.addButton(withTitle: "Stop Point Guard and Quit")
                 guard alert.runModal() == .alertSecondButtonReturn else { return }
                 do {
                     try await service.stopOwnedForQuit()

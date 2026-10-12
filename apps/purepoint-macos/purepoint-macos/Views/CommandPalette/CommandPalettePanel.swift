@@ -191,7 +191,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        view.window?.makeFirstResponder(searchField)
+        focusSearchFieldIfSelecting()
     }
 
     // MARK: - Setup
@@ -414,26 +414,36 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         resizePanel(rowCount: filteredItems.count)
 
         DispatchQueue.main.async { [weak self] in
-            self?.view.window?.makeFirstResponder(self?.searchField)
+            self?.focusSearchFieldIfSelecting()
         }
     }
 
+    /// Deferred search focus must not steal focus from a naming/prompt step entered
+    /// in the meantime (e.g. `show(initialItem:)` selects an item right after loadView).
+    private func focusSearchFieldIfSelecting() {
+        guard case .selection = phase else { return }
+        view.window?.makeFirstResponder(searchField)
+    }
+
+    /// Lays out the naming step directly (never via the prompt layout) so the panel
+    /// resizes once and focus lands in the name field before any typed keys are delivered.
     private func showNamingPhase(item: CommandPaletteItem) {
-        showPromptPhase(item: item)
         phase = .naming(item)
+        prepareItemPhase(item: item)
         promptHeaderLabel.stringValue = "Name \(item.displayName)"
+
         nameLabel.isHidden = false
         nameField.isHidden = false
         nameField.placeholderString = "e.g., Fix authentication"
         slugPreview.isHidden = false
         slugPreview.stringValue = "Enter to continue"
+        promptScrollTopConstraint?.isActive = false
         NSLayoutConstraint.activate(nameFieldConstraints)
         promptScrollView.isHidden = true
         promptHint.isHidden = true
+
+        focus(nameField)
         resizePanelHeight(to: 150)
-        DispatchQueue.main.async { [weak self] in
-            self?.view.window?.makeFirstResponder(self?.nameField)
-        }
     }
 
     private func submitName() {
@@ -453,9 +463,9 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         }
     }
 
-    private func showPromptPhase(item: CommandPaletteItem) {
-        phase = .prompt(item)
-
+    /// Shared setup for the naming and prompt steps: hide selection UI, show the item header,
+    /// and reset drafts when switching to a different item.
+    private func prepareItemPhase(item: CommandPaletteItem) {
         searchField.isHidden = true
         separatorView.isHidden = true
         scrollView.isHidden = true
@@ -464,6 +474,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         promptHeaderIcon.image = img
         promptHeaderIcon.contentTintColor = .labelColor
         promptHeaderLabel.stringValue = item.displayName
+        promptHeader.isHidden = false
 
         if draftItemID != item.id {
             promptTextView.string = ""
@@ -471,6 +482,23 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
             draftItemID = item.id
         }
         promptTextView.setPlaceholder(item.promptPlaceholder)
+    }
+
+    /// Moves focus synchronously when the panel is on screen, so keystrokes queued behind the
+    /// Enter that triggered a transition go to the new field rather than the previous one.
+    private func focus(_ responder: NSResponder) {
+        if let window = view.window {
+            window.makeFirstResponder(responder)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.view.window?.makeFirstResponder(responder)
+            }
+        }
+    }
+
+    private func showPromptPhase(item: CommandPaletteItem) {
+        phase = .prompt(item)
+        prepareItemPhase(item: item)
 
         let showName = item.showsNameField
         nameLabel.isHidden = !showName
@@ -494,7 +522,6 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
         let showPrompt = item.showsPromptField
 
-        promptHeader.isHidden = false
         promptScrollView.isHidden = !showPrompt
         promptHint.isHidden = !showPrompt
 
@@ -509,15 +536,8 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         } else {
             panelHeight = 170
         }
+        focus(showName ? nameField : promptTextView)
         resizePanelHeight(to: panelHeight)
-
-        DispatchQueue.main.async { [weak self] in
-            if showName {
-                self?.view.window?.makeFirstResponder(self?.nameField)
-            } else {
-                self?.view.window?.makeFirstResponder(self?.promptTextView)
-            }
-        }
     }
 
     private func resizePanelHeight(to height: CGFloat, animate: Bool = true) {

@@ -18,7 +18,7 @@ export default function(pi) {
    const stream=createAssistantMessageEventStream();
    void (async()=>{
     const prompt=getCurrentSystemPrompt(context.messages);
-    await appendFile(process.env.PROOF_REPORTS, JSON.stringify({prompt,tools:getCurrentTools(context.messages).map(t=>t.name)})+"\\n");
+    await appendFile(process.env.PROOF_REPORTS, JSON.stringify({prompt,tools:getCurrentTools(context.messages).map(t=>t.name),leaked:JSON.stringify(context.messages).includes("nativeManagedDiagnostics")})+"\\n");
     const last=context.messages.at(-1);
     const text=typeof last?.content==="string"?last.content:(last?.content??[]).map(b=>b.text??"").join("");
     if(text==="slow request") {
@@ -208,6 +208,8 @@ test(
     );
     const first = await report();
     assert.deepEqual(first.tools, ["read", "bash", "edit", "write"]);
+    // /pointguard info is display-only; it must never reach the model.
+    assert.equal(first.leaked, false);
     for (const tag of [
       "pointguard_soul",
       "pointguard_user",

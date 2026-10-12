@@ -60,7 +60,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     func start(chat: PiChatModel) {
         self.chat = chat
         guard process == nil, startTask == nil, !stopping else { return }
-        error = nil; phase = "Starting Pi…"; expectedStop = false
+        error = nil; phase = "Starting Point Guard…"; expectedStop = false
         startTask = Task { [weak self] in
             guard let self else { return }
             defer { self.startTask = nil }
@@ -108,7 +108,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 let chatToken = try PointGuardPrivateFile.token(self.stateDirectory.appendingPathComponent("desktop-chat-token"))
                 self.remoteEndpoint = descriptor.chatURL
                 chat.bindManagedConnection(endpoint: descriptor.nativeChatURL, secret: chatToken, clientId: descriptor.desktopClientId)
-                self.ready = true; self.phase = "Pi ready"; self.launchCwd = nil
+                self.ready = true; self.phase = "Point Guard ready"; self.launchCwd = nil
                 await self.refresh()
             } catch {
                 self.error = error.localizedDescription
@@ -344,7 +344,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         catch { self.error = error.localizedDescription }
     }
     func restart(chat: PiChatModel) async {
-        guard !chat.busy else { error = "Wait for Pi to finish or Stop this run before restarting."; return }
+        guard !chat.busy else { error = "Wait for Point Guard to finish or Stop this run before restarting."; return }
         do { try await stop(); restartRequired = false; start(chat: chat) }
         catch { self.error = error.localizedDescription }
     }
@@ -365,7 +365,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         }
         pollTask?.cancel(); pollTask = nil
         authGeneration += 1; enrollmentGeneration += 1
-        ready = false; phase = "Stopping Pi…"; chat?.disconnect()
+        ready = false; phase = "Stopping Point Guard…"; chat?.disconnect()
         for _ in 0..<100 {
             if !child.isRunning {
                 ownedRuntimeExited(instanceId: instanceId); phase = "Stopped"
@@ -375,7 +375,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         }
         throw PiChatError("Point Guard has not exited. The update/restart is paused until its owned child stops.")
     }
-    /// Called only after the native Quit dialog's deliberate Stop Pi and Quit choice.
+    /// Called only after the native Quit dialog's deliberate Stop Point Guard and Quit choice.
     func stopOwnedForQuit() async throws {
         guard !stopping else { throw PiChatError("Point Guard is already stopping. Wait, then retry Quit.") }
         stopping = true; defer { stopping = false }
@@ -401,7 +401,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         pollTask?.cancel(); pollTask = nil
         phase = "Stopped"
         if !expectedStop {
-            phase = "Pi stopped"
+            phase = "Point Guard stopped"
             error = startupFailure(pid: child.processIdentifier, launchId: launchId)
                 ?? "Point Guard exited (\(status)). Retry to restore your saved session. Check private state permissions and available ports if startup fails."
         }
