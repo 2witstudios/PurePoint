@@ -1,12 +1,20 @@
 use super::*;
 use pu_core::protocol::{KillTarget, Request, Response};
+use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+fn private_dir() -> TempDir {
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn given_ipc_server_should_accept_connection() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = private_dir();
     let sock_path = tmp.path().join("test.sock");
     let engine = Engine::new();
 
@@ -23,7 +31,7 @@ async fn given_ipc_server_should_accept_connection() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_health_request_should_respond_with_report() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = private_dir();
     let sock_path = tmp.path().join("test.sock");
     let engine = Engine::new();
 
@@ -61,7 +69,7 @@ async fn given_health_request_should_respond_with_report() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_init_request_should_create_manifest() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = private_dir();
     let sock_path = tmp.path().join("test.sock");
     let project_root = tmp.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
@@ -102,7 +110,7 @@ async fn given_init_request_should_create_manifest() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_shutdown_request_should_respond_and_stop() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = private_dir();
     let sock_path = tmp.path().join("test.sock");
     let engine = Engine::new();
 
@@ -139,6 +147,7 @@ async fn setup_with_agent() -> (
     TempDir,
 ) {
     let (engine, agent_id, tmp) = crate::test_helpers::init_and_spawn().await;
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let sock_path = tmp.path().join("test.sock");
 
     let server = IpcServer::bind(&sock_path, engine).unwrap();
@@ -425,7 +434,7 @@ async fn send_health(stream: UnixStream) -> Option<Response> {
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_connection_limit_reached_should_reject_new_connection_promptly() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = private_dir();
     let sock_path = tmp.path().join("test.sock");
     let server = IpcServer::bind(&sock_path, Engine::new())
         .unwrap()

@@ -4,6 +4,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 async fn start_server(sock: &std::path::Path) -> tokio::task::JoinHandle<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        sock.parent().unwrap(),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
     let engine = pu_engine::engine::Engine::new();
     let server = pu_engine::ipc_server::IpcServer::bind(sock, engine).unwrap();
     tokio::spawn(async move {
@@ -562,7 +568,9 @@ async fn given_uninitialised_project_kill_should_return_error() {
 
 #[tokio::test]
 async fn given_production_daemon_restart_should_restore_registry_without_project_discovery() {
+    use std::os::unix::fs::PermissionsExt;
     let tmp = TempDir::new().unwrap();
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let socket = tmp.path().join("production.sock");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
