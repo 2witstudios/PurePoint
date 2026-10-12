@@ -321,7 +321,7 @@ export async function runManaged(env = process.env) {
       ...(controller.error
         ? {
             recovery:
-              "Pi stopped or transport failed. Inspect history, then restart the owned service. No uncertain prompt will be replayed.",
+              "Point Guard stopped or transport failed. Inspect history, then restart the owned service. No uncertain prompt will be replayed.",
           }
         : {}),
     });
@@ -335,7 +335,7 @@ export async function runManaged(env = process.env) {
       if (!idle(controller))
         throw new AdminError(
           "busy",
-          "Wait for Pi and its queued work to finish before applying setup changes.",
+          "Wait for Point Guard and its queued work to finish before applying setup changes.",
         );
       controller.pendingMutations++;
       const operation = controller.serial.then(() => {

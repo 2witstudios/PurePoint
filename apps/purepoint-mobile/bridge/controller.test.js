@@ -479,7 +479,7 @@ for (const op of ["stop", "new", "resume", "send"]) {
         const old = await sync;
         await mutation;
         if (fails) assert.match(old.error.message, /Older read failed/);
-        else assert.equal(old.snapshot.title, "Pi");
+        else assert.equal(old.snapshot.title, "Point Guard");
         const fresh = c.snapshot();
         assert.equal(fresh.title, "Post-mutation title");
         assert.equal(fresh.busy, false);
