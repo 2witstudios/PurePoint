@@ -417,7 +417,8 @@ pub(super) enum Live {
     Operations,
     /// Live writers only; fenced evidence is bounded by the input receipt budget.
     Writers,
-    /// Uncertain input evidence, attributed to the writer's principal.
+    /// Uncertain input evidence of runs still holding capacity, attributed to
+    /// the writer's principal.
     Inputs,
 }
 
@@ -445,9 +446,14 @@ impl Live {
             Self::Writers => {
                 "FROM writers w WHERE json_extract(w.data,'$.live')=1 AND ?1 IS NOT NULL".into()
             }
+            // Evidence is retained forever, but only runs still holding
+            // capacity count: an ended run's uncertain receipts never lock a
+            // peer out of future input.
             Self::Inputs => format!(
                 "FROM inputs i JOIN writers w ON w.id=i.writer \
-                 WHERE json_extract(i.data,'$.outcome') NOT IN {CERTAIN} AND ?1 IS NOT NULL"
+                 JOIN runs r ON r.id=w.run \
+                 WHERE json_extract(i.data,'$.outcome') NOT IN {CERTAIN} \
+                 AND json_extract(r.data,'$.lifecycle') NOT IN {TERMINAL} AND ?1 IS NOT NULL"
             ),
         }
     }

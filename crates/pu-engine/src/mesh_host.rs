@@ -313,6 +313,12 @@ impl Link {
         ttl_seconds: u32,
         admission: &Semaphore,
     ) -> Result<Response, Error> {
+        // Reconnect first if the worker restarted (its bulk ended), so the
+        // generation below is current and a closed window is never reused.
+        {
+            let mut slot = self.conn.lock().await;
+            self.ensure(&mut slot, transport).await?;
+        }
         let generation = self.generation.load(std::sync::atomic::Ordering::SeqCst);
         let cached = self
             .window

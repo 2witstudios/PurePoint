@@ -428,3 +428,60 @@ fn given_peer_accumulating_uncertain_input_should_exhaust_only_its_own_quota() {
     ));
     assert!(partial_inputs(&quiet, 1)[0].is_ok());
 }
+
+#[test]
+fn given_uncertain_input_of_ended_runs_should_be_retained_without_blocking_new_input() {
+    // given: a peer's quota filled by uncertain evidence of one run
+    let ledger = Ledger::in_memory(
+        "daemon-a",
+        Limits {
+            principal_input_receipts: 1,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    let peer = peer_named(&ledger, "peer");
+    let first = running(&ledger, &peer);
+    let writer = ledger.open_writer(&peer, &first.guard(), None).unwrap();
+    ledger
+        .accept_input(
+            &peer,
+            &first.guard(),
+            writer.id,
+            1,
+            PayloadDigest([1; 32]),
+            8,
+        )
+        .unwrap();
+    ledger
+        .finish_input(writer.id, 1, InputOutcome::Partial { bytes: 4 })
+        .unwrap();
+
+    // when: that run ends with proof
+    ledger
+        .resolve_run(
+            &first.current_run,
+            &OutcomeProof::ProcessTreeTerminated {
+                evidence: "tree ended".into(),
+                interrupted: false,
+            },
+        )
+        .unwrap();
+
+    // then: the evidence is still readable and a new run accepts input
+    assert!(ledger.input_receipt(writer.id, 1).unwrap().is_some());
+    let second = running(&ledger, &peer);
+    let writer = ledger.open_writer(&peer, &second.guard(), None).unwrap();
+    assert!(
+        ledger
+            .accept_input(
+                &peer,
+                &second.guard(),
+                writer.id,
+                1,
+                PayloadDigest([2; 32]),
+                8
+            )
+            .is_ok()
+    );
+}

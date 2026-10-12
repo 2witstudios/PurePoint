@@ -1,8 +1,8 @@
 //! Owner-local disposition of worker-owned runs. Local IPC already admits only
-//! the owning UID. These operations take the run's per-agent boundary first
-//! and then make their ledger transition under the authority barrier, so a
-//! local takeover fences remote writers and a remote peer can never displace
-//! the local controller.
+//! the owning UID. Like bridge dispatch, these operations take the authority
+//! barrier, then the run's per-agent boundary, then make their ledger
+//! transition, so a local takeover fences remote writers and a remote peer can
+//! never displace the local controller.
 
 use super::{Cause, Executor, Proof};
 use crate::{
