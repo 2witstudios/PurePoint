@@ -1949,3 +1949,174 @@ async fn given_transport_catalog_overflow_should_reject_before_unbounded_policy_
     );
     assert!(authority.transport(&work, admin(), now()).await.is_err());
 }
+
+#[test]
+fn given_invalid_preauth_budget_should_reject_limits() {
+    // given
+    let valid = SessionLimits::default();
+    // when / then
+    assert!(valid.validate().is_ok());
+    for invalid in [
+        SessionLimits {
+            preauth_total: 0,
+            ..SessionLimits::default()
+        },
+        SessionLimits {
+            preauth_per_source: 0,
+            ..SessionLimits::default()
+        },
+        SessionLimits {
+            preauth_per_source: valid.preauth_total + 1,
+            ..SessionLimits::default()
+        },
+        SessionLimits {
+            handshake_deadline: Duration::ZERO,
+            ..SessionLimits::default()
+        },
+        SessionLimits {
+            handshake_deadline: crate::mesh_transport::HANDSHAKE_DEADLINE
+                + Duration::from_millis(1),
+            ..SessionLimits::default()
+        },
+    ] {
+        assert!(matches!(invalid.validate(), Err(Error::Limits)));
+    }
+}
+
+#[tokio::test]
+async fn given_one_source_exceeding_preauth_cap_should_not_starve_other_sources() {
+    // given: one source holds its whole pre-auth share with handshakes that
+    // never send a byte; session permits must stay untouched meanwhile.
+    let limits = SessionLimits {
+        control_total: 1,
+        control_per_peer: 1,
+        preauth_total: 3,
+        preauth_per_source: 2,
+        handshake_deadline: Duration::from_millis(300),
+        ..SessionLimits::default()
+    };
+    let f = Arc::new(Fixture::new(limits, None).await);
+    let flooder: std::net::IpAddr = "192.0.2.7".parse().unwrap();
+    let other: std::net::IpAddr = "192.0.2.8".parse().unwrap();
+    let mut idle = Vec::new();
+    for _ in 0..2 {
+        let permit = f.authority.preauthorize(Some(flooder)).unwrap();
+        let (io, peer) = tokio::io::duplex(4096);
+        let f = f.clone();
+        idle.push(tokio::spawn(async move {
+            let _peer = peer;
+            let started = std::time::Instant::now();
+            let result = f
+                .authority
+                .accept_admitted(&f.server, io, Role::Control, permit)
+                .await;
+            (result.is_err(), started.elapsed())
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    // when / then: the flooding source is capped, other sources still admitted
+    assert!(matches!(
+        f.authority.preauthorize(Some(flooder)),
+        Err(Error::Capacity)
+    ));
+    assert_eq!(f.authority.control.available_permits(), 1);
+    let permit = f.authority.preauthorize(Some(other)).unwrap();
+    // The global budget (3) is now full for every source.
+    assert!(matches!(
+        f.authority.preauthorize(Some("192.0.2.9".parse().unwrap())),
+        Err(Error::Capacity)
+    ));
+    let (server, client) = tokio::io::duplex(4096);
+    let (server, client) = tokio::join!(
+        f.authority
+            .accept_admitted(&f.server, server, Role::Control, permit),
+        ControlClient::connect(
+            &f.clients[0],
+            client,
+            f.server_id,
+            f.authority.daemon.clone(),
+            f.generations[0],
+            f.authority.limits.clone()
+        )
+    );
+    assert!(matches!(server, Ok(Accepted::Session(_))));
+    assert!(client.is_ok());
+    // An authenticated session no longer consumes pre-authentication budget.
+    assert!(f.authority.preauthorize(Some(other)).is_ok());
+    // Idle handshakes are cut at the pre-auth deadline and release their share.
+    for task in idle {
+        let (failed, elapsed) = task.await.unwrap();
+        assert!(failed);
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    }
+    assert!(f.authority.preauthorize(Some(flooder)).is_ok());
+}
+
+#[tokio::test]
+async fn given_ipv6_sources_in_one_prefix_should_share_one_preauth_cap() {
+    // given
+    let limits = SessionLimits {
+        preauth_total: 8,
+        preauth_per_source: 2,
+        ..SessionLimits::default()
+    };
+    let f = Fixture::new(limits, None).await;
+    let source = |text: &str| Some(text.parse::<std::net::IpAddr>().unwrap());
+    // when
+    let first = f.authority.preauthorize(source("2001:db8::1")).unwrap();
+    let second = f
+        .authority
+        .preauthorize(source("2001:db8::ffff:2"))
+        .unwrap();
+    // then: rotating the interface identifier within a /64 gains nothing
+    assert!(matches!(
+        f.authority.preauthorize(source("2001:db8::abcd:3")),
+        Err(Error::Capacity)
+    ));
+    assert!(f.authority.preauthorize(source("2001:db8:0:1::1")).is_ok());
+    // IPv4-mapped addresses count as their IPv4 source.
+    let v4 = f.authority.preauthorize(source("192.0.2.1")).unwrap();
+    let _v4b = f.authority.preauthorize(source("192.0.2.1")).unwrap();
+    assert!(matches!(
+        f.authority.preauthorize(source("::ffff:192.0.2.1")),
+        Err(Error::Capacity)
+    ));
+    drop((first, second, v4));
+    assert!(f.authority.preauthorize(source("::ffff:192.0.2.1")).is_ok());
+    assert!(f.authority.preauthorize(source("2001:db8::9")).is_ok());
+}
+
+#[tokio::test]
+async fn given_unauthenticated_handshakes_should_never_reserve_session_permits() {
+    // given: more idle unauthenticated handshakes than session permits
+    let limits = SessionLimits {
+        control_total: 1,
+        control_per_peer: 1,
+        bulk_total: 1,
+        bulk_per_peer: 1,
+        ..SessionLimits::default()
+    };
+    let f = Arc::new(Fixture::new(limits, None).await);
+    let mut idle = Vec::new();
+    for role in [Role::Control, Role::Control, Role::Bulk, Role::Bulk] {
+        let (io, peer) = tokio::io::duplex(4096);
+        let f = f.clone();
+        idle.push((
+            peer,
+            tokio::spawn(async move { f.authority.accept(&f.server, io, role).await.is_err() }),
+        ));
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    // when / then: the enrolled peer still binds control and bulk immediately
+    assert_eq!(f.authority.control.available_permits(), 1);
+    assert_eq!(f.authority.bulk.available_permits(), 1);
+    let (_control, client) = tokio::time::timeout(Duration::from_millis(500), f.control(0))
+        .await
+        .unwrap();
+    let _bulk = tokio::time::timeout(Duration::from_millis(500), f.bulk(&client))
+        .await
+        .unwrap();
+    for (_peer, task) in idle {
+        assert!(task.await.unwrap());
+    }
+}

@@ -532,6 +532,40 @@ async fn given_stalled_handshake_should_expire_on_both_sides() {
 }
 
 #[tokio::test]
+async fn given_shorter_server_deadline_should_cut_idle_handshake_early() {
+    // given: a peer that connects but never sends a TLS ClientHello
+    let a = Identity::generate().unwrap();
+    let b = Identity::generate().unwrap();
+    let server = transport(&a, &b);
+    let (io, _idle_peer) = tokio::io::duplex(4096);
+    let started = std::time::Instant::now();
+    // when
+    let result = server
+        .accept_within(io, Role::Control, Duration::from_millis(100))
+        .await;
+    // then
+    assert!(matches!(result, Err(Error::Timeout)));
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn given_server_deadline_above_overall_bound_should_clamp_to_handshake_deadline() {
+    // given
+    let a = Identity::generate().unwrap();
+    let b = Identity::generate().unwrap();
+    let server = transport(&a, &b);
+    let (io, _idle_peer) = tokio::io::duplex(4096);
+    // when: a caller-supplied longer deadline cannot extend the overall bound
+    let result = tokio::time::timeout(
+        HANDSHAKE_DEADLINE + Duration::from_secs(2),
+        server.accept_within(io, Role::Control, Duration::from_secs(60)),
+    )
+    .await;
+    // then
+    assert!(matches!(result, Ok(Err(Error::Timeout))));
+}
+
+#[tokio::test]
 async fn given_repeat_connections_should_never_resume_or_offer_early_data() {
     // given
     let a = Identity::generate().unwrap();

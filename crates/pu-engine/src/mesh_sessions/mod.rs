@@ -19,6 +19,7 @@ use pu_core::mesh::{
 };
 use std::{
     collections::HashMap,
+    net::IpAddr,
     sync::{Arc, Mutex, Weak},
 };
 use tokio::{
@@ -27,7 +28,8 @@ use tokio::{
 };
 
 mod limits;
-pub use limits::SessionLimits;
+use limits::PreAuthGate;
+pub use limits::{PreAuth, SessionLimits};
 mod client;
 pub use client::{BulkClient, ControlClient};
 
@@ -132,6 +134,7 @@ pub struct SessionAuthority {
     registry: Mutex<Registry>,
     control: Arc<Semaphore>,
     bulk: Arc<Semaphore>,
+    preauth: Arc<PreAuthGate>,
     limits: SessionLimits,
     daemon: String,
     incarnation: String,
@@ -161,6 +164,7 @@ impl SessionAuthority {
             registry: Mutex::new(Registry::default()),
             control: Arc::new(Semaphore::new(limits.control_total)),
             bulk: Arc::new(Semaphore::new(limits.bulk_total)),
+            preauth: PreAuthGate::new(&limits),
             limits,
             #[cfg(test)]
             validation_gate: Mutex::new(None),
@@ -202,7 +206,41 @@ impl SessionAuthority {
         })
     }
 
-    /// Total role permits are reserved BEFORE TLS negotiation, with no queue.
+    /// Reserve one UNAUTHENTICATED handshake slot for a connection from
+    /// `source` (None: no address, e.g. an in-process stream; counts only
+    /// against the total). No queue: a full budget or source share is
+    /// `Capacity`, and the caller drops the stream without spending TLS.
+    /// This budget is separate from session permits, so unauthenticated
+    /// traffic can slow, but never hold, an enrolled peer's admission.
+    pub fn preauthorize(&self, source: Option<IpAddr>) -> Result<PreAuth> {
+        self.preauth.admit(source)
+    }
+    /// Listener ingress: one handshake already admitted by `preauthorize`.
+    /// Control demultiplexes discovery and sessions like `accept_incoming`;
+    /// Bulk accepts only a bound bulk session, like `accept`.
+    pub async fn accept_admitted<S>(
+        self: &Arc<Self>,
+        transport: &MeshTransport,
+        io: S,
+        role: Role,
+        preauth: PreAuth,
+    ) -> Result<Accepted<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if !preauth.issued_by(&self.preauth) {
+            return Err(Error::Denied);
+        }
+        let ingress = match role {
+            Role::Control => Ingress::Incoming,
+            Role::Bulk => Ingress::Session,
+        };
+        let (connection, lease) = self.authenticate(transport, io, role, preauth).await?;
+        self.negotiate(connection, lease, ingress).await
+    }
+    /// Session permits (total, then per-peer) are reserved only AFTER the TLS
+    /// handshake proves an exact enrolled pin, with no queue; the handshake
+    /// itself runs under the pre-auth budget and `handshake_deadline`.
     /// Only an independent mTLS connection can establish a bulk session.
     pub async fn accept<S>(
         self: &Arc<Self>,
@@ -213,7 +251,8 @@ impl SessionAuthority {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let (connection, lease) = self.authenticate(transport, io, role).await?;
+        let preauth = self.preauthorize(None)?;
+        let (connection, lease) = self.authenticate(transport, io, role, preauth).await?;
         match self.negotiate(connection, lease, Ingress::Session).await? {
             Accepted::Session(session) => Ok(session),
             Accepted::Discovery => Err(Error::Denied),
@@ -229,7 +268,10 @@ impl SessionAuthority {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let (connection, lease) = self.authenticate(transport, io, Role::Control).await?;
+        let preauth = self.preauthorize(None)?;
+        let (connection, lease) = self
+            .authenticate(transport, io, Role::Control, preauth)
+            .await?;
         self.negotiate(connection, lease, Ingress::Incoming).await
     }
     /// Discovery-only convenience sharing the same TLS/admission implementation.
@@ -241,7 +283,10 @@ impl SessionAuthority {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let (connection, lease) = self.authenticate(transport, io, Role::Control).await?;
+        let preauth = self.preauthorize(None)?;
+        let (connection, lease) = self
+            .authenticate(transport, io, Role::Control, preauth)
+            .await?;
         match self
             .negotiate(connection, lease, Ingress::Discovery)
             .await?
@@ -255,6 +300,7 @@ impl SessionAuthority {
         transport: &MeshTransport,
         io: S,
         role: Role,
+        preauth: PreAuth,
     ) -> Result<(AuthenticatedConnection<S>, Lease)>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -263,12 +309,24 @@ impl SessionAuthority {
             Role::Control => &self.control,
             Role::Bulk => &self.bulk,
         };
+        // Only authenticated sessions ever hold these permits, so refusing
+        // early when they are all held cannot be driven by an unauthenticated
+        // host; it just avoids spending a handshake that would be refused.
+        if pool.available_permits() == 0 {
+            return Err(Error::Capacity);
+        }
+        let connection = transport
+            .accept_within(io, role, self.limits.handshake_deadline)
+            .await?;
+        // The exact enrolled pin is proven: only now reserve session budgets.
         let total = pool
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Capacity)?;
-        let connection = transport.accept(io, role).await?;
         let lease = self.admit(connection.peer_id(), role, total)?;
+        // Hand-over without a gap: the task stays bounded by one budget or
+        // the other for its whole life.
+        drop(preauth);
         Ok((connection, lease))
     }
     async fn negotiate<S>(
