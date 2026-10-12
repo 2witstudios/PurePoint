@@ -50,7 +50,7 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
   } else if (stage === "runtime") {
     code = "missing_runtime";
     recovery =
-      "Reinstall the complete PurePoint app for this Mac architecture. Bundled Node, Pi, pu and support files are required.";
+      "Reinstall the complete PurePoint app for this Mac architecture. Bundled Node, Point Guard runtime, pu and support files are required.";
   } else if (stage === "cwd") {
     code = "invalid_cwd";
     recovery = "Choose an existing working folder in Point Guard setup.";
@@ -62,8 +62,8 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
     code = "credential_state";
     recovery =
       error?.code === "native_directory_unsafe"
-        ? "Restore the native Pi agent directory as a real directory owned by your user, with no group or other write permissions. Keep auth.json owner-only, then retry. Existing data has not been changed."
-        : "Native Pi credentials are corrupt or not private. Restore owner-only permissions or a known private backup before retrying.";
+        ? "Restore the Point Guard agent directory as a real directory owned by your user, with no group or other write permissions. Keep auth.json owner-only, then retry. Existing data has not been changed."
+        : "Point Guard credentials are corrupt or not private. Restore owner-only permissions or a known private backup before retrying.";
   } else if (stage === "trust") {
     code = message.includes("expired")
       ? "identity_expired"
@@ -83,7 +83,7 @@ export function startupFailure(error, stage, instanceId, pid = process.pid) {
   } else if (stage === "pi") {
     code = "native_session";
     recovery =
-      "The native Pi session or packaged adapter could not load. Inspect native session state, select a valid conversation/provider, or reinstall the complete app. Nothing will be replayed.";
+      "The Point Guard session or packaged adapter could not load. Inspect native session state, select a valid conversation/provider, or reinstall the complete app. Nothing will be replayed.";
   }
   return {
     schemaVersion: 1,

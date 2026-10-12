@@ -23,7 +23,7 @@ export class Rpc extends EventEmitter {
           record.success
             ? p.resolve(record.data ?? {})
             : p.reject(
-                new Error(clip(record.error ?? "Pi rejected command", 4000)),
+                new Error(clip(record.error ?? "Point Guard rejected command", 4000)),
               );
         }
       } else this.emit("event", record);
@@ -34,7 +34,7 @@ export class Rpc extends EventEmitter {
       } catch {
         this.fail(
           new Error(
-            "Invalid or oversized Pi RPC output. Check the pinned runtime and extensions.",
+            "Invalid or oversized Point Guard runtime output. Check the pinned runtime and extensions.",
           ),
         );
         this.child.stdin.end();
@@ -52,7 +52,7 @@ export class Rpc extends EventEmitter {
       this.fail(
         new Error(
           env.POINT_GUARD_MANAGED === "1"
-            ? "Bundled Pi could not start. Check the working folder in Point Guard setup and retry. If it still fails, update or reinstall PurePoint."
+            ? "Point Guard could not start. Check the working folder in Point Guard setup and retry. If it still fails, update or reinstall PurePoint."
             : "Pi could not start. Run npm ci and check the configured working folder.",
         ),
       ),
@@ -60,7 +60,7 @@ export class Rpc extends EventEmitter {
     this.child.stdin.on("error", () =>
       this.fail(
         new Error(
-          "Pi input pipe failed. Delivery is uncertain; reconnect and inspect history.",
+          "Point Guard input pipe failed. Delivery is uncertain; reconnect and inspect history.",
         ),
       ),
     );
@@ -72,7 +72,7 @@ export class Rpc extends EventEmitter {
         this.fail(
           new Error(
             env.POINT_GUARD_MANAGED === "1"
-              ? `Pi exited (${code ?? signal}). Check the provider and model in Point Guard setup, then restart Point Guard.`
+              ? `Point Guard exited (${code ?? signal}). Check the provider and model in Point Guard setup, then restart Point Guard.`
               : `Pi exited (${code ?? signal}). Check native Pi provider setup in a terminal, then restart the bridge.`,
           ),
         );
@@ -93,20 +93,20 @@ export class Rpc extends EventEmitter {
     if (this.closing) throw new Error("Bridge shutting down");
     if (this.failure) throw this.failure;
     if (this.child.stdin.writableLength > 1024 * 1024)
-      throw new Error("Pi input is backlogged; inspect state before retrying.");
+      throw new Error("Point Guard input is backlogged; inspect state before retrying.");
     this.child.stdin.write(JSON.stringify(record) + "\n");
   }
   /** @returns {Promise<any>} */
   call(type, data = {}, timeout = 30000, onResponse = undefined) {
     if (this.pending.size >= 32)
-      return Promise.reject(new Error("Too many Pi commands in flight"));
+      return Promise.reject(new Error("Too many Point Guard commands in flight"));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const error = new Error(
           type === "prompt"
-            ? "Pi prompt timed out. Delivery is uncertain; inspect native history and restart the bridge before sending again."
-            : "Pi command timed out. Delivery is uncertain; inspect history before sending again.",
+            ? "Point Guard prompt timed out. Delivery is uncertain; inspect native history and restart the bridge before sending again."
+            : "Point Guard command timed out. Delivery is uncertain; inspect history before sending again.",
         );
         // A timed-out input hook can still enqueue later. Fence subsequent RPC
         // prompts so that it cannot inherit another client's queue ownership.

@@ -32,7 +32,12 @@ struct PiPointGuardChatView: View {
             sidebar
         } content: {
             VStack(spacing: 0) {
-                transcript
+                // Fades the transcript into the composer without reaching the error banner below it.
+                transcript.overlay(alignment: .bottom) {
+                    let surface = Color(nsColor: Theme.chatBackground)
+                    LinearGradient(colors: [surface.opacity(0), surface], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 24).allowsHitTesting(false)
+                }
                 if let error = model.error {
                     InlineErrorBanner(message: error) { model.error = nil }
                 }
@@ -340,10 +345,12 @@ struct PiPointGuardChatView: View {
                 }
             }
             .padding(12)
-            .background(
-                Color(nsColor: Theme.composerBackground),
-                in: RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
-            )
+            .background {
+                // Shadow the shape, not the contents: light mode's translucent fill would halo the text.
+                RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
+                    .fill(Color(nsColor: Theme.composerBackground))
+                    .shadow(color: Color(nsColor: Theme.composerShadow), radius: 12, y: 6)
+            }
             .overlay {
                 RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
                     .strokeBorder(composerFocused ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.08))
@@ -354,7 +361,6 @@ struct PiPointGuardChatView: View {
                     .stroke(Color.accentColor.opacity(composerFocused ? 0.12 : 0), lineWidth: 3)
                     .padding(-1.5)
             }
-            .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
             if !compact {
                 Text("Return to send · Shift-Return for a new line")
                     .font(.system(size: 11)).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
@@ -362,13 +368,6 @@ struct PiPointGuardChatView: View {
         }
         .frame(maxWidth: PurePointTheme.chatContentWidth).frame(maxWidth: .infinity)
         .padding(.horizontal, compact ? 8 : PurePointTheme.chatHorizontalPadding).padding(.top, 8).padding(.bottom, 16)
-        .background(alignment: .top) {
-            LinearGradient(
-                colors: [Color(nsColor: Theme.chatBackground).opacity(0), Color(nsColor: Theme.chatBackground)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 24).offset(y: -24).allowsHitTesting(false)
-        }
         .onAppear { composerFocused = isFocused }
         .onChange(of: isFocused) { _, focused in
             if !focused { composerFocused = false }

@@ -107,9 +107,9 @@ export class Controller extends EventEmitter {
       });
     }
     if (e.type === "auto_compaction_start")
-      this.notice("Pi is summarizing earlier context.");
+      this.notice("Point Guard is summarizing earlier context.");
     if (e.type === "auto_retry_start")
-      this.notice("Pi is retrying the provider request.");
+      this.notice("Point Guard is retrying the provider request.");
     if (e.type === "extension_error")
       this.notice(
         `Extension ${clip(basename(e.extensionPath || "unknown"), 200)} failed during ${clip(e.event || "unknown hook", 100)}: ${clip(e.error || "Unknown error", 3500)}`,
@@ -265,7 +265,7 @@ export class Controller extends EventEmitter {
       runId: this.runId,
       busy: this.busy,
       sessionId: this.state.sessionId ?? "",
-      title: this.titleOverride ?? clip(this.state.sessionName ?? "Pi", 200),
+      title: this.titleOverride ?? clip(this.state.sessionName ?? "Point Guard", 200),
       messages: boundedRows(this.projection.messages, 1024 * 1024),
       tools: boundedRows(this.projection.tools, 256 * 1024),
       queue: boundedRows(this.queue, 128 * 1024),
@@ -438,14 +438,14 @@ export class Controller extends EventEmitter {
     if (r.op === "send") {
       const images = validateImages(r.images);
       if (images.length && (this.busy || r.mode !== "send"))
-        throw new Error("Send image attachments when Pi is idle.");
+        throw new Error("Send image attachments when Point Guard is idle.");
       if (
         images.length &&
         Array.isArray(this.state.model?.input) &&
         !this.state.model.input.includes("image")
       )
         throw new Error(
-          "The selected Pi model does not support images. Select an image-capable model.",
+          "The selected model does not support images. Select an image-capable model.",
         );
       if (
         typeof r.text !== "string" ||
@@ -456,14 +456,14 @@ export class Controller extends EventEmitter {
       if (!["send", "steer", "after"].includes(r.mode))
         throw new Error("Choose Send, Steer or After reply.");
       if (this.busy && r.mode === "send")
-        throw new Error("Pi is running. Choose Steer or After reply.");
+        throw new Error("Point Guard is running. Choose Steer or After reply.");
       if (!this.state.model)
         throw new Error(
-          "No Pi model configured. Configure a provider and select a model before sending.",
+          "No model configured. Configure a provider and select a model before sending.",
         );
       const queued = r.mode !== "send";
       if (queued && this.nativeQueue.length >= 100)
-        throw new Error("Queue is full. Wait for Pi before sending more.");
+        throw new Error("Queue is full. Wait for Point Guard before sending more.");
       const pending = queued ? { mode: r.mode, item: null } : null;
       this.pendingEnqueue = pending;
       const acknowledge = (result) => {
@@ -564,7 +564,7 @@ export class Controller extends EventEmitter {
       native.pendingMessageCount > 0
     )
       throw new Error(
-        "Pi is running. Stop explicitly before changing conversations.",
+        "Point Guard is running. Stop explicitly before changing conversations.",
       );
     const result =
       r.op === "new"
@@ -573,7 +573,7 @@ export class Controller extends EventEmitter {
             sessionPath: await this.sessions.path(r.sessionId),
           });
     if (result.cancelled)
-      throw new Error("A Pi extension canceled the conversation change.");
+      throw new Error("A Point Guard extension canceled the conversation change.");
     // Explicitly reselecting the same session still invalidates old actions.
     await this.refreshFresh(true);
     return { sessionId: this.state.sessionId };
