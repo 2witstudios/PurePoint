@@ -395,8 +395,8 @@ async fn given_actual_tls_peer_should_filter_inventory_and_deny_dispatch_after_r
         EnrolledPeers::new([store.identity().certificate_der()]).unwrap(),
     )
     .unwrap();
-    let authority = SessionAuthority::new(store, ledger, SessionLimits::default()).unwrap();
-    let exports = Arc::new(exports);
+    let authority =
+        SessionAuthority::new(store, ledger, exports, SessionLimits::default()).unwrap();
     let (rx, tx) = tokio::io::duplex(4096);
     let (session, client) = tokio::join!(
         authority.accept(&server, rx, Role::Control),
@@ -417,10 +417,10 @@ async fn given_actual_tls_peer_should_filter_inventory_and_deny_dispatch_after_r
         operation: Operation::Inventory {},
     };
     let (sent, reply) = tokio::join!(
-        session.dispatch(&work, move |ledger, caller, policy, request| dispatch(
-            ledger, &exports, caller, policy, request
-        )
-        .map_err(crate::mesh_sessions::Error::from)),
+        session.dispatch(&work, move |ledger, exports, caller, policy, request| {
+            dispatch(ledger, exports, caller, policy, request)
+                .map_err(crate::mesh_sessions::Error::from)
+        }),
         client.request::<Response>(&request)
     );
     sent.unwrap();
@@ -435,7 +435,9 @@ async fn given_actual_tls_peer_should_filter_inventory_and_deny_dispatch_after_r
         .unwrap();
     assert!(
         session
-            .dispatch(&work, |_, _, _, _| panic!("revoked peer reached dispatch"))
+            .dispatch(&work, |_, _, _, _, _| panic!(
+                "revoked peer reached dispatch"
+            ))
             .await
             .is_err()
     );

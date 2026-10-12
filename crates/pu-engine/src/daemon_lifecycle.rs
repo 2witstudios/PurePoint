@@ -12,6 +12,8 @@ use nix::sys::signal;
 use nix::unistd::Pid;
 use tokio::net::{UnixListener, UnixSocket};
 
+#[path = "mesh_admin/mod.rs"]
+pub mod mesh_admin;
 pub mod mesh_exports;
 pub mod mesh_store;
 pub mod owned_work;

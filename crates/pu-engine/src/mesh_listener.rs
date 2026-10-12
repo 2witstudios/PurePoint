@@ -2,6 +2,7 @@
 //! Engine or SessionAuthority; production startup consumes local configuration.
 
 use crate::{
+    daemon_lifecycle::mesh_exports::MeshExports,
     daemon_lifecycle::owned_work::WorkOwner,
     execution_state::{Caller, Ledger},
     mesh_sessions::{self, Accepted, SessionAuthority},
@@ -56,7 +57,13 @@ impl BoundListeners {
         dispatch: F,
     ) -> io::Result<()>
     where
-        F: Fn(&Ledger, &Caller, &PeerPolicy, &Request) -> mesh_sessions::Result<Vec<u8>>
+        F: Fn(
+                &Ledger,
+                &MeshExports,
+                &Caller,
+                &PeerPolicy,
+                &Request,
+            ) -> mesh_sessions::Result<Vec<u8>>
             + Send
             + Sync
             + 'static,
@@ -121,8 +128,8 @@ impl BoundListeners {
                 loop {
                     let effect = dispatch.clone();
                     if session
-                        .dispatch(&work, move |ledger, caller, policy, request| {
-                            effect(ledger, caller, policy, request)
+                        .dispatch(&work, move |ledger, exports, caller, policy, request| {
+                            effect(ledger, exports, caller, policy, request)
                         })
                         .await
                         .is_err()
@@ -167,7 +174,10 @@ mod tests {
         let admin =
             LocalAdmin::authorized_by_local_policy(&Caller::authenticated_local("admin").unwrap())
                 .unwrap();
-        let mut store = MeshStore::initialize(lock, &admin).unwrap();
+        let mut store = MeshStore::initialize(lock.clone(), &admin).unwrap();
+        let exports =
+            crate::daemon_lifecycle::mesh_exports::MeshExports::open(lock, store.daemon_id(), 8)
+                .unwrap();
         let ledger = Ledger::open(
             tmp.path().join("ledger.sqlite"),
             store.daemon_id(),
@@ -208,7 +218,7 @@ mod tests {
             bulk_per_peer: 1,
             ..SessionLimits::default()
         };
-        let authority = SessionAuthority::new(store, ledger, limits.clone()).unwrap();
+        let authority = SessionAuthority::new(store, ledger, exports, limits.clone()).unwrap();
         let pair = BoundListeners {
             control: TcpListener::bind("127.0.0.1:0").await.unwrap(),
             bulk: TcpListener::bind("127.0.0.1:0").await.unwrap(),
@@ -220,7 +230,7 @@ mod tests {
             transport,
             work.clone(),
             rx,
-            |_, _, _, request| {
+            |_, _, _, _, request| {
                 Ok(pu_core::mesh::response::Response {
                     request_id: request.request_id.clone(),
                     daemon_id: request.target_daemon.clone(),
