@@ -131,7 +131,8 @@ private actor DaemonLauncher {
             kill(pid, 0) == 0,
             Self.isDaemonProcess(pid)
         else {
-            try? FileManager.default.removeItem(atPath: pidPath)
+            // Advisory PID state belongs to the daemon's locked lifecycle.
+            // A client must not unlink a replacement daemon's PID entry.
             return
         }
 
@@ -168,12 +169,12 @@ private actor DaemonLauncher {
         process.standardOutput = FileHandle.nullDevice
 
         // Redirect stderr to log file for diagnostics
-        try? FileManager.default.createDirectory(at: puDir, withIntermediateDirectories: true)
+        try DaemonStateDirectory.prepare(puDir)
         // O_APPEND, never a plain write from offset 0: during an update relaunch
         // the old daemon may still be writing, and without O_APPEND each process
         // keeps its own offset and overwrites the other's lines.
         let logFile = puDir.appendingPathComponent("daemon.log")
-        let logFd = open(logFile.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
+        let logFd = open(logFile.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0o600)
         process.standardError =
             logFd >= 0 ? FileHandle(fileDescriptor: logFd, closeOnDealloc: true) : FileHandle.nullDevice
 
@@ -277,7 +278,8 @@ enum DaemonLifecycleError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .binaryNotFound: "Could not find pu-engine binary. Install it or add it to PATH."
-        case .startupTimeout: "Daemon did not become healthy within 3 seconds."
+        case .startupTimeout:
+            "Daemon did not become healthy within 3 seconds. Inspect ~/.pu/daemon.log for private-state errors. Existing directories must be owned 0700 and lock/PID files owned, single-link 0600 regular files. Save agent work and stop the daemon before deliberately migrating old state; unsafe state is never repaired automatically."
         }
     }
 }

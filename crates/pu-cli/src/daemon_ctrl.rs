@@ -5,6 +5,29 @@ use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 
 use crate::error::CliError;
 
+/// Create only missing state with private permissions. The daemon performs the
+/// full ancestor/ACL validation; clients must not precreate a public directory
+/// or silently repair existing state before that check.
+fn prepare_state_directory(path: &Path) -> Result<(), CliError> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    // SAFETY: geteuid has no preconditions.
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(CliError::Other(format!(
+            "unsafe daemon state directory {}: expected an owned directory with mode 0700. After saving agent work and stopping the daemon, inspect ownership, symlinks and ACLs and deliberately migrate its permissions; no existing state was changed",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 pub fn find_daemon_binary() -> Option<PathBuf> {
     which::which("pu-engine").ok()
 }
@@ -54,15 +77,22 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         "pu-engine not found on PATH — install with `cargo install --path crates/pu-engine`".into(),
     ))?;
 
+    if let Some(parent) = socket.parent().filter(|path| !path.as_os_str().is_empty()) {
+        prepare_state_directory(parent)?;
+    }
+
     // Redirect daemon stderr to log file so startup errors are diagnosable
     let stderr_target = match paths::daemon_log_path() {
         Ok(log_path) => {
             if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent).ok();
+                prepare_state_directory(parent)?;
             }
+            use std::os::unix::fs::OpenOptionsExt;
             match std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(&log_path)
             {
                 Ok(file) => std::process::Stdio::from(file),
@@ -97,12 +127,31 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
     };
     tokio::time::timeout(std::time::Duration::from_secs(3), poll)
         .await
-        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))?
+        .map_err(|_| CliError::Other(
+            "daemon did not start within 3 seconds; inspect ~/.pu/daemon.log for private-state errors. Existing directories must be owned 0700 and lock/PID files owned, single-link 0600 regular files. Stop the daemon before deliberately migrating old state; unsafe state is never repaired automatically".into()
+        ))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_new_daemon_state_should_create_private_directory_without_repairing_existing_state() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // given
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = tmp.path().join("state");
+        // when / then
+        prepare_state_directory(&state).unwrap();
+        assert_eq!(std::fs::metadata(&state).unwrap().mode() & 0o777, 0o700);
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(prepare_state_directory(&state).is_err());
+        assert_eq!(std::fs::metadata(&state).unwrap().mode() & 0o777, 0o755);
+        let alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&state, &alias).unwrap();
+        assert!(prepare_state_directory(&alias).is_err());
+    }
 
     #[test]
     fn given_find_daemon_binary_should_return_path_or_none() {
@@ -120,8 +169,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn given_running_daemon_should_report_healthy() {
+        use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
         let tmp = TempDir::new().unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let sock = tmp.path().join("test.sock");
 
         let engine = pu_engine::engine::Engine::new();

@@ -25,8 +25,10 @@ async fn json(socket: &Path, args: &[&str]) -> serde_json::Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_after_restart() {
+    use std::os::unix::fs::PermissionsExt;
     // given
     let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let root = temp.path().canonicalize().unwrap();
     let root_s = root.to_str().unwrap();
     let socket = root.join("test.sock");
@@ -76,7 +78,6 @@ async fn given_native_sources_should_read_all_runtimes_through_real_cli_and_ipc_
     // when: replace the daemon, retaining only persisted state
     task.abort();
     let _ = task.await;
-    std::fs::remove_file(&socket).unwrap();
     let server =
         IpcServer::bind(&socket, Engine::with_project_registry(registry).unwrap()).unwrap();
     let task = tokio::spawn(async move {

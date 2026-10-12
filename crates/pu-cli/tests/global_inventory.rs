@@ -55,7 +55,9 @@ async fn git(root: &Path, args: &[&str]) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn given_cli_outside_projects_should_query_and_control_agents_globally_with_explicit_scope() {
+    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::TempDir::new().unwrap();
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let socket = tmp.path().join("test.sock");
     let registry = pu_core::paths::project_registry_path(&socket);
     let engine = pu_engine::engine::Engine::with_project_registry(registry.clone()).unwrap();
