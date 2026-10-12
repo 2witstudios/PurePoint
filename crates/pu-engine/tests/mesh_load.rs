@@ -5,7 +5,9 @@
 //!
 //!   cargo test -p pu-engine --test mesh_load -- --ignored --nocapture
 //!
-//! The JSON report is the evidence recorded in docs/proof/mesh-load.md.
+//! Asserts that viewers stay live beside a stalled bulk reader and that every
+//! run tree ends; latency and resource figures are measured and reported in
+//! the JSON report recorded in docs/product/lan-mesh.md, not asserted.
 
 mod mesh_support;
 
@@ -77,7 +79,8 @@ fn fds(pid: u32) -> usize {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "fleet load measurement; run explicitly"]
-async fn given_eight_workers_by_thirty_agents_should_bound_control_latency_and_resources() {
+async fn given_eight_workers_by_thirty_agents_should_keep_viewers_live_end_every_tree_and_report_latency()
+ {
     let marker = marker();
     let _reaper = reap(&marker);
     let started = Instant::now();

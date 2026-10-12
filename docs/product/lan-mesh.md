@@ -101,6 +101,12 @@ Local kill, suspend, resume, rename and worktree deletion never act on a worker-
 
 `unsafe-libyaml` (RUSTSEC-2024-0449, unmaintained) has been replaced by `serde-saphyr`, with characterization tests pinning existing configuration semantics (see `crates/pu-core/src/yaml`).
 
+### ! [MESH-009] Ledger scope: remote runs, not local spawns
+
+Every remote spawn and control, and every local action on a remote-owned run, goes through the worker ledger and the per-agent boundary. Local `pu spawn` runs are not admitted into mesh capacity. Admitting them would require running every local agent under the guardian, because without guardian proof their reservations could never be released. That would change local behavior today: descendants such as dev servers would end when the agent exits.
+
+Local runs therefore do not consume or contend for remote capacity, and remote-owned runs can never escape the ledger through local commands. Revisit this if local agents adopt the guardian contract.
+
 ## Requirements
 
 - Given an unknown, revoked, expired or mismatched peer or certificate, should reject at authentication or authorization without revealing inventory, and without any downgrade or silent identity reset.
