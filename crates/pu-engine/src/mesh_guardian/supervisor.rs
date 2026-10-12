@@ -117,6 +117,17 @@ impl Signals {
                 }
             }
         }
+        // The daemon spawns the guardian with termination signals blocked so a
+        // stop during startup cannot kill it unhandled; deliver them now.
+        // SAFETY: sigset operations on a local, then unblock for this thread.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            for sig in TERMINATING {
+                libc::sigaddset(&mut set, sig);
+            }
+            libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        }
         Ok(Self { read_fd: fds[0] })
     }
 

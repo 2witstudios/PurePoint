@@ -133,6 +133,40 @@ pub enum MeshAdminRequest {
         fingerprint: String,
     },
     WorkerList {},
+    /// Worker-owned runs that still hold capacity on this receiver.
+    RunList {},
+    /// Owner takes control of a run, fencing any remote controller and writer.
+    RunTakeover {
+        agent_id: String,
+    },
+    /// Owner gives up control; a granted peer may acquire it again.
+    RunRelease {
+        agent_id: String,
+    },
+    /// Durable stop under local control; the guardian proves termination.
+    RunStop {
+        agent_id: String,
+    },
+    /// Explicit owner disposition of an Unknown run with no supervisor proof,
+    /// after the owner has verified its processes are gone.
+    RunResolve {
+        run_id: String,
+        evidence: String,
+    },
+}
+
+/// Local view of one worker-owned run; receiver-local only, never bridged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunStatus {
+    pub agent_id: String,
+    pub run_id: String,
+    pub export: Option<String>,
+    pub runtime: String,
+    pub lifecycle: String,
+    /// "none", "local" or "peer:<fingerprint>".
+    pub controller: String,
+    pub live: bool,
 }
 
 /// Exact SHA256 certificate fingerprint syntax, without prefixes or case aliases.
@@ -198,6 +232,15 @@ impl MeshAdminRequest {
             Self::ConfigSet { config } => config.validate(),
             Self::WorkerSet { route } => route.validate(),
             Self::WorkerRemove { fingerprint } => valid_fingerprint(fingerprint),
+            Self::RunTakeover { agent_id }
+            | Self::RunRelease { agent_id }
+            | Self::RunStop { agent_id } => super::valid_identifier(agent_id),
+            Self::RunResolve { run_id, evidence } => {
+                super::valid_identifier(run_id)
+                    && !evidence.trim().is_empty()
+                    && evidence.len() <= 512
+                    && !evidence.chars().any(char::is_control)
+            }
             _ => true,
         }
     }
@@ -256,6 +299,9 @@ pub enum MeshAdminResponse {
     },
     Workers {
         workers: Vec<WorkerRoute>,
+    },
+    Runs {
+        runs: Vec<RunStatus>,
     },
     Done {},
 }

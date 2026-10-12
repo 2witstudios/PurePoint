@@ -25,6 +25,8 @@ fn timeout_for(request: &Request) -> Duration {
         Request::Spawn {
             prompt, plan_mode, ..
         } if *plan_mode || !prompt.trim().is_empty() => DELIVERY_TIMEOUT,
+        // A routed spawn includes receiver source verification and worktree setup.
+        Request::MeshRoute { .. } => Duration::from_secs(90),
         _ => REQUEST_TIMEOUT,
     }
 }

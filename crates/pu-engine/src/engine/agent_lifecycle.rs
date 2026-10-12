@@ -51,9 +51,16 @@ impl Engine {
             }
         };
 
-        // Apply exclusions (self-protection + root-protection)
-        let (agent_ids, skipped): (Vec<String>, Vec<String>) =
-            all_ids.into_iter().partition(|id| !exclude.contains(id));
+        if let KillTarget::Agent(id) = &target
+            && let Some(refusal) = self.mesh_owned(id)
+        {
+            return refusal;
+        }
+        // Apply exclusions (self-protection + root-protection). Worker-owned
+        // mesh runs are skipped: their lifetime belongs to the ledger/guardian.
+        let (agent_ids, skipped): (Vec<String>, Vec<String>) = all_ids
+            .into_iter()
+            .partition(|id| !exclude.contains(id) && !self.is_mesh_agent(id));
 
         // Kill agents: remove pending inputs, extract handles, kill PTY processes.
         let handles_killed = self.kill_agents(&agent_ids).await;
@@ -96,6 +103,9 @@ impl Engine {
         agent_id: &str,
         name: &str,
     ) -> Response {
+        if let Some(refusal) = self.mesh_owned(agent_id) {
+            return refusal;
+        }
         let pr = project_root.to_string();
         let aid = agent_id.to_string();
         let new_name = name.to_string();
@@ -239,6 +249,11 @@ impl Engine {
         project_root: &str,
         target: SuspendTarget,
     ) -> Response {
+        if let SuspendTarget::Agent(id) = &target
+            && let Some(refusal) = self.mesh_owned(id)
+        {
+            return refusal;
+        }
         let m = match self.read_manifest_async(project_root).await {
             Ok(m) => m,
             Err(e) => return Self::error_response(&e),
@@ -267,6 +282,11 @@ impl Engine {
                 .collect(),
         };
 
+        // Worker-owned mesh runs are never suspended through local paths.
+        let agent_ids: Vec<String> = agent_ids
+            .into_iter()
+            .filter(|id| !self.is_mesh_agent(id))
+            .collect();
         if agent_ids.is_empty() {
             return Response::SuspendResult { suspended: vec![] };
         }
@@ -306,6 +326,9 @@ impl Engine {
     }
 
     pub(super) async fn handle_resume(&self, project_root: &str, agent_id: &str) -> Response {
+        if let Some(refusal) = self.mesh_owned(agent_id) {
+            return refusal;
+        }
         // One resume per agent at a time, and never for an agent this daemon is
         // already running: either would put a second `--resume` process on the
         // same transcript and orphan the first.

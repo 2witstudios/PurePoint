@@ -43,6 +43,8 @@ pub enum Error {
     Host(#[from] mesh_host::Error),
     #[error("worker is not routed from this host")]
     UnknownWorker,
+    #[error(transparent)]
+    Run(#[from] crate::mesh_exec::local::RunError),
     #[error("mesh runtime is unavailable")]
     Unavailable,
 }
@@ -175,6 +177,9 @@ impl MeshRuntime {
         self: &Arc<Self>,
         request: MeshAdminRequest,
     ) -> Result<MeshAdminResponse, Error> {
+        if let Some(response) = self.run_admin(&request).await {
+            return response;
+        }
         let admin = local_admin()?;
         if !mutates(&request) {
             return Ok(self.service.handle(&self.work, admin, request).await?);
@@ -189,6 +194,82 @@ impl MeshRuntime {
         // intent whose acknowledgement is uncertain, and the old listener is gone.
         self.apply(&mut slot).await;
         Ok(result?)
+    }
+
+    /// Owner-local run disposition; never changes listener or trust state.
+    async fn run_admin(
+        self: &Arc<Self>,
+        request: &MeshAdminRequest,
+    ) -> Option<Result<MeshAdminResponse, Error>> {
+        if !matches!(
+            request,
+            MeshAdminRequest::RunList {}
+                | MeshAdminRequest::RunTakeover { .. }
+                | MeshAdminRequest::RunRelease { .. }
+                | MeshAdminRequest::RunStop { .. }
+                | MeshAdminRequest::RunResolve { .. }
+        ) {
+            return None;
+        }
+        if !request.validate() {
+            return Some(Err(mesh_admin::Error::InvalidRequest.into()));
+        }
+        let Some(executor) = self.current_executor().await else {
+            return Some(Err(mesh_admin::Error::NotInitialized.into()));
+        };
+        let done = || MeshAdminResponse::Done {};
+        Some(match request {
+            MeshAdminRequest::RunList {} => executor
+                .local_runs()
+                .await
+                .map(|runs| MeshAdminResponse::Runs { runs })
+                .map_err(Error::from),
+            MeshAdminRequest::RunTakeover { agent_id } => executor
+                .local_control(agent_id, true)
+                .await
+                .map(|_| done())
+                .map_err(Error::from),
+            MeshAdminRequest::RunRelease { agent_id } => executor
+                .local_control(agent_id, false)
+                .await
+                .map(|_| done())
+                .map_err(Error::from),
+            MeshAdminRequest::RunStop { agent_id } => executor
+                .local_stop(agent_id)
+                .await
+                .map(|_| done())
+                .map_err(Error::from),
+            MeshAdminRequest::RunResolve { run_id, evidence } => executor
+                .local_resolve(run_id, evidence.clone())
+                .await
+                .map(|_| done())
+                .map_err(Error::from),
+            _ => return None,
+        })
+    }
+
+    /// The executor for the loaded authority, creating it if needed.
+    async fn current_executor(self: &Arc<Self>) -> Option<Arc<Executor>> {
+        if let Some(executor) = self.executor.lock().await.as_ref() {
+            return Some(executor.clone());
+        }
+        let admin = local_admin().ok()?;
+        let authority = self
+            .service
+            .current_authority(&self.work, admin)
+            .await
+            .ok()?;
+        self.executor(authority).await
+    }
+
+    /// Whether the local owner currently controls this worker-owned run.
+    pub async fn local_controls(self: &Arc<Self>, agent_id: &str) -> bool {
+        match self.executor.lock().await.as_ref() {
+            Some(executor) => executor.clone(),
+            None => return false,
+        }
+        .local_controls(agent_id)
+        .await
     }
 
     /// Forward one request to an explicitly routed, pinned worker. Only read
@@ -355,6 +436,7 @@ fn mutates(request: &MeshAdminRequest) -> bool {
             | MeshAdminRequest::ExportList {}
             | MeshAdminRequest::ConfigShow {}
             | MeshAdminRequest::WorkerList {}
+            | MeshAdminRequest::RunList {}
     )
 }
 

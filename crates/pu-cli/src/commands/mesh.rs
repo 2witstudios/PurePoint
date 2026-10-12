@@ -2,11 +2,7 @@
 use crate::error::CliError;
 use crate::{client, daemon_ctrl, output};
 use clap::Subcommand;
-use pu_core::mesh::admin::{
-    ListenConfig, MeshAdminRequest, MeshAdminResponse, PeerChange, WorkerRoute,
-};
-use pu_core::mesh::local::LocalRoute;
-use pu_core::mesh::wire;
+use pu_core::mesh::admin::{ListenConfig, MeshAdminRequest, PeerChange, WorkerRoute};
 use pu_core::protocol::{Request, Response};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -71,13 +67,18 @@ pub enum MeshAction {
     },
     /// Applied listener state (not configured intent)
     Listener,
+    /// Owner-local disposition of worker-owned runs on this machine
+    Run {
+        #[command(subcommand)]
+        action: RunAction,
+    },
     /// Read from a routed worker through its pinned, authenticated bridge
     Remote {
         /// Worker fingerprint or route label
         #[arg(long)]
         worker: String,
         #[command(subcommand)]
-        action: RemoteAction,
+        action: super::mesh_remote::RemoteAction,
     },
 }
 #[derive(Debug, Subcommand)]
@@ -101,21 +102,20 @@ pub enum WorkerAction {
     List,
 }
 #[derive(Debug, Subcommand)]
-pub enum RemoteAction {
-    /// Exports this host may inspect on the worker
-    Inventory,
-    /// Durable agent/run status for one export
-    Status {
+pub enum RunAction {
+    /// Worker-owned runs that still hold capacity on this machine
+    List,
+    /// Take local control, fencing any remote controller and writer
+    Takeover { agent_id: String },
+    /// Give up local control so a granted peer may acquire it
+    Release { agent_id: String },
+    /// Durably stop a locally controlled run; its guardian proves termination
+    Stop { agent_id: String },
+    /// Resolve an Unknown run after verifying its processes are gone
+    Resolve {
+        run_id: String,
         #[arg(long)]
-        export: String,
-        #[arg(long, default_value_t = 1)]
-        export_generation: u64,
-        #[arg(long)]
-        agent: Option<String>,
-        #[arg(long)]
-        after: Option<String>,
-        #[arg(long, default_value_t = 64)]
-        limit: u16,
+        evidence: String,
     },
 }
 #[derive(Debug, Subcommand)]
@@ -172,6 +172,15 @@ impl MeshAction {
             Self::Listener | Self::Remote { .. } => {
                 return Err(CliError::Other("not a mesh administration request".into()));
             }
+            Self::Run { action } => match action {
+                RunAction::List => MeshAdminRequest::RunList {},
+                RunAction::Takeover { agent_id } => MeshAdminRequest::RunTakeover { agent_id },
+                RunAction::Release { agent_id } => MeshAdminRequest::RunRelease { agent_id },
+                RunAction::Stop { agent_id } => MeshAdminRequest::RunStop { agent_id },
+                RunAction::Resolve { run_id, evidence } => {
+                    MeshAdminRequest::RunResolve { run_id, evidence }
+                }
+            },
             Self::Worker { action } => match action {
                 WorkerAction::Add {
                     fingerprint,
@@ -309,43 +318,6 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, CliError> {
     Ok(bytes)
 }
 
-impl RemoteAction {
-    fn operation(self) -> wire::Operation {
-        match self {
-            Self::Inventory => wire::Operation::Inventory {},
-            Self::Status {
-                export,
-                export_generation,
-                agent,
-                after,
-                limit,
-            } => wire::Operation::Status {
-                export: wire::Export {
-                    id: export,
-                    generation: export_generation,
-                },
-                agent_id: agent,
-                after_agent: after,
-                limit,
-            },
-        }
-    }
-}
-
-/// Resolve a fingerprint or unique label against this host's own routes.
-fn select_worker(workers: Vec<WorkerRoute>, selector: &str) -> Result<WorkerRoute, CliError> {
-    let mut matches = workers
-        .into_iter()
-        .filter(|worker| worker.fingerprint == selector || worker.label == selector);
-    match (matches.next(), matches.next()) {
-        (Some(worker), None) => Ok(worker),
-        (Some(_), Some(_)) => Err(CliError::Other(
-            "worker label is ambiguous; use its fingerprint".into(),
-        )),
-        _ => Err(CliError::Other("no routed worker matches".into())),
-    }
-}
-
 async fn local(socket: &Path, request: &Request, json: bool) -> Result<Response, CliError> {
     output::check_response(client::send_request(socket, request).await?, json)
 }
@@ -359,34 +331,7 @@ pub async fn run(socket: &Path, action: MeshAction, json: bool) -> Result<(), Cl
         }
         MeshAction::Remote { worker, action } => {
             daemon_ctrl::ensure_daemon(socket).await?;
-            let workers = match local(
-                socket,
-                &Request::MeshAdmin {
-                    request: MeshAdminRequest::WorkerList {},
-                },
-                json,
-            )
-            .await?
-            {
-                Response::MeshAdmin {
-                    response: MeshAdminResponse::Workers { workers },
-                } => workers,
-                _ => return Err(CliError::Other("unexpected worker list response".into())),
-            };
-            let worker = select_worker(workers, &worker)?;
-            let route = LocalRoute {
-                worker: worker.fingerprint,
-                request: wire::Request {
-                    request_id: pu_core::id::session_id(),
-                    target_daemon: worker.daemon_id,
-                    operation: action.operation(),
-                },
-            };
-            if !route.validate() {
-                return Err(CliError::Other("invalid remote mesh request".into()));
-            }
-            let response = local(socket, &Request::MeshRoute { route }, json).await?;
-            return output::print_response(&response, json);
+            return super::mesh_remote::run(socket, &worker, action, json).await;
         }
         _ => {}
     }

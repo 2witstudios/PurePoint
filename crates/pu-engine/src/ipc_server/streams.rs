@@ -83,11 +83,18 @@ pub(super) async fn handle_attach_stream(
             } => {
                 match parse_stream_request(result, &line) {
                     Some(Request::Input { data, .. }) => {
+                        // Remote-controlled mesh runs fence local writers.
+                        if engine.mesh_input_fence(agent_id).await.is_some() {
+                            continue;
+                        }
                         let engine = engine.clone();
                         let fd = master_fd.clone();
                         super::run_effect(work, async move { engine.write_to_pty(&fd, &data).await }).await.ok();
                     }
                     Some(Request::Resize { cols, rows, .. }) => {
+                        if engine.mesh_input_fence(agent_id).await.is_some() {
+                            continue;
+                        }
                         let engine = engine.clone();
                         let fd = master_fd.clone();
                         super::run_effect(work, async move { engine.resize_pty(&fd, cols, rows).await }).await.ok();

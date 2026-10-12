@@ -134,6 +134,23 @@ impl NativePtyHost {
     }
 
     pub async fn spawn(&self, config: SpawnConfig) -> Result<AgentHandle, std::io::Error> {
+        self.spawn_inner(config, false).await
+    }
+
+    /// Spawn a supervisor that installs its own termination handlers. SIGTERM,
+    /// SIGHUP and SIGINT stay blocked across exec, so a stop that arrives while
+    /// the supervisor is still loading is queued for its handler instead of
+    /// killing it before it can prove the run's outcome. The supervisor must
+    /// unblock them once its handlers are installed.
+    pub async fn spawn_guarded(&self, config: SpawnConfig) -> Result<AgentHandle, std::io::Error> {
+        self.spawn_inner(config, true).await
+    }
+
+    async fn spawn_inner(
+        &self,
+        config: SpawnConfig,
+        block_termination: bool,
+    ) -> Result<AgentHandle, std::io::Error> {
         let pty = openpty(None, None).map_err(std::io::Error::other)?;
 
         // Set initial window size
@@ -197,6 +214,15 @@ impl NativePtyHost {
                 let slave_fd = pty.slave.as_raw_fd();
 
                 unsafe {
+                    if block_termination {
+                        // sigprocmask is async-signal-safe; the mask survives exec.
+                        let mut set: libc::sigset_t = core::mem::zeroed();
+                        libc::sigemptyset(&mut set);
+                        libc::sigaddset(&mut set, libc::SIGTERM);
+                        libc::sigaddset(&mut set, libc::SIGHUP);
+                        libc::sigaddset(&mut set, libc::SIGINT);
+                        libc::sigprocmask(libc::SIG_BLOCK, &set, core::ptr::null_mut());
+                    }
                     // New session + controlling terminal
                     if libc::setsid() < 0 {
                         libc::_exit(1);

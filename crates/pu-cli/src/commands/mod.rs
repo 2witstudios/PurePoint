@@ -12,6 +12,7 @@ pub mod inventory;
 pub mod kill;
 pub mod logs;
 pub mod mesh;
+pub mod mesh_remote;
 pub mod prompt;
 pub mod pulse;
 pub mod read;

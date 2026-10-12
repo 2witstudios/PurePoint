@@ -46,6 +46,8 @@ pub(crate) fn list_processes() -> Vec<ProcEntry> {
         .collect()
 }
 
+// Signature shared with the macOS sysctl reader, which grows the buffer.
+#[allow(clippy::ptr_arg)]
 pub(crate) fn environment(pid: i32, _buf: &mut Vec<u8>) -> Option<Vec<u8>> {
     std::fs::read(format!("/proc/{pid}/environ")).ok()
 }

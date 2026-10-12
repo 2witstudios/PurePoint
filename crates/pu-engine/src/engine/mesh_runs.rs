@@ -116,7 +116,7 @@ impl Engine {
             cols: 120,
             rows: 40,
         };
-        let mut handle = match self.pty_host.spawn(config).await {
+        let mut handle = match self.pty_host.spawn_guarded(config).await {
             Ok(handle) => handle,
             Err(error) => {
                 self.rollback_worktree(&root, Some(&spec.worktree_id), Some(&spec.branch))
@@ -141,6 +141,10 @@ impl Engine {
         let pid = handle.pid;
         let exit_rx = handle.exit_rx.clone();
         self.watch_natural_exit(&project_root, &spec.agent_id, pid, exit_rx.clone());
+        self.mesh_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(spec.agent_id.clone());
         self.sessions
             .lock()
             .await
@@ -205,6 +209,46 @@ impl Engine {
         }
         self.notify_status_change(&project_root).await;
         Ok(MeshSpawned { exit_rx })
+    }
+
+    pub(crate) fn is_mesh_agent(&self, agent_id: &str) -> bool {
+        self.mesh_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(agent_id)
+    }
+
+    /// Lifecycle changes to a worker-owned run go through the ledger and its
+    /// guardian, never through local kill/suspend/resume/rename paths.
+    pub(super) fn mesh_owned(&self, agent_id: &str) -> Option<pu_core::protocol::Response> {
+        self.is_mesh_agent(agent_id)
+            .then(|| pu_core::protocol::Response::Error {
+                code: "MESH_OWNED_RUN".into(),
+                message: format!(
+                    "agent {agent_id} is a worker-owned mesh run; use `pu mesh run stop` or `pu mesh run takeover`"
+                ),
+            })
+    }
+
+    /// Local input/resize reaches a mesh run only while the local owner holds
+    /// control. A remote controller (or none) fences every local writer.
+    pub(crate) async fn mesh_input_fence(
+        &self,
+        agent_id: &str,
+    ) -> Option<pu_core::protocol::Response> {
+        if !self.is_mesh_agent(agent_id) {
+            return None;
+        }
+        let local = match self.mesh() {
+            Some(mesh) => mesh.local_controls(agent_id).await,
+            None => false,
+        };
+        (!local).then(|| pu_core::protocol::Response::Error {
+            code: "MESH_REMOTE_CONTROL".into(),
+            message: format!(
+                "agent {agent_id} is not under local control; run `pu mesh run takeover {agent_id}` first"
+            ),
+        })
     }
 
     pub(crate) async fn mesh_session(&self, agent_id: &str) -> Option<MeshSession> {

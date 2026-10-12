@@ -94,6 +94,9 @@ pub struct Engine {
     /// must stay resumable, so their exits are not recorded as Broken; any
     /// other exit (including one that happened just before teardown) is.
     shutdown_killed: Arc<std::sync::Mutex<HashSet<u32>>>,
+    /// Worker-owned mesh runs started by this daemon. Their lifetime belongs to
+    /// the guardian and the ledger; local mutations are fenced (mesh_runs.rs).
+    mesh_agents: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl Default for Engine {
@@ -112,6 +115,7 @@ fn mesh_not_configured() -> Response {
 /// Stable, non-sensitive error codes; details stay in the daemon log.
 pub(crate) fn mesh_error(error: &crate::mesh_runtime::Error) -> Response {
     use crate::daemon_lifecycle::mesh_admin::Error as Admin;
+    use crate::mesh_exec::local::RunError as Run;
     use crate::mesh_host::Error as Host;
     use crate::mesh_runtime::Error as Mesh;
     let code = match error {
@@ -131,6 +135,11 @@ pub(crate) fn mesh_error(error: &crate::mesh_runtime::Error) -> Response {
         Mesh::Host(Host::Closed) => "MESH_CLOSED",
         Mesh::Host(Host::Refused(_)) => "MESH_REFUSED",
         Mesh::Unavailable => "MESH_UNAVAILABLE",
+        Mesh::Run(Run::NotFound) => "MESH_RUN_NOT_FOUND",
+        Mesh::Run(Run::Fenced) => "MESH_RUN_FENCED",
+        Mesh::Run(Run::InvalidState) => "MESH_RUN_INVALID_STATE",
+        Mesh::Run(Run::Live) => "MESH_RUN_LIVE",
+        Mesh::Run(Run::Unavailable) => "MESH_UNAVAILABLE",
     };
     tracing::debug!(%error, code, "mesh request failed");
     Response::Error {
@@ -182,6 +191,7 @@ impl Engine {
             registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            mesh_agents: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -298,11 +308,35 @@ impl Engine {
     /// shutdown (and so left resumable); an agent that had already exited keeps
     /// its natural exit.
     pub async fn kill_all_sessions(&self, grace: Duration) {
-        let handles: Vec<AgentHandle> = {
+        type Sessions = Vec<(String, AgentHandle)>;
+        let (mesh, handles): (Sessions, Sessions) = {
             let mut sessions = self.sessions.lock().await;
-            sessions.drain().map(|(_, h)| h).collect()
+            let mesh_agents = self.mesh_agents.lock().unwrap_or_else(|e| e.into_inner());
+            sessions
+                .drain()
+                .partition(|(id, _)| mesh_agents.contains(id))
         };
+        // Mesh runs: only ask each guardian to terminate its tree. Its own
+        // grace/kill sequence produces the outcome proof; SIGKILLing it here
+        // would leave the run Unknown.
+        for (_, handle) in &mesh {
+            if handle.exit_rx.borrow().is_none()
+                && let Ok(pid) = i32::try_from(handle.pid)
+            {
+                // SAFETY: signal delivery to the guardian's own process group.
+                unsafe {
+                    libc::killpg(pid, libc::SIGTERM);
+                }
+            }
+        }
+        let handles: Vec<AgentHandle> = handles.into_iter().map(|(_, h)| h).collect();
         if handles.is_empty() {
+            let deadline = tokio::time::Instant::now() + grace;
+            while tokio::time::Instant::now() < deadline
+                && mesh.iter().any(|(_, h)| h.exit_rx.borrow().is_none())
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
             return;
         }
         // One `ps` snapshot for all handles — cheaper than one per agent.

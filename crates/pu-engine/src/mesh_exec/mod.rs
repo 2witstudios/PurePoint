@@ -6,6 +6,7 @@
 //! PTY write; duplicates return retained evidence and never act again.
 
 mod bulk;
+pub mod local;
 pub mod supervisor;
 #[cfg(test)]
 mod tests;

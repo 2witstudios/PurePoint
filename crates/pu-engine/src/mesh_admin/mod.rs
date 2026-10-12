@@ -263,6 +263,12 @@ impl MeshAdminService {
                 | MeshAdminRequest::WorkerRemove { .. }
         );
         let response = match request {
+            // Run disposition needs the executor; the daemon runtime handles it.
+            MeshAdminRequest::RunList {}
+            | MeshAdminRequest::RunTakeover { .. }
+            | MeshAdminRequest::RunRelease { .. }
+            | MeshAdminRequest::RunStop { .. }
+            | MeshAdminRequest::RunResolve { .. } => return Err(Error::InvalidRequest),
             MeshAdminRequest::WorkerList {} => MeshAdminResponse::Workers {
                 workers: state.config.workers.clone(),
             },

@@ -71,7 +71,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 struct Fleet {
     host: Daemon,
-    _worker: Daemon,
+    worker: Daemon,
     worker_identity: PublicIdentity,
     project: tempfile::TempDir,
     marker: String,
@@ -192,7 +192,7 @@ async fn fleet(capabilities: BTreeSet<Capability>) -> Fleet {
     .await;
     Fleet {
         host,
-        _worker: worker,
+        worker,
         worker_identity,
         project,
         marker,
@@ -532,6 +532,139 @@ async fn given_missing_source_or_ungranted_operation_should_fail_explicitly_with
     };
     match fleet.send_raw(suspend).await {
         Response::Error { code, .. } => assert_eq!(code, "MESH_DENIED"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_remote_controlled_run_should_fence_local_writers_until_owner_takeover() {
+    // given: a running remote-controlled run with an open remote writer
+    let fleet = fleet(BTreeSet::from([
+        Capability::Inspect,
+        Capability::ReadOutput,
+        Capability::Spawn,
+        Capability::Control,
+        Capability::Input,
+        Capability::Stop,
+    ]))
+    .await;
+    let window = fleet.window().await;
+    let spawned = evidence(
+        fleet
+            .send(fleet.spawn_op(window, "spawn-local", &fleet.commit))
+            .await,
+    );
+    fleet
+        .wait_lifecycle(&spawned.target.agent_id, Lifecycle::Running)
+        .await;
+    let agent = spawned.target.agent_id.clone();
+    let remote_guard = fleet.guard(&spawned.target).await;
+    let writer = match fleet
+        .send(Operation::OpenWriter {
+            guard: remote_guard.clone(),
+            previous: None,
+        })
+        .await
+    {
+        Body::Writer { writer, .. } => writer,
+        other => panic!("unexpected {other:?}"),
+    };
+
+    // then: local raw input, kill and suspend are refused
+    let local_input = |data: &str| Request::Input {
+        agent_id: agent.clone(),
+        data: data.as_bytes().to_vec(),
+        submit: false,
+    };
+    match fleet.worker.call(local_input("local\n")).await {
+        Response::Error { code, .. } => assert_eq!(code, "MESH_REMOTE_CONTROL"),
+        other => panic!("unexpected {other:?}"),
+    }
+    let root = fleet.project.path().canonicalize().unwrap();
+    match fleet
+        .worker
+        .call(Request::Kill {
+            project_root: root.to_string_lossy().into(),
+            target: pu_core::protocol::KillTarget::Agent(agent.clone()),
+            exclude: vec![],
+        })
+        .await
+    {
+        Response::Error { code, .. } => assert_eq!(code, "MESH_OWNED_RUN"),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // when: the owner takes over locally
+    assert!(matches!(
+        fleet
+            .worker
+            .admin(MeshAdminRequest::RunTakeover {
+                agent_id: agent.clone()
+            })
+            .await,
+        MeshAdminResponse::Done {}
+    ));
+
+    // then: the remote writer is fenced and local input is accepted
+    match fleet
+        .send(Operation::Input {
+            guard: remote_guard.clone(),
+            writer,
+            sequence: 1,
+            data: b"remote\n".to_vec(),
+        })
+        .await
+    {
+        Body::Error { code } => assert!(
+            matches!(code, ErrorCode::Fenced | ErrorCode::Stale),
+            "{code:?}"
+        ),
+        other => panic!("remote writer was not fenced: {other:?}"),
+    }
+    assert!(matches!(
+        fleet.worker.call(local_input("local\n")).await,
+        Response::Ok
+    ));
+    // a peer cannot displace the local controller
+    let current = fleet.guard(&spawned.target).await;
+    match fleet
+        .send(Operation::AcquireControl {
+            guard: current,
+            mutation: Mutation {
+                window,
+                id: "reacquire".into(),
+            },
+        })
+        .await
+    {
+        Body::Error { code } => assert_eq!(code, ErrorCode::Fenced),
+        other => panic!("peer displaced local control: {other:?}"),
+    }
+    match fleet.worker.admin(MeshAdminRequest::RunList {}).await {
+        MeshAdminResponse::Runs { runs } => {
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].controller, "local");
+            assert!(runs[0].live);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // when: the owner stops it locally
+    fleet
+        .worker
+        .admin(MeshAdminRequest::RunStop {
+            agent_id: agent.clone(),
+        })
+        .await;
+
+    // then: the guardian proves whole-tree termination and capacity is freed
+    fleet.wait_lifecycle(&agent, Lifecycle::Terminated).await;
+    assert!(
+        !fleet.marked_alive(),
+        "detached descendant survived local stop"
+    );
+    match fleet.worker.admin(MeshAdminRequest::RunList {}).await {
+        MeshAdminResponse::Runs { runs } => assert!(runs.is_empty(), "{runs:?}"),
         other => panic!("unexpected {other:?}"),
     }
 }

@@ -25,10 +25,13 @@ pub(crate) fn another_descriptor_for(file: &std::fs::File) -> bool {
             continue;
         }
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstat(fd, &mut stat) } == 0
-            && stat.st_dev as u64 == metadata.dev()
-            && stat.st_ino == metadata.ino()
-        {
+        if unsafe { libc::fstat(fd, &mut stat) } != 0 {
+            continue;
+        }
+        // st_dev is i32 on macOS and u64 on Linux.
+        #[allow(clippy::unnecessary_cast)]
+        let device = stat.st_dev as u64;
+        if device == metadata.dev() && stat.st_ino == metadata.ino() {
             return true;
         }
     }

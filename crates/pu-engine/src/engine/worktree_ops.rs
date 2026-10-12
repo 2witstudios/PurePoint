@@ -143,6 +143,17 @@ impl Engine {
                 };
             }
         };
+        // A live worker-owned mesh run keeps its worktree until the ledger and
+        // guardian prove its process tree has ended.
+        for agent_id in wt.agents.keys() {
+            if self.is_mesh_agent(agent_id)
+                && let Some(session) = self.mesh_session(agent_id).await
+                && session.exit_rx.borrow().is_none()
+                && let Some(refusal) = self.mesh_owned(agent_id)
+            {
+                return refusal;
+            }
+        }
 
         // 1. Kill all agents in the worktree
         let agent_ids: Vec<String> = wt.agents.keys().cloned().collect();

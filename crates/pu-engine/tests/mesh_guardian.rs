@@ -340,13 +340,20 @@ fn given_scrubbed_descendant_observed_before_reparenting_should_still_be_killed(
         .spawn()
         .unwrap();
     let pid = wait_pidfile(&scrubbed);
+    // macOS reparents orphans to launchd. On Linux the guardian is a child
+    // subreaper, so the orphan reparents to the guardian itself.
+    let reaper = if cfg!(target_os = "linux") {
+        child.id().to_string()
+    } else {
+        "1".to_string()
+    };
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let out = Command::new("/bin/ps")
+        let out = Command::new("ps")
             .args(["-o", "ppid=", "-p", &pid.to_string()])
             .output()
             .unwrap();
-        if String::from_utf8_lossy(&out.stdout).trim() == "1" {
+        if String::from_utf8_lossy(&out.stdout).trim() == reaper {
             break;
         }
         assert!(Instant::now() < deadline, "descendant never reparented");
