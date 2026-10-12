@@ -48,6 +48,7 @@ mod error;
 mod input;
 mod launch;
 mod operations;
+mod queries;
 mod types;
 mod validation;
 
