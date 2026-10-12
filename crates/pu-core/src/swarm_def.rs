@@ -82,7 +82,7 @@ pub fn save_swarm_def(dir: &Path, def: &SwarmDef) -> Result<(), std::io::Error> 
     crate::validation::validate_name(&def.name)?;
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{}.yaml", def.name));
-    let yaml = serde_yaml_ng::to_string(def).map_err(std::io::Error::other)?;
+    let yaml = crate::yaml::to_string(def).map_err(std::io::Error::other)?;
     std::fs::write(path, yaml)
 }
 
@@ -108,7 +108,7 @@ fn scan_dir(dir: &Path, scope: &str) -> Vec<SwarmDef> {
         if path.extension().and_then(|e| e.to_str()) == Some("yaml")
             && let Ok(content) = std::fs::read_to_string(&path)
         {
-            match serde_yaml_ng::from_str::<SwarmDef>(&content) {
+            match crate::yaml::from_str::<SwarmDef>(&content) {
                 Ok(mut def) => {
                     def.scope = scope.to_string();
                     defs.push(def);
@@ -129,7 +129,7 @@ fn find_in_dir(dir: &Path, name: &str, scope: &str) -> Option<SwarmDef> {
     let path = dir.join(format!("{name}.yaml"));
     if path.is_file()
         && let Ok(content) = std::fs::read_to_string(&path)
-        && let Ok(mut def) = serde_yaml_ng::from_str::<SwarmDef>(&content)
+        && let Ok(mut def) = crate::yaml::from_str::<SwarmDef>(&content)
     {
         def.scope = scope.to_string();
         return Some(def);
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn given_swarm_def_yaml_should_deserialize() {
         let yaml = "name: full-stack\nworktree_count: 3\nworktree_template: feature\nroster:\n  - agent_def: reviewer\n    role: review\n    quantity: 2\ninclude_terminal: true\n";
-        let def: SwarmDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let def: SwarmDef = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(def.name, "full-stack");
         assert_eq!(def.worktree_count, 3);
         assert_eq!(def.worktree_template, "feature");
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn given_minimal_yaml_should_use_defaults() {
         let yaml = "name: basic\n";
-        let def: SwarmDef = serde_yaml_ng::from_str(yaml).unwrap();
+        let def: SwarmDef = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(def.worktree_count, 1);
         assert_eq!(def.worktree_template, "");
         assert!(def.roster.is_empty());
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn given_roster_entry_should_default_quantity() {
         let yaml = "agent_def: builder\nrole: build\n";
-        let entry: SwarmRosterEntry = serde_yaml_ng::from_str(yaml).unwrap();
+        let entry: SwarmRosterEntry = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(entry.quantity, 1);
     }
 
@@ -255,7 +255,7 @@ mod tests {
         assert!(path.is_file());
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let loaded: SwarmDef = serde_yaml_ng::from_str(&content).unwrap();
+        let loaded: SwarmDef = crate::yaml::from_str(&content).unwrap();
         assert_eq!(loaded.name, "test-swarm");
         assert_eq!(loaded.worktree_count, 2);
         assert_eq!(loaded.roster.len(), 1);

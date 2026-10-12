@@ -14,6 +14,7 @@ pub mod template;
 pub mod trigger_def;
 pub mod types;
 pub mod validation;
+pub mod yaml;
 
 pub mod channel;
 pub mod read;

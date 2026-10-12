@@ -14,7 +14,7 @@ pub struct GlobalAgentSettings {
 pub fn load_global_agent_settings() -> Result<GlobalAgentSettings, PuError> {
     let path = paths::global_pu_dir()?.join("agent-settings.yaml");
     match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_yaml_ng::from_str(&content)?),
+        Ok(content) => Ok(crate::yaml::from_str(&content)?),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(GlobalAgentSettings::default()),
         Err(e) => Err(e.into()),
     }
@@ -28,7 +28,7 @@ pub fn save_global_agent_settings(codex_yolo: bool) -> Result<GlobalAgentSetting
     let lock = std::fs::File::create(path.with_extension("yaml.lock"))?;
     FileExt::lock(&lock)?;
     let settings = GlobalAgentSettings { codex_yolo };
-    let yaml = serde_yaml_ng::to_string(&settings)?;
+    let yaml = crate::yaml::to_string(&settings)?;
     let tmp_path = path.with_extension("yaml.tmp");
     let mut tmp = std::fs::File::create(&tmp_path)?;
     std::io::Write::write_all(&mut tmp, yaml.as_bytes())?;
@@ -124,7 +124,7 @@ fn load_project_config(project_root: &Path) -> Result<Config, PuError> {
     let path = paths::config_path(project_root);
     match std::fs::read_to_string(&path) {
         Ok(content) => {
-            let mut config: Config = serde_yaml_ng::from_str(&content)?;
+            let mut config: Config = crate::yaml::from_str(&content)?;
             // Fill in any agents missing from file with code defaults
             for (name, agent) in crate::types::default_agents() {
                 config.agents.entry(name).or_insert(agent);
@@ -169,7 +169,7 @@ pub fn update_agent_config(
 
     // Load raw config from file (without merging code defaults)
     let mut raw_config: Config = match std::fs::read_to_string(&path) {
-        Ok(content) => serde_yaml_ng::from_str(&content)?,
+        Ok(content) => crate::yaml::from_str(&content)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config {
             default_agent: "claude".into(),
             agents: indexmap::IndexMap::new(),
@@ -198,7 +198,7 @@ pub fn update_agent_config(
     // Write back to YAML atomically: temp file, fsync, rename. A plain truncating
     // write can leave a torn file (e.g. a duplicated `envFiles:` tail) that fails
     // every later load.
-    let yaml = serde_yaml_ng::to_string(&raw_config)?;
+    let yaml = crate::yaml::to_string(&raw_config)?;
     let tmp_path = path.with_extension("yaml.tmp");
     let mut tmp = std::fs::File::create(&tmp_path)?;
     std::io::Write::write_all(&mut tmp, yaml.as_bytes())?;
@@ -404,7 +404,7 @@ agents:
     interactive: true
 envFiles: [".env"]
 "#;
-        let config: crate::types::Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: crate::types::Config = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(config.default_agent, "codex");
         assert!(config.agents.contains_key("codex"));
         let codex = &config.agents["codex"];
