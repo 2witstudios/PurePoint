@@ -25,16 +25,16 @@ impl Ledger {
         }
         self.transaction(|tx| {
             let mut statement=tx.prepare(
-                "SELECT a.data,r.data FROM agents a JOIN runs r ON r.id=json_extract(a.data,'$.current_run') \
+                "SELECT a.id,a.data,r.id,r.data FROM agents a JOIN runs r ON r.id=json_extract(a.data,'$.current_run') \
                  WHERE a.id>?1 AND json_extract(r.data,'$.intent.project')=?2 \
                  AND json_extract(r.data,'$.intent.export')=?3 ORDER BY a.id LIMIT ?4"
             )?;
-            let rows=statement.query_map(params![after.unwrap_or(""),project,export,limit], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
+            let rows=statement.query_map(params![after.unwrap_or(""),project,export,limit], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?;
             rows.map(|row| {
-                let (agent,run)=row?;
+                let (agent_key,agent,run_key,run)=row?;
                 let agent:AgentRecord=decode(agent)?;
                 let run:RunRecord=decode(run)?;
-                if agent.owner_daemon!=self.owner || agent.current_run!=run.run_id || agent.agent_id!=run.agent_id || run.intent.project!=project || run.intent.export.as_deref()!=Some(export) {
+                if agent.agent_id.0!=agent_key || run.run_id.0!=run_key || agent.owner_daemon!=self.owner || agent.current_run!=run.run_id || agent.agent_id!=run.agent_id || run.intent.project!=project || run.intent.export.as_deref()!=Some(export) {
                     return Err(Error::Corrupt("inventory ownership"));
                 }
                 Ok((agent,run))
@@ -53,11 +53,19 @@ impl Ledger {
         }
         self.transaction(|tx| {
             let mut statement =
-                tx.prepare("SELECT data FROM peers WHERE id>?1 ORDER BY id LIMIT ?2")?;
+                tx.prepare("SELECT id,data FROM peers WHERE id>?1 ORDER BY id LIMIT ?2")?;
             let rows = statement.query_map(params![after.unwrap_or(""), limit], |row| {
-                row.get::<_, String>(0)
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
-            rows.map(|row| decode(row?)).collect()
+            rows.map(|row| {
+                let (key, data) = row?;
+                let peer: PeerRecord = decode(data)?;
+                if peer.id != key {
+                    return Err(Error::Corrupt("peer inventory identity"));
+                }
+                Ok(peer)
+            })
+            .collect()
         })
     }
 }
@@ -118,6 +126,16 @@ mod tests {
         );
         assert!(ledger.agents_for_export("/one", "one", None, 0).is_err());
         assert!(ledger.agents_for_export("/one", "one", None, 66).is_err());
+        // Consistent decoded ownership cannot replace the durable table key.
+        ledger.transaction(|tx| {
+            tx.execute("UPDATE agents SET data=json_set(data,'$.agent_id','impostor') WHERE id=?1", [&selected[0]])?;
+            tx.execute("UPDATE runs SET data=json_set(data,'$.agent_id','impostor') WHERE json_extract(data,'$.agent_id')=?1", [&selected[0]])?;
+            Ok(())
+        }).unwrap();
+        assert!(matches!(
+            ledger.agents_for_export("/one", "one", None, 1),
+            Err(Error::Corrupt(_))
+        ));
     }
 
     #[test]
@@ -139,5 +157,26 @@ mod tests {
         assert!(first[0].authorization_digest.is_none());
         assert_eq!(ledger.peers_page(Some("b"), 2).unwrap()[0].id, "c");
         assert!(ledger.peers_page(None, 257).is_err());
+    }
+
+    #[test]
+    fn given_peer_record_claiming_another_key_should_reject_page_without_an_alias_cursor() {
+        let ledger = Ledger::in_memory("worker", Limits::default()).unwrap();
+        let admin =
+            LocalAdmin::authorized_by_local_policy(&Caller::authenticated_local("admin").unwrap())
+                .unwrap();
+        for id in ["a", "b"] {
+            ledger.register_peer(&admin, id).unwrap();
+        }
+        ledger
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE peers SET data=(SELECT data FROM peers WHERE id='b') WHERE id='a'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(matches!(ledger.peers_page(None, 1), Err(Error::Corrupt(_))));
     }
 }
