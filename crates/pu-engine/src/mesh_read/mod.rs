@@ -85,7 +85,10 @@ fn read(
             Ok(Body::Inventory { exports: visible })
         }
         Operation::Status {
-            export, agent_id, ..
+            export,
+            agent_id,
+            after_agent,
+            limit,
         } => {
             let resolved = resolve(export)?;
             let records = if let Some(id) = agent_id {
@@ -97,13 +100,18 @@ fn read(
                 vec![(agent, run)]
             } else {
                 ledger
-                    .agents_for_export(root(&resolved)?, resolved.id(), None, 65)
+                    .agents_for_export(
+                        root(&resolved)?,
+                        resolved.id(),
+                        after_agent.as_deref(),
+                        usize::from(*limit) + 1,
+                    )
                     .map_err(map_state)?
             };
-            let more = records.len() > 64;
+            let more = records.len() > usize::from(*limit);
             let agents = records
                 .into_iter()
-                .take(64)
+                .take(usize::from(*limit))
                 .map(|(agent, run)| summary(export, &agent, &run, caller))
                 .collect::<Vec<_>>();
             let next_agent = if more {

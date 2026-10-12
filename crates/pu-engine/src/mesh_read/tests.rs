@@ -21,6 +21,42 @@ struct Fixture {
     receipt: LaunchReceipt,
     key: OperationKey,
 }
+
+#[test]
+fn given_paged_status_should_honor_limit_and_resume_after_last_immutable_agent_id() {
+    let f = Fixture::new();
+    for i in [2, 3] {
+        let key = OperationKey {
+            window: f.key.window,
+            id: OperationId(format!("op-{i}")),
+            digest: PayloadDigest([i; 32]),
+        };
+        f.ledger
+            .admit_launch(&f.caller, &key, &f.intent, None, 101)
+            .unwrap();
+    }
+    let mut after = None;
+    let mut ids = Vec::new();
+    for page in 0..3 {
+        let request = f.request(Operation::Status {
+            export: f.export(),
+            agent_id: None,
+            after_agent: after.clone(),
+            limit: 1,
+        });
+        let Body::Status { agents, next_agent } = f.call(&request).body else {
+            panic!("status reply expected")
+        };
+        assert_eq!(agents.len(), 1);
+        if let Some(previous) = after.as_ref() {
+            assert!(&agents[0].target.agent_id > previous);
+        }
+        ids.push(agents[0].target.agent_id.clone());
+        assert_eq!(next_agent.is_some(), page < 2);
+        after = next_agent;
+    }
+    assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), 3);
+}
 impl Fixture {
     fn new() -> Self {
         let tmp = tempfile::Builder::new()

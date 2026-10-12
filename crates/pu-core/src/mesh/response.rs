@@ -135,14 +135,21 @@ impl Response {
             (_, Body::Error { .. }) | (Operation::Inventory {}, Body::Inventory { .. }) => true,
             (
                 Operation::Status {
-                    export, agent_id, ..
+                    export,
+                    agent_id,
+                    after_agent,
+                    limit,
                 },
-                Body::Status { agents, .. },
+                Body::Status { agents, next_agent },
             ) => {
                 agents.iter().all(|a| {
                     a.target.export == *export
                         && agent_id.as_ref().is_none_or(|id| a.target.agent_id == *id)
-                }) && (agent_id.is_none() || agents.len() <= 1)
+                        && after_agent
+                            .as_ref()
+                            .is_none_or(|id| a.target.agent_id > *id)
+                }) && agents.len() <= usize::from(*limit)
+                    && (agent_id.is_none() || (agents.len() <= 1 && next_agent.is_none()))
             }
             (Operation::Receipt { export, .. }, Body::Receipt { evidence }) => {
                 evidence.as_ref().is_none_or(|e| e.target.export == *export)
@@ -193,6 +200,9 @@ impl Response {
                 }
                 Body::Status { agents, next_agent } => {
                     agents.len() <= 64
+                        && agents
+                            .windows(2)
+                            .all(|pair| pair[0].target.agent_id < pair[1].target.agent_id)
                         && agents.iter().all(|a| {
                             target(&a.target)
                                 && counter(a.epoch)
@@ -213,7 +223,7 @@ impl Response {
                         && counter(r.sequence)
                         && (1..=super::wire::MAX_INPUT_BYTES as u32).contains(&r.payload_bytes)
                         && match r.outcome {
-                            InputOutcome::Partial { bytes } => bytes < r.payload_bytes,
+                            InputOutcome::Partial { bytes } => bytes > 0 && bytes < r.payload_bytes,
                             _ => true,
                         }
                 }),
@@ -230,6 +240,53 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn given_status_page_should_reject_duplicates_prior_cursor_and_excess_rows() {
+        let export = Export {
+            id: "project".into(),
+            generation: 1,
+        };
+        let request = Request {
+            request_id: "request".into(),
+            target_daemon: "worker".into(),
+            operation: super::super::wire::Operation::Status {
+                export: export.clone(),
+                agent_id: None,
+                after_agent: Some("agent-b".into()),
+                limit: 1,
+            },
+        };
+        let agent = AgentSummary {
+            target: AgentTarget {
+                export,
+                agent_id: "agent-c".into(),
+                run_id: "run".into(),
+            },
+            lifecycle: Lifecycle::Unknown,
+            epoch: 1,
+            revision: 1,
+            controller: Controller::None,
+            runtime: "codex".into(),
+        };
+        let mut response = Response {
+            request_id: "request".into(),
+            daemon_id: "worker".into(),
+            body: Body::Status {
+                agents: vec![agent.clone()],
+                next_agent: None,
+            },
+        };
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_ok());
+        if let Body::Status { agents, .. } = &mut response.body {
+            agents.push(agent);
+        }
+        assert!(Response::decode(&serde_json::to_vec(&response).unwrap(), &request).is_err());
+        if let Body::Status { agents, .. } = &mut response.body {
+            agents.pop();
+            agents[0].target.agent_id = "agent-a".into();
+        }
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_err());
+    }
     #[test]
     fn given_correlated_receipt_for_another_run_should_reject_before_host_reconciliation() {
         let target = AgentTarget {
