@@ -408,9 +408,10 @@ mod tests {
         let master = Arc::new(pty.master);
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let writer = master.clone();
-        // when: more input than the tty queue holds
+        // when: far more input than any platform's tty queue holds
         std::thread::spawn(move || {
-            let delivery = write_once(&writer, &[b'x'; 8192], Duration::from_millis(200));
+            let data = vec![b'x'; 1 << 20];
+            let delivery = write_once(&writer, &data, Duration::from_millis(200));
             let _ = done_tx.send(delivery);
         });
         // then: the attempt ends near its deadline with an exact partial count

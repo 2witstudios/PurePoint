@@ -612,8 +612,11 @@ private enum GitReviewChecks {
             }
         }
         let cancelService = GitService()
+        // Far longer than any scheduling delay: on a loaded runner the test's own
+        // continuation can wait seconds for a cooperative thread before it gets to
+        // cancel. A broken cancellation path still completes and fails below.
         let canceled = Task {
-            await cancelService.runGit(["-c", "alias.cancel-check=!exec /bin/sleep 2", "cancel-check"], cwd: NSTemporaryDirectory())
+            await cancelService.runGit(["-c", "alias.cancel-check=!exec /bin/sleep 30", "cancel-check"], cwd: NSTemporaryDirectory())
         }
         try await Task.sleep(for: .milliseconds(100))
         canceled.cancel()
