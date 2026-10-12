@@ -19,20 +19,20 @@ struct PointGuardSetupView: View {
                 Label(service.phase, systemImage: service.ready ? "checkmark.circle" : "circle")
                 Spacer()
                 if service.ready {
-                    Button("Stop Pi") { Task { do { try await service.stop() } catch { service.error = error.localizedDescription } } }.disabled(chat.busy)
-                    Button("Restart Pi") { Task { await service.restart(chat: chat) } }.disabled(chat.busy)
+                    Button("Stop Point Guard") { Task { do { try await service.stop() } catch { service.error = error.localizedDescription } } }.disabled(chat.busy)
+                    Button("Restart Point Guard") { Task { await service.restart(chat: chat) } }.disabled(chat.busy)
                 } else {
                     Button("Start / Retry") { service.start(chat: chat) }
                 }
             }
-            Text("Pi is included with PurePoint and updated with the app. Your provider and conversations are saved on this Mac.")
+            Text("Point Guard is included with PurePoint and updated with the app. Your provider and conversations are saved on this Mac.")
                 .font(.callout).foregroundStyle(.secondary)
             if let error = service.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if service.hasPendingAuthCleanup { Button("Retry pending login cancellations") { Task { await service.retryAuthCleanup() } } }
             if service.hasPendingEnrollmentCleanup { Button("Retry pending pairing revocations") { Task { await service.retryEnrollmentCleanup() } } }
             if service.restartRequired {
                 HStack {
-                    Text("Setup saved. Apply when Pi is idle.")
+                    Text("Setup saved. Apply when Point Guard is idle.")
                     Button("Apply and restart") { Task { await service.restart(chat: chat) } }.disabled(chat.busy)
                 }
             }
@@ -130,7 +130,7 @@ struct PointGuardSetupView: View {
             if status == "complete" {
                 Label(service.authMessage ?? "Sign-in complete", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green).accessibilityAddTraits(.updatesFrequently)
-                Text(service.restartRequired ? "Choose Apply and restart when Pi is idle to use these credentials." : "Choose a model to start chatting.")
+                Text(service.restartRequired ? "Choose Apply and restart when Point Guard is idle to use these credentials." : "Choose a model to start chatting.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 Text(service.authMessage ?? "Sign-in status unavailable").font(.callout).foregroundStyle(.secondary)

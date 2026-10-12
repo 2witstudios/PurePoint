@@ -23,10 +23,10 @@ struct PiPointGuardChatView: View {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
             } label: {
-                Label("New Pi Chat", systemImage: "square.and.pencil")
+                Label("New Chat", systemImage: "square.and.pencil")
             }
-            .help("Start a new Pi conversation")
-            .accessibilityLabel("New Pi Chat")
+            .help("Start a new Point Guard conversation")
+            .accessibilityLabel("New Chat")
             .disabled(!model.connected || model.changingSession)
         } sidebar: {
             sidebar
@@ -40,6 +40,7 @@ struct PiPointGuardChatView: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Color(nsColor: Theme.chatBackground))
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
             result in
             importAttachment(result)
@@ -54,10 +55,10 @@ struct PiPointGuardChatView: View {
         .onChange(of: model.snapshot?.sessionId) { _, _ in
             Task { await model.loadConversations() }
         }
-        .confirmationDialog("Stop Pi before starting a new conversation?", isPresented: $confirmNew) {
+        .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
             Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
         }
-        .confirmationDialog("Stop Pi before resuming this conversation?", isPresented: $confirmResume) {
+        .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
             Button("Stop and resume") {
                 if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
             }
@@ -87,15 +88,19 @@ struct PiPointGuardChatView: View {
                         Task { await model.changeSession(to: session.id) }
                     }
                 } label: {
-                    HStack {
-                        Text(session.title).lineLimit(2).multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
-                        if model.snapshot?.sessionId == session.id {
-                            Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                        }
-                    }.font(.system(size: 12)).padding(.vertical, 3)
-                }.buttonStyle(.plain).disabled(!model.connected || model.changingSession)
-            }.listStyle(.sidebar)
+                    Text(session.title).lineLimit(2).multilineTextAlignment(.leading)
+                        .font(.system(size: 12)).padding(.vertical, 3)
+                        .foregroundStyle(isCurrent(session) ? .primary : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(!model.connected || model.changingSession)
+                .accessibilityAddTraits(isCurrent(session) ? .isSelected : [])
+                .listRowBackground(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isCurrent(session) ? Color.primary.opacity(0.06) : Color.clear)
+                        .padding(.horizontal, 6)
+                )
+            }.listStyle(.sidebar).scrollContentBackground(.hidden)
             HStack {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.loadConversations() } }
                     .disabled(!model.connected)
@@ -108,6 +113,8 @@ struct PiPointGuardChatView: View {
             }.font(.system(size: 11)).buttonStyle(.borderless).padding(10)
         }
     }
+
+    private func isCurrent(_ session: PiConversation) -> Bool { model.snapshot?.sessionId == session.id }
 
     private var transcript: some View {
         ScrollViewReader { proxy in
@@ -200,7 +207,7 @@ struct PiPointGuardChatView: View {
             Text(
                 model.connected
                     ? "Plan a change, direct your agents, or explore an idea with Point Guard."
-                    : "Connect to your Mac’s Pi bridge in Settings → Point Guard to start a conversation."
+                    : "Finish setting up Point Guard in Settings to start a conversation."
             )
             .font(.system(size: 14)).foregroundStyle(.secondary)
             if !model.connected {
@@ -208,6 +215,9 @@ struct PiPointGuardChatView: View {
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private static let userBubbleShape = UnevenRoundedRectangle(
+        topLeadingRadius: 18, bottomLeadingRadius: 18, bottomTrailingRadius: 6, topTrailingRadius: 18)
 
     @ViewBuilder
     private func messageView(_ message: PiChatMessage) -> some View {
@@ -218,8 +228,9 @@ struct PiPointGuardChatView: View {
                     Text(message.text).font(PurePointTheme.chatFont).lineSpacing(3).textSelection(.enabled)
                     if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 }
-                .padding(.horizontal, 17).padding(.vertical, 13)
-                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 22))
+                .padding(.horizontal, 16).padding(.vertical, 11)
+                .background(Color(nsColor: Theme.userBubbleBackground), in: Self.userBubbleShape)
+                .overlay { Self.userBubbleShape.strokeBorder(Color.primary.opacity(0.05)) }
                 .accessibilityLabel("You: " + message.text)
             }
         } else if message.role == "notice" {
@@ -312,7 +323,7 @@ struct PiPointGuardChatView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Stop Point Guard")
-                        .help("Stop Pi and queued messages; delegated workers keep running").disabled(!model.connected)
+                        .help("Stop Point Guard and queued messages; delegated workers keep running").disabled(!model.connected)
                     } else {
                         Button {
                             submitDraft()
@@ -330,16 +341,34 @@ struct PiPointGuardChatView: View {
             }
             .padding(12)
             .background(
-                Color.primary.opacity(0.045),
+                Color(nsColor: Theme.composerBackground),
                 in: RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius)
-                    .strokeBorder(composerFocused ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08))
+                    .strokeBorder(composerFocused ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.08))
+            }
+            .background {
+                // Focus ring outside the border, under the drop shadow.
+                RoundedRectangle(cornerRadius: PurePointTheme.composerCornerRadius + 3)
+                    .stroke(Color.accentColor.opacity(composerFocused ? 0.12 : 0), lineWidth: 3)
+                    .padding(-1.5)
+            }
+            .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+            if !compact {
+                Text("Return to send · Shift-Return for a new line")
+                    .font(.system(size: 11)).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
             }
         }
         .frame(maxWidth: PurePointTheme.chatContentWidth).frame(maxWidth: .infinity)
         .padding(.horizontal, compact ? 8 : PurePointTheme.chatHorizontalPadding).padding(.top, 8).padding(.bottom, 16)
+        .background(alignment: .top) {
+            LinearGradient(
+                colors: [Color(nsColor: Theme.chatBackground).opacity(0), Color(nsColor: Theme.chatBackground)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 24).offset(y: -24).allowsHitTesting(false)
+        }
         .onAppear { composerFocused = isFocused }
         .onChange(of: isFocused) { _, focused in
             if !focused { composerFocused = false }
@@ -378,8 +407,8 @@ struct PiPointGuardChatView: View {
     private func composerActionIcon(_ name: String, enabled: Bool) -> some View {
         Image(systemName: name).font(.system(size: 14, weight: .semibold))
             .frame(width: 34, height: 34)
-            .foregroundStyle(Color(NSColor.controlBackgroundColor))
-            .background(enabled ? Color.accentColor : Color.secondary.opacity(0.35), in: Circle())
+            .foregroundStyle(Color(nsColor: Theme.chatBackground))
+            .background(enabled ? Color.primary.opacity(0.92) : Color.secondary.opacity(0.35), in: Circle())
             .contentShape(Circle())
     }
 }
@@ -419,7 +448,11 @@ private struct PiToolActivityView: View {
                 }
             }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                if running > 0 {
+                    Circle().fill(Color.green).frame(width: 6, height: 6)
+                        .background(Circle().fill(Color.green.opacity(0.18)).padding(-3))
+                }
                 Text("\(tools.count) tool call\(tools.count == 1 ? "" : "s")")
                     .font(.system(size: 12, weight: .medium))
                 if running > 0 {
@@ -429,7 +462,9 @@ private struct PiToolActivityView: View {
                 }
             }.foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 4).frame(minHeight: 36)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
+        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.05)) }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityHint("Expand to inspect tool calls and their output")
     }

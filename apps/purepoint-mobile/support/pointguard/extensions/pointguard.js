@@ -57,6 +57,12 @@ export default function pointguard(pi) {
       },
     );
   });
+  // /pointguard info is for the human: keep it in the transcript, never the model request.
+  pi.on("context", (event) => ({
+    messages: event.messages.filter(
+      (m) => m.role !== "custom" || m.customType !== "pointguard-info",
+    ),
+  }));
   pi.registerCommand("pointguard", {
     description:
       "Point Guard personal files, package/capability diagnostics, and native reload",

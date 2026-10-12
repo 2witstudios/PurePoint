@@ -211,7 +211,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         guard connectionTask == nil else { return }
         wantsConnection = true
         let address = endpoint
-        connectionStatus = "Connecting to Pi…"
+        connectionStatus = "Connecting to Point Guard…"
         connectionTask = Task { [weak self] in
             await self?.recoveryTask?.value
             let secret = await Task.detached(priority: .userInitiated) { PiPairingSecret.read(endpoint: address) }.value
@@ -224,7 +224,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
     private func startConnection(url: URL, secret: String) {
         guard !secret.isEmpty else { error = "Add the pairing secret in Connection settings."; return }
         wantsConnection = true; retryTask?.cancel(); generation += 1; let current = generation
-        cursor.reset(); connectionStatus = "Connecting to Pi…"; error = nil
+        cursor.reset(); connectionStatus = "Connecting to Point Guard…"; error = nil
         var request = URLRequest(url: url); request.setValue("Bearer " + secret, forHTTPHeaderField: "Authorization")
         request.setValue(clientId, forHTTPHeaderField: "X-PointGuard-Client-ID")
         let task = URLSession.shared.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024;
@@ -255,7 +255,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             do {
                 try await self.syncState()
                 guard current == self.generation else { return }
-                self.connected = true; self.connectionStatus = "Connected to Pi"; self.retryDelay = 2
+                self.connected = true; self.connectionStatus = "Connected to Point Guard"; self.retryDelay = 2
             } catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }
     }
@@ -264,7 +264,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         if active {
             if wantsConnection { connect() }
         } else {
-            writer.flush(); detach(); connectionStatus = "Paused on this Mac · Pi continues on your Mac"
+            writer.flush(); detach(); connectionStatus = "Paused on this Mac · Point Guard continues on your Mac"
         }
     }
     func disconnect() { wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected" }
@@ -280,7 +280,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         }
     }
     private func connectionLost(_ reason: String) {
-        detach(); connectionStatus = "Connection lost · Pi continues on your Mac";
+        detach(); connectionStatus = "Connection lost · Point Guard continues on your Mac";
         error =
             reason + " Check the Mac bridge, Tailscale, pairing secret, and the bridge address and pairing secret."
         guard foreground, wantsConnection else { return }
@@ -373,9 +373,9 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
     private func call(_ op: String, fields: [String: Any] = [:], id: String = UUID().uuidString) async throws
         -> PiJSONValue
     {
-        guard let socket else { throw PiChatError("Connect to Pi before sending.") }
+        guard let socket else { throw PiChatError("Connect to Point Guard before sending.") }
         guard pending.count < 16 else {
-            throw PiChatError("Too many actions in flight. Wait for Pi before trying again.")
+            throw PiChatError("Too many actions in flight. Wait for Point Guard before trying again.")
         }
         var record = fields; record["version"] = 1
         record["clientId"] = clientId; record["id"] = id; record["op"] = op
