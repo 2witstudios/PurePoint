@@ -12,6 +12,7 @@ use nix::sys::signal;
 use nix::unistd::Pid;
 use tokio::net::{UnixListener, UnixSocket};
 
+pub mod mesh_exports;
 pub mod mesh_store;
 pub mod owned_work;
 use pu_core::private_fs::{Entry, PrivateDir, denied};

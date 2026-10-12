@@ -129,6 +129,31 @@ PTY input uses `(agent_id, run_id, control_epoch, writer_id, sequence)` plus a p
 
 **Worker admission and source preparation.**
 
+Receiver export implementation contract: bind each receiver-issued random export
+ID immutably to one canonical project root and observed directory identity.
+Retargeting or re-enabling issues a new export ID and requires explicit grants;
+v1 export generation is therefore always 1. Keep revoked IDs as permanent
+tombstones, reject wrong generations, and recheck current export state under the
+authority barrier before every resource lookup/effect. Unavailable/replaced roots
+fail closed. These path/inode checks prevent accidental routing changes; they do
+not isolate malicious same-account code or make authority backup rollback safe.
+Private owner-bound records are size/count bounded, initialized exclusively,
+synced before success, and never silently recreated or repaired after damage.
+
+Source verification research: an exact full object ID and commit type can be
+checked using Git's bounded `cat-file --batch-check` metadata; an annotated tag
+that peels to a commit is not itself the requested commit. Git documents
+`--no-replace-objects` to bypass replacement refs and `--no-lazy-fetch` to avoid
+fetching promised missing objects ([Git options](https://git-scm.com/docs/git),
+[cat-file metadata](https://git-scm.com/docs/git-cat-file)). Verify the selected
+canonical root is the repository worktree top level, clear inherited Git routing
+and configuration environment, and reject missing source without branch fallback.
+Checking an existing commit is read-only and distinct from checkout readiness:
+its tree/blobs, submodules, dependencies and runtime inputs still need validation
+at the subsequent worker-owned preparation boundary. Existing local
+`git::create_worktree` prunes/deletes branch state and must not be reused for a
+remote operation without operation-owned artifact checks.
+
 An availability snapshot is a placement hint, not a reservation. Every launch path, including local spawn, resume, scheduled work and remote spawn, must use worker admission. Under a worker-owned admission transaction: validate identity/grant/runtime/source/export, deduplicate the request, check global/project/runtime/peer concurrency and queue budgets, reserve a slot and persist the operation/reservation before side effects. Recheck revoked grants and controller generation before launch. Concurrent duplicates consume one slot; storage failure admits no launch. Reject excess work with a structured capacity response; no unbounded implicit backlog.
 
 Reservation states cover starting, running, stopping and uncertain runs. Release once on proven startup rollback or confirmed process-tree termination; uncertainty holds capacity until reconciliation. Controller revocation or host loss does not free a live run's slot. Basic v1 enforcement is concurrent-run/startup limits; CPU, memory and disk telemetry is advisory unless an OS mechanism actually enforces the advertised limits. OS resource budgets remain an explicit extension point and are required if future product claims depend on them.
