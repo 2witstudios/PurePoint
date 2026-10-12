@@ -427,7 +427,11 @@ impl WriterRecord {
 pub enum InputOutcome {
     Accepted,
     Written,
-    Partial { bytes: u32 },
+    Partial {
+        bytes: u32,
+    },
+    /// The single attempt failed before any byte reached the PTY interface.
+    NotWritten,
     Unknown,
 }
 

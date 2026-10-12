@@ -379,8 +379,20 @@ fn write_outcome(dir: &PrivateDir, outcome: &Outcome) -> io::Result<()> {
 /// not finished. Errors when the directory or file is unsafe, the record is
 /// malformed, or it was not written for `token` (digest mismatch).
 pub fn read_outcome(outcome_dir: &Path, run_id: &str, token: &str) -> io::Result<Option<Outcome>> {
-    validate_run_id(run_id).map_err(|e| denied(&e))?;
     validate_token(token).map_err(|e| denied(&e))?;
+    read_outcome_by_digest(outcome_dir, run_id, &token_digest(token))
+}
+
+/// Restart reconciliation holds only the durable token digest, never the token.
+pub fn read_outcome_by_digest(
+    outcome_dir: &Path,
+    run_id: &str,
+    expected_digest: &str,
+) -> io::Result<Option<Outcome>> {
+    validate_run_id(run_id).map_err(|e| denied(&e))?;
+    if expected_digest.len() != 64 || !expected_digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(denied("invalid token digest"));
+    }
     let dir = PrivateDir::open(outcome_dir, false)?;
     let name = outcome_name(run_id);
     if dir.entry(OsStr::new(&name))?.is_none() {
@@ -400,10 +412,7 @@ pub fn read_outcome(outcome_dir: &Path, run_id: &str, token: &str) -> io::Result
     if outcome.run_id != run_id {
         return Err(denied("outcome run id mismatch"));
     }
-    if !constant_time_eq(
-        outcome.token_digest.as_bytes(),
-        token_digest(token).as_bytes(),
-    ) {
+    if !constant_time_eq(outcome.token_digest.as_bytes(), expected_digest.as_bytes()) {
         return Err(denied("outcome token digest mismatch"));
     }
     Ok(Some(outcome))

@@ -15,7 +15,8 @@ use crate::{
         owned_work::WorkOwner,
     },
     execution_state::{Caller, Limits, LocalAdmin},
-    mesh_host::{self, HostReader},
+    mesh_exec::{Executor, supervisor::Guardian},
+    mesh_host::{self, HostClient},
     mesh_listener::BoundListeners,
     mesh_sessions::SessionLimits,
 };
@@ -46,17 +47,26 @@ pub enum Error {
     Unavailable,
 }
 
+/// Guardian executable for mesh runs: this daemon binary in guardian mode.
+fn default_guardian() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| "pu-engine".into())
+}
+
 struct Running {
     stop: watch::Sender<bool>,
     task: JoinHandle<std::io::Result<()>>,
 }
 
 pub struct MeshRuntime {
+    lock: Arc<DaemonLock>,
+    engine: std::sync::OnceLock<std::sync::Weak<crate::engine::Engine>>,
+    guardian: std::sync::Mutex<std::path::PathBuf>,
+    executor: Mutex<Option<Arc<Executor>>>,
     service: Arc<MeshAdminService>,
     work: Arc<WorkOwner>,
     listener: Mutex<Option<Running>>,
     status: watch::Sender<ListenerStatus>,
-    host: HostReader,
+    host: HostClient,
 }
 
 /// The local IPC socket already admits only the owning UID; that authenticated
@@ -69,7 +79,7 @@ fn local_admin() -> Result<LocalAdmin, Error> {
 impl MeshRuntime {
     pub fn new(lock: Arc<DaemonLock>, work: Arc<WorkOwner>) -> Result<Arc<Self>, Error> {
         let service = MeshAdminService::new(
-            lock,
+            lock.clone(),
             Limits::default(),
             SessionLimits::default(),
             256,
@@ -79,12 +89,61 @@ impl MeshRuntime {
                 .collect::<BTreeSet<_>>(),
         )?;
         Ok(Arc::new(Self {
+            lock,
+            engine: std::sync::OnceLock::new(),
+            guardian: std::sync::Mutex::new(default_guardian()),
+            executor: Mutex::new(None),
             service,
             work,
             listener: Mutex::new(None),
             status: watch::channel(ListenerStatus::NotInitialized).0,
-            host: HostReader::new(16)?,
+            host: HostClient::new(16)?,
         }))
+    }
+
+    /// Bound once by the IPC server; the runtime never extends engine lifetime.
+    pub fn bind_engine(&self, engine: std::sync::Weak<crate::engine::Engine>) {
+        let _ = self.engine.set(engine);
+    }
+
+    /// Embedding/test override of the guardian binary (default: this daemon).
+    pub fn set_guardian_executable(&self, path: std::path::PathBuf) {
+        *self.guardian.lock().unwrap_or_else(|e| e.into_inner()) = path;
+    }
+
+    /// One executor per loaded authority. Its creation reconciles runs left
+    /// Unknown by a previous daemon from their verified supervisor records.
+    async fn executor(
+        self: &Arc<Self>,
+        authority: Arc<crate::mesh_sessions::SessionAuthority>,
+    ) -> Option<Arc<Executor>> {
+        let mut slot = self.executor.lock().await;
+        if let Some(executor) = slot.as_ref() {
+            return Some(executor.clone());
+        }
+        let engine = self.engine.get()?.clone();
+        let outcomes = match self.lock.mesh_outcome_dir() {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(%error, "mesh run outcome directory unavailable");
+                return None;
+            }
+        };
+        let guardian = self
+            .guardian
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let executor = Executor::new(
+            engine,
+            authority,
+            self.work.clone(),
+            Arc::new(Guardian::new(guardian, outcomes)),
+        );
+        executor.bind_self();
+        executor.reconcile().await;
+        *slot = Some(executor.clone());
+        Some(executor)
     }
 
     pub fn service(&self) -> &Arc<MeshAdminService> {
@@ -102,6 +161,12 @@ impl MeshRuntime {
     /// Apply persisted configuration at daemon start. Missing identity is a
     /// normal disabled state, never an implicit initialization.
     pub async fn start(self: &Arc<Self>) {
+        // Reconcile even when no listener is configured: runs outlive listeners.
+        if let Ok(admin) = local_admin()
+            && let Ok(authority) = self.service.current_authority(&self.work, admin).await
+        {
+            self.executor(authority).await;
+        }
         let mut slot = self.listener.lock().await;
         self.apply(&mut slot).await;
     }
@@ -117,6 +182,8 @@ impl MeshRuntime {
         let mut slot = self.listener.lock().await;
         stop(&mut slot).await;
         self.status.send_replace(ListenerStatus::Stopped);
+        // Host links were authenticated under the previous trust/routing state.
+        self.host.reset();
         let result = self.service.handle(&self.work, admin, request).await;
         // Re-apply even after failure: a failed publication can leave durable
         // intent whose acknowledgement is uncertain, and the old listener is gone.
@@ -130,6 +197,34 @@ impl MeshRuntime {
         if !route.validate() {
             return Err(mesh_host::Error::Invalid.into());
         }
+        let (target, transport) = self.routed(&route).await?;
+        Ok(self
+            .host
+            .request(&transport, &target, &route.request)
+            .await?)
+    }
+
+    /// Subscribe to a routed worker run's output over that worker's link.
+    pub async fn watch(
+        self: &Arc<Self>,
+        route: LocalRoute,
+    ) -> Result<(Response, mesh_host::Watch), Error> {
+        if !route.validate() {
+            return Err(mesh_host::Error::Invalid.into());
+        }
+        let (target, transport) = self.routed(&route).await?;
+        Ok(self
+            .host
+            .watch(Arc::new(transport), &target, &route.request)
+            .await?)
+    }
+
+    /// The route's worker from this host's own directory plus a transport whose
+    /// trust set is the current active enrolled certificates.
+    async fn routed(
+        self: &Arc<Self>,
+        route: &LocalRoute,
+    ) -> Result<(mesh_host::Target, crate::mesh_transport::MeshTransport), Error> {
         let admin = local_admin()?;
         let workers = match self
             .service
@@ -154,11 +249,13 @@ impl MeshRuntime {
             .transport(&self.work, admin, now())
             .await
             .map_err(|_| Error::Unavailable)?;
-        let pin = peer_id_from_name(&worker.fingerprint).map_err(|_| Error::UnknownWorker)?;
-        Ok(self
-            .host
-            .read(&transport, pin, worker.control_address, &route.request)
-            .await?)
+        let target = mesh_host::Target {
+            receiver: peer_id_from_name(&worker.fingerprint).map_err(|_| Error::UnknownWorker)?,
+            daemon: worker.daemon_id,
+            control: worker.control_address,
+            bulk: worker.bulk_address,
+        };
+        Ok((target, transport))
     }
 
     async fn apply(self: &Arc<Self>, slot: &mut Option<Running>) {
@@ -201,6 +298,10 @@ impl MeshRuntime {
                 return;
             }
         };
+        let Some(executor) = self.executor(snapshot.authority.clone()).await else {
+            self.fail(ListenerFailure::Service);
+            return;
+        };
         let (stop_tx, stop_rx) = watch::channel(false);
         let status = self.status.clone();
         let serve = bound.run(
@@ -208,7 +309,7 @@ impl MeshRuntime {
             Arc::new(snapshot.transport),
             self.work.clone(),
             stop_rx,
-            Arc::new(crate::mesh_listener::ReadOnly),
+            executor,
         );
         self.status.send_replace(ListenerStatus::Listening {
             config: snapshot.config,

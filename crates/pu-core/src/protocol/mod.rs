@@ -33,6 +33,10 @@ pub enum Request {
     MeshRoute {
         route: crate::mesh::local::LocalRoute,
     },
+    /// Owner-local only: stream one remote run's output (SubscribeOutput route).
+    MeshWatch {
+        route: crate::mesh::local::LocalRoute,
+    },
     Read {
         project_root: String,
         agent_id: String,
@@ -412,6 +416,10 @@ pub enum Response {
     },
     MeshRoute {
         response: crate::mesh::response::Response,
+    },
+    /// One streamed output frame of a watched remote run.
+    MeshOutput {
+        frame: crate::mesh::response::OutputFrame,
     },
     ChannelHistory {
         messages: Vec<ChannelMessage>,

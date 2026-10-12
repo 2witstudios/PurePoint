@@ -1081,9 +1081,9 @@ fn authorize_request<S>(
         Input { guard, .. } => Some((&guard.target.export.id, Action::Input)),
         Resize { guard, .. } => Some((&guard.target.export.id, Action::Resize)),
         InputReceipt { target, .. } => Some((&target.export.id, Action::Inspect)),
-        SubscribeOutput { target, .. } | ReadConversation { target, .. } => {
-            Some((&target.export.id, Action::ReadOutput))
-        }
+        SubscribeOutput { target, .. }
+        | UnsubscribeOutput { target }
+        | ReadConversation { target, .. } => Some((&target.export.id, Action::ReadOutput)),
     };
     if let Some((export, action)) = selection {
         state

@@ -198,6 +198,7 @@ fn read(
                         state::InputOutcome::Accepted => response::InputOutcome::Accepted,
                         state::InputOutcome::Written => response::InputOutcome::Written,
                         state::InputOutcome::Unknown => response::InputOutcome::Unknown,
+                        state::InputOutcome::NotWritten => response::InputOutcome::NotWritten,
                         state::InputOutcome::Partial { bytes } => {
                             response::InputOutcome::Partial { bytes }
                         }
@@ -208,9 +209,9 @@ fn read(
                 .map_err(|_| ErrorCode::Unavailable)?;
             Ok(Body::InputReceipt { evidence })
         }
-        Operation::ReadConversation { .. } | Operation::SubscribeOutput { .. } => {
-            Err(ErrorCode::Unsupported)
-        }
+        Operation::ReadConversation { .. }
+        | Operation::SubscribeOutput { .. }
+        | Operation::UnsubscribeOutput { .. } => Err(ErrorCode::Unsupported),
         _ => Err(ErrorCode::ExecutionDisabled),
     }
 }

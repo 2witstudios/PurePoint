@@ -105,7 +105,12 @@ impl Ledger {
             while retained.len() >= self.limits.receipts_per_writer {
                 let index = retained
                     .iter()
-                    .position(|ack| ack.outcome == InputOutcome::Written)
+                    .position(|ack| {
+                        matches!(
+                            ack.outcome,
+                            InputOutcome::Written | InputOutcome::NotWritten
+                        )
+                    })
                     .ok_or(Error::Capacity {
                         scope: CapacityScope::Records("writer receipts"),
                         limit: self.limits.receipts_per_writer,

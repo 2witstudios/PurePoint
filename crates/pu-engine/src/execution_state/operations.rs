@@ -103,7 +103,9 @@ impl Ledger {
                 let mut statement = tx.prepare("SELECT data FROM inputs WHERE writer=?1")?;
                 let acks: Vec<InputAck> = statement.query_map([writer.id.0], |r| r.get::<_, String>(0))?
                     .map(|row| decode(row?)).collect::<Result<_>>()?;
-                if acks.iter().all(|ack| ack.outcome == InputOutcome::Written) {
+                if acks.iter().all(|ack| {
+                    matches!(ack.outcome, InputOutcome::Written | InputOutcome::NotWritten)
+                }) {
                     tx.execute("DELETE FROM inputs WHERE writer=?1", [writer.id.0])?;
                     tx.execute("DELETE FROM writers WHERE id=?1", [writer.id.0])?;
                 }

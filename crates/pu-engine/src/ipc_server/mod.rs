@@ -86,10 +86,12 @@ impl IpcServer {
         let mesh = crate::mesh_runtime::MeshRuntime::new(lifecycle.clone(), work.clone())
             .map_err(std::io::Error::other)?;
         engine.bind_mesh(&mesh);
+        let engine = Arc::new(engine);
+        mesh.bind_engine(Arc::downgrade(&engine));
         Ok(Self {
             mesh,
             listener,
-            engine: Arc::new(engine),
+            engine,
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
             lifecycle,
@@ -255,6 +257,11 @@ impl IpcServer {
                 return write_response(writer, &resp).await.is_ok();
             }
         };
+
+        if let Request::MeshWatch { route } = request {
+            streams::handle_mesh_watch(reader, writer, engine, route, work).await;
+            return false;
+        }
 
         let owned_engine = engine.clone();
         let completed = run_effect(work, async move {

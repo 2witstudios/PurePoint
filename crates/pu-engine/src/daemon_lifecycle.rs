@@ -81,6 +81,20 @@ pub fn try_acquire_daemon_lock(socket_path: &Path) -> io::Result<Option<DaemonLo
 }
 
 impl DaemonLock {
+    /// Private directory for mesh run supervisor outcomes, created owner-only
+    /// inside the validated daemon directory. Only called after mesh identity
+    /// initialization, so it is retained mesh metadata like the ledger.
+    pub fn mesh_outcome_dir(&self) -> std::io::Result<PathBuf> {
+        self.verify_lock()?;
+        let mut name = self.socket_name.clone();
+        name.push(".mesh-runs");
+        let path = self.directory.checked_path_for(&name)?;
+        pu_core::private_fs::PrivateDir::open(&path, true)?;
+        Ok(path)
+    }
+}
+
+impl DaemonLock {
     fn verify_lock(&self) -> io::Result<()> {
         self.directory.verify()?;
         self.directory

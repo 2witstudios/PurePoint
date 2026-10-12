@@ -329,6 +329,12 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::MeshRoute { response } => {
             println!("{}", serde_json::to_string_pretty(response)?);
         }
+        Response::MeshOutput { frame } => {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&frame.data)?;
+            stdout.flush()?;
+        }
         Response::GlobalAgentSettingsReport { codex_yolo } => {
             println!("Codex YOLO for all projects: {codex_yolo}");
         }

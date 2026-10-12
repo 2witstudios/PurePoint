@@ -217,6 +217,9 @@ pub enum Operation {
         target: AgentTarget,
         cursor: Option<OutputCursor>,
     },
+    UnsubscribeOutput {
+        target: AgentTarget,
+    },
     ReadConversation {
         target: AgentTarget,
         limit: u16,
@@ -224,7 +227,7 @@ pub enum Operation {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentTarget {
     pub export: Export,
@@ -275,7 +278,7 @@ pub struct Mutation {
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Export {
     pub id: String,
@@ -426,6 +429,7 @@ impl Request {
                 mutation.validate()?;
                 require((1..=4096).contains(cols) && (1..=4096).contains(rows))
             }
+            Operation::UnsubscribeOutput { target } => target.validate(),
             Operation::SubscribeOutput { target, cursor } => {
                 target.validate()?;
                 require(

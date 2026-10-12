@@ -229,3 +229,80 @@ async fn write_output_chunks(
     }
     Ok(())
 }
+
+/// Stream one remote run's output to a local owner. Observation only: no
+/// effect is accepted here, and the stream ends with the run, an error, client
+/// disconnect or daemon shutdown.
+pub(super) async fn handle_mesh_watch(
+    reader: &mut IpcReader,
+    writer: &mut IpcWriter,
+    engine: &Engine,
+    route: pu_core::mesh::local::LocalRoute,
+    work: &std::sync::Arc<crate::daemon_lifecycle::owned_work::WorkOwner>,
+) {
+    use crate::mesh_host::Error as Host;
+    use crate::mesh_runtime::Error as Mesh;
+    let Some(mesh) = engine.mesh() else {
+        let _ = write_response(
+            writer,
+            &Response::Error {
+                code: "MESH_NOT_CONFIGURED".into(),
+                message: "local mesh administration is not configured for this engine".into(),
+            },
+        )
+        .await;
+        return;
+    };
+    let mut watch = match mesh.watch(route).await {
+        Ok((response, watch)) => {
+            if write_response(writer, &Response::MeshRoute { response })
+                .await
+                .is_err()
+            {
+                return;
+            }
+            watch
+        }
+        Err(Mesh::Host(Host::Refused(response))) => {
+            let _ = write_response(
+                writer,
+                &Response::MeshRoute {
+                    response: *response,
+                },
+            )
+            .await;
+            return;
+        }
+        Err(error) => {
+            let _ = write_response(writer, &crate::engine::mesh_error(&error)).await;
+            return;
+        }
+    };
+    let mut line = String::new();
+    loop {
+        tokio::select! {
+            frame = watch.next() => match frame {
+                Ok(frame) => {
+                    let end = frame.end;
+                    let response = Response::MeshOutput { frame };
+                    if write_response(writer, &response).await.is_err() || end {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = write_response(writer, &crate::engine::mesh_error(&Mesh::Host(error))).await;
+                    return;
+                }
+            },
+            read = async {
+                line.clear();
+                reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
+            } => {
+                if matches!(read, Ok(0) | Err(_)) {
+                    return;
+                }
+            }
+            _ = work.stopping() => return,
+        }
+    }
+}

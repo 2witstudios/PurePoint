@@ -115,6 +115,20 @@ pub enum ErrorCode {
     ExecutionDisabled,
     Unsupported,
     Capacity,
+    /// The exact source commit is not present in the exported repository.
+    SourceMissing,
+    /// The guard's epoch/revision/run no longer matches; query Status.
+    Stale,
+    /// Another principal controls the run, or the writer was replaced.
+    Fenced,
+    /// Input sequence is not the next expected value.
+    SequenceGap,
+    /// The predecessor writer must be inspected and its checkpoint supplied.
+    ReconciliationRequired,
+    /// The writer's previous input has not reached a final outcome.
+    InputPending,
+    /// The run is not in a state that permits this operation.
+    InvalidState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +186,7 @@ pub enum InputOutcome {
     Accepted,
     Written,
     Partial { bytes: u32 },
+    NotWritten,
     Unknown,
 }
 
@@ -205,7 +220,8 @@ impl Response {
             (_, Body::Error { .. }) | (Operation::Inventory {}, Body::Inventory { .. }) => true,
             (Operation::IssueWindow { .. }, Body::Window { .. })
             | (Operation::CloseWindow { .. }, Body::Done {})
-            | (Operation::Resize { .. }, Body::Done {}) => true,
+            | (Operation::Resize { .. }, Body::Done {})
+            | (Operation::UnsubscribeOutput { .. }, Body::Done {}) => true,
             (Operation::Spawn { export, .. }, Body::Receipt { evidence: Some(e) }) => {
                 e.target.export == *export
             }

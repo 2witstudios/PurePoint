@@ -296,9 +296,18 @@ mod tests {
             target_daemon: authority.daemon_id().into(),
             operation: wire::Operation::Inventory {},
         };
-        let response = crate::mesh_host::HostReader::new(2)
+        let response = crate::mesh_host::HostClient::new(2)
             .unwrap()
-            .read(&client_transport, pin, control, &request)
+            .request(
+                &client_transport,
+                &crate::mesh_host::Target {
+                    receiver: pin,
+                    daemon: authority.daemon_id().into(),
+                    control,
+                    bulk,
+                },
+                &request,
+            )
             .await
             .unwrap();
         assert!(

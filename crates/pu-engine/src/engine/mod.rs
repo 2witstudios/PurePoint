@@ -3,6 +3,7 @@ mod channel;
 mod definitions;
 mod helpers;
 mod inventory;
+pub(crate) mod mesh_runs;
 mod pty_operations;
 mod read;
 mod scheduler;
@@ -109,7 +110,7 @@ fn mesh_not_configured() -> Response {
 }
 
 /// Stable, non-sensitive error codes; details stay in the daemon log.
-fn mesh_error(error: &crate::mesh_runtime::Error) -> Response {
+pub(crate) fn mesh_error(error: &crate::mesh_runtime::Error) -> Response {
     use crate::daemon_lifecycle::mesh_admin::Error as Admin;
     use crate::mesh_host::Error as Host;
     use crate::mesh_runtime::Error as Mesh;
@@ -128,6 +129,7 @@ fn mesh_error(error: &crate::mesh_runtime::Error) -> Response {
         Mesh::Host(Host::Denied) => "MESH_DENIED",
         Mesh::Host(Host::Incompatible) => "MESH_INCOMPATIBLE",
         Mesh::Host(Host::Closed) => "MESH_CLOSED",
+        Mesh::Host(Host::Refused(_)) => "MESH_REFUSED",
         Mesh::Unavailable => "MESH_UNAVAILABLE",
     };
     tracing::debug!(%error, code, "mesh request failed");
@@ -394,6 +396,10 @@ impl Engine {
                 Some(mesh) => Response::MeshListener {
                     status: mesh.status(),
                 },
+            },
+            Request::MeshWatch { .. } => Response::Error {
+                code: "MESH_STREAM_ONLY".into(),
+                message: "mesh watch is only available as a local stream".into(),
             },
             Request::MeshRoute { route } => match self.mesh() {
                 None => mesh_not_configured(),
