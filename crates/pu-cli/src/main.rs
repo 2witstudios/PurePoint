@@ -22,6 +22,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Owner-local LAN mesh administration; manual OOB enrollment only
+    Mesh {
+        #[arg(long, global = true)]
+        json: bool,
+        #[command(subcommand)]
+        action: commands::mesh::MeshAction,
+    },
     /// Read and post to the shared project channel (does not wake agents)
     Channel {
         #[arg(long, global = true)]
@@ -746,6 +753,7 @@ async fn main() {
     }
 
     let result = match cli.command {
+        Commands::Mesh { action, json } => commands::mesh::run(&socket, action, json).await,
         Commands::Init { json } => commands::init::run(&socket, json).await,
         Commands::Spawn {
             prompt,

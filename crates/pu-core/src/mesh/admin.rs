@@ -8,16 +8,29 @@ use std::net::SocketAddr;
 #[serde(deny_unknown_fields)]
 pub struct ListenConfig {
     pub bind_address: Option<SocketAddr>,
+    pub bulk_bind_address: Option<SocketAddr>,
 }
 
 impl ListenConfig {
     pub fn validate(&self) -> bool {
-        self.bind_address.is_none_or(|address| {
+        fn specific(address: SocketAddr) -> bool {
             let ip = address.ip();
-            address.port() != 0 && !ip.is_unspecified() && !ip.is_multicast()
+            address.port() != 0
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
                 && !matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
                 && !matches!(ip, std::net::IpAddr::V6(ip) if ip.to_ipv4_mapped().is_some_and(|ip| ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast()))
-        })
+        }
+        match (self.bind_address, self.bulk_bind_address) {
+            (None, None) => true,
+            (Some(control), Some(bulk)) => {
+                specific(control)
+                    && specific(bulk)
+                    && control.ip() == bulk.ip()
+                    && control.port() != bulk.port()
+            }
+            _ => false,
+        }
     }
 }
 
@@ -129,7 +142,7 @@ impl MeshAdminRequest {
                 project_root.len() <= 4096
                     && !project_root.contains('\0')
                     && std::path::Path::new(project_root).is_absolute()
-                    && !label.is_empty()
+                    && !label.trim().is_empty()
                     && label.len() <= 128
                     && !label.chars().any(char::is_control)
             }
@@ -210,14 +223,16 @@ mod tests {
         ] {
             assert!(
                 !ListenConfig {
-                    bind_address: Some(address.parse().unwrap())
+                    bind_address: Some(address.parse().unwrap()),
+                    bulk_bind_address: Some("127.0.0.1:8444".parse().unwrap())
                 }
                 .validate()
             );
         }
         assert!(
             ListenConfig {
-                bind_address: Some("127.0.0.1:8443".parse().unwrap())
+                bind_address: Some("127.0.0.1:8443".parse().unwrap()),
+                bulk_bind_address: Some("127.0.0.1:8444".parse().unwrap())
             }
             .validate()
         );
@@ -289,6 +304,25 @@ mod tests {
                     fingerprint: pin,
                     expected_generation: 1,
                     change: PeerChange::Regrant
+                }
+                .validate()
+            );
+        }
+    }
+    #[test]
+    fn given_paired_listener_config_should_require_same_specific_ip_and_distinct_explicit_ports() {
+        // given / when / then
+        for (control, bulk) in [
+            (Some("127.0.0.1:8443"), None),
+            (None, Some("127.0.0.1:8444")),
+            (Some("127.0.0.1:8443"), Some("127.0.0.1:8443")),
+            (Some("127.0.0.1:8443"), Some("127.0.0.2:8444")),
+            (Some("127.0.0.1:8443"), Some("127.0.0.1:0")),
+        ] {
+            assert!(
+                !ListenConfig {
+                    bind_address: control.map(|s| s.parse().unwrap()),
+                    bulk_bind_address: bulk.map(|s| s.parse().unwrap())
                 }
                 .validate()
             );
