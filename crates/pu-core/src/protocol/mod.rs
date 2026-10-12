@@ -27,6 +27,12 @@ pub enum Request {
     MeshAdmin {
         request: crate::mesh::admin::MeshAdminRequest,
     },
+    /// Owner-local only: applied (not configured) bridge listener state.
+    MeshListenerStatus {},
+    /// Owner-local only: forward one bridge request to a pinned, routed worker.
+    MeshRoute {
+        route: crate::mesh::local::LocalRoute,
+    },
     Read {
         project_root: String,
         agent_id: String,
@@ -400,6 +406,12 @@ fn default_enabled() -> bool {
 pub enum Response {
     MeshAdmin {
         response: crate::mesh::admin::MeshAdminResponse,
+    },
+    MeshListener {
+        status: crate::mesh::local::ListenerStatus,
+    },
+    MeshRoute {
+        response: crate::mesh::response::Response,
     },
     ChannelHistory {
         messages: Vec<ChannelMessage>,

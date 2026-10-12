@@ -34,6 +34,49 @@ impl ListenConfig {
     }
 }
 
+fn specific_address(address: SocketAddr) -> bool {
+    let ip = match address.ip() {
+        std::net::IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(address.ip(), Into::into),
+        ip => ip,
+    };
+    address.port() != 0
+        && !ip.is_unspecified()
+        && !ip.is_multicast()
+        && !matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
+}
+
+/// Host-side routing hint for one enrolled worker. Addresses never authenticate:
+/// every connection still pins the worker certificate fingerprint, and the worker
+/// must also be enrolled on this host (normally with no grants) to be reachable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRoute {
+    pub fingerprint: String,
+    pub daemon_id: String,
+    pub label: String,
+    pub control_address: SocketAddr,
+    pub bulk_address: SocketAddr,
+}
+
+impl WorkerRoute {
+    pub fn validate(&self) -> bool {
+        valid_fingerprint(&self.fingerprint)
+            && super::valid_identifier(&self.daemon_id)
+            && valid_label(&self.label)
+            && specific_address(self.control_address)
+            && specific_address(self.bulk_address)
+            && self.control_address.ip() == self.bulk_address.ip()
+            && self.control_address.port() != self.bulk_address.port()
+    }
+}
+
+/// Maximum routed workers per host; bounds the persisted configuration record.
+pub const MAX_WORKER_ROUTES: usize = 64;
+
+fn valid_label(label: &str) -> bool {
+    !label.trim().is_empty() && label.len() <= 128 && !label.chars().any(char::is_control)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PeerChange {
@@ -83,6 +126,13 @@ pub enum MeshAdminRequest {
     ConfigSet {
         config: ListenConfig,
     },
+    WorkerSet {
+        route: WorkerRoute,
+    },
+    WorkerRemove {
+        fingerprint: String,
+    },
+    WorkerList {},
 }
 
 /// Exact SHA256 certificate fingerprint syntax, without prefixes or case aliases.
@@ -142,12 +192,12 @@ impl MeshAdminRequest {
                 project_root.len() <= 4096
                     && !project_root.contains('\0')
                     && std::path::Path::new(project_root).is_absolute()
-                    && !label.trim().is_empty()
-                    && label.len() <= 128
-                    && !label.chars().any(char::is_control)
+                    && valid_label(label)
             }
             Self::ExportRevoke { export_id } => super::valid_identifier(export_id),
             Self::ConfigSet { config } => config.validate(),
+            Self::WorkerSet { route } => route.validate(),
+            Self::WorkerRemove { fingerprint } => valid_fingerprint(fingerprint),
             _ => true,
         }
     }
@@ -203,6 +253,9 @@ pub enum MeshAdminResponse {
     Config {
         config: ListenConfig,
         revision: u64,
+    },
+    Workers {
+        workers: Vec<WorkerRoute>,
     },
     Done {},
 }
@@ -309,6 +362,49 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn given_worker_route_should_require_pin_identity_and_specific_paired_addresses() {
+        // given
+        let mut route = WorkerRoute {
+            fingerprint: "a".repeat(64),
+            daemon_id: "worker".into(),
+            label: "studio".into(),
+            control_address: "192.168.1.20:8443".parse().unwrap(),
+            bulk_address: "192.168.1.20:8444".parse().unwrap(),
+        };
+        // when / then
+        assert!(
+            MeshAdminRequest::WorkerSet {
+                route: route.clone()
+            }
+            .validate()
+        );
+        for (control, bulk) in [
+            ("0.0.0.0:8443", "0.0.0.0:8444"),
+            ("[::ffff:0.0.0.0]:8443", "[::ffff:0.0.0.0]:8444"),
+            ("192.168.1.20:8443", "192.168.1.21:8444"),
+            ("192.168.1.20:8443", "192.168.1.20:8443"),
+            ("224.0.0.1:8443", "224.0.0.1:8444"),
+        ] {
+            route.control_address = control.parse().unwrap();
+            route.bulk_address = bulk.parse().unwrap();
+            assert!(!route.validate(), "{control} {bulk}");
+        }
+        route.control_address = "192.168.1.20:8443".parse().unwrap();
+        route.bulk_address = "192.168.1.20:8444".parse().unwrap();
+        route.fingerprint = "A".repeat(64);
+        assert!(!route.validate());
+        route.fingerprint = "a".repeat(64);
+        route.daemon_id = "../worker".into();
+        assert!(!route.validate());
+        assert!(
+            !MeshAdminRequest::WorkerRemove {
+                fingerprint: "x".into()
+            }
+            .validate()
+        );
+    }
+
     #[test]
     fn given_paired_listener_config_should_require_same_specific_ip_and_distinct_explicit_ports() {
         // given / when / then

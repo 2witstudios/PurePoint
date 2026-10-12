@@ -323,6 +323,12 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::MeshAdmin { response } => {
             println!("{}", serde_json::to_string_pretty(response)?);
         }
+        Response::MeshListener { status } => {
+            println!("{}", serde_json::to_string_pretty(status)?);
+        }
+        Response::MeshRoute { response } => {
+            println!("{}", serde_json::to_string_pretty(response)?);
+        }
         Response::GlobalAgentSettingsReport { codex_yolo } => {
             println!("Codex YOLO for all projects: {codex_yolo}");
         }

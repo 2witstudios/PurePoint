@@ -60,6 +60,8 @@ pub struct IpcServer {
     conn_limit: Arc<Semaphore>,
     lifecycle: Arc<DaemonLock>,
     work: Arc<WorkOwner>,
+    /// Retains the daemon lock like `lifecycle`; dropped with the server.
+    mesh: Arc<crate::mesh_runtime::MeshRuntime>,
 }
 
 impl IpcServer {
@@ -80,7 +82,12 @@ impl IpcServer {
         let lifecycle = Arc::new(lock);
         let work = WorkOwner::new(&lifecycle);
         engine.bind_work_owner(work.clone());
+        // Inert until explicitly initialized and configured by the owner.
+        let mesh = crate::mesh_runtime::MeshRuntime::new(lifecycle.clone(), work.clone())
+            .map_err(std::io::Error::other)?;
+        engine.bind_mesh(&mesh);
         Ok(Self {
+            mesh,
             listener,
             engine: Arc::new(engine),
             shutdown: Arc::new(Notify::new()),
@@ -105,6 +112,11 @@ impl IpcServer {
     pub(crate) fn with_connection_limit(mut self, limit: usize) -> Self {
         self.conn_limit = Arc::new(Semaphore::new(limit));
         self
+    }
+
+    /// Owner-local mesh administration and listener coordination.
+    pub fn mesh(&self) -> &Arc<crate::mesh_runtime::MeshRuntime> {
+        &self.mesh
     }
 
     /// Get a reference to the engine for starting background tasks.

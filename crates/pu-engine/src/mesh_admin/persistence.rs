@@ -12,7 +12,24 @@ pub(super) struct ConfigRecord {
     pub owner_daemon: String,
     pub revision: u64,
     pub config: ListenConfig,
+    /// Host-side routing hints; absent in records written before worker routing.
+    #[serde(default)]
+    pub workers: Vec<WorkerRoute>,
 }
+
+impl ConfigRecord {
+    pub(super) fn valid_workers(&self) -> bool {
+        let mut seen = std::collections::BTreeSet::new();
+        self.workers.len() <= MAX_WORKER_ROUTES
+            && self
+                .workers
+                .iter()
+                .all(|route| route.validate() && seen.insert(route.fingerprint.as_str()))
+    }
+}
+
+/// Bounds the private configuration record, including every worker route.
+const CONFIG_LIMIT: u64 = 64 * 1024;
 
 pub(super) fn name(lock: &DaemonLock, suffix: &str) -> OsString {
     let mut name = lock.socket_name.clone();
@@ -70,15 +87,15 @@ pub(super) fn read_config(lock: &DaemonLock, owner: &str) -> Result<ConfigRecord
         .metadata()
         .map_err(|_| Error::State("listener configuration"))?
         .len()
-        > 4096
+        > CONFIG_LIMIT
     {
         return Err(Error::State("listener configuration size"));
     }
     let mut bytes = Vec::new();
-    file.take(4097)
+    file.take(CONFIG_LIMIT + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| Error::State("listener configuration"))?;
-    if bytes.len() > 4096 {
+    if bytes.len() as u64 > CONFIG_LIMIT {
         return Err(Error::State("listener configuration size"));
     }
     let record: ConfigRecord = serde_json::from_slice(&bytes)
@@ -87,6 +104,7 @@ pub(super) fn read_config(lock: &DaemonLock, owner: &str) -> Result<ConfigRecord
         || record.owner_daemon != owner
         || record.revision == 0
         || !record.config.validate()
+        || !record.valid_workers()
     {
         return Err(Error::State(
             "listener configuration owner, revision or interface",

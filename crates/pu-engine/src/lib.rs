@@ -10,6 +10,7 @@ pub mod ipc_server;
 pub mod mesh_host;
 pub mod mesh_listener;
 pub mod mesh_read;
+pub mod mesh_runtime;
 pub mod mesh_sessions;
 pub mod mesh_source;
 pub mod mesh_transport;

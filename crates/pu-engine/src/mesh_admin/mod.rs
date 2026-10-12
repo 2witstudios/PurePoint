@@ -13,8 +13,8 @@ use crate::mesh_sessions::{Error as SessionError, SessionAuthority, SessionLimit
 use crate::mesh_transport::{MeshTransport, PeerId};
 use persistence::*;
 use pu_core::mesh::admin::{
-    ExportStatus, ListenConfig, MeshAdminRequest, MeshAdminResponse, PeerChange, PeerStatus,
-    PublicIdentity,
+    ExportStatus, ListenConfig, MAX_WORKER_ROUTES, MeshAdminRequest, MeshAdminResponse, PeerChange,
+    PeerStatus, PublicIdentity, WorkerRoute,
 };
 use pu_core::mesh::{ExportGrant, PeerPolicy, valid_identifier};
 use std::collections::BTreeSet;
@@ -36,6 +36,8 @@ pub enum Error {
     State(&'static str),
     #[error("mesh administration work is unavailable")]
     Unavailable,
+    #[error("no active enrolled peer; the listener stays closed")]
+    NoActivePeers,
     #[error("mesh authority rejected administration")]
     Authority,
 }
@@ -132,6 +134,7 @@ impl MeshAdminService {
                 owner_daemon: store.daemon_id().into(),
                 revision: 1,
                 config: ListenConfig::default(),
+                workers: Vec::new(),
             };
             write_config(&self.lock, &config, true)?;
             config
@@ -247,6 +250,7 @@ impl MeshAdminService {
         let authority = state.authority.clone();
         let is_config_set = matches!(&request, MeshAdminRequest::ConfigSet { .. });
         let mut change_config = None;
+        let mut change_workers: Option<Vec<WorkerRoute>> = None;
         let changes = matches!(
             request,
             MeshAdminRequest::EnrollManual { .. }
@@ -255,8 +259,49 @@ impl MeshAdminService {
                 | MeshAdminRequest::ExportRegister { .. }
                 | MeshAdminRequest::ExportRevoke { .. }
                 | MeshAdminRequest::ConfigSet { .. }
+                | MeshAdminRequest::WorkerSet { .. }
+                | MeshAdminRequest::WorkerRemove { .. }
         );
         let response = match request {
+            MeshAdminRequest::WorkerList {} => MeshAdminResponse::Workers {
+                workers: state.config.workers.clone(),
+            },
+            MeshAdminRequest::WorkerSet { route } => {
+                // A route is only a hint for an already pinned, active peer. Its
+                // certificate stays in the peer store; this record carries no trust.
+                let fingerprint = route.fingerprint.clone();
+                authority
+                    .inspect_admin(work, admin.clone(), move |store, ledger, _, admin| {
+                        let (record, _, _) = store
+                            .admin_peer(ledger, admin, &fingerprint)
+                            .map_err(|_| SessionError::Denied)?;
+                        if record.revoked {
+                            return Err(SessionError::Denied);
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|_| Error::InvalidRequest)?;
+                let mut workers = state.config.workers.clone();
+                workers.retain(|existing| existing.fingerprint != route.fingerprint);
+                if workers.len() >= MAX_WORKER_ROUTES {
+                    return Err(Error::InvalidRequest);
+                }
+                workers.push(route);
+                workers.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+                change_workers = Some(workers.clone());
+                MeshAdminResponse::Workers { workers }
+            }
+            MeshAdminRequest::WorkerRemove { fingerprint } => {
+                let mut workers = state.config.workers.clone();
+                let before = workers.len();
+                workers.retain(|existing| existing.fingerprint != fingerprint);
+                if workers.len() == before {
+                    return Err(Error::InvalidRequest);
+                }
+                change_workers = Some(workers.clone());
+                MeshAdminResponse::Workers { workers }
+            }
             MeshAdminRequest::IdentityInitialize {} | MeshAdminRequest::IdentityShow {} => {
                 let identity = authority
                     .identity(work, admin.clone())
@@ -451,6 +496,9 @@ impl MeshAdminService {
             if let Some(config) = change_config {
                 next.config = config;
             }
+            if let Some(workers) = change_workers {
+                next.workers = workers;
+            }
             let lock = self.lock.clone();
             let persisted = next.clone();
             authority
@@ -540,11 +588,12 @@ impl MeshAdminService {
             if state.config.config.bind_address.is_none() {
                 return Ok(None);
             }
-            let transport = state
-                .authority
-                .transport(&owned_work, admin, now())
-                .await
-                .map_err(|_| Error::State("checked transport certificate set"))?;
+            let transport = match state.authority.transport(&owned_work, admin, now()).await {
+                Ok(transport) => transport,
+                // Nothing could authenticate, so nothing listens.
+                Err(SessionError::Denied) => return Err(Error::NoActivePeers),
+                Err(_) => return Err(Error::State("checked transport certificate set")),
+            };
             Ok(Some(ListenerSnapshot {
                 authority: state.authority.clone(),
                 transport,

@@ -82,6 +82,10 @@ async fn main() {
     // Start background scheduler for recurring tasks
     server.engine().start_scheduler();
 
+    // Apply persisted mesh listener intent. Uninitialized or disabled mesh state
+    // opens no network listener.
+    server.mesh().start().await;
+
     // In managed mode, exit when the parent process (macOS app) dies.
     // Without this, the daemon outlives app restarts and stale binaries persist.
     // Use the same request/service drain and agent teardown as ordinary shutdown.

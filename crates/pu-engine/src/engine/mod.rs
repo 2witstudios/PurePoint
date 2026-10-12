@@ -67,6 +67,9 @@ pub(super) struct SaveTriggerParams {
 
 pub struct Engine {
     work_owner: Option<Arc<crate::daemon_lifecycle::owned_work::WorkOwner>>,
+    /// Owned by the IPC server (it retains the daemon lock); the engine never
+    /// extends that lifetime. Absent or dropped means mesh requests are rejected.
+    mesh: std::sync::Weak<crate::mesh_runtime::MeshRuntime>,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
     start_time: Instant,
@@ -98,6 +101,42 @@ impl Default for Engine {
     }
 }
 
+fn mesh_not_configured() -> Response {
+    Response::Error {
+        code: "MESH_NOT_CONFIGURED".into(),
+        message: "local mesh administration is not configured for this engine".into(),
+    }
+}
+
+/// Stable, non-sensitive error codes; details stay in the daemon log.
+fn mesh_error(error: &crate::mesh_runtime::Error) -> Response {
+    use crate::daemon_lifecycle::mesh_admin::Error as Admin;
+    use crate::mesh_host::Error as Host;
+    use crate::mesh_runtime::Error as Mesh;
+    let code = match error {
+        Mesh::Admin(Admin::NotInitialized) => "MESH_NOT_INITIALIZED",
+        Mesh::Admin(Admin::AlreadyInitialized) => "MESH_ALREADY_INITIALIZED",
+        Mesh::Admin(Admin::InvalidRequest) => "MESH_INVALID_REQUEST",
+        Mesh::Admin(Admin::FingerprintMismatch) => "MESH_FINGERPRINT_MISMATCH",
+        Mesh::Admin(Admin::NoActivePeers) => "MESH_NO_ACTIVE_PEERS",
+        Mesh::Admin(_) => "MESH_STATE",
+        Mesh::UnknownWorker => "MESH_UNKNOWN_WORKER",
+        Mesh::Host(Host::Capacity) => "MESH_CAPACITY",
+        Mesh::Host(Host::Invalid | Host::Unsupported) => "MESH_INVALID_REQUEST",
+        Mesh::Host(Host::Offline) => "MESH_WORKER_OFFLINE",
+        Mesh::Host(Host::Timeout) => "MESH_WORKER_TIMEOUT",
+        Mesh::Host(Host::Denied) => "MESH_DENIED",
+        Mesh::Host(Host::Incompatible) => "MESH_INCOMPATIBLE",
+        Mesh::Host(Host::Closed) => "MESH_CLOSED",
+        Mesh::Unavailable => "MESH_UNAVAILABLE",
+    };
+    tracing::debug!(%error, code, "mesh request failed");
+    Response::Error {
+        code: code.into(),
+        message: error.to_string(),
+    }
+}
+
 /// Build a `ConfigReport` response from a loaded config.
 /// Filters out the terminal agent (no launch args to configure).
 fn config_to_report(cfg: &pu_core::types::Config) -> Response {
@@ -126,6 +165,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             work_owner: None,
+            mesh: std::sync::Weak::new(),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
             start_time: Instant::now(),
@@ -141,6 +181,14 @@ impl Engine {
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
+    }
+
+    pub(crate) fn bind_mesh(&mut self, mesh: &Arc<crate::mesh_runtime::MeshRuntime>) {
+        self.mesh = Arc::downgrade(mesh);
+    }
+
+    pub fn mesh(&self) -> Option<Arc<crate::mesh_runtime::MeshRuntime>> {
+        self.mesh.upgrade()
     }
 
     pub(crate) fn bind_work_owner(
@@ -334,9 +382,25 @@ impl Engine {
             return response;
         }
         match request {
-            Request::MeshAdmin { .. } => Response::Error {
-                code: "MESH_NOT_CONFIGURED".into(),
-                message: "local mesh administration is not configured for this engine".into(),
+            Request::MeshAdmin { request } => match self.mesh() {
+                None => mesh_not_configured(),
+                Some(mesh) => match mesh.admin(request).await {
+                    Ok(response) => Response::MeshAdmin { response },
+                    Err(error) => mesh_error(&error),
+                },
+            },
+            Request::MeshListenerStatus {} => match self.mesh() {
+                None => mesh_not_configured(),
+                Some(mesh) => Response::MeshListener {
+                    status: mesh.status(),
+                },
+            },
+            Request::MeshRoute { route } => match self.mesh() {
+                None => mesh_not_configured(),
+                Some(mesh) => match mesh.route(route).await {
+                    Ok(response) => Response::MeshRoute { response },
+                    Err(error) => mesh_error(&error),
+                },
             },
             request @ (Request::ChannelRead { .. }
             | Request::ChannelSend { .. }
