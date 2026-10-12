@@ -50,8 +50,13 @@ const TABLES: &[(&str, &str)] = &[
 
 pub(super) struct Inner {
     connection: Connection,
+    /// Retain receiver observations in this instance even if the clock commit
+    /// itself fails. No timed operation runs until this fence is durable.
+    observed_time: i64,
     #[cfg(test)]
     fail_commit: bool,
+    #[cfg(test)]
+    fail_clock_commit: bool,
 }
 
 /// One synchronized durable writer. SQLite's exclusive locking mode also rejects
@@ -164,12 +169,19 @@ impl Ledger {
         }
         super::validation::validate_records(&tx, owner)?;
         recover(&tx)?;
+        let observed_time =
+            tx.query_row("SELECT last_time FROM meta WHERE singleton=1", [], |row| {
+                row.get(0)
+            })?;
         tx.commit()?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 connection,
+                observed_time,
                 #[cfg(test)]
                 fail_commit: false,
+                #[cfg(test)]
+                fail_clock_commit: false,
             }),
             limits,
             owner: owner.into(),
@@ -181,32 +193,48 @@ impl Ledger {
         f: impl FnOnce(&Transaction<'_>) -> Result<T>,
     ) -> Result<T> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        run_transaction(&mut inner, f)
+    }
+
+    /// Persist trusted receiver time before attempting any operation validation or
+    /// writes. Keep the same writer mutex across both transactions: no admission
+    /// or authority change can interleave. Every failed operation rolls back all
+    /// of its writes, while its already-committed clock observation survives even
+    /// an operation COMMIT failure. Failure to persist time prevents the operation.
+    pub(super) fn transaction_at<T>(
+        &self,
+        now: i64,
+        f: impl FnOnce(&Transaction<'_>, i64) -> Result<T>,
+    ) -> Result<T> {
+        if now < 0 {
+            return Err(Error::Invalid("receiver time"));
+        }
+        let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        inner.observed_time = inner.observed_time.max(now);
+        let observed_time = inner.observed_time;
         #[cfg(test)]
-        let fail = std::mem::take(&mut inner.fail_commit);
+        let fail_clock = std::mem::take(&mut inner.fail_clock_commit);
         let tx = inner
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let result = f(&tx);
-        // Expiry is a durable negative decision. Only window checks can return
-        // this error, before any operation effect/reservation. Commit its clock
-        // fence rather than allowing a later clock rollback to reopen the window.
-        if let Err(error) = &result
-            && !matches!(error, Error::WindowClosed)
-        {
-            return result;
-        }
+        let fenced_time = advance_clock(&tx, observed_time)?;
         #[cfg(test)]
-        if fail {
-            // Real deferred FK failure at COMMIT, after the candidate result exists.
-            tx.execute_batch("PRAGMA defer_foreign_keys=ON; INSERT INTO operations VALUES (-1, '__commit_fault__', '{}');")?;
+        if fail_clock {
+            inject_commit_failure(&tx)?;
         }
         tx.commit()?;
-        result
+        inner.observed_time = fenced_time;
+        run_transaction(&mut inner, |tx| f(tx, fenced_time))
     }
 
     #[cfg(test)]
     pub(super) fn fail_next_commit(&self) {
         self.inner.lock().unwrap().fail_commit = true;
+    }
+
+    #[cfg(test)]
+    pub(super) fn fail_next_clock_commit(&self) {
+        self.inner.lock().unwrap().fail_clock_commit = true;
     }
 
     /// Internal engine read: apply current read/export authorization before exposing it.
@@ -364,7 +392,7 @@ pub(super) fn next_id(tx: &Transaction<'_>, field: &str) -> Result<u64> {
     Ok(id)
 }
 
-pub(super) fn time(tx: &Transaction<'_>, now: i64) -> Result<i64> {
+fn advance_clock(tx: &Transaction<'_>, now: i64) -> Result<i64> {
     if now < 0 {
         return Err(Error::Invalid("receiver time"));
     }
@@ -377,6 +405,31 @@ pub(super) fn time(tx: &Transaction<'_>, now: i64) -> Result<i64> {
             r.get(0)
         })?,
     )
+}
+
+fn run_transaction<T>(
+    inner: &mut Inner,
+    f: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    #[cfg(test)]
+    let fail = std::mem::take(&mut inner.fail_commit);
+    let tx = inner
+        .connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let result = f(&tx)?;
+    #[cfg(test)]
+    if fail {
+        inject_commit_failure(&tx)?;
+    }
+    tx.commit()?;
+    Ok(result)
+}
+
+#[cfg(test)]
+fn inject_commit_failure(tx: &Transaction<'_>) -> Result<()> {
+    // Real deferred FK failure at COMMIT, after the prospective result exists.
+    tx.execute_batch("PRAGMA defer_foreign_keys=ON; INSERT INTO operations VALUES (-1, '__commit_fault__', '{}');")?;
+    Ok(())
 }
 
 fn recover(tx: &Transaction<'_>) -> Result<()> {

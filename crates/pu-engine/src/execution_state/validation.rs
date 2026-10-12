@@ -201,6 +201,7 @@ pub(super) fn validate_records(tx: &Transaction<'_>, owner: &str) -> Result<()> 
         }
     }
     let mut pending = HashSet::new();
+    let mut latest = HashSet::new();
     for ack in all::<InputAck>(tx, "inputs")? {
         let writer = writers
             .get(&ack.writer)
@@ -212,9 +213,12 @@ pub(super) fn validate_records(tx: &Transaction<'_>, owner: &str) -> Result<()> 
                 && ack.payload_bytes <= 1_048_576,
             "input bounds",
         )?;
+        if ack.sequence == writer.last_sequence {
+            latest.insert(writer.id);
+        }
         match ack.outcome {
             InputOutcome::Accepted => ensure(
-                writer.live && pending.insert(writer.id),
+                writer.live && ack.sequence == writer.last_sequence && pending.insert(writer.id),
                 "pending input ownership",
             )?,
             InputOutcome::Partial { bytes } => ensure(
@@ -223,6 +227,15 @@ pub(super) fn validate_records(tx: &Transaction<'_>, owner: &str) -> Result<()> 
             )?,
             _ => {}
         }
+    }
+    // Older Written receipts may be evicted only while a newer one is inserted;
+    // whole-writer compaction removes the writer too. A retained nonempty writer
+    // must therefore retain its latest receipt, irrespective of the outcome.
+    for writer in writers.values() {
+        ensure(
+            writer.last_sequence == 0 || latest.contains(&writer.id),
+            "latest input receipt",
+        )?;
     }
     for operation in all::<StoredOperation>(tx, "operations")? {
         valid(operation.key.validate())?;

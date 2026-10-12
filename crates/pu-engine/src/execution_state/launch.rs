@@ -17,9 +17,9 @@ impl Ledger {
         resume: Option<&MutationGuard>,
         now: i64,
     ) -> Result<Recorded<LaunchReceipt>> {
-        intent.validate()?;
-        let descriptor = encode(&("launch", intent, resume))?;
-        self.transaction(|tx| {
+        self.transaction_at(now, |tx, now| {
+            intent.validate()?;
+            let descriptor = encode(&("launch", intent, resume))?;
             if let Some(receipt) = check_operation(tx, caller, key, &descriptor, now, &self.limits)?
             {
                 let OperationReceipt::Launch(value) = receipt else {
