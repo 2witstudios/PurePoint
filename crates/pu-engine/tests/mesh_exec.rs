@@ -649,3 +649,50 @@ async fn given_host_link_reconnect_should_resume_open_watch() {
             .await
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_owner_takeover_racing_bridge_requests_should_complete_without_deadlock() {
+    // given: a peer hammering one run with resize requests
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let guard = fixture.guard(&spawned).await;
+    let window = fixture.window().await;
+    let route = Route {
+        worker: fixture.route.worker.clone(),
+        export: fixture.route.export.clone(),
+    };
+    let socket = fixture.host.socket.clone();
+    let hammer = tokio::spawn(async move {
+        for n in 0..200u32 {
+            let resize = route.local(Operation::Resize {
+                guard: guard.clone(),
+                mutation: Mutation {
+                    window,
+                    id: format!("resize-{n}"),
+                },
+                cols: 80 + (n % 40) as u16,
+                rows: 24,
+            });
+            let _ = call_socket(&socket, Request::MeshRoute { route: resize }).await;
+        }
+    });
+
+    // when: the owner takes over in the middle of that traffic
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let takeover = tokio::time::timeout(
+        Duration::from_secs(20),
+        fixture.worker.admin(MeshAdminRequest::RunTakeover {
+            agent_id: spawned.target.agent_id.clone(),
+        }),
+    )
+    .await
+    .expect("takeover deadlocked against bridge dispatch");
+    hammer.abort();
+
+    // then: the worker's authority is still serving requests
+    assert_eq!(takeover, MeshAdminResponse::Done {});
+    let runs = tokio::time::timeout(Duration::from_secs(20), fixture.worker_runs())
+        .await
+        .expect("worker authority hung after takeover");
+    assert_eq!(runs[0].controller, "local");
+}

@@ -133,6 +133,9 @@ pub struct Limits {
     pub principal_operations: usize,
     /// Live writers one peer principal may hold at once.
     pub principal_writers: usize,
+    /// Uncertain input receipts (Accepted/Partial/Unknown) one peer may hold;
+    /// they are never compacted, so a peer cannot exhaust everyone's budget.
+    pub principal_input_receipts: usize,
     /// Slice of `windows` that peers can never consume, kept for local owners.
     pub local_reserved_windows: usize,
     /// Slice of `operations` that peers can never consume, kept for local owners.
@@ -166,6 +169,7 @@ impl Default for Limits {
             principal_windows: 16,
             principal_operations: 256,
             principal_writers: 64,
+            principal_input_receipts: 512,
             local_reserved_windows: 64,
             local_reserved_operations: 512,
             retained_terminal_runs: 256,
@@ -193,6 +197,7 @@ impl Limits {
             self.principal_windows,
             self.principal_operations,
             self.principal_writers,
+            self.principal_input_receipts,
             self.local_reserved_windows,
             self.local_reserved_operations,
             self.retained_terminal_runs,

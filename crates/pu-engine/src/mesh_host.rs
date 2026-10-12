@@ -112,16 +112,37 @@ struct Conn {
     client: ControlClient<TcpStream>,
     reader: tokio::task::JoinHandle<()>,
     used: Instant,
+    watchers: Watchers,
 }
 
+/// However a connection ends (error, replacement or a cancelled request that
+/// owned it), its subscriptions end with it: closing the local queues makes
+/// every watch resubscribe on the next connection and learn any gap.
 impl Drop for Conn {
     fn drop(&mut self) {
         self.reader.abort();
+        self.watchers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
+}
+
+/// A worker-issued operation window the host reuses for its mutations, valid
+/// for one worker generation (a restart closes every window).
+#[derive(Clone)]
+struct CachedWindow {
+    window: u64,
+    expires_at: i64,
+    generation: u64,
+    reuse_until: Instant,
 }
 
 struct Link {
     target: Target,
+    /// Generation of the worker reached by the current or last connection.
+    generation: std::sync::atomic::AtomicU64,
+    window: std::sync::Mutex<Option<CachedWindow>>,
     conn: tokio::sync::Mutex<Option<Conn>>,
     watchers: Watchers,
     keepalive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -147,15 +168,8 @@ impl Link {
         self.retired.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Every subscription lived on the dropped bulk connection; closing the
-    /// local queues makes each watch resubscribe and learn any gap.
     fn drop_conn(&self, slot: &mut Option<Conn>) {
-        if slot.take().is_some() {
-            self.watchers
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clear();
-        }
+        slot.take();
     }
 
     /// Fresh authenticated control + bulk pair. Discovery supplies only the
@@ -181,6 +195,8 @@ impl Link {
         )
         .await
         .map_err(session_error)?;
+        self.generation
+            .store(generation.generation, std::sync::atomic::Ordering::SeqCst);
         let bulk = client
             .connect_bulk(transport, connect(self.target.bulk).await?)
             .await
@@ -189,6 +205,7 @@ impl Link {
             client,
             reader: tokio::spawn(demultiplex(bulk, self.watchers.clone())),
             used: Instant::now(),
+            watchers: self.watchers.clone(),
         })
     }
 
@@ -284,6 +301,49 @@ impl Link {
     }
 }
 
+impl Link {
+    /// Windows are per principal and quota-limited on the worker, so the host
+    /// reuses one until half its lifetime is spent instead of leaking a new
+    /// window per command. A reused window is reported as issued; the worker
+    /// still checks it on every mutation.
+    async fn window(
+        &self,
+        transport: &MeshTransport,
+        request: &Request,
+        ttl_seconds: u32,
+        admission: &Semaphore,
+    ) -> Result<Response, Error> {
+        let generation = self.generation.load(std::sync::atomic::Ordering::SeqCst);
+        let cached = self
+            .window
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .filter(|w| w.generation == generation && Instant::now() < w.reuse_until);
+        if let Some(cached) = cached {
+            return Ok(Response {
+                request_id: request.request_id.clone(),
+                daemon_id: request.target_daemon.clone(),
+                body: Body::Window {
+                    window: cached.window,
+                    expires_at: cached.expires_at,
+                },
+            });
+        }
+        let response = self.request(transport, request, Some(admission)).await?;
+        if let Body::Window { window, expires_at } = response.body {
+            *self.window.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedWindow {
+                window,
+                expires_at,
+                // Generation of the connection that issued it.
+                generation: self.generation.load(std::sync::atomic::Ordering::SeqCst),
+                reuse_until: Instant::now() + Duration::from_secs(u64::from(ttl_seconds) / 2),
+            });
+        }
+        Ok(response)
+    }
+}
+
 /// Route bulk frames to the local watches of their run.
 async fn demultiplex(mut bulk: mesh_sessions::BulkClient<TcpStream>, watchers: Watchers) {
     loop {
@@ -346,6 +406,8 @@ impl HostClient {
             watchers: Arc::default(),
             keepalive: std::sync::Mutex::new(None),
             retired: std::sync::atomic::AtomicBool::new(false),
+            generation: std::sync::atomic::AtomicU64::new(0),
+            window: std::sync::Mutex::new(None),
         });
         if let Some(previous) = links.insert(target.receiver, link.clone()) {
             previous
@@ -374,10 +436,26 @@ impl HostClient {
             return Err(Error::Invalid);
         }
         let link = self.link(target);
-        timeout(
-            REQUEST_DEADLINE,
-            link.request(transport, request, Some(&self.admission)),
-        )
+        timeout(REQUEST_DEADLINE, async {
+            if let Operation::IssueWindow { ttl_seconds } = request.operation {
+                return link
+                    .window(transport, request, ttl_seconds, &self.admission)
+                    .await;
+            }
+            let response = link
+                .request(transport, request, Some(&self.admission))
+                .await?;
+            if matches!(
+                response.body,
+                Body::Error {
+                    code: pu_core::mesh::response::ErrorCode::ReceiptExpired
+                }
+            ) {
+                // The cached window was closed under us; issue a fresh one next.
+                *link.window.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
+            Ok(response)
+        })
         .await
         .map_err(|_| Error::Timeout)?
     }

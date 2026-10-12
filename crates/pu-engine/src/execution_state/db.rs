@@ -417,6 +417,8 @@ pub(super) enum Live {
     Operations,
     /// Live writers only; fenced evidence is bounded by the input receipt budget.
     Writers,
+    /// Uncertain input evidence, attributed to the writer's principal.
+    Inputs,
 }
 
 impl Live {
@@ -425,6 +427,7 @@ impl Live {
             Self::Windows => "windows",
             Self::Operations => "operations",
             Self::Writers => "writers",
+            Self::Inputs => "inputs",
         }
     }
 
@@ -442,6 +445,10 @@ impl Live {
             Self::Writers => {
                 "FROM writers w WHERE json_extract(w.data,'$.live')=1 AND ?1 IS NOT NULL".into()
             }
+            Self::Inputs => format!(
+                "FROM inputs i JOIN writers w ON w.id=i.writer \
+                 WHERE json_extract(i.data,'$.outcome') NOT IN {CERTAIN} AND ?1 IS NOT NULL"
+            ),
         }
     }
 
@@ -462,6 +469,12 @@ impl Live {
             ),
             // Only peers open writers; there is no local writer reserve.
             Self::Writers => (limits.writers, limits.writers, limits.principal_writers),
+            // Only peers write input; there is no local reserve.
+            Self::Inputs => (
+                limits.input_receipts,
+                limits.input_receipts,
+                limits.principal_input_receipts,
+            ),
         }
     }
 }

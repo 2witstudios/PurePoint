@@ -376,3 +376,55 @@ fn given_retained_receipt_for_terminal_run_should_remain_readable_until_horizon(
         Err(Error::WindowClosed)
     ));
 }
+
+#[test]
+fn given_peer_accumulating_uncertain_input_should_exhaust_only_its_own_quota() {
+    // given: a two-receipt quota per peer and a larger global budget
+    let ledger = Ledger::in_memory(
+        "daemon-a",
+        Limits {
+            principal_input_receipts: 2,
+            input_receipts: 16,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    let noisy = peer_named(&ledger, "noisy-peer");
+    let quiet = peer_named(&ledger, "quiet-peer");
+    let partial_inputs = |caller: &Caller, count: u64| {
+        let agent = running(&ledger, caller);
+        let writer = ledger.open_writer(caller, &agent.guard(), None).unwrap();
+        (1..=count)
+            .map(|sequence| {
+                let accepted = ledger.accept_input(
+                    caller,
+                    &agent.guard(),
+                    writer.id,
+                    sequence,
+                    PayloadDigest([sequence as u8; 32]),
+                    8,
+                );
+                if accepted.is_ok() {
+                    ledger
+                        .finish_input(writer.id, sequence, InputOutcome::Partial { bytes: 4 })
+                        .unwrap();
+                }
+                accepted
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // when: one peer keeps leaving uncertain evidence behind
+    let noisy_results = partial_inputs(&noisy, 3);
+
+    // then: only that peer is refused; another peer can still write input
+    assert!(noisy_results[0].is_ok() && noisy_results[1].is_ok());
+    assert!(matches!(
+        noisy_results[2],
+        Err(Error::Capacity {
+            scope: CapacityScope::PrincipalRecords("inputs"),
+            ..
+        })
+    ));
+    assert!(partial_inputs(&quiet, 1)[0].is_ok());
+}

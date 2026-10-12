@@ -161,7 +161,7 @@ host_down ⇒ run continues ; worker_down ⇒ tree terminated ∧ run resolved a
 - Host budgets: 16 concurrent requests and 64 watches.
 - Ledger capacity: 256 global runs, 64 per project, 128 per runtime, 64 per principal, 16 starting.
 - Pre-authentication: 32 TLS handshakes in flight, 4 per source address (IPv6 per /64), 1 s handshake deadline. Session permits are reserved only after the pinned certificate check.
-- Ledger budgets count only live records. Each peer holds at most 16 open windows, 256 live operations and 64 live writers. The local owner has a reserve of 64 windows and 512 operations that peers cannot consume. The newest 256 terminal runs are retained; older history is compacted automatically.
+- Ledger budgets count only live records. Each peer holds at most 16 open windows, 256 live operations, 64 live writers and 512 uncertain input receipts. The host reuses one window per worker generation for half its lifetime. The local owner has a reserve of 64 windows and 512 operations that peers cannot consume. The newest 256 terminal runs are retained; older history is compacted automatically.
 - Prompts: at most 32 KiB, never starting with `-`, no control characters other than newline and tab.
 
 ## Edge Cases

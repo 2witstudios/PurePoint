@@ -123,14 +123,10 @@ impl Ledger {
                     params![writer_id.0, old.sequence],
                 )?;
             }
-            // Final-certain receipts are bounded per writer; only evidence that
-            // can never be compacted consumes the global receipt budget.
-            budget_where(
-                tx,
-                "inputs",
-                &format!("json_extract(data,'$.outcome') NOT IN {CERTAIN}"),
-                self.limits.input_receipts,
-            )?;
+            // Final-certain receipts are bounded per writer; evidence that can
+            // never be compacted consumes the writer principal's own quota and
+            // then the global receipt budget.
+            live_budget(tx, Live::Inputs, caller.principal(), 0, &self.limits)?;
             let value = InputAck {
                 writer: writer_id,
                 sequence,

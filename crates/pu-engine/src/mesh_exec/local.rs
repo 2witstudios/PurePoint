@@ -114,24 +114,27 @@ impl Executor {
     }
 
     /// The run's boundary, held while local control is confirmed and through
-    /// the caller's write. None unless the local owner controls the run.
+    /// the caller's write. None unless the local owner controls the run. Lock
+    /// order matches bridge dispatch: authority barrier, then the boundary; the
+    /// barrier is released on return while the boundary stays held.
     pub async fn local_input_permit(
         self: &Arc<Self>,
         agent: &str,
     ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-        let held = self.agent_boundary(agent).lock_owned().await;
         let (_, admin) = owner().ok()?;
+        let boundary = self.agent_boundary(agent);
         let agent = AgentId(agent.to_string());
-        let controls = self
-            .authority
+        self.authority
             .inspect_admin(&self.work, admin, move |_, ledger, _, _| {
+                let held = boundary.blocking_lock_owned();
                 Ok(ledger
                     .agent(&agent)
-                    .is_ok_and(|record| is_owner(&record.controller)))
+                    .is_ok_and(|record| is_owner(&record.controller))
+                    .then_some(held))
             })
             .await
-            .unwrap_or(false);
-        controls.then_some(held)
+            .ok()
+            .flatten()
     }
 
     pub async fn local_runs(self: &Arc<Self>) -> Result<Vec<RunStatus>, RunError> {
@@ -173,7 +176,6 @@ impl Executor {
     /// its live control and bulk sessions. The controller is re-read under the
     /// barrier; if it changed since it was chosen, the attempt is retried.
     pub async fn local_control(self: &Arc<Self>, agent: &str, take: bool) -> Result<(), RunError> {
-        let _held = self.agent_boundary(agent).lock_owned().await;
         for _ in 0..3 {
             let expected = self.controller(agent).await?;
             match self.change_controller(agent, take, expected).await? {
@@ -210,7 +212,10 @@ impl Executor {
         let agent_id = AgentId(agent.to_string());
         let controller = take.then(|| Principal::Local { id: OWNER.into() });
         let check = expected.clone();
+        let boundary = self.agent_boundary(agent);
         let change = move |ledger: &Ledger, admin: &LocalAdmin| -> Result<bool, RunError> {
+            // Barrier first (held by the caller), then the run's boundary.
+            let _held = boundary.blocking_lock();
             let record = ledger.agent(&agent_id)?;
             if record.controller != check {
                 return Ok(false);
@@ -243,12 +248,13 @@ impl Executor {
     /// Durable stop intent under local control, then one termination request
     /// to the guardian. Termination proof resolves the run later.
     pub async fn local_stop(self: &Arc<Self>, agent: &str) -> Result<(), RunError> {
-        let _held = self.agent_boundary(agent).lock_owned().await;
         let (caller, admin) = owner()?;
         let agent_id = AgentId(agent.to_string());
-        let fresh = flatten(
+        let executor = self.clone();
+        flatten(
             self.authority
                 .inspect_admin(&self.work, admin, move |_, ledger, _, _| {
+                    let _held = executor.agent_boundary(&agent_id.0).blocking_lock_owned();
                     Ok((|| {
                         let record = ledger.agent(&agent_id)?;
                         if !is_owner(&record.controller) {
@@ -256,17 +262,23 @@ impl Executor {
                         }
                         let key = local_key(ledger, &caller, "stop", &agent_id.0)?;
                         let now = ledger.observe_time(chrono::Utc::now().timestamp())?;
-                        Ok(ledger
+                        if ledger
                             .request_stop(&caller, &key, &record.guard(), now)?
-                            .fresh)
+                            .fresh
+                            && let Some(engine) = executor.engine.upgrade()
+                        {
+                            // Durable intent first, then the single termination
+                            // request, under the same boundary as bridge stops.
+                            let agent = agent_id.0.clone();
+                            executor
+                                .runtime
+                                .block_on(async move { engine.mesh_terminate(&agent).await });
+                        }
+                        Ok(())
                     })())
                 })
                 .await,
-        )?;
-        if fresh && let Some(engine) = self.engine.upgrade() {
-            engine.mesh_terminate(agent).await;
-        }
-        Ok(())
+        )
     }
 
     /// Resolve a run with no live process that is Unknown, or Stopping with no
@@ -290,15 +302,23 @@ impl Executor {
             )?
             .agent_id
         };
-        let _held = self.agent_boundary(&agent.0).lock_owned().await;
-        if self.live(&agent.0).await {
-            return Err(RunError::Live);
-        }
-        let supervisor = self.supervisor.clone();
+        let executor = self.clone();
         flatten(
             self.authority
                 .inspect_admin(&self.work, admin, move |_, ledger, _, _| {
+                    let _held = executor.agent_boundary(&agent.0).blocking_lock_owned();
                     Ok((|| {
+                        let live = {
+                            let executor = executor.clone();
+                            let agent = agent.0.clone();
+                            executor
+                                .runtime
+                                .clone()
+                                .block_on(async move { executor.live(&agent).await })
+                        };
+                        if live {
+                            return Err(RunError::Live);
+                        }
                         let record = ledger.run(&run_id)?;
                         if !matches!(
                             record.lifecycle,
@@ -309,7 +329,7 @@ impl Executor {
                         let proof = match record
                             .supervision
                             .as_ref()
-                            .map(|identity| supervisor.outcome(&run_id.0, identity))
+                            .map(|identity| executor.supervisor.outcome(&run_id.0, identity))
                         {
                             Some(Proof::Terminated { evidence, cause }) => {
                                 state::OutcomeProof::ProcessTreeTerminated {
