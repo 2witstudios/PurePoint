@@ -357,6 +357,20 @@ impl MeshStore {
         self.current_policy(ledger, connection.peer_id(), generation, now)
     }
 
+    /// Authenticated, generation-independent discovery only. Session authority
+    /// retains its barrier through the bounded response; this policy is no token.
+    pub(crate) fn discover_connection_policy<S>(
+        &self,
+        ledger: &Ledger,
+        connection: &AuthenticatedConnection<S>,
+        now: i64,
+    ) -> Result<PeerPolicy> {
+        self.require_owner(ledger)?;
+        let peer = connection.peer_id();
+        let generation = ledger.peer(&peer_name(peer))?.generation;
+        self.current_policy(ledger, peer, generation, now)
+    }
+
     /// Authenticates from the verified TLS connection, checks durable grant bytes,
     /// then constructs a current Caller. Caller is usable only while the engine
     /// retains its shared authority barrier through the actual operation effect.

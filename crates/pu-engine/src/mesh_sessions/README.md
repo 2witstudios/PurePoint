@@ -139,3 +139,47 @@ Native macOS strict process-tree lifetime remains blocked by platform decision
 and proof. There is no OS process-lifetime or agent-sandbox claim, no listening
 by default, no remote execution enablement, no installed binary replacement,
 and no signals sent to real user daemons/agents.
+
+## Discovery and bounded status delta
+
+`Hello::Discover { version, target_daemon }` and `GenerationDiscovery { version,
+daemon_id, generation }` have strict <=2048-byte decoders with no unknown fields.
+Discovery uses the same independent mTLS `Role::Control` ALPN endpoint as ordinary
+Control. `accept_incoming(transport, io) -> Accepted<S>` reads exactly one TLS/Hello
+and returns either `Session(Session<S>)` or `Discovery` after a bounded response
+and stream drop. `accept` remains strict, including Bulk; `accept_discovery` is an
+optional discovery-only convenience, with no separate port or extra negotiation.
+Discovery is transient and consumes the existing bounded control connection
+permit through actual blocking policy/ledger validation and response write. It
+mints no control binding, incarnation, subscription, writer or operation window,
+and does not replace an existing binding.
+
+`ControlClient::discover(transport, io, exact_receiver_pin, daemon, limits)`
+validates the exact TLS server pin, receiver target/version and bounded response.
+The returned generation is a reconnect hint, not authorization. Use NEW streams
+for a fresh ordinary strict Control+Bulk pair. If generation changes again that
+handshake rejects; there is no automatic mutation/input replay.
+
+The narrow store discovery accessor obtains generation from the actual TLS peer's
+ledger record and invokes the same canonical policy/anchor/expiry check under the
+retained shared barrier. Revoked, corrupt, missing, unanchored and expired policy
+denies. SQLite reopen advances generation and fences old bindings/windows/writers;
+read-only reconciliation still requires current grants, exact resource ownership
+and stable peer identity checks. Actual private SQLite reopen tests retain unknown
+input receipts and lifecycle receipts while rejecting stale control, old bulk
+bindings, closed-window new work and old writer/dispatch use. Records are synthetic
+and no actual process/PTY is started, so native lifetime acceptance stays blocked.
+
+Status now carries `after_agent: Option<String>` (serde default None) and
+`limit: u16` (serde default 64), validated 1..=64. The cursor is a bounded identifier
+and cannot accompany `agent_id: Some(...)`. Exact-agent status remains supported.
+No unbounded ledger/status scan is exposed over this wire surface.
+
+Delta checks: core wire tests (9) and session tests (22), real TLS plus private
+SQLite, with strict all-target engine Clippy. New red tests failed before the
+Discover/GenerationDiscovery/pagination/demultiplex APIs were implemented. The
+new cancellation gate confirms a cancelled discovery waiter cannot release its
+actual validation owner's control permit or create a binding. Malformed version,
+wrong pin/target/role, inactive/damaged grants and substituted/oversized discovery
+responses reject. Parent metadata/read dispatch and listener lifecycle remain
+separate producer/integration work.
