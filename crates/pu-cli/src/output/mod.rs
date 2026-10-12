@@ -320,6 +320,9 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::GateResult { passed, output } => {
             execution::print_gate_result(*passed, output);
         }
+        Response::MeshAdmin { response } => {
+            println!("{}", serde_json::to_string_pretty(response)?);
+        }
         Response::GlobalAgentSettingsReport { codex_yolo } => {
             println!("Codex YOLO for all projects: {codex_yolo}");
         }
