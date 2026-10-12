@@ -17,7 +17,7 @@ use crate::{
     execution_state::{Caller, Limits, LocalAdmin},
     mesh_host::{self, HostReader},
     mesh_listener::BoundListeners,
-    mesh_sessions::{self, SessionLimits},
+    mesh_sessions::SessionLimits,
 };
 use pu_core::mesh::{
     admin::{MeshAdminRequest, MeshAdminResponse},
@@ -208,10 +208,7 @@ impl MeshRuntime {
             Arc::new(snapshot.transport),
             self.work.clone(),
             stop_rx,
-            move |ledger, exports, caller, policy, request| {
-                crate::mesh_read::dispatch(ledger, exports, caller, policy, request)
-                    .map_err(mesh_sessions::Error::from)
-            },
+            Arc::new(crate::mesh_listener::ReadOnly),
         );
         self.status.send_replace(ListenerStatus::Listening {
             config: snapshot.config,

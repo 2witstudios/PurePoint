@@ -198,65 +198,10 @@ impl Engine {
             };
             (cmd_bin, cmd_args, None, false)
         } else {
-            // Standard agent flow
-            let (command, cmd_args) = match Self::parse_agent_command(&agent_cfg, &agent_type) {
+            match Self::agent_command(&agent_cfg, &agent_type, prompt, no_auto, &extra_args) {
                 Ok(v) => v,
                 Err(e) => return e,
-            };
-            let mut args = cmd_args;
-
-            // Add agent-type-specific launch args from config (or defaults).
-            // --no-auto skips only the built-in defaults; explicit user-configured
-            // launchArgs are always applied.
-            let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
-                Vec::new()
-            } else {
-                pu_core::types::resolved_launch_args(&agent_type, agent_cfg.launch_args.as_deref())
-            };
-            if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
-                tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
             }
-            Self::append_launch_args(&mut args, launch_args);
-
-            // Append extra args from --agent-args (always applied, even with --no-auto)
-            args.extend(extra_args.iter().cloned());
-
-            let generated_id = if agent_type == "opencode" {
-                format!("ses_{}", &pu_core::id::session_id().replace('-', "")[..26])
-            } else {
-                pu_core::id::session_id()
-            };
-            let session_id = match crate::read_source::prepare_session_args(
-                &agent_type,
-                &mut args,
-                &generated_id,
-            ) {
-                Ok(id) => id,
-                Err(e) => {
-                    return Response::Error {
-                        code: "INVALID_ARGUMENT".into(),
-                        message: e.to_string(),
-                    };
-                }
-            };
-
-            // Claude prompt via argv can stall first render in some terminals; keep stdin injection
-            // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
-            let inject_prompt_via_stdin =
-                Self::should_inject_prompt_via_stdin(&agent_type, agent_cfg.interactive, prompt);
-            if !inject_prompt_via_stdin && !prompt.is_empty() {
-                let prompt_flag =
-                    Self::resolved_prompt_flag(&agent_type, agent_cfg.prompt_flag.as_deref());
-                if let Some(flag) = prompt_flag {
-                    args.push(flag);
-                    args.push(prompt.to_string());
-                } else {
-                    // Default prompt style is positional (for example codex [PROMPT]).
-                    args.push(prompt.to_string());
-                }
-            }
-
-            (command, args, session_id, inject_prompt_via_stdin)
         };
 
         // Determine working directory
@@ -365,53 +310,8 @@ impl Engine {
                 .await
                 .insert(agent_id.clone(), prompt.as_bytes().to_vec());
         } else if inject_prompt_via_stdin {
-            let prompt_bytes = prompt.as_bytes().to_vec();
-            let pending = self.pending_initial_inputs.clone();
-            pending
-                .lock()
-                .await
-                .insert(agent_id.clone(), prompt_bytes.clone());
-
-            let output_buffer = handle.output_buffer.clone();
-            let master_fd = handle.master_fd();
-            let mut exit_rx = handle.exit_rx.clone();
-            let pty_host = NativePtyHost::new();
-            let aid = agent_id.clone();
-
-            crate::daemon_lifecycle::owned_work::spawn_inherited(async move {
-                let mut watcher = output_buffer.subscribe();
-                let timeout = tokio::time::sleep(Duration::from_millis(1800));
-                tokio::pin!(timeout);
-
-                loop {
-                    tokio::select! {
-                        _ = &mut timeout => {
-                            // Fallback or quiet-period expired — inject now
-                            break;
-                        }
-                        Ok(()) = exit_rx.changed() => {
-                            // Process exited before we could inject — abort
-                            pending.lock().await.remove(&aid);
-                            tracing::debug!(agent_id = %aid, "prompt injection aborted: process exited");
-                            return;
-                        }
-                        Ok(()) = watcher.changed() => {
-                            // Got output — reset to a 450ms quiet period
-                            timeout
-                                .as_mut()
-                                .reset(tokio::time::Instant::now() + Duration::from_millis(450));
-                        }
-                    }
-                }
-
-                // Inject the prompt
-                if inject_initial_prompt(&pty_host, &master_fd, &aid, &prompt_bytes).await {
-                    tracing::debug!(agent_id = %aid, "prompt injected at spawn time");
-                } else {
-                    tracing::warn!(agent_id = %aid, "failed to inject prompt at spawn time");
-                }
-                pending.lock().await.remove(&aid);
-            });
+            self.inject_prompt_after_quiet_period(&handle, &agent_id, prompt.as_bytes().to_vec())
+                .await;
         }
 
         handle.project_root = Some(project_root.clone());
@@ -588,6 +488,126 @@ impl Engine {
             agent_id,
             status: AgentStatus::Running,
         }
+    }
+
+    /// Resolve a configured runtime into its launch command. Remote mesh runs use
+    /// this with receiver configuration only; callers never supply executables.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn agent_command(
+        agent_cfg: &pu_core::types::AgentConfig,
+        agent_type: &str,
+        prompt: &str,
+        no_auto: bool,
+        extra_args: &[String],
+    ) -> Result<(String, Vec<String>, Option<String>, bool), Response> {
+        let (command, cmd_args) = Self::parse_agent_command(agent_cfg, agent_type)?;
+        let mut args = cmd_args;
+
+        // Add agent-type-specific launch args from config (or defaults).
+        // --no-auto skips only the built-in defaults; explicit user-configured
+        // launchArgs are always applied.
+        let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
+            Vec::new()
+        } else {
+            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref())
+        };
+        if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
+            tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
+        }
+        Self::append_launch_args(&mut args, launch_args);
+
+        // Append extra args from --agent-args (always applied, even with --no-auto)
+        args.extend(extra_args.iter().cloned());
+
+        let generated_id = if agent_type == "opencode" {
+            format!("ses_{}", &pu_core::id::session_id().replace('-', "")[..26])
+        } else {
+            pu_core::id::session_id()
+        };
+        let session_id =
+            match crate::read_source::prepare_session_args(agent_type, &mut args, &generated_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    return Err(Response::Error {
+                        code: "INVALID_ARGUMENT".into(),
+                        message: e.to_string(),
+                    });
+                }
+            };
+
+        // Claude prompt via argv can stall first render in some terminals; keep stdin injection
+        // for Claude (and terminal agent). Codex/OpenCode accept startup prompts via CLI args.
+        let inject_prompt_via_stdin =
+            Self::should_inject_prompt_via_stdin(agent_type, agent_cfg.interactive, prompt);
+        if !inject_prompt_via_stdin && !prompt.is_empty() {
+            let prompt_flag =
+                Self::resolved_prompt_flag(agent_type, agent_cfg.prompt_flag.as_deref());
+            if let Some(flag) = prompt_flag {
+                args.push(flag);
+                args.push(prompt.to_string());
+            } else {
+                // Default prompt style is positional (for example codex [PROMPT]).
+                args.push(prompt.to_string());
+            }
+        }
+
+        Ok((command, args, session_id, inject_prompt_via_stdin))
+    }
+
+    /// Deliver a stdin prompt once output has been quiet briefly (or after a
+    /// fallback delay); abandoned if the process exits first.
+    pub(super) async fn inject_prompt_after_quiet_period(
+        &self,
+        handle: &crate::pty_manager::AgentHandle,
+        agent_id: &str,
+        prompt_bytes: Vec<u8>,
+    ) {
+        let pending = self.pending_initial_inputs.clone();
+        pending
+            .lock()
+            .await
+            .insert(agent_id.to_string(), prompt_bytes.clone());
+
+        let output_buffer = handle.output_buffer.clone();
+        let master_fd = handle.master_fd();
+        let mut exit_rx = handle.exit_rx.clone();
+        let pty_host = NativePtyHost::new();
+        let aid = agent_id.to_string();
+
+        crate::daemon_lifecycle::owned_work::spawn_inherited(async move {
+            let mut watcher = output_buffer.subscribe();
+            let timeout = tokio::time::sleep(Duration::from_millis(1800));
+            tokio::pin!(timeout);
+
+            loop {
+                tokio::select! {
+                    _ = &mut timeout => {
+                        // Fallback or quiet-period expired — inject now
+                        break;
+                    }
+                    Ok(()) = exit_rx.changed() => {
+                        // Process exited before we could inject — abort
+                        pending.lock().await.remove(&aid);
+                        tracing::debug!(agent_id = %aid, "prompt injection aborted: process exited");
+                        return;
+                    }
+                    Ok(()) = watcher.changed() => {
+                        // Got output — reset to a 450ms quiet period
+                        timeout
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + Duration::from_millis(450));
+                    }
+                }
+            }
+
+            // Inject the prompt
+            if inject_initial_prompt(&pty_host, &master_fd, &aid, &prompt_bytes).await {
+                tracing::debug!(agent_id = %aid, "prompt injected at spawn time");
+            } else {
+                tracing::warn!(agent_id = %aid, "failed to inject prompt at spawn time");
+            }
+            pending.lock().await.remove(&aid);
+        });
     }
 
     fn append_launch_args(args: &mut Vec<String>, launch_args: Vec<String>) {

@@ -12,10 +12,60 @@ use pu_core::mesh::admin::ListenConfig;
 use pu_core::mesh::{PeerPolicy, wire::Request};
 use std::{io, net::SocketAddr, sync::Arc};
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{Semaphore, watch},
     task::JoinSet,
 };
+
+/// Daemon-side bridge behavior behind an authenticated session. `binding` is the
+/// receiver-issued control binding for the request's connection; the bulk
+/// connection that names the same binding is handed to `serve_bulk`.
+pub trait BridgeHandler: Send + Sync + 'static {
+    fn dispatch(
+        &self,
+        binding: &str,
+        ledger: &Ledger,
+        exports: &MeshExports,
+        caller: &Caller,
+        policy: &PeerPolicy,
+        request: &Request,
+    ) -> mesh_sessions::Result<Vec<u8>>;
+
+    /// A control session started or ended; bulk state for it may be created or
+    /// must be released.
+    fn control_opened(&self, _binding: &str) {}
+    fn control_closed(&self, _binding: &str) {}
+
+    /// Serve one authenticated bulk session until it closes. The default accepts
+    /// no subscriptions and only detects disconnects.
+    fn serve_bulk(
+        self: Arc<Self>,
+        mut session: mesh_sessions::Session<TcpStream>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            let _ = session.wait_bulk_close().await;
+        })
+    }
+}
+
+/// Read-only metadata handler used before execution is enabled.
+pub struct ReadOnly;
+
+impl BridgeHandler for ReadOnly {
+    fn dispatch(
+        &self,
+        _binding: &str,
+        ledger: &Ledger,
+        exports: &MeshExports,
+        caller: &Caller,
+        policy: &PeerPolicy,
+        request: &Request,
+    ) -> mesh_sessions::Result<Vec<u8>> {
+        Ok(crate::mesh_read::dispatch(
+            ledger, exports, caller, policy, request,
+        )?)
+    }
+}
 
 pub struct BoundListeners {
     control: TcpListener,
@@ -48,29 +98,16 @@ impl BoundListeners {
     /// authority enforce its own global/per-peer limits across listener reloads.
     /// Stopping closes transports; accepted owned effects retain their barriers
     /// until actual completion. This does not stop local IPC or worker execution.
-    pub async fn run<F>(
+    pub async fn run<H: BridgeHandler>(
         self,
         authority: Arc<SessionAuthority>,
         transport: Arc<MeshTransport>,
         work: Arc<WorkOwner>,
         mut stop: watch::Receiver<bool>,
-        dispatch: F,
-    ) -> io::Result<()>
-    where
-        F: Fn(
-                &Ledger,
-                &MeshExports,
-                &Caller,
-                &PeerPolicy,
-                &Request,
-            ) -> mesh_sessions::Result<Vec<u8>>
-            + Send
-            + Sync
-            + 'static,
-    {
+        handler: Arc<H>,
+    ) -> io::Result<()> {
         let control = Arc::new(Semaphore::new(authority.limits().control_total));
         let bulk = Arc::new(Semaphore::new(authority.limits().bulk_total));
-        let dispatch = Arc::new(dispatch);
         let mut connections = JoinSet::new();
         let outcome = loop {
             if *stop.borrow() || work.is_stopping() {
@@ -105,7 +142,7 @@ impl BoundListeners {
             let authority = authority.clone();
             let transport = transport.clone();
             let work = work.clone();
-            let dispatch = dispatch.clone();
+            let handler = handler.clone();
             connections.spawn(async move {
                 let _admission = admission;
                 let mut session = match role {
@@ -120,16 +157,17 @@ impl BoundListeners {
                     },
                 };
                 if role == Role::Bulk {
-                    // Bulk subscriptions are wired by the observation adapter.
-                    // This read-only metadata service accepts no bulk requests.
-                    let _ = session.wait_bulk_close().await;
+                    handler.serve_bulk(session).await;
                     return;
                 }
+                let binding = session.welcome().control_binding.clone();
+                handler.control_opened(&binding);
                 loop {
-                    let effect = dispatch.clone();
+                    let effect = handler.clone();
+                    let binding = binding.clone();
                     if session
                         .dispatch(&work, move |ledger, exports, caller, policy, request| {
-                            effect(ledger, exports, caller, policy, request)
+                            effect.dispatch(&binding, ledger, exports, caller, policy, request)
                         })
                         .await
                         .is_err()
@@ -137,6 +175,7 @@ impl BoundListeners {
                         break;
                     }
                 }
+                handler.control_closed(&binding);
             });
         };
         connections.shutdown().await;
@@ -147,6 +186,26 @@ impl BoundListeners {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct EmptyInventory;
+    impl BridgeHandler for EmptyInventory {
+        fn dispatch(
+            &self,
+            _binding: &str,
+            _ledger: &Ledger,
+            _exports: &MeshExports,
+            _caller: &Caller,
+            _policy: &PeerPolicy,
+            request: &Request,
+        ) -> mesh_sessions::Result<Vec<u8>> {
+            Ok(pu_core::mesh::response::Response {
+                request_id: request.request_id.clone(),
+                daemon_id: request.target_daemon.clone(),
+                body: pu_core::mesh::response::Body::Inventory { exports: vec![] },
+            }
+            .encode()?)
+        }
+    }
     use crate::{
         daemon_lifecycle::{mesh_store::MeshStore, owned_work::WorkOwner, try_acquire_daemon_lock},
         execution_state::{Caller, Ledger, Limits, LocalAdmin},
@@ -230,14 +289,7 @@ mod tests {
             transport,
             work.clone(),
             rx,
-            |_, _, _, _, request| {
-                Ok(pu_core::mesh::response::Response {
-                    request_id: request.request_id.clone(),
-                    daemon_id: request.target_daemon.clone(),
-                    body: pu_core::mesh::response::Body::Inventory { exports: vec![] },
-                }
-                .encode()?)
-            },
+            Arc::new(EmptyInventory),
         ));
         let request = wire::Request {
             request_id: "query".into(),

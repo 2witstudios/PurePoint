@@ -2,7 +2,7 @@
 //! private ledger records are deliberately absent from this network schema.
 use super::{
     valid_identifier,
-    wire::{AgentTarget, Export, MAX_CONTROL_FRAME, Request, WireError},
+    wire::{AgentTarget, Export, MAX_CONTROL_FRAME, OutputCursor, Request, WireError},
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,10 +30,80 @@ pub enum Body {
     InputReceipt {
         evidence: Option<InputEvidence>,
     },
+    /// Receiver-issued, principal-scoped operation window.
+    Window {
+        window: u64,
+        expires_at: i64,
+    },
+    /// Single input writer for one run/control epoch, fencing its predecessor.
+    Writer {
+        target: AgentTarget,
+        writer: u64,
+        epoch: u64,
+    },
+    /// Output now flows on the paired bulk connection, starting at `cursor`.
+    Subscribed {
+        target: AgentTarget,
+        cursor: OutputCursor,
+    },
+    Done {},
     Error {
         code: ErrorCode,
     },
 }
+
+/// One bounded bulk frame of raw PTY output for one run. `gap` reports bytes
+/// that were evicted before they could be sent; they are never silently filled.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputFrame {
+    pub target: AgentTarget,
+    pub incarnation: String,
+    pub offset: u64,
+    pub gap: Option<u64>,
+    pub data: Vec<u8>,
+    /// The run's output ended (process exited); no further frames follow.
+    pub end: bool,
+}
+
+impl OutputFrame {
+    pub fn encode(&self) -> Result<Vec<u8>, WireError> {
+        self.validate()?;
+        let bytes = serde_json::to_vec(self).map_err(|_| WireError::Invalid)?;
+        if bytes.len() > super::wire::MAX_BULK_FRAME {
+            return Err(WireError::Invalid);
+        }
+        Ok(bytes)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.is_empty() || bytes.len() > super::wire::MAX_BULK_FRAME {
+            return Err(WireError::Invalid);
+        }
+        let frame: Self = serde_json::from_slice(bytes).map_err(|_| WireError::Invalid)?;
+        frame.validate()?;
+        Ok(frame)
+    }
+
+    fn validate(&self) -> Result<(), WireError> {
+        let valid = valid_identifier(&self.target.agent_id)
+            && valid_identifier(&self.target.run_id)
+            && valid_identifier(&self.target.export.id)
+            && self.target.export.generation > 0
+            && valid_identifier(&self.incarnation)
+            && self.data.len() <= MAX_OUTPUT_CHUNK
+            && self.gap.is_none_or(|gap| gap > 0)
+            && self.offset <= i64::MAX as u64;
+        if valid {
+            Ok(())
+        } else {
+            Err(WireError::Invalid)
+        }
+    }
+}
+
+/// Raw output bytes per bulk frame; JSON byte arrays stay below the bulk cap.
+pub const MAX_OUTPUT_CHUNK: usize = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -133,6 +203,34 @@ impl Response {
         use super::wire::Operation;
         let matches = match (&request.operation, &response.body) {
             (_, Body::Error { .. }) | (Operation::Inventory {}, Body::Inventory { .. }) => true,
+            (Operation::IssueWindow { .. }, Body::Window { .. })
+            | (Operation::CloseWindow { .. }, Body::Done {})
+            | (Operation::Resize { .. }, Body::Done {}) => true,
+            (Operation::Spawn { export, .. }, Body::Receipt { evidence: Some(e) }) => {
+                e.target.export == *export
+            }
+            (
+                Operation::AcquireControl { guard, .. } | Operation::Stop { guard, .. },
+                Body::Receipt { evidence: Some(e) },
+            ) => e.target == guard.target,
+            (Operation::Resume { guard, .. }, Body::Receipt { evidence: Some(e) }) => {
+                e.target.export == guard.target.export && e.target.agent_id == guard.target.agent_id
+            }
+            (Operation::OpenWriter { guard, .. }, Body::Writer { target, .. }) => {
+                *target == guard.target
+            }
+            (
+                Operation::Input {
+                    guard,
+                    writer,
+                    sequence,
+                    ..
+                },
+                Body::InputReceipt { evidence: Some(e) },
+            ) => e.target == guard.target && e.writer == *writer && e.sequence == *sequence,
+            (Operation::SubscribeOutput { target, .. }, Body::Subscribed { target: t, .. }) => {
+                t == target
+            }
             (
                 Operation::Status {
                     export,
@@ -227,7 +325,18 @@ impl Response {
                             _ => true,
                         }
                 }),
-                Body::Error { .. } => true,
+                Body::Window { window, expires_at } => counter(*window) && *expires_at > 0,
+                Body::Writer {
+                    target: t,
+                    writer,
+                    epoch,
+                } => target(t) && counter(*writer) && counter(*epoch),
+                Body::Subscribed { target: t, cursor } => {
+                    target(t)
+                        && valid_identifier(&cursor.incarnation)
+                        && cursor.offset <= i64::MAX as u64
+                }
+                Body::Done {} | Body::Error { .. } => true,
             };
         if valid {
             Ok(())
