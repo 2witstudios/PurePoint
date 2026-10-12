@@ -345,6 +345,18 @@ impl MeshStore {
         Ok(policy)
     }
 
+    /// Connection establishment/inventory check. The session authority must retain
+    /// its shared barrier through use; this snapshot never authorizes later effects.
+    pub(crate) fn connection_policy<S>(
+        &self,
+        ledger: &Ledger,
+        connection: &AuthenticatedConnection<S>,
+        generation: u64,
+        now: i64,
+    ) -> Result<PeerPolicy> {
+        self.current_policy(ledger, connection.peer_id(), generation, now)
+    }
+
     /// Authenticates from the verified TLS connection, checks durable grant bytes,
     /// then constructs a current Caller. Caller is usable only while the engine
     /// retains its shared authority barrier through the actual operation effect.
