@@ -1,7 +1,9 @@
 //! Linux process introspection and parent-death watch for the guardian.
 //!
 //! Process table and start time (clock ticks since boot, field 22) from
-//! `/proc/<pid>/stat`; uid from the owner of `/proc/<pid>`; environment from
+//! `/proc/<pid>/stat`; real uid from the `Uid:` line of `/proc/<pid>/status`
+//! (not the owner of `/proc/<pid>`, which is root for non-dumpable processes
+//! such as ssh-agent, so they would otherwise look foreign); environment from
 //! `/proc/<pid>/environ` (mode 0400, same uid only). Parent death:
 //! `PR_SET_PDEATHSIG` plus a `getppid()` re-check; `PR_SET_CHILD_SUBREAPER`
 //! keeps orphaned descendants parented to the guardian.
@@ -11,7 +13,6 @@
 
 use std::io;
 use std::os::fd::RawFd;
-use std::os::unix::fs::MetadataExt;
 
 use super::supervisor::ProcEntry;
 
@@ -24,7 +25,7 @@ pub(crate) const PDEATH_SIGNAL: libc::c_int = libc::SIGUSR2;
 
 pub(crate) fn process(pid: i32) -> Option<ProcEntry> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let uid = std::fs::metadata(format!("/proc/{pid}")).ok()?.uid();
+    let uid = real_uid(pid)?;
     let rest = &stat[stat.rfind(')')? + 2..];
     let fields: Vec<&str> = rest.split_whitespace().collect();
     // rest[0] is field 3 (state); ppid is field 4; starttime is field 22.
@@ -35,6 +36,23 @@ pub(crate) fn process(pid: i32) -> Option<ProcEntry> {
         start: fields.get(19)?.parse().ok()?,
         zombie: matches!(*fields.first()?, "Z" | "X"),
     })
+}
+
+/// Real uid of `pid`. `/proc/<pid>/status` stays world-readable even when the
+/// process is non-dumpable.
+fn real_uid(pid: i32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    parse_real_uid(&status)
+}
+
+fn parse_real_uid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
 
 pub(crate) fn list_processes() -> Vec<ProcEntry> {
@@ -90,5 +108,26 @@ pub(crate) fn become_subreaper() {
     // SAFETY: prctl with integer arguments only. Best effort.
     unsafe {
         libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1 as libc::c_ulong);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn given_status_of_non_dumpable_process_should_read_real_uid_not_proc_owner() {
+        // given: /proc/<pid> may be owned by root, but status names the real uid
+        let status = "Name:\tssh-agent\nUmask:\t0077\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n";
+        // when / then
+        assert_eq!(parse_real_uid(status), Some(1000));
+        assert_eq!(parse_real_uid("Name:\tx\n"), None);
+    }
+
+    #[test]
+    fn given_current_process_should_read_its_own_real_uid() {
+        // SAFETY: getuid has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        assert_eq!(real_uid(std::process::id() as i32), Some(uid));
     }
 }

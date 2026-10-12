@@ -219,8 +219,11 @@ impl Tracker {
         }
     }
 
+    /// A tracked process that still exists with the same start time is alive,
+    /// whatever its uid now reads: an unverifiable survivor must never count as
+    /// proof of termination. Signals still only succeed for same-uid processes.
     fn is_alive(&self, (pid, start): (i32, u64)) -> bool {
-        platform::process(pid).is_some_and(|p| p.start == start && !p.zombie && p.uid == self.uid)
+        platform::process(pid).is_some_and(|p| p.start == start && !p.zombie)
     }
 
     pub(crate) fn alive(&self) -> Vec<(i32, u64)> {
