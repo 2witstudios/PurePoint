@@ -1,696 +1,651 @@
-//! End-to-end remote execution between two real in-process daemons, using the
-//! compiled `pu-engine` binary as the worker's run guardian. The worker project
-//! is a real Git repository at an exact commit; its `claude` runtime is a test
-//! script that echoes PTY input and leaves a detached, marked descendant so stop
-//! must prove whole-tree termination.
+//! Remote execution against real host and worker daemon processes. Each test
+//! names one requirement from docs/product/lan-mesh.md. The worker's `claude`
+//! runtime is an echoing test agent that leaves a detached, marked descendant,
+//! so stopping must prove whole-tree termination.
 
-use std::collections::BTreeSet;
-use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+mod mesh_support;
 
+use mesh_support::*;
 use pu_core::mesh::{
-    Capability, ExportGrant,
-    admin::{ListenConfig, MeshAdminRequest, MeshAdminResponse, PublicIdentity, WorkerRoute},
-    local::LocalRoute,
-    response::{Body, ErrorCode, InputOutcome, Lifecycle, ReceiptEvidence},
-    wire::{AgentTarget, ControlGuard, Export, Mutation, Operation, Request as WireRequest},
+    Capability,
+    admin::{MeshAdminRequest, MeshAdminResponse, PeerChange},
+    response::{Body, ErrorCode, InputOutcome, Lifecycle},
+    wire::{AgentTarget, ControlGuard, Mutation, Operation},
 };
-use pu_core::protocol::{Request, Response};
-use pu_engine::{engine::Engine, ipc_server::IpcServer};
+use pu_core::protocol::{KillTarget, Request, Response};
+use std::collections::BTreeSet;
+use std::time::Duration;
 
-const EXE: &str = env!("CARGO_BIN_EXE_pu-engine");
-
-struct Daemon {
-    _tmp: tempfile::TempDir,
-    server: IpcServer,
-}
-
-impl Daemon {
-    fn new() -> Self {
-        let tmp = tempfile::Builder::new()
-            .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
-            .unwrap();
-        let server = IpcServer::bind(&tmp.path().join("daemon.sock"), Engine::new()).unwrap();
-        server.mesh().set_guardian_executable(PathBuf::from(EXE));
-        Self { _tmp: tmp, server }
-    }
-
-    async fn call(&self, request: Request) -> Response {
-        self.server.engine().handle_request(request).await
-    }
-
-    async fn admin(&self, request: MeshAdminRequest) -> MeshAdminResponse {
-        match self.call(Request::MeshAdmin { request }).await {
-            Response::MeshAdmin { response } => response,
-            other => panic!("admin request failed: {other:?}"),
-        }
-    }
-
-    async fn identity(&self) -> PublicIdentity {
-        match self.admin(MeshAdminRequest::IdentityShow {}).await {
-            MeshAdminResponse::Identity { identity } => identity,
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{args:?}: {output:?}");
-    String::from_utf8(output.stdout).unwrap().trim().to_string()
-}
-
-struct Fleet {
-    host: Daemon,
-    worker: Daemon,
-    worker_identity: PublicIdentity,
-    project: tempfile::TempDir,
-    marker: String,
-    export: Export,
-    commit: String,
-}
-
-impl Drop for Fleet {
-    fn drop(&mut self) {
-        // Never leak test processes, even on failure: kill only our marker.
-        let _ = std::process::Command::new("pkill")
-            .args(["-9", "-f", &self.marker])
-            .status();
-    }
-}
-
-fn free_pair() -> (SocketAddr, SocketAddr) {
-    let a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    (a.local_addr().unwrap(), b.local_addr().unwrap())
-}
-
-async fn fleet(capabilities: BTreeSet<Capability>) -> Fleet {
-    let host = Daemon::new();
-    let worker = Daemon::new();
-    for daemon in [&host, &worker] {
-        daemon.admin(MeshAdminRequest::IdentityInitialize {}).await;
-    }
-    let host_identity = host.identity().await;
-    let worker_identity = worker.identity().await;
-
-    // A real repository and exact commit on the worker.
-    let project = tempfile::tempdir().unwrap();
-    let root = project.path().canonicalize().unwrap();
-    git(&root, &["init", "-q", "-b", "main"]);
-    git(&root, &["config", "user.email", "test@example.com"]);
-    git(&root, &["config", "user.name", "test"]);
-    std::fs::write(root.join("README"), "worker project\n").unwrap();
-    git(&root, &["add", "README"]);
-    git(&root, &["commit", "-q", "-m", "initial"]);
-    let commit = git(&root, &["rev-parse", "HEAD"]);
-    if let Response::Error { code, message } = worker
-        .call(Request::Init {
-            project_root: root.to_string_lossy().into(),
-        })
-        .await
-    {
-        panic!("init failed: {code} {message}");
-    }
-    // The receiver's own runtime configuration: an echoing fake agent that also
-    // leaves a detached descendant carrying a unique marker.
-    let marker = format!("pu-mesh-exec-test-{}", uuid_like());
-    let script = root.join(".pu").join("fake-agent.sh");
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\n( exec perl -e 'use POSIX; exit 0 if fork; POSIX::setsid(); sleep 300' {marker} & )\necho READY\nexec cat\n"
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(
-        root.join(".pu").join("config.yaml"),
-        format!(
-            "agents:\n  claude:\n    name: claude\n    command: {}\n    launchArgs: []\n",
-            script.display()
-        ),
-    )
-    .unwrap();
-
-    let export_id = match worker
-        .admin(MeshAdminRequest::ExportRegister {
-            project_root: root.to_string_lossy().into(),
-            label: "project".into(),
-        })
-        .await
-    {
-        MeshAdminResponse::Export { export } => export.id,
-        other => panic!("unexpected {other:?}"),
-    };
-    worker
-        .admin(MeshAdminRequest::EnrollManual {
-            certificate_der: host_identity.certificate_der.clone(),
-            expected_fingerprint: host_identity.fingerprint.clone(),
-            grants: vec![ExportGrant {
-                export_id: export_id.clone(),
-                capabilities,
-                runtimes: BTreeSet::from(["claude".into()]),
-            }],
-            expires_at: None,
-        })
-        .await;
-    host.admin(MeshAdminRequest::EnrollManual {
-        certificate_der: worker_identity.certificate_der.clone(),
-        expected_fingerprint: worker_identity.fingerprint.clone(),
-        grants: vec![],
-        expires_at: None,
-    })
-    .await;
-    let (control, bulk) = free_pair();
-    worker
-        .admin(MeshAdminRequest::ConfigSet {
-            config: ListenConfig {
-                bind_address: Some(control),
-                bulk_bind_address: Some(bulk),
-            },
-        })
-        .await;
-    host.admin(MeshAdminRequest::WorkerSet {
-        route: WorkerRoute {
-            fingerprint: worker_identity.fingerprint.clone(),
-            daemon_id: worker_identity.daemon_id.clone(),
-            label: "worker".into(),
-            control_address: control,
-            bulk_address: bulk,
-        },
-    })
-    .await;
-    Fleet {
-        host,
-        worker,
-        worker_identity,
-        project,
-        marker,
-        export: Export {
-            id: export_id,
-            generation: 1,
-        },
-        commit,
-    }
-}
-
-fn uuid_like() -> String {
-    pu_core::id::session_id().replace('-', "")
-}
-
-impl Fleet {
-    fn request(&self, operation: Operation) -> WireRequest {
-        WireRequest {
-            request_id: pu_core::id::session_id(),
-            target_daemon: self.worker_identity.daemon_id.clone(),
-            operation,
-        }
-    }
-
-    async fn send_raw(&self, operation: Operation) -> Response {
-        self.host
-            .call(Request::MeshRoute {
-                route: LocalRoute {
-                    worker: self.worker_identity.fingerprint.clone(),
-                    request: self.request(operation),
-                },
-            })
-            .await
-    }
-
-    async fn send(&self, operation: Operation) -> Body {
-        match self.send_raw(operation).await {
-            Response::MeshRoute { response } => response.body,
-            other => panic!("route failed: {other:?}"),
-        }
-    }
-
-    /// Current guard from durable status; receipts are historical snapshots.
-    async fn guard(&self, target: &AgentTarget) -> ControlGuard {
-        let status = self.status(&target.agent_id).await;
-        assert_eq!(status.target, *target);
-        ControlGuard {
-            target: status.target,
-            epoch: status.epoch,
-            revision: status.revision,
-        }
-    }
-
-    async fn window(&self) -> u64 {
-        match self.send(Operation::IssueWindow { ttl_seconds: 600 }).await {
-            Body::Window { window, .. } => window,
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-
-    fn spawn_op(&self, window: u64, id: &str, commit: &str) -> Operation {
-        Operation::Spawn {
-            mutation: Mutation {
-                window,
-                id: id.into(),
-            },
-            export: self.export.clone(),
-            runtime: "claude".into(),
-            source_commit: commit.into(),
-            prompt: "hello from host".into(),
-        }
-    }
-
-    async fn status(&self, agent: &str) -> pu_core::mesh::response::AgentSummary {
-        match self
-            .send(Operation::Status {
-                export: self.export.clone(),
-                agent_id: Some(agent.into()),
-                after_agent: None,
-                limit: 1,
-            })
-            .await
-        {
-            Body::Status { mut agents, .. } => agents.remove(0),
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-
-    async fn wait_lifecycle(&self, agent: &str, wanted: Lifecycle) {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            let status = self.status(agent).await;
-            if status.lifecycle == wanted {
-                return;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "lifecycle stayed {:?}, wanted {wanted:?}",
-                status.lifecycle
-            );
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    fn marked_alive(&self) -> bool {
-        std::process::Command::new("pgrep")
-            .args(["-f", &self.marker])
-            .output()
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false)
-    }
-}
-
-fn evidence(body: Body) -> ReceiptEvidence {
-    match body {
-        Body::Receipt {
-            evidence: Some(evidence),
-        } => evidence,
-        other => panic!("expected receipt, got {other:?}"),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn given_enrolled_worker_should_spawn_observe_input_and_stop_original_run_without_replay() {
-    // given
-    let fleet = fleet(BTreeSet::from([
-        Capability::Inspect,
-        Capability::ReadOutput,
-        Capability::Spawn,
-        Capability::Control,
-        Capability::Input,
-        Capability::Stop,
-    ]))
-    .await;
-    let window = fleet.window().await;
-
-    // when: spawn, then repeat the identical operation
-    let spawned = evidence(
-        fleet
-            .send(fleet.spawn_op(window, "spawn-1", &fleet.commit))
-            .await,
-    );
-    let duplicate = evidence(
-        fleet
-            .send(fleet.spawn_op(window, "spawn-1", &fleet.commit))
-            .await,
-    );
-
-    // then: one durable worker-owned agent/run; the duplicate launched nothing
-    assert_eq!(spawned.target, duplicate.target);
-    fleet
-        .wait_lifecycle(&spawned.target.agent_id, Lifecycle::Running)
-        .await;
-    match fleet
+async fn agent_count(fixture: &Fixture) -> usize {
+    match fixture
         .send(Operation::Status {
-            export: fleet.export.clone(),
+            export: fixture.route.export.clone(),
             agent_id: None,
             after_agent: None,
             limit: 64,
         })
         .await
     {
-        Body::Status { agents, .. } => assert_eq!(agents.len(), 1),
+        Body::Status { agents, .. } => agents.len(),
         other => panic!("unexpected {other:?}"),
     }
-    // A conflicting payload under the same operation identity is rejected.
-    let other_commit = "0".repeat(40);
-    assert!(matches!(
-        fleet
-            .send(fleet.spawn_op(window, "spawn-1", &other_commit))
+}
+
+async fn take_over(fixture: &Fixture, agent: &str) {
+    assert_eq!(
+        fixture
+            .worker
+            .admin(MeshAdminRequest::RunTakeover {
+                agent_id: agent.into(),
+            })
             .await,
-        Body::Error { .. }
-    ));
+        MeshAdminResponse::Done {}
+    );
+}
 
-    // when: observe output over the paired bulk connection
-    let (subscribed, mut watch) = fleet
-        .host
-        .server
-        .mesh()
-        .watch(LocalRoute {
-            worker: fleet.worker_identity.fingerprint.clone(),
-            request: fleet.request(Operation::SubscribeOutput {
-                target: spawned.target.clone(),
-                cursor: None,
-            }),
-        })
-        .await
-        .unwrap();
-    assert!(matches!(subscribed.body, Body::Subscribed { .. }));
-    // The guarded runtime is ready once it prints READY on the PTY.
-    let started = Instant::now();
-    let mut early = Vec::new();
-    while !String::from_utf8_lossy(&early).contains("READY") {
-        assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "agent never started"
-        );
-        if let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(3), watch.next()).await {
-            early.extend_from_slice(&frame.data);
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_repeated_spawn_operation_should_return_original_receipt_without_launching_twice() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let window = fixture.window().await;
+    let spawned = receipt(fixture.send(fixture.spawn_op(window, "spawn-1")).await);
+
+    // when
+    let repeated = receipt(fixture.send(fixture.spawn_op(window, "spawn-1")).await);
+
+    // then
+    assert_eq!(repeated.target, spawned.target);
+    assert_eq!(agent_count(&fixture).await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_conflicting_payload_under_one_operation_identity_should_return_conflict() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let window = fixture.window().await;
+    receipt(fixture.send(fixture.spawn_op(window, "spawn-1")).await);
+
+    // when
+    let conflicting = fixture
+        .send(
+            fixture
+                .route
+                .spawn_op(window, "spawn-1", &fixture.project.commit, "different"),
+        )
+        .await;
+
+    // then
+    assert_eq!(
+        conflicting,
+        Body::Error {
+            code: ErrorCode::Conflict
         }
+    );
+    assert_eq!(agent_count(&fixture).await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_missing_source_should_fail_explicitly_without_admission() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let window = fixture.window().await;
+
+    // when
+    let missing = fixture
+        .send(
+            fixture
+                .route
+                .spawn_op(window, "missing", &"f".repeat(40), ""),
+        )
+        .await;
+
+    // then
+    assert_eq!(
+        missing,
+        Body::Error {
+            code: ErrorCode::SourceMissing
+        }
+    );
+    assert_eq!(agent_count(&fixture).await, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_retried_spawn_after_source_removed_should_still_return_original_receipt() {
+    // given: an admitted spawn, then the worker repository loses that commit
+    let fixture = fixture(all_capabilities()).await;
+    let window = fixture.window().await;
+    let root = &fixture.project.root;
+    std::fs::write(root.join("NEXT"), "next\n").unwrap();
+    git(root, &["add", "NEXT"]);
+    git(root, &["commit", "-q", "-m", "next"]);
+    let commit = git(root, &["rev-parse", "HEAD"]);
+    let spawn = fixture.route.spawn_op(window, "spawn-1", &commit, "");
+    let spawned = receipt(fixture.send(spawn.clone()).await);
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    git(root, &["reflog", "expire", "--expire=now", "--all"]);
+    git(root, &["gc", "-q", "--prune=now"]);
+
+    // when
+    let retried = receipt(fixture.send(spawn).await);
+
+    // then: the retained receipt answers before any source check
+    assert_eq!(retried.target, spawned.target);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_ungranted_runtime_should_refuse_at_the_session_without_admission() {
+    // given: only inspect and spawn
+    let fixture = fixture(BTreeSet::from([Capability::Inspect, Capability::Spawn])).await;
+    let window = fixture.window().await;
+    let mut codex = fixture.spawn_op(window, "codex");
+    if let Operation::Spawn { runtime, .. } = &mut codex {
+        *runtime = "codex".into();
     }
 
-    // when: one writer, exact input acknowledgements
-    let current = fleet.guard(&spawned.target).await;
-    let writer = match fleet
-        .send(Operation::OpenWriter {
-            guard: current.clone(),
-            previous: None,
-        })
-        .await
-    {
-        Body::Writer { writer, .. } => writer,
-        other => panic!("unexpected {other:?}"),
+    // when / then
+    assert_eq!(error_code(fixture.send_raw(codex).await), "MESH_DENIED");
+    assert_eq!(agent_count(&fixture).await, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_granted_suspend_resume_or_transcript_read_should_return_unsupported() {
+    // given: every capability, including suspend and resume
+    let mut capabilities = all_capabilities();
+    capabilities.extend([Capability::Suspend, Capability::Resume]);
+    let fixture = fixture(capabilities).await;
+    let spawned = fixture.running("spawn-1").await;
+    let guard = fixture.guard(&spawned).await;
+    let window = fixture.window().await;
+    let mutation = |id: &str| Mutation {
+        window,
+        id: id.into(),
     };
+
+    // when / then
+    for operation in [
+        Operation::Suspend {
+            guard: guard.clone(),
+            mutation: mutation("suspend"),
+        },
+        Operation::Resume {
+            guard: guard.clone(),
+            mutation: mutation("resume"),
+            runtime: "claude".into(),
+            source_commit: fixture.project.commit.clone(),
+        },
+        Operation::ReadConversation {
+            target: spawned.target.clone(),
+            limit: 10,
+            cursor: None,
+        },
+    ] {
+        assert_eq!(
+            fixture.send(operation).await,
+            Body::Error {
+                code: ErrorCode::Unsupported
+            }
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_peer_without_grants_should_not_be_issued_windows() {
+    // given: a second host enrolled on the worker with no grants
+    let fixture = fixture(all_capabilities()).await;
+    let stranger = Daemon::start();
+    let route = enroll(
+        &stranger,
+        &fixture.worker,
+        &fixture.project,
+        BTreeSet::new(),
+    )
+    .await;
+
+    // when
+    let window = route
+        .send(&stranger, Operation::IssueWindow { ttl_seconds: 60 })
+        .await;
+
+    // then
+    assert_eq!(
+        window,
+        Body::Error {
+            code: ErrorCode::Denied
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_input_should_deliver_once_with_exact_receipts_and_never_replay() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let mut watch = fixture.watch(&spawned).await;
+    let writer = fixture.writer(&spawned).await;
+    let guard = fixture.guard(&spawned).await;
     let input = |sequence: u64, data: &[u8]| Operation::Input {
-        guard: current.clone(),
+        guard: guard.clone(),
         writer,
         sequence,
         data: data.to_vec(),
     };
-    let first = fleet.send(input(1, b"ping-from-host\n")).await;
+
+    // when
+    let first = fixture.send(input(1, b"ping-from-host\n")).await;
+    let repeated = fixture.send(input(1, b"ping-from-host\n")).await;
+    let conflicting = fixture.send(input(1, b"different-bytes\n")).await;
+    let gap = fixture.send(input(3, b"skipped\n")).await;
+    let next = fixture.send(input(2, b"sentinel\n")).await;
+
+    // then
     match &first {
         Body::InputReceipt {
             evidence: Some(evidence),
         } => assert_eq!(evidence.outcome, InputOutcome::Written),
         other => panic!("unexpected {other:?}"),
     }
-    // A repeated sequence returns the same evidence and writes nothing again.
-    assert_eq!(fleet.send(input(1, b"ping-from-host\n")).await, first);
+    assert_eq!(repeated, first);
     assert_eq!(
-        fleet.send(input(1, b"different-bytes\n")).await,
+        conflicting,
         Body::Error {
             code: ErrorCode::Conflict
         }
     );
     assert_eq!(
-        fleet.send(input(3, b"skipped\n")).await,
+        gap,
         Body::Error {
             code: ErrorCode::SequenceGap
         }
     );
-
-    // then: the echoed input arrives exactly once in the observed output
-    let mut seen = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !String::from_utf8_lossy(&seen).contains("ping-from-host") {
-        assert!(
-            Instant::now() < deadline,
-            "output: {:?}",
-            String::from_utf8_lossy(&seen)
-        );
-        let frame = tokio::time::timeout(Duration::from_secs(5), watch.next())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(frame.target, spawned.target);
-        assert!(frame.gap.is_none());
-        seen.extend_from_slice(&frame.data);
-    }
+    assert!(matches!(next, Body::InputReceipt { .. }), "{next:?}");
+    // Each line appears twice (tty echo, then `cat`) for exactly one delivery.
     assert!(
-        fleet.marked_alive(),
-        "marked descendant should be running; output: {:?}",
-        String::from_utf8_lossy(&seen)
+        watch
+            .until("sentinel\r\nsentinel", Duration::from_secs(30))
+            .await
     );
-
-    // when: stop the original run
-    let stop = Operation::Stop {
-        guard: fleet.guard(&spawned.target).await,
-        mutation: Mutation {
-            window,
-            id: "stop-1".into(),
-        },
-    };
-    let stopped = evidence(fleet.send(stop.clone()).await);
-    assert_eq!(stopped.target, spawned.target);
-
-    // then: guardian-verified whole-tree termination releases the run
-    fleet
-        .wait_lifecycle(&spawned.target.agent_id, Lifecycle::Terminated)
-        .await;
-    assert!(!fleet.marked_alive(), "detached descendant survived stop");
-    drop(watch);
-    drop(fleet.project.path().to_path_buf());
+    let output = String::from_utf8_lossy(&watch.seen);
+    assert_eq!(output.matches("ping-from-host").count(), 2, "{output:?}");
+    assert_eq!(output.matches("different-bytes").count(), 0, "{output:?}");
+    assert_eq!(output.matches("skipped").count(), 0, "{output:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn given_missing_source_or_ungranted_operation_should_fail_explicitly_without_launch() {
+async fn given_stop_should_prove_whole_tree_termination_and_release_the_run() {
     // given
-    let fleet = fleet(BTreeSet::from([Capability::Inspect, Capability::Spawn])).await;
-    let window = fleet.window().await;
-    // when / then: no commit fallback
-    assert_eq!(
-        fleet
-            .send(fleet.spawn_op(window, "missing", &"f".repeat(40)))
-            .await,
-        Body::Error {
-            code: ErrorCode::SourceMissing
-        }
-    );
-    // an ungranted runtime is denied
-    let mut ungranted = fleet.spawn_op(window, "codex", &fleet.commit);
-    if let Operation::Spawn { runtime, .. } = &mut ungranted {
-        *runtime = "codex".into();
-    }
-    match fleet.send_raw(ungranted).await {
-        Response::Error { code, .. } => assert_eq!(code, "MESH_DENIED"),
-        other => panic!("unexpected {other:?}"),
-    }
-    // nothing was admitted
-    match fleet
-        .send(Operation::Status {
-            export: fleet.export.clone(),
-            agent_id: None,
-            after_agent: None,
-            limit: 64,
-        })
-        .await
-    {
-        Body::Status { agents, .. } => assert!(agents.is_empty()),
-        other => panic!("unexpected {other:?}"),
-    }
-    // an ungranted operation is refused by the session before dispatch
-    let suspend = Operation::Suspend {
-        guard: ControlGuard {
-            target: AgentTarget {
-                export: fleet.export.clone(),
-                agent_id: "agent".into(),
-                run_id: "run".into(),
-            },
-            epoch: 1,
-            revision: 1,
-        },
-        mutation: Mutation {
-            window,
-            id: "suspend".into(),
-        },
-    };
-    match fleet.send_raw(suspend).await {
-        Response::Error { code, .. } => assert_eq!(code, "MESH_DENIED"),
-        other => panic!("unexpected {other:?}"),
-    }
-}
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let window = fixture.window().await;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn given_remote_controlled_run_should_fence_local_writers_until_owner_takeover() {
-    // given: a running remote-controlled run with an open remote writer
-    let fleet = fleet(BTreeSet::from([
-        Capability::Inspect,
-        Capability::ReadOutput,
-        Capability::Spawn,
-        Capability::Control,
-        Capability::Input,
-        Capability::Stop,
-    ]))
-    .await;
-    let window = fleet.window().await;
-    let spawned = evidence(
-        fleet
-            .send(fleet.spawn_op(window, "spawn-local", &fleet.commit))
-            .await,
-    );
-    fleet
-        .wait_lifecycle(&spawned.target.agent_id, Lifecycle::Running)
-        .await;
-    let agent = spawned.target.agent_id.clone();
-    let remote_guard = fleet.guard(&spawned.target).await;
-    let writer = match fleet
-        .send(Operation::OpenWriter {
-            guard: remote_guard.clone(),
-            previous: None,
-        })
-        .await
-    {
-        Body::Writer { writer, .. } => writer,
-        other => panic!("unexpected {other:?}"),
-    };
-
-    // then: local raw input, kill and suspend are refused
-    let local_input = |data: &str| Request::Input {
-        agent_id: agent.clone(),
-        data: data.as_bytes().to_vec(),
-        submit: false,
-    };
-    match fleet.worker.call(local_input("local\n")).await {
-        Response::Error { code, .. } => assert_eq!(code, "MESH_REMOTE_CONTROL"),
-        other => panic!("unexpected {other:?}"),
-    }
-    let root = fleet.project.path().canonicalize().unwrap();
-    match fleet
-        .worker
-        .call(Request::Kill {
-            project_root: root.to_string_lossy().into(),
-            target: pu_core::protocol::KillTarget::Agent(agent.clone()),
-            exclude: vec![],
-        })
-        .await
-    {
-        Response::Error { code, .. } => assert_eq!(code, "MESH_OWNED_RUN"),
-        other => panic!("unexpected {other:?}"),
-    }
-
-    // when: the owner takes over locally
-    assert!(matches!(
-        fleet
-            .worker
-            .admin(MeshAdminRequest::RunTakeover {
-                agent_id: agent.clone()
+    // when
+    let stopped = receipt(
+        fixture
+            .send(Operation::Stop {
+                guard: fixture.guard(&spawned).await,
+                mutation: Mutation {
+                    window,
+                    id: "stop-1".into(),
+                },
             })
             .await,
-        MeshAdminResponse::Done {}
-    ));
+    );
 
-    // then: the remote writer is fenced and local input is accepted
-    // Takeover closes the peer's live sessions, so the host may learn of the
-    // fence either from that closed link or from a typed refusal.
-    match fleet
-        .send_raw(Operation::Input {
-            guard: remote_guard.clone(),
-            writer,
-            sequence: 1,
-            data: b"remote\n".to_vec(),
-        })
-        .await
-    {
-        Response::MeshRoute { response } => match response.body {
-            Body::Error { code } => assert!(
-                matches!(code, ErrorCode::Fenced | ErrorCode::Stale),
-                "{code:?}"
-            ),
-            other => panic!("remote writer was not fenced: {other:?}"),
-        },
-        Response::Error { code, .. } => assert!(
-            matches!(code.as_str(), "MESH_DENIED" | "MESH_CLOSED"),
-            "{code}"
-        ),
-        other => panic!("unexpected {other:?}"),
-    }
-    // A fenced link is never reused: the next request reconnects and the
-    // refusal is typed.
-    match fleet
-        .send(Operation::Input {
-            guard: remote_guard.clone(),
-            writer,
-            sequence: 1,
-            data: b"remote\n".to_vec(),
-        })
-        .await
-    {
-        Body::Error { code } => assert!(
-            matches!(code, ErrorCode::Fenced | ErrorCode::Stale),
-            "{code:?}"
-        ),
-        other => panic!("remote writer was not fenced: {other:?}"),
-    }
-    assert!(matches!(
-        fleet.worker.call(local_input("local\n")).await,
-        Response::Ok
-    ));
-    // a peer cannot displace the local controller
-    let current = fleet.guard(&spawned.target).await;
-    match fleet
-        .send(Operation::AcquireControl {
-            guard: current,
-            mutation: Mutation {
-                window,
-                id: "reacquire".into(),
-            },
-        })
-        .await
-    {
-        Body::Error { code } => assert_eq!(code, ErrorCode::Fenced),
-        other => panic!("peer displaced local control: {other:?}"),
-    }
-    match fleet.worker.admin(MeshAdminRequest::RunList {}).await {
-        MeshAdminResponse::Runs { runs } => {
-            assert_eq!(runs.len(), 1);
-            assert_eq!(runs[0].controller, "local");
-            assert!(runs[0].live);
-        }
-        other => panic!("unexpected {other:?}"),
-    }
+    // then
+    assert_eq!(stopped.target, spawned.target);
+    fixture.wait(&spawned, Lifecycle::Terminated).await;
+    assert!(wait_marker_dead(&fixture.marker, Duration::from_secs(10)));
+    assert!(fixture.worker_runs().await.is_empty());
+}
 
-    // when: the owner stops it locally
-    fleet
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_stop_during_guardian_startup_should_still_prove_termination() {
+    // given: a spawn stopped immediately, before the runtime prints READY
+    let fixture = fixture(all_capabilities()).await;
+    let window = fixture.window().await;
+    let spawned = receipt(fixture.send(fixture.spawn_op(window, "spawn-1")).await);
+
+    // when
+    let guard = fixture.guard(&spawned).await;
+    receipt(
+        fixture
+            .send(Operation::Stop {
+                guard,
+                mutation: Mutation {
+                    window,
+                    id: "stop-early".into(),
+                },
+            })
+            .await,
+    );
+
+    // then: proof, not Unknown
+    fixture.wait(&spawned, Lifecycle::Terminated).await;
+    assert!(wait_marker_dead(&fixture.marker, Duration::from_secs(10)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_another_peers_run_should_refuse_its_control() {
+    // given: a second host granted control on the same export, and a run with
+    // no controller (the owner took over and released it)
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let agent = spawned.target.agent_id.clone();
+    take_over(&fixture, &agent).await;
+    fixture
         .worker
-        .admin(MeshAdminRequest::RunStop {
+        .admin(MeshAdminRequest::RunRelease {
             agent_id: agent.clone(),
         })
         .await;
+    let other = Daemon::start();
+    enroll(
+        &other,
+        &fixture.worker,
+        &fixture.project,
+        all_capabilities(),
+    )
+    .await;
+    let route = Route {
+        worker: fixture.route.worker.clone(),
+        export: fixture.route.export.clone(),
+    };
+    let window = route.window(&other).await;
+    let status = route.status(&other, &agent).await;
 
-    // then: the guardian proves whole-tree termination and capacity is freed
-    fleet.wait_lifecycle(&agent, Lifecycle::Terminated).await;
-    assert!(
-        !fleet.marked_alive(),
-        "detached descendant survived local stop"
+    // when
+    let acquired = route
+        .send(
+            &other,
+            Operation::AcquireControl {
+                guard: ControlGuard {
+                    target: AgentTarget { ..status.target },
+                    epoch: status.epoch,
+                    revision: status.revision,
+                },
+                mutation: Mutation {
+                    window,
+                    id: "seize".into(),
+                },
+            },
+        )
+        .await;
+
+    // then
+    assert_eq!(
+        acquired,
+        Body::Error {
+            code: ErrorCode::Fenced
+        }
     );
-    match fleet.worker.admin(MeshAdminRequest::RunList {}).await {
-        MeshAdminResponse::Runs { runs } => assert!(runs.is_empty(), "{runs:?}"),
-        other => panic!("unexpected {other:?}"),
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_remote_controlled_run_should_fence_local_lifecycle_and_writers() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let agent = spawned.target.agent_id.clone();
+    let root = fixture.project.root.to_string_lossy().to_string();
+
+    // when / then
+    let local_input = Request::Input {
+        agent_id: agent.clone(),
+        data: b"local\n".to_vec(),
+        submit: false,
+    };
+    assert_eq!(
+        error_code(fixture.worker.call(local_input).await),
+        "MESH_REMOTE_CONTROL"
+    );
+    for request in [
+        Request::Kill {
+            project_root: root.clone(),
+            target: KillTarget::Agent(agent.clone()),
+            exclude: vec![],
+        },
+        Request::Rename {
+            project_root: root.clone(),
+            agent_id: agent.clone(),
+            name: "renamed".into(),
+        },
+        Request::Resume {
+            project_root: root.clone(),
+            agent_id: agent.clone(),
+        },
+    ] {
+        assert_eq!(
+            error_code(fixture.worker.call(request).await),
+            "MESH_OWNED_RUN"
+        );
     }
+    assert!(marked_alive(&fixture.marker));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_owner_takeover_should_fence_remote_writer_and_allow_local_input() {
+    // given: a remote writer and a watch
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let agent = spawned.target.agent_id.clone();
+    let remote_guard = fixture.guard(&spawned).await;
+    let writer = fixture.writer(&spawned).await;
+    let mut watch = fixture.watch(&spawned).await;
+    let remote = || Operation::Input {
+        guard: remote_guard.clone(),
+        writer,
+        sequence: 1,
+        data: b"remote-line\n".to_vec(),
+    };
+
+    // when
+    take_over(&fixture, &agent).await;
+
+    // then: the closed link may report the fence first; then it is typed
+    if let Response::Error { code, .. } = fixture.send_raw(remote()).await {
+        assert!(
+            matches!(code.as_str(), "MESH_DENIED" | "MESH_CLOSED"),
+            "{code}"
+        );
+    }
+    assert!(
+        matches!(
+            fixture.send(remote()).await,
+            Body::Error {
+                code: ErrorCode::Fenced | ErrorCode::Stale
+            }
+        ),
+        "remote writer was not fenced"
+    );
+    assert!(matches!(
+        fixture
+            .worker
+            .call(Request::Input {
+                agent_id: agent.clone(),
+                data: b"local-line\n".to_vec(),
+                submit: false,
+            })
+            .await,
+        Response::Ok
+    ));
+    assert!(watch.until("local-line", Duration::from_secs(30)).await);
+    assert!(!String::from_utf8_lossy(&watch.seen).contains("remote-line"));
+    let runs = fixture.worker_runs().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].controller, "local");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_local_control_should_never_be_displaced_by_a_peer() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    take_over(&fixture, &spawned.target.agent_id).await;
+    let window = fixture.window().await;
+    let guard = fixture.guard(&spawned).await;
+
+    // when
+    let acquired = fixture
+        .route
+        .send_eventually(
+            &fixture.host,
+            Operation::AcquireControl {
+                guard,
+                mutation: Mutation {
+                    window,
+                    id: "reacquire".into(),
+                },
+            },
+        )
+        .await;
+
+    // then
+    assert_eq!(
+        acquired,
+        Body::Error {
+            code: ErrorCode::Fenced
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_owner_stop_should_prove_termination_and_free_capacity() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    take_over(&fixture, &spawned.target.agent_id).await;
+
+    // when
+    assert_eq!(
+        fixture
+            .worker
+            .admin(MeshAdminRequest::RunStop {
+                agent_id: spawned.target.agent_id.clone(),
+            })
+            .await,
+        MeshAdminResponse::Done {}
+    );
+
+    // then
+    fixture.wait(&spawned, Lifecycle::Terminated).await;
+    assert!(wait_marker_dead(&fixture.marker, Duration::from_secs(10)));
+    assert!(fixture.worker_runs().await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_owner_resolution_should_refuse_live_or_settled_runs() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let resolve = || Request::MeshAdmin {
+        request: MeshAdminRequest::RunResolve {
+            run_id: spawned.target.run_id.clone(),
+            evidence: "checked by owner".into(),
+        },
+    };
+
+    // when / then: a live run is never released by attestation
+    assert_eq!(
+        error_code(fixture.worker.call(resolve()).await),
+        "MESH_RUN_LIVE"
+    );
+
+    // when the run has ended with proof
+    take_over(&fixture, &spawned.target.agent_id).await;
+    fixture
+        .worker
+        .admin(MeshAdminRequest::RunStop {
+            agent_id: spawned.target.agent_id.clone(),
+        })
+        .await;
+    fixture.wait(&spawned, Lifecycle::Terminated).await;
+
+    // then a settled run cannot be re-resolved
+    assert_eq!(
+        error_code(fixture.worker.call(resolve()).await),
+        "MESH_RUN_INVALID_STATE"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_two_watches_of_one_run_should_each_receive_output_independently() {
+    // given
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let mut first = fixture.watch(&spawned).await;
+    let mut second = fixture.watch(&spawned).await;
+    let writer = fixture.writer(&spawned).await;
+    let guard = fixture.guard(&spawned).await;
+    let send = |sequence: u64, text: &str| Operation::Input {
+        guard: guard.clone(),
+        writer,
+        sequence,
+        data: text.as_bytes().to_vec(),
+    };
+
+    // when: both see one line, then the first watch closes
+    fixture.send(send(1, "both-see-this\n")).await;
+    assert!(first.until("both-see-this", Duration::from_secs(30)).await);
+    assert!(second.until("both-see-this", Duration::from_secs(30)).await);
+    drop(first);
+    fixture.send(send(2, "second-still-sees\n")).await;
+
+    // then: closing one watch does not end the other's subscription
+    assert!(
+        second
+            .until("second-still-sees", Duration::from_secs(30))
+            .await
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn given_host_link_reconnect_should_resume_open_watch() {
+    // given: an open watch
+    let fixture = fixture(all_capabilities()).await;
+    let spawned = fixture.running("spawn-1").await;
+    let mut watch = fixture.watch(&spawned).await;
+    let host_fingerprint = fixture.host.identity().await.fingerprint;
+    let generation = match fixture
+        .worker
+        .admin(MeshAdminRequest::PeerList {
+            after: None,
+            limit: 8,
+        })
+        .await
+    {
+        MeshAdminResponse::Peers { peers, .. } => {
+            peers
+                .into_iter()
+                .find(|p| p.fingerprint == host_fingerprint)
+                .unwrap()
+                .generation
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+
+    // when: advancing the host's generation closes its link; later output
+    // comes from the owner, who takes over to type into the run
+    fixture
+        .worker
+        .admin(MeshAdminRequest::PeerChange {
+            fingerprint: host_fingerprint,
+            expected_generation: generation,
+            change: PeerChange::AdvanceGeneration,
+        })
+        .await;
+    take_over(&fixture, &spawned.target.agent_id).await;
+    fixture
+        .worker
+        .call(Request::Input {
+            agent_id: spawned.target.agent_id.clone(),
+            data: b"after-reconnect\n".to_vec(),
+            submit: false,
+        })
+        .await;
+
+    // then: the watch resubscribes over a new link and sees later output
+    assert!(
+        watch
+            .until("after-reconnect", Duration::from_secs(20))
+            .await
+    );
 }

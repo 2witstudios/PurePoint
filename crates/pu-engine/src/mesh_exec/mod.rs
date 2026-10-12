@@ -389,9 +389,14 @@ impl Executor {
         }
     }
 
-    /// Windows are only for principals that hold at least one grant.
+    /// Windows are only for principals granted at least one capability.
     fn issue_window(&self, call: &Call<'_>, ttl_seconds: u32) -> Outcome {
-        if call.policy.exports.is_empty() {
+        if call
+            .policy
+            .exports
+            .iter()
+            .all(|grant| grant.capabilities.is_empty())
+        {
             return Err(ErrorCode::Denied);
         }
         let window = call

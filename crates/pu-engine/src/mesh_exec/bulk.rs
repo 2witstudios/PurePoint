@@ -25,6 +25,9 @@ const IDLE: Duration = Duration::from_millis(25);
 /// An empty frame keeps an idle subscription inside the peer's read deadline and
 /// detects a dead or stalled host without waiting for output.
 const TICK: Duration = Duration::from_secs(2);
+/// After the process exits, the PTY reader may still append its final bytes;
+/// output ends only once it has been quiet this long since exit.
+const SETTLE: Duration = Duration::from_millis(250);
 
 pub(super) struct Subscribe {
     pub target: AgentTarget,
@@ -93,6 +96,8 @@ struct Active {
     permit: mesh_sessions::Subscription,
     offset: usize,
     sent: Instant,
+    /// When exit was first seen with everything sent, and the total then.
+    drained: Option<(Instant, usize)>,
 }
 
 pub(super) async fn serve(
@@ -155,6 +160,7 @@ pub(super) async fn serve(
                             permit,
                             offset,
                             sent: Instant::now(),
+                            drained: None,
                         });
                     }
                     Err(_) => return,
@@ -181,7 +187,18 @@ async fn pump(
         .output
         .read_range(active.offset, MAX_OUTPUT_CHUNK)
         .map_err(|_| mesh_sessions::Error::Frame)?;
-    let end = exited && chunk.next == chunk.total;
+    let caught_up = exited && chunk.next == chunk.total;
+    let end = match (caught_up, active.drained) {
+        (false, _) => {
+            active.drained = None;
+            false
+        }
+        (true, Some((since, total))) if total == chunk.total => since.elapsed() >= SETTLE,
+        (true, _) => {
+            active.drained = Some((Instant::now(), chunk.total));
+            false
+        }
+    };
     if chunk.bytes.is_empty() && chunk.gap.is_none() && !end && active.sent.elapsed() < TICK {
         return Ok(Step::Idle);
     }

@@ -2,6 +2,7 @@
 //! with its own private state directory and isolated HOME, driven over its
 //! local socket exactly like the CLI. Processes are killed on drop; agent
 //! processes carry a per-test marker and are reaped by marker only.
+// Each test binary uses a different subset of this shared harness.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
@@ -233,15 +234,26 @@ pub async fn enroll(
     }
     let host_identity = host.identity().await;
     let worker_identity = worker.identity().await;
-    let export_id = match worker
-        .admin(MeshAdminRequest::ExportRegister {
-            project_root: project.root.to_string_lossy().into(),
-            label: "project".into(),
-        })
-        .await
-    {
-        MeshAdminResponse::Export { export } => export.id,
+    // Every host enrolled on this worker shares the project's one export.
+    let existing = match worker.admin(MeshAdminRequest::ExportList {}).await {
+        MeshAdminResponse::Exports { exports } => exports
+            .into_iter()
+            .find(|export| export.label == "project" && !export.revoked)
+            .map(|export| export.id),
         other => panic!("unexpected {other:?}"),
+    };
+    let export_id = match existing {
+        Some(id) => id,
+        None => match worker
+            .admin(MeshAdminRequest::ExportRegister {
+                project_root: project.root.to_string_lossy().into(),
+                label: "project".into(),
+            })
+            .await
+        {
+            MeshAdminResponse::Export { export } => export.id,
+            other => panic!("unexpected {other:?}"),
+        },
     };
     worker
         .admin(MeshAdminRequest::EnrollManual {
@@ -545,10 +557,113 @@ pub fn reap(marker: &str) -> Reaper {
     Reaper(marker.to_string())
 }
 
-pub fn assert_receipt_target(evidence: &ReceiptEvidence, export: &Export) {
-    assert_eq!(evidence.target.export, *export);
+/// One enrolled host and worker with a prepared, guarded project.
+pub struct Fixture {
+    pub host: Daemon,
+    pub worker: Daemon,
+    pub project: Project,
+    pub route: Route,
+    pub marker: String,
+    _reaper: Reaper,
 }
 
-pub fn assert_dir(path: &Path) {
-    assert!(path.is_dir(), "{}", path.display());
+pub async fn fixture(capabilities: BTreeSet<Capability>) -> Fixture {
+    let marker = marker();
+    let reaper = reap(&marker);
+    let host = Daemon::start();
+    let worker = Daemon::start();
+    let project = project(&worker, &marker, None).await;
+    let route = enroll(&host, &worker, &project, capabilities).await;
+    Fixture {
+        host,
+        worker,
+        project,
+        route,
+        marker,
+        _reaper: reaper,
+    }
+}
+
+impl Fixture {
+    pub async fn send(&self, operation: Operation) -> Body {
+        self.route.send(&self.host, operation).await
+    }
+
+    pub async fn send_raw(&self, operation: Operation) -> Response {
+        self.route.send_raw(&self.host, operation).await
+    }
+
+    pub async fn window(&self) -> u64 {
+        self.route.window(&self.host).await
+    }
+
+    pub fn spawn_op(&self, window: u64, id: &str) -> Operation {
+        self.route
+            .spawn_op(window, id, &self.project.commit, "hello from host")
+    }
+
+    /// Spawn and wait until the guarded runtime prints READY.
+    pub async fn running(&self, id: &str) -> ReceiptEvidence {
+        let window = self.window().await;
+        let spawned = receipt(self.send(self.spawn_op(window, id)).await);
+        self.route
+            .wait_lifecycle(&self.host, &spawned.target.agent_id, Lifecycle::Running)
+            .await;
+        let mut watch = self.watch(&spawned).await;
+        assert!(
+            watch.until("READY", Duration::from_secs(30)).await,
+            "agent never started"
+        );
+        assert!(wait_marker_alive(&self.marker, Duration::from_secs(10)));
+        spawned
+    }
+
+    pub async fn watch(&self, spawned: &ReceiptEvidence) -> Watch {
+        Watch::open(
+            &self.host,
+            self.route.local(Operation::SubscribeOutput {
+                target: spawned.target.clone(),
+                cursor: None,
+            }),
+        )
+        .await
+    }
+
+    pub async fn guard(&self, spawned: &ReceiptEvidence) -> ControlGuard {
+        self.route.guard(&self.host, &spawned.target.agent_id).await
+    }
+
+    pub async fn writer(&self, spawned: &ReceiptEvidence) -> u64 {
+        match self
+            .send(Operation::OpenWriter {
+                guard: self.guard(spawned).await,
+                previous: None,
+            })
+            .await
+        {
+            Body::Writer { writer, .. } => writer,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    pub async fn wait(&self, spawned: &ReceiptEvidence, lifecycle: Lifecycle) {
+        self.route
+            .wait_lifecycle(&self.host, &spawned.target.agent_id, lifecycle)
+            .await;
+    }
+
+    pub async fn worker_runs(&self) -> Vec<pu_core::mesh::admin::RunStatus> {
+        match self.worker.admin(MeshAdminRequest::RunList {}).await {
+            MeshAdminResponse::Runs { runs } => runs,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+/// The worker-side error code of a refused local request.
+pub fn error_code(response: Response) -> String {
+    match response {
+        Response::Error { code, .. } => code,
+        other => panic!("expected refusal, got {other:?}"),
+    }
 }

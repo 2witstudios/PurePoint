@@ -378,7 +378,7 @@ async fn given_two_hosts_spawning_concurrently_should_admit_each_operation_exact
         BTreeSet::from([Capability::Inspect, Capability::Spawn]),
     )
     .await;
-    // The second enrollment registers the export again under a new immutable ID.
+    // Both hosts are granted the project's one export.
     let route_b = enroll(
         &second,
         &worker,
@@ -423,7 +423,8 @@ async fn given_two_hosts_spawning_concurrently_should_admit_each_operation_exact
         worker.log()
     );
 
-    // then: duplicates return the same receipt; six distinct runs exist
+    // then: duplicates return the same receipt; six distinct runs exist on the
+    // shared export, visible to both hosts
     let mut agents = BTreeSet::new();
     for body in bodies {
         agents.insert(receipt(body).target.agent_id);
@@ -442,7 +443,7 @@ async fn given_two_hosts_spawning_concurrently_should_admit_each_operation_exact
             )
             .await
         {
-            Body::Status { agents, .. } => assert_eq!(agents.len(), 3),
+            Body::Status { agents, .. } => assert_eq!(agents.len(), 6),
             other => panic!("unexpected {other:?}"),
         }
     }
