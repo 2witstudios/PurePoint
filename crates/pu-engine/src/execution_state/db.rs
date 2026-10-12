@@ -68,6 +68,18 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    /// Stable authority identity checked when composing receiver-owned stores.
+    pub fn owner_daemon(&self) -> &str {
+        &self.owner
+    }
+
+    /// Durably fence trusted receiver time for grant expiry as well as windows.
+    /// Call from the blocking dispatcher under its authority barrier. A failed
+    /// clock commit permits no authorization, and the observation is retained.
+    pub fn observe_time(&self, now: i64) -> Result<i64> {
+        self.transaction_at(now, |_, fenced_time| Ok(fenced_time))
+    }
+
     /// Open under a private directory established by the daemon's local-boundary
     /// utility, while holding its singleton lock. This checks the immediate
     /// directory/database/sidecars, not every ancestor or a hostile same-UID race.

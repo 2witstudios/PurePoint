@@ -11,6 +11,7 @@ use nix::sys::signal;
 use nix::unistd::Pid;
 use tokio::net::{UnixListener, UnixSocket};
 
+pub mod mesh_store;
 mod private_state;
 use private_state::{Entry, PrivateDir, denied};
 
