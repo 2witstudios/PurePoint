@@ -972,3 +972,524 @@ async fn given_inspect_only_grant_should_allow_input_receipt_reconciliation_with
     assert!(response.is_err());
     assert!(matches!(dispatch, Err(Error::Denied)));
 }
+
+#[tokio::test]
+async fn given_control_endpoint_discovery_should_return_only_current_generation_without_creating_or_replacing_binding()
+ {
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let (control, mut client) = f.control(0).await;
+    let original = control.welcome().clone();
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let (accepted, discovered) = tokio::join!(
+        f.authority.accept_incoming(&f.server, server_io),
+        ControlClient::discover(
+            &f.clients[0],
+            client_io,
+            f.server_id,
+            f.authority.daemon.clone(),
+            f.authority.limits.clone()
+        )
+    );
+    assert!(matches!(accepted, Ok(Accepted::Discovery)));
+    let discovered = discovered.unwrap();
+    assert_eq!(discovered.generation, f.generations[0]);
+    assert_eq!(discovered.daemon_id, f.authority.daemon);
+    assert_eq!(control.welcome(), &original);
+    assert!(control.binding.check().is_ok());
+    assert_eq!(f.authority.control.available_permits(), 7);
+    assert_eq!(f.authority.bulk.available_permits(), 8);
+    let request = f.inventory();
+    let mut control = control;
+    let (response, dispatched) = tokio::join!(
+        client.request::<serde_json::Value>(&request),
+        control.dispatch(&f.work, |_, _, _, _| Ok(br#"{"ok":true}"#.to_vec()))
+    );
+    assert!(dispatched.is_ok());
+    assert_eq!(response.unwrap()["ok"], true);
+}
+
+impl Fixture {
+    async fn reopen(self) -> Self {
+        self.work.wait_idle().await;
+        tokio::task::spawn_blocking(move || {
+            let Fixture {
+                _tmp,
+                _lock,
+                authority,
+                work,
+                server,
+                clients,
+                identities,
+                server_id,
+                ..
+            } = self;
+            let authority = Arc::try_unwrap(authority)
+                .ok()
+                .expect("no live old sessions or operations");
+            let limits = authority.limits;
+            let AuthorityState { store, ledger } =
+                Arc::try_unwrap(authority.state).ok().unwrap().into_inner();
+            drop(ledger);
+            let ledger = Ledger::open(
+                _tmp.path().join("ledger.sqlite"),
+                store.daemon_id(),
+                LedgerLimits::default(),
+            )
+            .unwrap();
+            let generations = identities
+                .each_ref()
+                .map(|id| ledger.peer(&peer_name(id.peer_id())).unwrap().generation);
+            let authority = SessionAuthority::new(store, ledger, limits).unwrap();
+            Self {
+                _tmp,
+                _lock,
+                authority,
+                work,
+                server,
+                clients,
+                identities,
+                server_id,
+                generations,
+            }
+        })
+        .await
+        .unwrap()
+    }
+    async fn discover(
+        &self,
+        peer: usize,
+        target: String,
+    ) -> (Result<Accepted<DuplexStream>>, Result<GenerationDiscovery>) {
+        let (server, client) = tokio::io::duplex(4096);
+        tokio::join!(
+            self.authority.accept_incoming(&self.server, server),
+            ControlClient::discover(
+                &self.clients[peer],
+                client,
+                self.server_id,
+                target,
+                self.authority.limits.clone()
+            )
+        )
+    }
+}
+
+#[tokio::test]
+async fn given_sqlite_restart_should_discover_fresh_generation_and_read_receipts_without_restoring_old_bindings_windows_or_writers()
+ {
+    use crate::execution_state::{
+        InputOutcome, LaunchIntent, Lifecycle, OperationId, OperationKey, PayloadDigest,
+        SupervisionIdentity, WorktreeIntent,
+    };
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let peer = f.identities[0].peer_id();
+    let generation = f.generations[0];
+    // Only synthetic ledger records; no process/PTY or bytes are ever dispatched.
+    let (key, intent, launch, writer) = f
+        .authority
+        .administer(&f.work, admin(), peer, move |_, ledger, _| {
+            let caller = Caller::authenticated_peer(peer_name(peer), generation).unwrap();
+            let key = OperationKey {
+                window: ledger.issue_window(&caller, now(), 60).unwrap().id,
+                id: OperationId::new("original-operation").unwrap(),
+                digest: PayloadDigest([7; 32]),
+            };
+            let intent = LaunchIntent {
+                project: "project".into(),
+                export: Some("export".into()),
+                runtime: "codex".into(),
+                source_commit: "a".repeat(40),
+                worktree: WorktreeIntent {
+                    id: "worktree".into(),
+                    path: "/scratch/worktree".into(),
+                    branch: "pu/scratch".into(),
+                },
+            };
+            let launch = ledger
+                .admit_launch(&caller, &key, &intent, None, now())
+                .unwrap()
+                .value;
+            ledger.begin_start(&caller, &launch.guard).unwrap();
+            let agent = ledger
+                .record_running(
+                    &launch.run_id,
+                    &SupervisionIdentity {
+                        mechanism: "synthetic-test".into(),
+                        token: "no-process".into(),
+                    },
+                )
+                .unwrap();
+            let writer = ledger.open_writer(&caller, &agent.guard(), None).unwrap();
+            ledger
+                .accept_input(
+                    &caller,
+                    &agent.guard(),
+                    writer.id,
+                    1,
+                    PayloadDigest([8; 32]),
+                    1,
+                )
+                .unwrap();
+            Ok((key, intent, launch, writer))
+        })
+        .await
+        .unwrap();
+    let (control, client) = f.control(0).await;
+    let (bulk, observer) = f.bulk(&client).await;
+    let old = control.welcome().clone();
+    drop((control, client, bulk, observer));
+    let f = f.reopen().await;
+    assert!(f.generations[0] > old.generation);
+    assert!(matches!(
+        f.hello(
+            0,
+            Role::Control,
+            Hello::Control {
+                version: 1,
+                target_daemon: f.authority.daemon.clone(),
+                generation: old.generation
+            }
+        )
+        .await,
+        Err(Error::Denied)
+    ));
+    let (accepted, discovered) = f.discover(0, f.authority.daemon.clone()).await;
+    assert!(matches!(accepted, Ok(Accepted::Discovery)));
+    let discovered = discovered.unwrap();
+    assert_eq!(discovered.generation, f.generations[0]);
+    assert_eq!(f.authority.registry.lock().unwrap().controls.len(), 0);
+    assert_eq!(f.authority.registry.lock().unwrap().counts.len(), 0);
+    assert!(matches!(
+        f.hello(
+            0,
+            Role::Bulk,
+            Hello::Bulk {
+                version: 1,
+                target_daemon: old.daemon_id.clone(),
+                generation: discovered.generation,
+                incarnation: old.incarnation.clone(),
+                control_binding: old.control_binding.clone()
+            }
+        )
+        .await,
+        Err(Error::Denied)
+    ));
+    // Fresh strict Control+Bulk on separate new streams, no automatic mutation.
+    let (server, io) = tokio::io::duplex(4096);
+    let (control, client) = tokio::join!(
+        f.authority.accept_incoming(&f.server, server),
+        ControlClient::connect(
+            &f.clients[0],
+            io,
+            f.server_id,
+            discovered.daemon_id,
+            discovered.generation,
+            f.authority.limits.clone()
+        )
+    );
+    let mut control = match control.unwrap() {
+        Accepted::Session(session) => session,
+        Accepted::Discovery => panic!("strict Control must create session"),
+    };
+    let mut client = client.unwrap();
+    assert_ne!(control.welcome.incarnation, old.incarnation);
+    assert_ne!(control.welcome.control_binding, old.control_binding);
+    let (bulk, observer) = f.bulk(&client).await;
+    drop((bulk, observer));
+    let request = Request {
+        request_id: "inspect-old-input".into(),
+        target_daemon: f.authority.daemon.clone(),
+        operation: wire::Operation::InputReceipt {
+            target: wire::AgentTarget {
+                export: wire::Export {
+                    id: "export".into(),
+                    generation: 1,
+                },
+                agent_id: writer.agent_id.0.clone(),
+                run_id: writer.run_id.0.clone(),
+            },
+            writer: writer.id.0,
+            sequence: 1,
+        },
+    };
+    let writer_id = writer.id;
+    let old_key = key.clone();
+    let old_intent = intent.clone();
+    let old_guard = launch.guard.clone();
+    let (response, dispatch) = tokio::join!(
+        client.request::<serde_json::Value>(&request),
+        control.dispatch(&f.work, move |ledger, caller, _, request| {
+            let wire::Operation::InputReceipt {
+                target,
+                writer,
+                sequence,
+            } = &request.operation
+            else {
+                panic!()
+            };
+            let stored = ledger.writer(writer_id).unwrap();
+            assert_eq!(*writer, writer_id.0);
+            assert_eq!(target.agent_id, stored.agent_id.0);
+            assert_eq!(target.run_id, stored.run_id.0);
+            match (&stored.principal, caller.principal()) {
+                (
+                    crate::execution_state::Principal::Peer { id: stored, .. },
+                    crate::execution_state::Principal::Peer { id: current, .. },
+                ) => assert_eq!(stored, current),
+                _ => panic!("receipt is owned by the current stable TLS peer"),
+            }
+            let run = ledger.run(&stored.run_id).unwrap();
+            assert_eq!(run.intent.project, "project");
+            assert_eq!(
+                run.intent.export.as_deref(),
+                Some(target.export.id.as_str())
+            );
+            assert_eq!(run.lifecycle, Lifecycle::Unknown);
+            assert!(!stored.live);
+            assert_eq!(
+                ledger
+                    .input_receipt(writer_id, *sequence)
+                    .unwrap()
+                    .unwrap()
+                    .outcome,
+                InputOutcome::Unknown
+            );
+            let fresh_on_closed_window = OperationKey {
+                window: old_key.window,
+                id: OperationId::new("new-operation").unwrap(),
+                digest: PayloadDigest([9; 32]),
+            };
+            assert!(
+                ledger
+                    .admit_launch(caller, &fresh_on_closed_window, &old_intent, None, now())
+                    .is_err()
+            );
+            assert!(ledger.validate_dispatch(caller, &old_guard).is_err());
+            assert!(
+                ledger
+                    .accept_input(caller, &old_guard, writer_id, 2, PayloadDigest([9; 32]), 1)
+                    .is_err()
+            );
+            Ok(br#"{"outcome":"unknown"}"#.to_vec())
+        })
+    );
+    assert!(dispatch.is_ok());
+    assert_eq!(response.unwrap()["outcome"], "unknown");
+    let request = Request {
+        request_id: "inspect-old-operation".into(),
+        target_daemon: f.authority.daemon.clone(),
+        operation: wire::Operation::Receipt {
+            export: wire::Export {
+                id: "export".into(),
+                generation: 1,
+            },
+            mutation: wire::Mutation {
+                window: key.window.0,
+                id: key.id.0.clone(),
+            },
+            payload_digest: key.digest.0,
+        },
+    };
+    let (response, dispatch) = tokio::join!(
+        client.request::<serde_json::Value>(&request),
+        control.dispatch(&f.work, move |ledger, caller, _, _| {
+            assert!(ledger.operation_receipt(caller, &key).unwrap().is_some());
+            assert_eq!(
+                ledger.run(&launch.run_id).unwrap().lifecycle,
+                Lifecycle::Unknown
+            );
+            Ok(br#"{"found":true}"#.to_vec())
+        })
+    );
+    assert!(dispatch.is_ok());
+    assert_eq!(response.unwrap()["found"], true);
+}
+
+#[tokio::test]
+async fn given_discovery_should_deny_wrong_target_pin_role_version_and_inactive_or_damaged_policy()
+{
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let (accepted, client) = f.discover(0, "wrong-daemon".into()).await;
+    assert!(matches!(accepted, Err(Error::Denied)));
+    assert!(client.is_err());
+    let (server, client) = tokio::io::duplex(4096);
+    let (accepted, client) = tokio::join!(
+        f.authority.accept_incoming(&f.server, server),
+        ControlClient::discover(
+            &f.clients[0],
+            client,
+            f.identities[1].peer_id(),
+            f.authority.daemon.clone(),
+            f.authority.limits.clone()
+        )
+    );
+    assert!(accepted.is_err());
+    assert!(matches!(
+        client,
+        Err(Error::Transport(crate::mesh_transport::Error::Pin))
+    ));
+    assert!(matches!(
+        f.hello(
+            0,
+            Role::Bulk,
+            Hello::Discover {
+                version: 1,
+                target_daemon: f.authority.daemon.clone()
+            }
+        )
+        .await,
+        Err(Error::Denied)
+    ));
+    // Strict session API never silently upgrades discovery into a control session.
+    assert!(matches!(
+        f.hello(
+            0,
+            Role::Control,
+            Hello::Discover {
+                version: 1,
+                target_daemon: f.authority.daemon.clone()
+            }
+        )
+        .await,
+        Err(Error::Denied)
+    ));
+    let unanchored = Fixture::with_anchor(SessionLimits::default(), None, false).await;
+    assert!(matches!(
+        unanchored
+            .discover(0, unanchored.authority.daemon.clone())
+            .await
+            .0,
+        Err(Error::Denied)
+    ));
+    let expired = Fixture::new(SessionLimits::default(), Some(now())).await;
+    assert!(matches!(
+        expired
+            .discover(0, expired.authority.daemon.clone())
+            .await
+            .0,
+        Err(Error::Denied)
+    ));
+    f.authority
+        .revoke(&f.work, admin(), f.identities[0].peer_id())
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.discover(0, f.authority.daemon.clone()).await.0,
+        Err(Error::Denied)
+    ));
+    let path = f._tmp.path().join(format!(
+        "scratch.sock.mesh-peer-{}.json",
+        peer_name(f.identities[1].peer_id())
+    ));
+    tokio::task::spawn_blocking(move || std::fs::write(path, b"{}").unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.discover(1, f.authority.daemon.clone()).await.0,
+        Err(Error::Denied)
+    ));
+}
+
+#[tokio::test]
+async fn given_cancelled_discovery_validation_should_retain_transient_admission_without_creating_bindings()
+ {
+    let f = Arc::new(
+        Fixture::new(
+            SessionLimits {
+                control_total: 1,
+                control_per_peer: 1,
+                ..SessionLimits::default()
+            },
+            None,
+        )
+        .await,
+    );
+    let (entered, began) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    *f.authority.validation_gate.lock().unwrap() = Some(ValidationGate {
+        entered,
+        release: wait,
+    });
+    let (server, client) = tokio::io::duplex(4096);
+    let task_f = f.clone();
+    let accepted = tokio::spawn(async move {
+        task_f
+            .authority
+            .accept_incoming(&task_f.server, server)
+            .await
+    });
+    let task_f = f.clone();
+    let client = tokio::spawn(async move {
+        ControlClient::discover(
+            &task_f.clients[0],
+            client,
+            task_f.server_id,
+            task_f.authority.daemon.clone(),
+            task_f.authority.limits.clone(),
+        )
+        .await
+    });
+    began.await.unwrap();
+    accepted.abort();
+    let _ = accepted.await;
+    let retained = f.authority.control.available_permits() == 0;
+    let (io, _peer) = tokio::io::duplex(4096);
+    let rejected = matches!(
+        f.authority.accept_incoming(&f.server, io).await,
+        Err(Error::Capacity)
+    );
+    release.send(()).unwrap();
+    assert!(retained && rejected);
+    assert!(client.await.unwrap().is_err());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while f.authority.control.available_permits() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(f.authority.registry.lock().unwrap().controls.len(), 0);
+    assert_eq!(f.authority.registry.lock().unwrap().counts.len(), 0);
+}
+
+#[tokio::test]
+async fn given_discovery_tls_frames_should_reject_bad_version_and_typed_client_response_substitution()
+ {
+    let f = Fixture::new(SessionLimits::default(), None).await;
+    let (server, client) = tokio::io::duplex(4096);
+    let malicious = async {
+        let mut client = f.clients[0]
+            .connect(client, Role::Control, f.server_id)
+            .await
+            .unwrap();
+        client
+            .write_frame(
+                br#"{"role":"discover","version":2,"target_daemon":"worker"}"#,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        let _ = client.read_frame(Duration::from_secs(1)).await;
+    };
+    let (accepted, _) = tokio::join!(f.authority.accept_incoming(&f.server, server), malicious);
+    assert!(matches!(
+        accepted,
+        Err(Error::Wire(wire::WireError::Version))
+    ));
+    for response in [
+        serde_json::to_vec(&serde_json::json!({"version":1,"daemon_id":"other-receiver","generation":f.generations[0]})).unwrap(),
+        serde_json::to_vec(&serde_json::json!({"version":2,"daemon_id":f.authority.daemon,"generation":f.generations[0]})).unwrap(),
+        serde_json::to_vec(&serde_json::json!({"version":1,"daemon_id":f.authority.daemon,"generation":0})).unwrap(),
+        vec![b' '; 2049],
+    ] {
+        let (server, client) = tokio::io::duplex(4096);
+        let substituted = async {
+            let mut server = f.server.accept(server, Role::Control).await.unwrap();
+            assert!(matches!(Hello::decode(&server.read_frame(Duration::from_secs(1)).await.unwrap()).unwrap(), Hello::Discover { .. }));
+            server.write_frame(&response, Duration::from_secs(1)).await.unwrap();
+        };
+        let (_, client) = tokio::join!(substituted, ControlClient::discover(&f.clients[0], client, f.server_id, f.authority.daemon.clone(), f.authority.limits.clone()));
+        assert!(client.is_err());
+    }
+    assert_eq!(f.authority.registry.lock().unwrap().controls.len(), 0);
+}

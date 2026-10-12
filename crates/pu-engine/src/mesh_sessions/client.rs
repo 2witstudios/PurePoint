@@ -14,6 +14,32 @@ pub struct BulkClient<S> {
     limits: SessionLimits,
 }
 impl<S: AsyncRead + AsyncWrite + Unpin> ControlClient<S> {
+    /// Discover only on an independent pinned Control-role TLS stream. The
+    /// stream closes after its bounded reply. Use NEW streams for strict Control
+    /// and Bulk; this generation is not a session or replay permission.
+    pub async fn discover(
+        transport: &MeshTransport,
+        io: S,
+        receiver: PeerId,
+        daemon: String,
+        limits: SessionLimits,
+    ) -> Result<GenerationDiscovery> {
+        limits.validate()?;
+        let mut connection = transport.connect(io, Role::Control, receiver).await?;
+        let hello = Hello::Discover {
+            version: wire::BRIDGE_VERSION,
+            target_daemon: daemon.clone(),
+        };
+        let bytes = serde_json::to_vec(&hello).map_err(|_| Error::Operation)?;
+        Hello::decode(&bytes)?;
+        connection.write_frame(&bytes, limits.send_deadline).await?;
+        let response =
+            GenerationDiscovery::decode(&connection.read_frame(limits.read_deadline).await?)?;
+        if response.daemon_id != daemon {
+            return Err(Error::Denied);
+        }
+        Ok(response)
+    }
     pub async fn connect(
         transport: &MeshTransport,
         io: S,

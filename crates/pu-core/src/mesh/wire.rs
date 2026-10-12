@@ -24,6 +24,8 @@ pub enum WireError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Hello {
+    /// Short-lived authenticated restart-generation discovery, not a session.
+    Discover { version: u32, target_daemon: String },
     Control {
         version: u32,
         target_daemon: String,
@@ -45,11 +47,15 @@ impl Hello {
         }
         let hello: Self = serde_json::from_slice(bytes).map_err(|_| WireError::Invalid)?;
         let (version, target_daemon, generation) = match &hello {
+            Self::Discover {
+                version,
+                target_daemon,
+            } => (version, target_daemon, None),
             Self::Control {
                 version,
                 target_daemon,
                 generation,
-            } => (version, target_daemon, generation),
+            } => (version, target_daemon, Some(generation)),
             Self::Bulk {
                 version,
                 target_daemon,
@@ -58,14 +64,40 @@ impl Hello {
                 control_binding,
             } => {
                 require(valid_identifier(incarnation) && valid_identifier(control_binding))?;
-                (version, target_daemon, generation)
+                (version, target_daemon, Some(generation))
             }
         };
         if *version != BRIDGE_VERSION {
             return Err(WireError::Version);
         }
-        require(valid_identifier(target_daemon) && counter(*generation))?;
+        require(
+            valid_identifier(target_daemon)
+                && generation.is_none_or(|generation| counter(*generation)),
+        )?;
         Ok(hello)
+    }
+}
+
+/// Receiver public identity/version/current generation only. This is a reconnect
+/// hint for a NEW strict control handshake, never a session or mutation authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDiscovery {
+    pub version: u32,
+    pub daemon_id: String,
+    pub generation: u64,
+}
+impl GenerationDiscovery {
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.is_empty() || bytes.len() > 2048 {
+            return Err(WireError::Invalid);
+        }
+        let response: Self = serde_json::from_slice(bytes).map_err(|_| WireError::Invalid)?;
+        if response.version != BRIDGE_VERSION {
+            return Err(WireError::Version);
+        }
+        require(valid_identifier(&response.daemon_id) && counter(response.generation))?;
+        Ok(response)
     }
 }
 
@@ -117,6 +149,10 @@ pub enum Operation {
     Status {
         export: Export,
         agent_id: Option<String>,
+        #[serde(default)]
+        after_agent: Option<String>,
+        #[serde(default = "default_status_limit")]
+        limit: u16,
     },
     IssueWindow {
         ttl_seconds: u32,
@@ -258,6 +294,10 @@ impl Mutation {
     }
 }
 
+fn default_status_limit() -> u16 {
+    64
+}
+
 fn require(condition: bool) -> Result<(), WireError> {
     if condition {
         Ok(())
@@ -294,9 +334,19 @@ impl Request {
         }
         match &self.operation {
             Operation::Inventory {} => Ok(()),
-            Operation::Status { export, agent_id } => {
+            Operation::Status {
+                export,
+                agent_id,
+                after_agent,
+                limit,
+            } => {
                 export.validate()?;
-                require(agent_id.as_deref().is_none_or(valid_identifier))
+                require(
+                    agent_id.as_deref().is_none_or(valid_identifier)
+                        && after_agent.as_deref().is_none_or(valid_identifier)
+                        && (1..=64).contains(limit)
+                        && (agent_id.is_none() || after_agent.is_none()),
+                )
             }
             Operation::IssueWindow { ttl_seconds } => require((1..=86400).contains(ttl_seconds)),
             Operation::CloseWindow { window } => require(counter(*window)),
@@ -420,6 +470,71 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_status_pages_should_default_to_small_bound_and_reject_ambiguous_or_invalid_cursors() {
+        let base = serde_json::json!({"request_id":"status","target_daemon":"worker","operation":{"type":"status","export":{"id":"project","generation":1},"agent_id":null}});
+        let decoded = Request::decode(&serde_json::to_vec(&base).unwrap()).unwrap();
+        assert!(matches!(
+            decoded.operation,
+            Operation::Status {
+                limit: 64,
+                after_agent: None,
+                ..
+            }
+        ));
+        let mut page = base.clone();
+        page["operation"]["after_agent"] = "agent-previous".into();
+        page["operation"]["limit"] = 1.into();
+        assert!(Request::decode(&serde_json::to_vec(&page).unwrap()).is_ok());
+        for limit in [0, 65] {
+            let mut invalid = page.clone();
+            invalid["operation"]["limit"] = limit.into();
+            assert!(Request::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        page["operation"]["agent_id"] = "agent-selected".into();
+        assert!(Request::decode(&serde_json::to_vec(&page).unwrap()).is_err());
+        page["operation"]["agent_id"] = serde_json::Value::Null;
+        page["operation"]["after_agent"] = "../agent".into();
+        assert!(Request::decode(&serde_json::to_vec(&page).unwrap()).is_err());
+        let mut selected = base;
+        selected["operation"]["agent_id"] = "agent-selected".into();
+        assert!(Request::decode(&serde_json::to_vec(&selected).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn given_generation_discovery_should_be_bounded_targeted_and_carry_no_binding_or_resource_authority()
+     {
+        // given: a discovery request needs a receiver target, never an old generation
+        let hello = br#"{"role":"discover","version":1,"target_daemon":"worker"}"#;
+        assert!(matches!(
+            Hello::decode(hello).unwrap(),
+            Hello::Discover { .. }
+        ));
+        let response = br#"{"version":1,"daemon_id":"worker","generation":3}"#;
+        assert_eq!(GenerationDiscovery::decode(response).unwrap().generation, 3);
+        // when / then: discovery cannot carry sender identity, binding or policy
+        for bytes in [
+            br#"{"role":"discover","version":1,"target_daemon":"worker","generation":2}"#
+                .as_slice(),
+            br#"{"role":"discover","version":1,"target_daemon":"worker","peer_id":"claimed"}"#
+                .as_slice(),
+            br#"{"role":"discover","version":2,"target_daemon":"worker"}"#.as_slice(),
+            br#"{"role":"discover","version":1,"target_daemon":"../worker"}"#.as_slice(),
+        ] {
+            assert!(Hello::decode(bytes).is_err());
+        }
+        for bytes in [
+            br#"{"version":1,"daemon_id":"worker","generation":3,"control_binding":"borrowed"}"#
+                .as_slice(),
+            br#"{"version":1,"daemon_id":"worker","generation":3,"exports":[]}"#.as_slice(),
+            br#"{"version":1,"daemon_id":"worker","generation":0}"#.as_slice(),
+            br#"{"version":2,"daemon_id":"worker","generation":3}"#.as_slice(),
+        ] {
+            assert!(GenerationDiscovery::decode(bytes).is_err());
+        }
+        assert!(GenerationDiscovery::decode(&vec![b' '; 2049]).is_err());
+    }
 
     #[test]
     fn given_receipt_lookup_should_require_original_digest_without_accepting_asserted_mutation_digests()

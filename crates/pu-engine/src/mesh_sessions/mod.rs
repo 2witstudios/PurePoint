@@ -14,7 +14,7 @@ use crate::{
 };
 use pu_core::mesh::{
     Action, ExportGrant, PeerPolicy,
-    wire::{self, Hello, Request, Welcome},
+    wire::{self, GenerationDiscovery, Hello, Request, Welcome},
 };
 use std::{
     collections::HashMap,
@@ -50,6 +50,19 @@ pub enum Error {
     Wire(#[from] wire::WireError),
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Demultiplexed result from one Control-role TLS/Hello endpoint. Discovery
+/// means the bounded public response was sent and the transient stream dropped.
+pub enum Accepted<S> {
+    Discovery,
+    Session(Session<S>),
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ingress {
+    Session,
+    Incoming,
+    Discovery,
+}
 
 struct AuthorityState {
     store: MeshStore,
@@ -180,6 +193,52 @@ impl SessionAuthority {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        let (connection, lease) = self.authenticate(transport, io, role).await?;
+        match self.negotiate(connection, lease, Ingress::Session).await? {
+            Accepted::Session(session) => Ok(session),
+            Accepted::Discovery => Err(Error::Denied),
+        }
+    }
+    /// One TLS endpoint for ordinary Control and authenticated discovery. No
+    /// second TLS negotiation, listener, automatic reconnect or command replay.
+    pub async fn accept_incoming<S>(
+        self: &Arc<Self>,
+        transport: &MeshTransport,
+        io: S,
+    ) -> Result<Accepted<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let (connection, lease) = self.authenticate(transport, io, Role::Control).await?;
+        self.negotiate(connection, lease, Ingress::Incoming).await
+    }
+    /// Discovery-only convenience sharing the same TLS/admission implementation.
+    pub async fn accept_discovery<S>(
+        self: &Arc<Self>,
+        transport: &MeshTransport,
+        io: S,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let (connection, lease) = self.authenticate(transport, io, Role::Control).await?;
+        match self
+            .negotiate(connection, lease, Ingress::Discovery)
+            .await?
+        {
+            Accepted::Discovery => Ok(()),
+            Accepted::Session(_) => Err(Error::Denied),
+        }
+    }
+    async fn authenticate<S>(
+        self: &Arc<Self>,
+        transport: &MeshTransport,
+        io: S,
+        role: Role,
+    ) -> Result<(AuthenticatedConnection<S>, Lease)>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let pool = match role {
             Role::Control => &self.control,
             Role::Bulk => &self.bulk,
@@ -190,17 +249,85 @@ impl SessionAuthority {
             .map_err(|_| Error::Capacity)?;
         let connection = transport.accept(io, role).await?;
         let lease = self.admit(connection.peer_id(), role, total)?;
-        self.bind(connection, lease).await
+        Ok((connection, lease))
     }
-    async fn bind<S>(
+    async fn negotiate<S>(
         self: &Arc<Self>,
         mut connection: AuthenticatedConnection<S>,
         lease: Lease,
-    ) -> Result<Session<S>>
+        ingress: Ingress,
+    ) -> Result<Accepted<S>>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let hello = Hello::decode(&connection.read_frame(self.limits.read_deadline).await?)?;
+        if let Hello::Discover { target_daemon, .. } = &hello {
+            if ingress == Ingress::Session
+                || connection.role() != Role::Control
+                || target_daemon != &self.daemon
+            {
+                return Err(Error::Denied);
+            }
+            self.discover(connection, lease).await?;
+            return Ok(Accepted::Discovery);
+        }
+        if ingress == Ingress::Discovery {
+            return Err(Error::Denied);
+        }
+        self.bind(connection, lease, hello)
+            .await
+            .map(Accepted::Session)
+    }
+    async fn discover<S>(
+        self: &Arc<Self>,
+        connection: AuthenticatedConnection<S>,
+        lease: Lease,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let guard = self.state.clone().read_owned().await;
+        let daemon = self.daemon.clone();
+        #[cfg(test)]
+        let gate = self.validation_gate.lock().unwrap().take();
+        let (mut connection, guard, _lease, response) = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.entered.send(()).ok();
+                gate.release.recv().ok();
+            }
+            let policy = guard
+                .store
+                .discover_connection_policy(&guard.ledger, &connection, now())
+                .map_err(|_| Error::Denied)?;
+            let response = GenerationDiscovery {
+                version: wire::BRIDGE_VERSION,
+                daemon_id: daemon,
+                generation: policy.generation,
+            };
+            let bytes = serde_json::to_vec(&response).map_err(|_| Error::Operation)?;
+            GenerationDiscovery::decode(&bytes)?;
+            Ok::<_, Error>((connection, guard, lease, bytes))
+        })
+        .await
+        .map_err(|_| Error::Operation)??;
+        // Guard and connection budget retained through this bounded write. No
+        // control binding, incarnation, subscription or mutation window is minted.
+        connection
+            .write_frame(&response, self.limits.send_deadline)
+            .await?;
+        drop(guard);
+        Ok(())
+    }
+    async fn bind<S>(
+        self: &Arc<Self>,
+        connection: AuthenticatedConnection<S>,
+        lease: Lease,
+        hello: Hello,
+    ) -> Result<Session<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let (generation, target, prior) = match hello {
             Hello::Control {
                 generation,
@@ -295,7 +422,7 @@ impl SessionAuthority {
         };
         drop(guard);
         result?;
-        session.connection = Some(connection);
+        session.connection = Some(Box::new(connection));
         Ok(session)
     }
 
@@ -437,7 +564,7 @@ impl Drop for Lease {
 /// Owns one live mTLS stream and its bounded admission. No raw stream escapes.
 /// Dropping/closing control invalidates all its bulk streams and wakes readers.
 pub struct Session<S> {
-    connection: Option<AuthenticatedConnection<S>>,
+    connection: Option<Box<AuthenticatedConnection<S>>>,
     authority: Arc<SessionAuthority>,
     role: Role,
     lease: Option<Arc<Lease>>,
