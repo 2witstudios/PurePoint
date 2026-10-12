@@ -15,7 +15,7 @@ final class DiffState {
     var activeTab: DiffTab = .branch {
         didSet {
             if summariesOnly, activeTab != .prDiffs { prDiffTask?.cancel(); isLoadingPRDiff = false }
-            if activeTab == .prDiffs, prDiff == nil, let pr = selectedPR ?? pullRequests.first { selectPR(pr) }
+            if activeTab == .prDiffs, (prDiff == nil || isPRDiffStale), let pr = selectedPR ?? pullRequests.first { selectPR(pr) }
         }
     }
     var branchDiff: [FileDiff] = []
@@ -28,6 +28,7 @@ final class DiffState {
     var comparisonBase = ""
     var availableBases: [String] = []
     var branchError: String?
+    var commitError: String?
     var localError: String?
     var prError: String?
     var isLoadingBranch = false
@@ -43,10 +44,12 @@ final class DiffState {
     var pullRequests: [PullRequestInfo] = []
     var selectedPR: PullRequestInfo?
     var prDiff: DiffData?
+    private var loadedPRVersion: String?
+    var isPRDiffStale: Bool { prDiff != nil && loadedPRVersion != selectedPR?.updatedAt }
     var isLoadingPRs = false
     var isLoadingPRDiff = false
     var ghAvailable = true
-    var error: String? { branchError ?? localError ?? prError }
+    var error: String? { branchError ?? commitError ?? localError ?? prError }
     var localFileCount: Int { Set((stagedDiff + unstagedDiff + untrackedDiff).map(\.filename)).count }
 
     private let git: GitService
@@ -87,8 +90,8 @@ final class DiffState {
         activeTab = .branch; comparisonBase = base ?? ""; availableBases = []
         branchDiff = []; stagedDiff = []; unstagedDiff = []; untrackedDiff = []
         commits = []; selectedCommit = nil; commitDiff = []
-        pullRequests = []; selectedPR = nil; prDiff = nil
-        branchError = nil; localError = nil; prError = nil
+        pullRequests = []; selectedPR = nil; prDiff = nil; loadedPRVersion = nil
+        branchError = nil; commitError = nil; localError = nil; prError = nil
         hasLoadedBranch = false; hasLoadedLocal = false; hasLoadedCommit = false
         refresh()
         // Explicitly driven callers can own refresh timing without background races.
@@ -122,7 +125,7 @@ final class DiffState {
     func selectCommit(_ commit: GitCommitInfo) {
         guard let path else { return }
         if selectedCommit?.sha != commit.sha { commitDiff = []; hasLoadedCommit = false }
-        selectedCommit = commit; commitTask?.cancel(); isLoadingCommit = true
+        selectedCommit = commit; commitTask?.cancel(); isLoadingCommit = true; commitError = nil
         let token = generation
         commitTask = Task {
             do {
@@ -131,7 +134,7 @@ final class DiffState {
                 commitDiff = files; hasLoadedCommit = true
             } catch {
                 guard !Task.isCancelled, generation == token, selectedCommit?.sha == commit.sha else { return }
-                branchError = error.localizedDescription
+                commitError = error.localizedDescription
             }
             isLoadingCommit = false
         }
@@ -141,13 +144,13 @@ final class DiffState {
         guard let path else { return }
         let changed = selectedPR?.number != pr.number
         selectedPR = pr; prDiffTask?.cancel(); isLoadingPRDiff = true
-        if changed { prDiff = nil }
+        if changed { prDiff = nil; loadedPRVersion = nil }
         let token = generation
         prDiffTask = Task {
             do {
                 let diff = try await remoteGit.fetchPRDiffChecked(cwd: path, prNumber: pr.number, summariesOnly: summariesOnly)
                 guard !Task.isCancelled, generation == token, selectedPR?.number == pr.number else { return }
-                prDiff = diff; prError = nil
+                prDiff = diff; loadedPRVersion = pr.updatedAt; prError = nil
             } catch {
                 guard !Task.isCancelled, generation == token, selectedPR?.number == pr.number else { return }
                 prError = error.localizedDescription
@@ -165,10 +168,10 @@ final class DiffState {
     }
 
     private let previewGit = GitService()
-    func loadPage(_ file: FileDiff, after page: ReviewPage? = nil) async throws -> ReviewPage {
+    func loadPage(_ file: FileDiff, after page: ReviewPageCursor? = nil) async throws -> ReviewPage {
         guard let path else { throw CancellationError() }
         let token = generation
-        let loaded = try await previewGit.fetchReviewPage(file: file, at: path, after: page)
+        let loaded = try await previewGit.fetchReviewPage(file: file, at: path, cursor: page)
         guard !Task.isCancelled, token == generation else { throw CancellationError() }
         return loaded
     }
@@ -190,7 +193,7 @@ final class DiffState {
             if branchReview.error == nil {
                 branchDiff = branchReview.files; commits = branchReview.commits
                 if let selectedCommit {
-                    if commits.contains(where: { $0.sha == selectedCommit.sha }) { if !summariesOnly { selectCommit(selectedCommit) } }
+                    if commits.contains(where: { $0.sha == selectedCommit.sha }) { if !summariesOnly || (!hasLoadedCommit && !isLoadingCommit) { selectCommit(selectedCommit) } }
                     else { commitTask?.cancel(); self.selectedCommit = nil; commitDiff = []; isLoadingCommit = false }
                 }
             }
@@ -202,7 +205,7 @@ final class DiffState {
         }
     }
 
-    private func refreshPRs(forceDiff: Bool = false) {
+    func refreshPRs(forceDiff: Bool = false) {
         guard let path, prTask == nil else { return }
         let token = generation, branch = branch
         lastPRRefresh = Date(); isLoadingPRs = true
@@ -215,9 +218,9 @@ final class DiffState {
                 ghAvailable = true; pullRequests = prs; prError = nil
                 if let selected = selectedPR, let updated = prs.first(where: { $0.number == selected.number }) {
                     if !summariesOnly || activeTab == .prDiffs {
-                        if forceDiff || !summariesOnly || selected.updatedAt != updated.updatedAt { selectPR(updated) }
+                        if forceDiff || !summariesOnly || loadedPRVersion != updated.updatedAt { selectPR(updated) }
                     } else if selected.updatedAt != updated.updatedAt {
-                        selectedPR = updated; prDiff = nil
+                        selectedPR = updated
                     }
                 }
                 else if shouldSelectInitialPR, let first = prs.first, !summariesOnly || activeTab == .prDiffs { selectPR(first) }

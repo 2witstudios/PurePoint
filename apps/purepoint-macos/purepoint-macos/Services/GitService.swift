@@ -225,6 +225,11 @@ actor GitService {
             let conflicts = Set(entries.filter { $0.status == "U" }.map(\.name))
             let indexPath = WorktreeWatcher.metadataPaths(worktreePath: path).first { $0.hasSuffix("/index") }
             let indexStamp = indexPath.map { fileStamp($0, at: "/") } ?? ""
+            var stagedBase = ""
+            if revisions == ["--cached"] {
+                let head = runGit(["rev-parse", "--verify", "HEAD"], cwd: path)
+                stagedBase = head.success ? head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : "unborn"
+            }
             var seen = Set<String>()
             return try entries.compactMap { entry -> FileDiff? in
                 guard seen.insert(entry.name).inserted else { return nil }
@@ -233,7 +238,7 @@ actor GitService {
                 var file = FileDiff(filename: entry.name, statusCode: status, added: count.0, removed: count.1, hunks: [], oldFilename: entry.old, isBinary: count.2)
                 let paths = entry.old.map { [$0, entry.name] } ?? [entry.name]
                 file.patchArguments = command + common + ["--patch"] + revisions + ["--"] + paths
-                file.previewVersion = path + revisions.joined(separator: "/") + ((revisions.isEmpty || revisions == ["--cached"]) ? fileStamp(entry.name, at: path) + indexStamp : "")
+                file.previewVersion = path + revisions.joined(separator: "/") + ((revisions.isEmpty || revisions == ["--cached"]) ? fileStamp(entry.name, at: path) + indexStamp + "/HEAD:" + stagedBase : "")
                 if status == "U", revisions.isEmpty, !root {
                     let stages = try checked(["ls-files", "--unmerged", "-z", "--", entry.name], at: path).split(separator: "\0")
                     let hasOurs = stages.contains { $0.split(separator: "\t", maxSplits: 1).first?.split(separator: " ").last == "2" }
@@ -294,10 +299,11 @@ actor GitService {
     }
 
     /// Generate an on-disk snapshot once; subsequent pages never regenerate Git output.
-    func fetchReviewPage(file: FileDiff, at path: String, after previous: ReviewPage? = nil) throws -> ReviewPage {
+    func fetchReviewPage(file: FileDiff, at path: String, after previous: ReviewPage? = nil, cursor: ReviewPageCursor? = nil) throws -> ReviewPage {
         try Task.checkCancellation()
+        let resume = cursor ?? previous?.continuation
         let slice: PatchSlice
-        if let previous { slice = previous.slice }
+        if let resume { slice = resume.slice }
         else if let stored = file.patchSlice { slice = stored }
         else {
             guard let arguments = file.patchArguments else { throw GitReviewError(message: "Refresh to load this file's diff.") }
@@ -308,12 +314,19 @@ actor GitService {
                 throw GitReviewError(message: result.stderr.nilIfEmpty ?? "Diff loading timed out or failed. Retry to load this file.")
             }
             let size = try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber
-            slice = PatchSlice(snapshot: snapshot, start: 0, end: size?.uint64Value ?? 0)
+            let indexed = try indexPatch(snapshot: snapshot, expected: file)
+            if let matching = indexed.first(where: { $0.filename == file.filename && $0.oldFilename == file.oldFilename }), let selected = matching.patchSlice {
+                slice = selected
+            } else if size?.uint64Value == 0 {
+                slice = PatchSlice(snapshot: snapshot, start: 0, end: 0)
+            } else {
+                throw GitReviewError(message: "The file changed while its diff loaded. Refresh to retry.")
+            }
         }
-        let reader = try PatchLineReader(slice: slice, offset: previous?.nextOffset ?? slice.start)
-        var old = previous?.oldLine ?? 0, new = previous?.newLine ?? 0
-        var header = previous?.header ?? "", hunks: [Hunk] = [], lines: [DiffLine] = []
-        var count = 0, characters = 0, binary = file.isBinary, longLines = false
+        let reader = try PatchLineReader(slice: slice, offset: resume?.nextOffset ?? slice.start)
+        var old = resume?.oldLine ?? 0, new = resume?.newLine ?? 0
+        var header = resume?.header ?? "", hunks: [Hunk] = [], lines: [DiffLine] = []
+        var count = 0, characters = 0, binary = resume?.isBinary ?? file.isBinary, longLines = false
         while let record = try reader.next() {
             try Task.checkCancellation()
             let line = record.text
@@ -574,6 +587,10 @@ actor GitService {
         let result = runGh(["pr", "diff", String(prNumber)], cwd: cwd, outputFile: snapshot.url)
         try Task.checkCancellation()
         guard result.success else { throw GitReviewError(message: result.stderr.nilIfEmpty ?? "GitHub PR diff failed") }
+        return DiffData(files: try indexPatch(snapshot: snapshot))
+    }
+
+    private func indexPatch(snapshot: PatchSnapshot, expected: FileDiff? = nil) throws -> [FileDiff] {
         let size = (try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber)?.uint64Value ?? 0
         let reader = try PatchLineReader(slice: PatchSlice(snapshot: snapshot, start: 0, end: size), offset: 0)
         var files: [FileDiff] = [], metadata: [String] = [], start: UInt64 = 0
@@ -582,7 +599,7 @@ actor GitService {
             guard !metadata.isEmpty else { return }
             let target = metadata.first { $0.hasPrefix("+++ ") && !$0.hasPrefix("+++ /dev/null") } ?? metadata.first { $0.hasPrefix("--- ") }
             let rename = metadata.first { $0.hasPrefix("rename to ") }
-            let raw = rename.map { String($0.dropFirst(10)) } ?? target.map { String($0.dropFirst(4)).components(separatedBy: "\t")[0] } ?? prHeaderPath(metadata[0])
+            let raw = rename.map { String($0.dropFirst(10)) } ?? target.map { String($0.dropFirst(4)).components(separatedBy: "\t")[0] } ?? (expected.flatMap { metadata[0] == "diff --git a/\($0.filename) b/\($0.filename)" ? "b/" + $0.filename : nil }) ?? prHeaderPath(metadata[0])
             guard let raw else { throw GitReviewError(message: "GitHub patch paths could not be read; refresh to retry.") }
             let decoded = decodeGitPath(raw)
             let name = rename != nil ? decoded : (decoded.hasPrefix("a/") || decoded.hasPrefix("b/") ? String(decoded.dropFirst(2)) : decoded)
@@ -598,7 +615,10 @@ actor GitService {
             if line.hasPrefix("diff --git ") {
                 try finish(end: record.start)
                 metadata = [line]; start = record.start; added = 0; removed = 0; inHunk = false; binary = false
-            } else if metadata.isEmpty { throw GitReviewError(message: "GitHub returned an unrecognized patch; refresh to retry.") }
+            } else if metadata.isEmpty {
+                if expected?.statusCode == "U", line.hasPrefix("* Unmerged path ") { continue }
+                throw GitReviewError(message: "Git returned an unrecognized patch; refresh to retry.")
+            }
             else if line.hasPrefix("@@ ") { inHunk = true }
             else if inHunk {
                 if line.hasPrefix("+") { added += 1 }
@@ -609,7 +629,7 @@ actor GitService {
             }
         }
         try finish(end: size)
-        return DiffData(files: files)
+        return files
     }
 
     private func prHeaderPath(_ header: String) -> String? {

@@ -106,6 +106,47 @@ nonisolated struct ReviewPage: Sendable {
     let hasLongLines: Bool
 }
 
+/// Lightweight resume state; it never retains rendered hunk bodies.
+nonisolated struct ReviewPageCursor: Sendable {
+    let slice: PatchSlice
+    let nextOffset: UInt64
+    let oldLine: Int
+    let newLine: Int
+    let header: String
+    let isBinary: Bool
+}
+
+extension ReviewPage {
+    nonisolated var continuation: ReviewPageCursor {
+        ReviewPageCursor(slice: slice, nextOffset: nextOffset, oldLine: oldLine,
+                         newLine: newLine, header: header, isBinary: isBinary)
+    }
+}
+
+/// Keep one body in memory and reread previously visited pages from their disk checkpoints.
+nonisolated struct ReviewPageHistory {
+    private var checkpoints: [ReviewPageCursor?] = [nil]
+    private var current: ReviewPage?
+    private var currentIndex = 0
+
+    var retainedLineCount: Int { current?.hunks.reduce(0) { $0 + $1.lines.count } ?? 0 }
+    func page(at index: Int) -> ReviewPage? { currentIndex == index ? current : nil }
+    func cursor(at index: Int) throws -> ReviewPageCursor? {
+        guard checkpoints.indices.contains(index) else { throw GitReviewError(message: "Load the preceding page first.") }
+        return checkpoints[index]
+    }
+    mutating func store(_ page: ReviewPage, at index: Int) {
+        current = page; currentIndex = index
+        if index == 0 {
+            checkpoints[0] = ReviewPageCursor(slice: page.slice, nextOffset: page.slice.start,
+                                             oldLine: 0, newLine: 0, header: "", isBinary: page.isBinary)
+        }
+        if checkpoints.count == index + 1 { checkpoints.append(page.continuation) }
+        else if checkpoints.indices.contains(index + 1) { checkpoints[index + 1] = page.continuation }
+    }
+    mutating func releaseBody() { current = nil }
+}
+
 nonisolated struct DiffFileGroup: Sendable {
     let title: String
     let files: [FileDiff]

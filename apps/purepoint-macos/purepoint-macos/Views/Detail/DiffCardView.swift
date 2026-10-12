@@ -4,10 +4,10 @@ import SwiftUI
 struct DiffCardView: View {
     let fileDiff: FileDiff
     var onLoadPreview: (() -> Void)? = nil
-    var loadPage: ((FileDiff, ReviewPage?) async throws -> ReviewPage)? = nil
+    var loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil
     var revealToken: UUID? = nil
     @State private var expanded: Bool
-    @State private var pages: [ReviewPage] = []
+    @State private var history = ReviewPageHistory()
     @State private var pageIndex = 0
     @State private var loading = false
     @State private var loadError: String?
@@ -16,14 +16,14 @@ struct DiffCardView: View {
     @State private var loadToken = UUID()
 
     init(fileDiff: FileDiff, onLoadPreview: (() -> Void)? = nil,
-         loadPage: ((FileDiff, ReviewPage?) async throws -> ReviewPage)? = nil,
+         loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil,
          revealToken: UUID? = nil) {
         self.fileDiff = fileDiff; self.onLoadPreview = onLoadPreview
         self.loadPage = loadPage; self.revealToken = revealToken
         _expanded = State(initialValue: revealToken != nil || !fileDiff.shouldCollapse)
     }
 
-    private var page: ReviewPage? { pagesVersion == fileDiff.previewVersion && pages.indices.contains(pageIndex) ? pages[pageIndex] : nil }
+    private var page: ReviewPage? { pagesVersion == fileDiff.previewVersion ? history.page(at: pageIndex) : nil }
     private var usesPages: Bool { loadPage != nil && (fileDiff.patchArguments != nil || fileDiff.patchSlice != nil) }
     private var visibleHunks: [Hunk] { usesPages ? (page?.hunks ?? []) : fileDiff.pageHunks(offset: pageIndex * 200) }
     private var hasMore: Bool { usesPages ? (page?.hasMore ?? false) : fileDiff.hunks.reduce(0) { $0 + $1.lines.count } > (pageIndex + 1) * 200 }
@@ -76,18 +76,20 @@ struct DiffCardView: View {
         .background(Color(nsColor: Theme.cardBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+        .onChange(of: expanded) { _, visible in if !visible { history.releaseBody() } }
+        .onDisappear { history.releaseBody() }
         .onChange(of: revealToken) { _, token in if token != nil { expanded = true } }
-        .onChange(of: fileDiff.previewVersion) { _, _ in pages = []; pageIndex = 0; loadError = nil }
+        .onChange(of: fileDiff.previewVersion) { _, _ in history = ReviewPageHistory(); pageIndex = 0; loadError = nil }
         .task(id: fileDiff.previewVersion + "/\(expanded)/\(pageIndex)/\(retry)") {
             guard expanded, usesPages, page == nil, let loadPage else { return }
-            if pagesVersion != fileDiff.previewVersion { pages = []; pagesVersion = fileDiff.previewVersion }
+            if pagesVersion != fileDiff.previewVersion { history = ReviewPageHistory(); pagesVersion = fileDiff.previewVersion }
             let token = UUID(); loadToken = token
             loading = true; loadError = nil
             defer { if loadToken == token { loading = false } }
             do {
-                let loaded = try await loadPage(fileDiff, pages.last)
+                let loaded = try await loadPage(fileDiff, history.cursor(at: pageIndex))
                 guard !Task.isCancelled, loadToken == token else { return }
-                pages.append(loaded)
+                history.store(loaded, at: pageIndex)
             } catch {
                 guard !Task.isCancelled, loadToken == token else { return }
                 loadError = error.localizedDescription

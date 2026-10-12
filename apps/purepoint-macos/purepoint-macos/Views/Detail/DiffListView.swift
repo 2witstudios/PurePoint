@@ -8,7 +8,7 @@ struct DiffListView: View {
     let error: String?
     var onRetry: (() -> Void)?
     var groups: [DiffFileGroup]? = nil
-    var loadPage: ((FileDiff, ReviewPage?) async throws -> ReviewPage)? = nil
+    var loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil
     @AppStorage("showReviewFilesSidebar") private var showSidebar = true
     @State private var search = ""
     @State private var selectedFile: String?

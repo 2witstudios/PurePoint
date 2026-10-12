@@ -41,7 +41,7 @@ struct ReviewChangesView: View {
                 VStack(spacing: 0) {
                     HStack { Button { state.selectedCommit = nil } label: { Image(systemName: "chevron.left") }; Text(commit.subject).font(.system(size: 13, weight: .medium)); Spacer(); Text(String(commit.sha.prefix(8))).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary) }.padding(14)
                     Divider()
-                    patches(state.commitDiff, loading: state.isInitiallyLoadingCommit, empty: "This commit has no file changes", error: nil)
+                    patches(state.commitDiff, loading: state.isInitiallyLoadingCommit, empty: "This commit has no file changes", error: state.commitError)
                 }
             } else {
                 ScrollView {
@@ -62,6 +62,14 @@ struct ReviewChangesView: View {
             }
         case .prDiffs:
             VStack(spacing: 0) {
+            if state.isPRDiffStale {
+                HStack {
+                    Text(state.isLoadingPRDiff ? "Showing the previous PR snapshot. Refreshing changes…" : "Showing the previous PR snapshot. Refresh to load current changes.").font(.system(size: 12))
+                    Spacer()
+                    Button("Retry") { if let pr = state.selectedPR { state.selectPR(pr) } }
+                }.foregroundStyle(.secondary).padding(12)
+                Divider()
+            }
             if let error = state.prError, !state.pullRequests.isEmpty || state.prDiff != nil {
                 HStack { Image(systemName: "exclamationmark.triangle"); Text(error).font(.system(size: 12)).textSelection(.enabled); Spacer(); Button("Retry") { state.refresh() } }.foregroundStyle(.secondary).padding(12).background(Color.orange.opacity(0.08))
                 Divider()
