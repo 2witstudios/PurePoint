@@ -16,3 +16,4 @@ Maps every product domain to its architecture dependencies, API operations, stor
 | Recovery | Daemon Engine | Recover | agents, worktrees | recover | — |
 | Desktop App | Desktop App Integration | Watch Project, Stream Output | dashboard state, layout | ui | All views, CommandPalette, Settings, HotkeySystem |
 | Configuration | — | — | config | — | SettingsView (general, display, hotkeys, about) |
+| LAN Mesh | IPC & API (IPC-004), Agent Execution, Daemon Engine | MeshAdmin, MeshListenerStatus, MeshRoute, MeshWatch; bridge wire v1 | mesh identity, peer policies, execution ledger, exports, listener/worker routes, guardian outcomes | `pu mesh …` (identity, enroll-manual, peer, export, config, listener, worker, run, remote) | — (CLI only in v1) |

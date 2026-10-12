@@ -87,6 +87,15 @@ Key behaviors:
 | `pu trigger delete <name>` | `--scope`, `--json` | Delete trigger definition |
 | `pu trigger assign <agent_id> <trigger_name>` | `--json` | Assign trigger to idle agent |
 | `pu gate <event>` | `--project-root` | Evaluate git hook gates (pre-commit, pre-push) |
+| `pu mesh identity initialize\|show` | `--json` | Create (explicitly, once) or show this daemon's public mesh identity and fingerprint |
+| `pu mesh enroll-manual` | `--certificate-file`, `--expected-fingerprint`, `--grants-file`, `--expires-at` | Pin a peer whose fingerprint was verified out of band and grant it receiver exports |
+| `pu mesh policy-update` / `pu mesh peers` / `pu mesh peer revoke\|regrant\|advance-generation` | `--expected-generation` | Change, list or fence peer authority |
+| `pu mesh export register\|list\|revoke` | `--label` | Receiver-issued project exports |
+| `pu mesh config show\|disable\|enable` | `--control-address`, `--bulk-address` | Persist explicit listener addresses (disabled by default) |
+| `pu mesh listener` | `--json` | Applied listener state |
+| `pu mesh worker add\|remove\|list` | `--fingerprint`, `--daemon-id`, `--label`, `--control-address`, `--bulk-address` | Host routes to already pinned workers |
+| `pu mesh run list\|takeover\|release\|stop\|resolve` | `--evidence` | Owner disposition of worker-owned runs on this machine |
+| `pu mesh remote --worker <fp\|label> <op>` | `inventory`, `status`, `window`, `spawn`, `acquire`, `stop`, `writer`, `input`, `input-receipt`, `resize`, `watch` | Host-side remote control through the pinned link; mutations print a retry-safe `--window/--operation` |
 
 ## Research Notes
 

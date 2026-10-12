@@ -122,6 +122,12 @@ pub enum RunAction {
 pub enum IdentityAction {
     Initialize,
     Show,
+    /// Write this daemon's public certificate (DER) for a peer's enrollment and
+    /// print its fingerprint to verify out of band. Never writes a private key.
+    Export {
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 #[derive(Debug, Subcommand)]
 pub enum PeerAction {
@@ -169,7 +175,11 @@ pub enum ConfigAction {
 impl MeshAction {
     fn request(self) -> Result<MeshAdminRequest, CliError> {
         let request = match self {
-            Self::Listener | Self::Remote { .. } => {
+            Self::Identity {
+                action: IdentityAction::Export { .. },
+            }
+            | Self::Listener
+            | Self::Remote { .. } => {
                 return Err(CliError::Other("not a mesh administration request".into()));
             }
             Self::Run { action } => match action {
@@ -297,6 +307,21 @@ impl MeshAction {
     }
 }
 
+/// Public material only; refuses to overwrite or follow an existing path.
+fn write_new_public(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
 fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, CliError> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
@@ -324,6 +349,44 @@ async fn local(socket: &Path, request: &Request, json: bool) -> Result<Response,
 
 pub async fn run(socket: &Path, action: MeshAction, json: bool) -> Result<(), CliError> {
     match action {
+        MeshAction::Identity {
+            action: IdentityAction::Export { out },
+        } => {
+            daemon_ctrl::ensure_daemon(socket).await?;
+            let identity = match local(
+                socket,
+                &Request::MeshAdmin {
+                    request: MeshAdminRequest::IdentityShow {},
+                },
+                json,
+            )
+            .await?
+            {
+                Response::MeshAdmin {
+                    response: pu_core::mesh::admin::MeshAdminResponse::Identity { identity },
+                } => identity,
+                _ => return Err(CliError::Other("unexpected identity response".into())),
+            };
+            write_new_public(&out, &identity.certificate_der)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "certificate_file": out,
+                        "fingerprint": identity.fingerprint,
+                        "daemon_id": identity.daemon_id,
+                    })
+                );
+            } else {
+                println!("certificate: {}", out.display());
+                println!("fingerprint: {}", identity.fingerprint);
+                println!("daemon id:   {}", identity.daemon_id);
+                println!(
+                    "Verify the fingerprint with the other machine's owner before they enroll it."
+                );
+            }
+            return Ok(());
+        }
         MeshAction::Listener => {
             daemon_ctrl::ensure_daemon(socket).await?;
             let response = local(socket, &Request::MeshListenerStatus {}, json).await?;

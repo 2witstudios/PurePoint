@@ -54,6 +54,15 @@ fn default_guardian() -> std::path::PathBuf {
     std::env::current_exe().unwrap_or_else(|_| "pu-engine".into())
 }
 
+/// Upper bound on how long cached routing may outlive a peer's expiry.
+const ROUTING_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+struct Routing {
+    workers: Vec<pu_core::mesh::admin::WorkerRoute>,
+    transport: Arc<crate::mesh_transport::MeshTransport>,
+    built: std::time::Instant,
+}
+
 struct Running {
     stop: watch::Sender<bool>,
     task: JoinHandle<std::io::Result<()>>,
@@ -69,6 +78,9 @@ pub struct MeshRuntime {
     listener: Mutex<Option<Running>>,
     status: watch::Sender<ListenerStatus>,
     host: HostClient,
+    /// Routes and the trusted transport, rebuilt after any administrative
+    /// change and at least every ROUTING_TTL so expiring peers drop out.
+    routing: Mutex<Option<Routing>>,
 }
 
 /// The local IPC socket already admits only the owning UID; that authenticated
@@ -100,6 +112,7 @@ impl MeshRuntime {
             listener: Mutex::new(None),
             status: watch::channel(ListenerStatus::NotInitialized).0,
             host: HostClient::new(16)?,
+            routing: Mutex::new(None),
         }))
     }
 
@@ -189,6 +202,7 @@ impl MeshRuntime {
         self.status.send_replace(ListenerStatus::Stopped);
         // Host links were authenticated under the previous trust/routing state.
         self.host.reset();
+        *self.routing.lock().await = None;
         let result = self.service.handle(&self.work, admin, request).await;
         // Re-apply even after failure: a failed publication can leave durable
         // intent whose acknowledgement is uncertain, and the old listener is gone.
@@ -294,10 +308,7 @@ impl MeshRuntime {
             return Err(mesh_host::Error::Invalid.into());
         }
         let (target, transport) = self.routed(&route).await?;
-        Ok(self
-            .host
-            .watch(Arc::new(transport), &target, &route.request)
-            .await?)
+        Ok(self.host.watch(transport, &target, &route.request).await?)
     }
 
     /// The route's worker from this host's own directory plus a transport whose
@@ -305,15 +316,41 @@ impl MeshRuntime {
     async fn routed(
         self: &Arc<Self>,
         route: &LocalRoute,
-    ) -> Result<(mesh_host::Target, crate::mesh_transport::MeshTransport), Error> {
-        let admin = local_admin()?;
-        let workers = match self
-            .service
-            .handle(&self.work, admin.clone(), MeshAdminRequest::WorkerList {})
-            .await?
-        {
-            MeshAdminResponse::Workers { workers } => workers,
-            _ => return Err(Error::Unavailable),
+    ) -> Result<(mesh_host::Target, Arc<crate::mesh_transport::MeshTransport>), Error> {
+        let (workers, transport) = {
+            let mut cached = self.routing.lock().await;
+            match cached.as_ref() {
+                Some(routing) if routing.built.elapsed() < ROUTING_TTL => {
+                    (routing.workers.clone(), routing.transport.clone())
+                }
+                _ => {
+                    let admin = local_admin()?;
+                    let workers = match self
+                        .service
+                        .handle(&self.work, admin.clone(), MeshAdminRequest::WorkerList {})
+                        .await?
+                    {
+                        MeshAdminResponse::Workers { workers } => workers,
+                        _ => return Err(Error::Unavailable),
+                    };
+                    let authority = self
+                        .service
+                        .current_authority(&self.work, admin.clone())
+                        .await?;
+                    let transport = Arc::new(
+                        authority
+                            .transport(&self.work, admin, now())
+                            .await
+                            .map_err(|_| Error::Unavailable)?,
+                    );
+                    *cached = Some(Routing {
+                        workers: workers.clone(),
+                        transport: transport.clone(),
+                        built: std::time::Instant::now(),
+                    });
+                    (workers, transport)
+                }
+            }
         };
         let worker = workers
             .into_iter()
@@ -322,14 +359,6 @@ impl MeshRuntime {
         if worker.daemon_id != route.request.target_daemon {
             return Err(mesh_host::Error::Invalid.into());
         }
-        let authority = self
-            .service
-            .current_authority(&self.work, admin.clone())
-            .await?;
-        let transport = authority
-            .transport(&self.work, admin, now())
-            .await
-            .map_err(|_| Error::Unavailable)?;
         let target = mesh_host::Target {
             receiver: peer_id_from_name(&worker.fingerprint).map_err(|_| Error::UnknownWorker)?,
             daemon: worker.daemon_id,

@@ -100,6 +100,7 @@ async fn given_host_daemon_killed_should_preserve_run_and_reconnect_to_control_i
     let route = enroll(&host, &worker, &project, all_capabilities()).await;
     let spawned = running(&host, &route, &project, "spawn-host-crash").await;
     let agent = spawned.target.agent_id.clone();
+    assert!(wait_marker_alive(&marker, Duration::from_secs(10)));
     let guard = route.guard(&host, &agent).await;
     let writer = match route
         .send(

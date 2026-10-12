@@ -606,6 +606,32 @@ async fn given_remote_controlled_run_should_fence_local_writers_until_owner_take
     ));
 
     // then: the remote writer is fenced and local input is accepted
+    // Takeover closes the peer's live sessions, so the host may learn of the
+    // fence either from that closed link or from a typed refusal.
+    match fleet
+        .send_raw(Operation::Input {
+            guard: remote_guard.clone(),
+            writer,
+            sequence: 1,
+            data: b"remote\n".to_vec(),
+        })
+        .await
+    {
+        Response::MeshRoute { response } => match response.body {
+            Body::Error { code } => assert!(
+                matches!(code, ErrorCode::Fenced | ErrorCode::Stale),
+                "{code:?}"
+            ),
+            other => panic!("remote writer was not fenced: {other:?}"),
+        },
+        Response::Error { code, .. } => assert!(
+            matches!(code.as_str(), "MESH_DENIED" | "MESH_CLOSED"),
+            "{code}"
+        ),
+        other => panic!("unexpected {other:?}"),
+    }
+    // A fenced link is never reused: the next request reconnects and the
+    // refusal is typed.
     match fleet
         .send(Operation::Input {
             guard: remote_guard.clone(),

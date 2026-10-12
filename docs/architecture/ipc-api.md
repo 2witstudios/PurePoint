@@ -14,18 +14,18 @@ All PurePoint clients (CLI, desktop app, future mobile/web) need a structured wa
 
 ! [IPC-005] Synchronous request-response — each request gets exactly one response on the same connection. `Spawn` returns immediately with agent/worktree IDs and initial status; clients poll via `Status` to track progress. Multiple request-response cycles supported per connection (loop until EOF). Long-running ops never block the connection. Implemented in `pu-engine/src/ipc_server.rs` (connection handler loop).
 
+! [IPC-004] Remote access is a separate bridge, never a transport for local IPC. Daemons authenticate each other with pinned mutual TLS 1.3. Each daemon has a self-signed certificate whose SHA-256 fingerprint is its identity, and enrollment is manual and out of band with an independently verified fingerprint. Bearer tokens and API keys were rejected: they authenticate a secret rather than a machine, and they don't pin both ends. The bridge (`pu_core::mesh::wire`, version 1) exposes only receiver-authorized, receiver-resolved operations; administration stays on owner-UID local IPC. Local IPC adds owner-only requests: `MeshAdmin` (identity, enrollment, grants, exports, listener configuration, worker routes, run disposition), `MeshListenerStatus` (applied listener state), `MeshRoute` (forward one bridge request over the host's pinned link to a routed worker), and `MeshWatch` (stream a remote run's output as `MeshOutput` lines). The additions are additive, so `PROTOCOL_VERSION` stays 8; older daemons reject the new requests explicitly. Full contract: [LAN Mesh](../product/lan-mesh.md).
+
 ## Open Questions
 
 ? [IPC-003] Should the API be split into tiers or kept as one service?
 Simple operations (spawn, kill, status) vs complex streaming (live output, state changes). Currently a single service handling both patterns. Separate services could run with different configurations. One service is simpler but mixes patterns. (Current implementation is single-service; question still valid for scaling.)
 
-? [IPC-004] What authentication model for remote connections?
-Local connections are authenticated by OS file permissions on the Unix socket. Remote connections need auth. Options: certificate-based, bearer token, API key. How lightweight can this be for a local-first tool? (Not yet implemented — local-only for now.)
 
 ## Design Directions
 
 - Local transport: Unix domain socket (implemented)
-- Remote transport: future consideration (see IPC-004)
+- Remote transport: the pinned mTLS LAN bridge (IPC-004, `product/lan-mesh.md`)
 - Real-time streaming via attach mode (PTY bytes forwarded to client)
 - Concurrent client support via semaphore-limited connection pool
 - Backwards-compatible API once stabilized (protocol version in health report)

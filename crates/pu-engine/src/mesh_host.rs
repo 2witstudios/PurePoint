@@ -67,9 +67,16 @@ impl Target {
 /// previous binding and its bulk. The host therefore keeps exactly one link per
 /// worker and carries every request and watch over it.
 pub struct HostClient {
+    /// Concurrent one-shot requests across all workers.
     admission: Arc<Semaphore>,
+    /// Open watches; separate so long-lived observers never starve control.
+    watches: Arc<Semaphore>,
     links: std::sync::Mutex<HashMap<PeerId, Arc<Link>>>,
 }
+
+/// Concurrent watches per host across all workers. Each holds no buffering
+/// beyond its bounded frame queue.
+pub const MAX_WATCHES: usize = 64;
 
 /// Frames buffered per local watcher before it is cut off as lagging; a cut-off
 /// watcher resubscribes from its cursor and the worker reports the gap.
@@ -227,6 +234,7 @@ impl HostClient {
         }
         Ok(Self {
             admission: Arc::new(Semaphore::new(max_concurrent)),
+            watches: Arc::new(Semaphore::new(MAX_WATCHES)),
             links: std::sync::Mutex::new(HashMap::new()),
         })
     }
@@ -297,7 +305,7 @@ impl HostClient {
             return Err(Error::Invalid);
         }
         let admission = self
-            .admission
+            .watches
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Capacity)?;
