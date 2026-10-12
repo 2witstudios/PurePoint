@@ -35,6 +35,7 @@ struct PointGuardView: View {
                         .frame(maxWidth: .infinity, alignment: .trailing).padding(8)
                     PointGuardChatSurfaceView(isFocused: true)
                 }
+                .background(Color(nsColor: Theme.chatBackground))
             } else {
                 Color.clear
             }

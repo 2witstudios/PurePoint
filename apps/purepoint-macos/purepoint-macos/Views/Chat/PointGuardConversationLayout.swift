@@ -39,7 +39,7 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
             .buttonStyle(.borderless)
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
-            Divider()
+            .foregroundStyle(.secondary)
             Group {
                 if isExpanded {
                     sidebar()
@@ -65,7 +65,8 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     HStack(spacing: 8) {
                         if isExpanded {
                             if width >= 160 {
-                                Text("Conversations").font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                                Text("CONVERSATIONS").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
                             Spacer(minLength: 0)
                         }
@@ -85,11 +86,13 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     if isExpanded { sidebar() } else { Spacer(minLength: 0) }
                 }
                 .frame(width: width, height: geometry.size.height)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(Color(nsColor: Theme.chatRailBackground))
                 .clipped()
 
+                // The drag handle is wider than the hairline it draws.
                 Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
+                    .fill(Color(nsColor: Theme.chatRailBackground))
+                    .overlay(alignment: .trailing) { Rectangle().fill(Color.primary.opacity(0.06)).frame(width: 1) }
                     .frame(width: dividerWidth)
                     .gesture(
                         DragGesture(minimumDistance: 1)
@@ -110,7 +113,7 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     .buttonStyle(.borderless)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    Divider()
+                    .foregroundStyle(.secondary)
                     content()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }

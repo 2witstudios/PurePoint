@@ -424,13 +424,13 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if active { retryBudget.reset(); if wantsConnection { connect(resetRetryBudget: false) } }
         else {
             writer.flush(); retryTask?.cancel(); cancelPairing()
-            detach(); if wantsConnection { connectionStatus = "Paused on this phone · Pi continues on your Mac" }
+            detach(); if wantsConnection { connectionStatus = "Paused on this phone · Point Guard continues on your Mac" }
         }
     }
     private func networkChanged(reachable: Bool) {
         guard foreground, wantsConnection else { return }
         if reachable { retryBudget.reset(); if socket == nil { connect(resetRetryBudget: false) } }
-        else { retryTask?.cancel(); detach(); connectionStatus = "Waiting for network · Pi continues on your Mac" }
+        else { retryTask?.cancel(); detach(); connectionStatus = "Waiting for network · Point Guard continues on your Mac" }
     }
     func disconnect(cancelPairing: Bool = true) {
         if cancelPairing {
@@ -448,7 +448,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Re-pair with your Mac"; error = reason
     }
     private func connectionLost(_ reason: String) {
-        retryTask?.cancel(); detach(); connectionStatus = "Connection lost · Pi continues on your Mac"; error = reason + " Check PurePoint on your Mac and Tailscale."
+        retryTask?.cancel(); detach(); connectionStatus = "Connection lost · Point Guard continues on your Mac"; error = reason + " Check PurePoint on your Mac and Tailscale."
         guard foreground, wantsConnection else { return }
         guard let delay = retryBudget.nextDelay() else { connectionStatus = "Reconnect paused · Check your Mac and network"; return }
         let token = selectionGeneration

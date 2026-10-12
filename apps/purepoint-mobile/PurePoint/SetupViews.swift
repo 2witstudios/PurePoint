@@ -299,7 +299,7 @@ struct ConversationView: View {
                 ToolbarItem(placement: .topBarLeading) { if model.browsing != nil { Button("Back") { model.browsing = nil } } }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.browsing = nil; dismiss() } }
             }
-            .confirmationDialog("Stop Pi and resume this conversation?", isPresented: $confirmResume, titleVisibility: .visible) {
+            .confirmationDialog("Stop Point Guard and resume this conversation?", isPresented: $confirmResume, titleVisibility: .visible) {
                 Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true, selection: selection); if model.browsing == nil { dismiss() } } } }
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be recoverable. Delegated workers keep running.") }
@@ -344,7 +344,7 @@ struct ExtensionDialogView: View {
                 }
             }
             .safeAreaInset(edge: .top) { if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(12).frame(maxWidth: .infinity).background(.bar) } }
-            .navigationTitle(dialog.title ?? "Pi needs your input").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(dialog.title ?? "Point Guard needs your input").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { answer(cancelled: true) }.disabled(answering) } }
             .onAppear { text = dialog.prefill ?? "" }
         }

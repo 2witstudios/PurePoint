@@ -17,6 +17,7 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(source / "State/PiChatModel.swift"),
         str(source / "Services/PiAttachmentImport.swift"),
         str(source / "Theme/PurePointTheme.swift"),
+        str(source / "Theme/Theme.swift"),
         str(source / "Views/DaemonErrorBanner.swift"),
         str(markdown / "ChatMarkdown.swift"),
         str(markdown / "ChatMarkdownView.swift"),

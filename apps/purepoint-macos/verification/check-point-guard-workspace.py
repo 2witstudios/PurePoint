@@ -30,7 +30,7 @@ let package = Package(
         "Models/ManifestModel.swift", "Models/ChannelModel.swift", "Views/PaneGrid/PaneSplitNode.swift",
         "State/AppState.swift", "Services/WorkspaceService.swift", "Services/DaemonProtocol.swift",
         "Views/PaneGrid/WorkspacePersistence.swift", "State/WorkspaceRegistry.swift",
-        "Views/Chat/PointGuardView.swift"
+        "Views/Chat/PointGuardView.swift", "Theme/Theme.swift"
     ]:
         shutil.copyfile(source / name, sources / Path(name).name)
 

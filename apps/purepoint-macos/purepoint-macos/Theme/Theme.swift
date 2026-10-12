@@ -10,6 +10,14 @@ nonisolated enum Theme {
     /// adaptive: the terminal is dark in both appearances, and the strip belongs to it.
     static let tabBarBackground = NSColor(srgbRed: 0.08, green: 0.08, blue: 0.09, alpha: 1.0)
 
+    // MARK: - Point Guard Chat
+    /// In dark mode the chat sits on the terminal's color so its active tab reads as attached,
+    /// with the history rail a step darker like the tab strip. Light mode keeps system surfaces.
+    static let chatBackground = darkOnly((0.11, 0.11, 0.12), light: .windowBackgroundColor)
+    static let chatRailBackground = darkOnly((0.08, 0.08, 0.09), light: .controlBackgroundColor)
+    static let composerBackground = darkOnly((0.137, 0.137, 0.153), light: NSColor.black.withAlphaComponent(0.045))
+    static let userBubbleBackground = darkOnly((0.149, 0.149, 0.165), light: NSColor.black.withAlphaComponent(0.055))
+
     // MARK: - Cards
     static let cardBackground = adaptive(dark: (0.14, 0.14, 0.15, 1.0), light: (1.0, 1.0, 1.0, 1.0))
     static let cardHeaderBackground = adaptive(dark: (0.16, 0.16, 0.17, 1.0), light: (0.93, 0.925, 0.92, 1.0))
@@ -35,6 +43,16 @@ nonisolated enum Theme {
                 return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: dark.3)
             } else {
                 return NSColor(srgbRed: light.0, green: light.1, blue: light.2, alpha: light.3)
+            }
+        }
+    }
+
+    private static func darkOnly(_ dark: (CGFloat, CGFloat, CGFloat), light: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+                return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: 1.0)
+            } else {
+                return light
             }
         }
     }
