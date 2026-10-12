@@ -5,60 +5,21 @@ use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 
 use crate::error::CliError;
 
-/// Create only missing state with private permissions. The daemon performs the
-/// full ancestor/ACL validation; clients must not precreate a public directory
-/// or silently repair existing state before that check.
+/// Validate the complete ancestor/ACL chain before creating private state.
 fn prepare_state_directory(path: &Path) -> Result<(), CliError> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)?;
-    let metadata = std::fs::symlink_metadata(path)?;
-    // SAFETY: geteuid has no preconditions.
-    if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o7777 != 0o700
-    {
-        return Err(CliError::Other(format!(
-            "unsafe daemon state directory {}: expected an owned directory with mode 0700. After saving agent work and stopping the daemon, inspect ownership, symlinks and ACLs and deliberately migrate its permissions; no existing state was changed",
-            path.display()
-        )));
-    }
+    pu_core::private_fs::PrivateDir::open(path, true)?;
     Ok(())
 }
 
 fn open_daemon_log(path: &Path) -> Result<std::fs::File, CliError> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let validate = |entry: &std::fs::Metadata| {
-        // SAFETY: geteuid has no preconditions.
-        if !entry.is_file()
-            || entry.uid() != unsafe { libc::geteuid() }
-            || entry.nlink() != 1
-            || entry.mode() & 0o7777 != 0o600
-        {
-            return Err(CliError::Other(format!(
-                "unsafe daemon log {}: expected an owned, single-link regular file with mode 0600; existing entry was left unchanged",
-                path.display()
-            )));
-        }
-        Ok(())
-    };
-    // Reject special files before opening them; nonblocking/no-follow flags also
-    // prevent a raced FIFO or link from hanging startup or following an alias.
-    match std::fs::symlink_metadata(path) {
-        Ok(entry) => validate(&entry)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)?;
-    validate(&file.metadata()?)?;
-    Ok(file)
+    let parent = path
+        .parent()
+        .ok_or_else(|| CliError::Other("daemon log needs a parent directory".into()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| CliError::Other("daemon log needs a basename".into()))?;
+    let dir = pu_core::private_fs::PrivateDir::open(parent, false)?;
+    Ok(dir.open_append(name)?)
 }
 
 pub fn find_daemon_binary() -> Option<PathBuf> {
@@ -156,11 +117,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn given_public_ancestor_should_not_create_state_or_log() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let parent = tmp.path().join("public");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let state = parent.join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let log = state.join("daemon.log");
+        assert!(open_daemon_log(&log).is_err());
+        assert!(!log.exists());
+        let missing = parent.join("missing");
+        assert!(prepare_state_directory(&missing).is_err());
+        assert!(!missing.exists());
+        assert_eq!(std::fs::metadata(&parent).unwrap().mode() & 0o7777, 0o777);
+    }
+
+    #[test]
     fn given_unsafe_log_should_reject_without_blocking_or_changing_existing_entries() {
         use std::io::Write;
         use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
         // given
         let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         for kind in ["public", "link", "hardlink", "fifo", "directory"] {
             let path = tmp.path().join(kind);
             let target = tmp.path().join(format!("{kind}-target"));
