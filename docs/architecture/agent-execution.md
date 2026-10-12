@@ -19,7 +19,7 @@ PurePoint manages AI coding agents that run in isolated environments. Each agent
 ## Open Questions
 
 ? [AGENT-003] Should there be a remote execution model?
-Should PurePoint support spawning agents on remote machines? Not needed initially, but architecture decisions now could make it easier or harder later.
+The owner confirmed a local-network fleet where one host Point Guard runs agents on any enrolled machine (2026-10-11). Product intent is resolved; the v1 topology is hub-and-spoke. Revision 2 of the proposal under [IPC-004] in `ipc-api.md` defines proposed per-agent controller epochs, serialized local/remote mutation handling, non-replayable PTY input, atomic admission and durable agent/run identities. The security scope and platform mechanism for daemon-subordinate process lifetime must be resolved before remote execution implementation. Architectural direction is supported by the owner-supplied review; implementation approval/readiness is not established.
 
 ? [AGENT-005] How should context be injected into agent prompts?
 The daemon assembles context (specs, memory, project state) for each agent task. How does this context reach the agent? Options: prepend to prompt, generate a system message, write a config file in the worktree, environment variables, stdin, or a combination.
@@ -36,6 +36,20 @@ Different agent types may need different context formats and injection methods. 
 - PTY resize support (TIOCSWINSZ ioctl on master fd)
 - Agent crash handling without corrupting daemon state (watch channel for exit notification)
 
+## Research Notes
+
+### [AGENT-003] LAN execution review: control ownership and lifecycle
+
+The owner-supplied architecture review identifies four authorities: daemon identity, receiver authorization, worker execution ownership and designated per-agent control. The worker remains authoritative when the host disappears. Project exports constrain routing but do not sandbox agents executing as the daemon's OS user; a trusted personal fleet is the proposed v1 scope, pending owner confirmation.
+
+Current implementation evidence: `engine/spawn.rs` generates the agent ID before launch but persists the agent manifest after `pty_host.spawn` and in-memory session registration. Failure returned by persistence triggers cleanup, but abrupt death needs a durable pre-launch operation/run record. `engine/pty_operations.rs` serializes `deliver_text`; raw input and attach-stream writes in `ipc_server/streams.rs` bypass that delivery lock. PTY handles/output readers/wait tasks live inside the daemon in `pty_manager.rs`. These paths do not establish independent crash-surviving supervision or guaranteed abrupt-death cleanup.
+
+Proposed foundation: one per-agent mutation boundary across local clients, bridge clients, raw attach and automation; durable controller epoch and run identity fence stale commands; one writer sequences PTY input and reports accepted/written/partial/unknown without automatic uncertain replay. Local administrative takeover is explicit. Admission covers local and remote spawn/resume before launch, reserving capacity and durable intent together. Revocation removes control and observation but leaves worker-owned runs for local disposition by default.
+
+The proposed v1 lifecycle ends managed runs when their owning worker daemon dies, while host disconnect leaves them running. A supported-platform process-tree supervision mechanism and failure-injection evidence are prerequisites, not current behavior. Recovery must prove termination before freeing capacity or explicitly resuming into a new run; an old PID alone is insufficient. See [DAEMON-003] in `daemon-engine.md` and the full contracts/vertical delivery slices under [IPC-004]. Durable terminal spooling, automatic migration and independently surviving PTYs are deferred.
+
 ## Related
+
+- [AGENT-003] connects to [IPC-004] (secure daemon mesh). Proposed model: host routes machine-qualified operations; receiving workers own PTYs, worktrees, local runtime/provider credentials and authoritative agent state. Disconnect does not stop remote agents; uncertain spawns require reconciliation rather than automatic replay or replacement on another machine. The host aggregates observations without replicating worker manifests. Source commits must be verified against explicitly bound worker repositories; repository transfer is a separate concern. These are design proposals, not implemented behavior.
 
 - [AGENT-005]/[AGENT-006] connect to [DAEMON-006] (context classification) and [STORE-006] (spec indexing) — classification determines what context is relevant, storage retrieves it, agent execution injects it.

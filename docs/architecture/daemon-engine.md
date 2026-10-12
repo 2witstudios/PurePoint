@@ -23,6 +23,7 @@ The daemon needs a global registry of all known projects, plus per-project state
 
 ? [DAEMON-003] What is the crash recovery model?
 If the daemon crashes, agents may still be running. On restart, the daemon needs to reconcile its state with reality. Should this be automatic on daemon startup? (Not yet implemented.)
+For the proposed LAN execution feature, the owner-supplied architecture review makes an explicit lifetime contract a prerequisite. The recommended v1 target is daemon-subordinate managed runs, with host disconnection independent of worker process lifetime. This guarantee is not established by current graceful-shutdown cleanup; the supported-platform enforcement mechanism remains open. See revision 2 under [IPC-004] in `ipc-api.md` and [AGENT-003] in `agent-execution.md` for durable pre-launch identity, conservative admission/recovery and per-agent control fencing.
 
 ? [DAEMON-006] How should the daemon classify incoming tasks for context assembly?
 The daemon is the context assembler — every task should automatically inject relevant specs and knowledge into agent prompts. How does the daemon decide what context is relevant? Options: keyword matching, task classification, explicit tags in spawn commands, or template-defined context maps. (Not yet implemented.)
