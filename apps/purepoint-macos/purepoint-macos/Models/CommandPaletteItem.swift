@@ -108,6 +108,14 @@ enum CommandPaletteItem: Identifiable {
         }
     }
 
+    var isIndividualLaunch: Bool {
+        switch self {
+        case .builtIn(let variant): variant.kind != .worktree
+        case .agentDef: true
+        case .swarm, .files, .file: false
+        }
+    }
+
     /// Only shown when the user has typed a query (one per file would flood the default list).
     var isQueryOnly: Bool {
         if case .file = self { return true }
@@ -164,7 +172,7 @@ enum CommandPaletteItem: Identifiable {
 
 enum CommandPaletteResult {
     case spawnBuiltIn(variant: AgentVariant, prompt: String?, name: String?)
-    case spawnAgentDef(def: AgentDefinition, prompt: String?)
+    case spawnAgentDef(def: AgentDefinition, prompt: String?, name: String?)
     case runSwarm(def: SwarmDefinition)
     case createWorktree(name: String?)
     /// Show the file navigator in the pane, optionally opened on `path`.

@@ -26,6 +26,15 @@ struct SettingsGeneralView: View {
 
                 Divider()
 
+                Toggle("Use point guard names", isOn: $settings.usePointGuardNames)
+                    .padding(.vertical, 8)
+
+                Text("Turn off to name each agent or terminal before launching it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                     .padding(.vertical, 8)
             }

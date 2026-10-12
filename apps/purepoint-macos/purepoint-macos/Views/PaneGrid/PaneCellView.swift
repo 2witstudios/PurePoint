@@ -132,7 +132,9 @@ private struct EmptyTabView: View {
     private func showPalette(
         items: [CommandPaletteItem], window: NSWindow?, state: AppState, reg: WorkspaceRegistry, wsId: String, sid: Int
     ) {
-        CommandPalettePanel.show(relativeTo: window, items: items) { result in
+        CommandPalettePanel.show(
+            relativeTo: window, items: items, usePointGuardNames: settingsState.usePointGuardNames
+        ) { result in
             guard let projectRoot = reg.projectRoot(forWorkspace: wsId),
                 let project = state.projectState(forRoot: projectRoot)
             else { return }
@@ -141,10 +143,10 @@ private struct EmptyTabView: View {
             case .spawnBuiltIn(let variant, let prompt, let name):
                 project.spawnAgentForSurface(
                     agent: variant.id, prompt: prompt ?? "", workspaceId: wsId, surfaceId: sid, name: name)
-            case .spawnAgentDef(let def, let prompt):
+            case .spawnAgentDef(let def, let prompt, let name):
                 project.spawnAgentForSurface(
                     agent: def.agentType, prompt: prompt ?? def.inlinePrompt ?? "",
-                    workspaceId: wsId, surfaceId: sid, command: def.command)
+                    workspaceId: wsId, surfaceId: sid, name: name, command: def.command)
             case .runSwarm, .createWorktree:
                 break
             case .openFilePane(let path):
