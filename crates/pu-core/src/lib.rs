@@ -5,6 +5,7 @@ pub mod id;
 pub mod manifest;
 pub mod mesh;
 pub mod paths;
+pub mod private_fs;
 pub mod protocol;
 pub mod schedule_def;
 pub mod serde_defaults;

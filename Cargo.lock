@@ -730,6 +730,8 @@ dependencies = [
  "chrono",
  "fs4",
  "indexmap",
+ "libc",
+ "nix",
  "rand",
  "serde",
  "serde_json",
