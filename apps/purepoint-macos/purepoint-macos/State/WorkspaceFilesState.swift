@@ -9,6 +9,7 @@ final class WorkspaceFilesState {
     enum Mode: String, CaseIterable {
         case changes = "Changes"
         case files = "Files"
+        case pointGuard = "Point Guard"
     }
 
     let rootPath: String

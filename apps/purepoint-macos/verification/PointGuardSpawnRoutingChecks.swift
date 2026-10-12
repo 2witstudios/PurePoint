@@ -24,13 +24,14 @@ import Testing
             registry.split(workspaceId: id, leafId: leaf, axis: index % 2 == 0 ? .vertical : .horizontal)
             let sid = try #require(registry.workspace(id: id)?.focusedSurface?.id)
             project.spawnAgentForSurface(agent: launch.0, prompt: "hello", workspaceId: id,
-                                         surfaceId: sid, command: launch.1)
+                                         surfaceId: sid, name: "Fix Auth \(index)", command: launch.1)
             let request = try #require(project.requests.last)
             let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
             #expect(json["project_root"] as? String == root)
             #expect(json["root"] as? Bool == true)
             #expect(json["worktree"] == nil)
             #expect(json["agent"] as? String == launch.0)
+            #expect(json["name"] as? String == "Fix Auth \(index)")
             #expect(json["command"] as? String == launch.1)
             #expect(registry.workspace(id: id)?.focusedSurface?.content == .agent("ag-spawned"))
         }

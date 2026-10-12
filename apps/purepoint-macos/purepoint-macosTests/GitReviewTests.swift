@@ -74,6 +74,14 @@ private enum GitReviewChecks {
         try require(local.staged.first { $0.filename == "new name.txt" }?.oldFilename == "old name.txt", "rename evidence")
         try require(local.unstaged.first { $0.filename == "deleted.txt" }?.statusCode == "D", "deleted path patch")
         try require(local.uniquePathCount == 5, "staged+unstaged path counted once")
+        let lazyLocal = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(lazyLocal.error == nil && lazyLocal.staged.first { $0.filename == "new name.txt" }?.oldFilename == "old name.txt", "lazy rename metadata")
+        let lazyStaged = try await service.fetchReviewPage(file: lazyLocal.staged.first { $0.filename == "same.txt" }!, at: path)
+        let lazyUnstaged = try await service.fetchReviewPage(file: lazyLocal.unstaged.first { $0.filename == "same.txt" }!, at: path)
+        try require(lazyStaged.hunks.first?.lines.contains { $0.content == "staged" && $0.type == .addition } == true, "lazy staged comparison remains distinct")
+        try require(lazyUnstaged.hunks.first?.lines.contains { $0.content == "unstaged" && $0.type == .addition } == true, "lazy unstaged comparison remains distinct")
+        let quotedPage = try await service.fetchReviewPage(file: lazyLocal.untracked.first { $0.filename == quoted }!, at: path)
+        try require(quotedPage.hunks.first?.lines.last?.content == "untracked content", "lazy quoted/newline path")
         let summary = await service.reviewSummary(at: path, baseBranch: "main")
         try require(summary.error == nil && summary.commitCount == 2 && summary.localFileCount == 5, "compact summary")
         let invalid = await service.fetchBranchReview(at: path, baseBranch: "missing-base")
@@ -126,6 +134,12 @@ private enum GitReviewChecks {
         try require(conflicted.staged.first { $0.filename == "conflict.txt" }?.statusCode == "U", "explicit staged conflict")
         try require(conflicted.unstaged.first { $0.filename == "conflict.txt" }?.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "working conflict patch against ours")
         try require(conflicted.uniquePathCount == 3, "conflict path counted once")
+        let lazyConflict = await service.fetchLocalReview(at: conflict, summariesOnly: true)
+        try require(lazyConflict.error == nil && lazyConflict.staged.count == 2 && lazyConflict.unstaged.count == 2, "lazy conflicts retain unique paths in both groups")
+        let stagedConflictPage = try await service.fetchReviewPage(file: lazyConflict.staged.first { $0.filename == "conflict.txt" }!, at: conflict)
+        try require(stagedConflictPage.hunks.isEmpty && !stagedConflictPage.hasMore, "marker-only staged conflict is a valid no-body preview")
+        let conflictPage = try await service.fetchReviewPage(file: lazyConflict.unstaged.first { $0.filename == "conflict.txt" }!, at: conflict)
+        try require(conflictPage.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "lazy conflict baseline retains actual working content")
         _ = try git(["reset", "--hard", "HEAD"], at: conflict)
         _ = try git(["checkout", "-b", "ours-deleted"], at: conflict)
         _ = try git(["rm", "conflict.txt"], at: conflict); try commit("ours deletes", at: conflict)
@@ -204,12 +218,35 @@ private enum GitReviewChecks {
         """, "prs.json", at: path)
         let patch = "diff --git a/remote.txt b/remote.txt\nnew file mode 100644\n--- /dev/null\n+++ b/remote.txt\n@@ -0,0 +1 @@\n+remote first\n"
         try write(patch, "pr.patch", at: path)
-        let state = DiffState(gitService: GitService(ghPath: fake), observeChanges: false)
+        let state = DiffState(gitService: GitService(ghPath: fake), observeChanges: false, summariesOnly: false)
         let worktree = WorktreeModel(id: "test", name: "test", path: path, branch: "feature", status: "active", agents: [], baseBranch: "main")
         state.loadForWorktree(worktree)
         try await settle(state)
         try require(state.activeTab == .branch && state.commits.count == 2 && state.comparisonBase == "main", "default branch and recorded base")
         try require(state.prDiff?.files.first?.added == 1 && state.prError == nil, "remote initial patch")
+        let lazyState = DiffState(gitService: GitService(ghPath: fake), observeChanges: false)
+        lazyState.loadForWorktree(worktree); try await settle(lazyState)
+        try require(lazyState.selectedPR == nil && lazyState.prDiff == nil && !lazyState.pullRequests.isEmpty, "opening a worktree does not download a background PR patch")
+        lazyState.activeTab = .prDiffs; try await settle(lazyState)
+        try require(lazyState.prDiff?.files.first?.hunks.isEmpty == true && lazyState.prDiff?.files.first?.added == 1, "PR tab loads metadata with deferred bodies")
+        let lazyPage = try await lazyState.loadPage(lazyState.prDiff!.files[0])
+        try require(lazyPage.hunks.first?.lines.last?.content == "remote first", "PR body loads through overview page routing")
+        lazyState.activeTab = .commits
+        let blob = try git(["rev-parse", "HEAD:second.txt"], at: path)
+        let object = path + "/.git/objects/" + blob.prefix(2) + "/" + blob.dropFirst(2)
+        let held = path + "/held-object"
+        try FileManager.default.moveItem(atPath: object, toPath: held)
+        lazyState.selectCommit(lazyState.commits[0]); try await settle(lazyState)
+        try require(lazyState.commitError != nil && lazyState.commitDiff.isEmpty, "failed selected commit retains an actionable error")
+        try FileManager.default.moveItem(atPath: held, toPath: object)
+        lazyState.refresh(); try await settle(lazyState)
+        try require(lazyState.commitError == nil, "local refresh retries a selected commit that has not loaded successfully")
+        try require(lazyState.commitDiff.first?.filename == "second.txt" && lazyState.commitDiff.first?.hunks.isEmpty == true, "selected commit loads metadata only")
+        lazyState.selectedPR = nil; lazyState.prDiff = nil
+        lazyState.activeTab = .branch; lazyState.activeTab = .prDiffs
+        try await settle(lazyState)
+        try require(lazyState.selectedPR == nil && lazyState.prDiff == nil, "lazy review tab switching preserves explicit PR list navigation")
+        lazyState.stopWatching()
         state.selectCommit(state.commits[1]); state.selectCommit(state.commits[0])
         try await settle(state)
         try require(state.commitDiff.first?.filename == "second.txt", "latest commit selection wins")
@@ -227,12 +264,22 @@ private enum GitReviewChecks {
         state.refresh(); try await settle(state)
         try require(state.prDiff?.files.contains { $0.filename == "quoted \"name\"\tü.txt" && $0.added == 1 } == true, "quoted PR filename")
         try require(state.prDiff?.files.contains { $0.filename == "binary \"name\".bin" && $0.isBinary } == true, "quoted binary PR filename")
+        let lazyRemote = GitService(ghPath: fake)
+        let remoteSummary = try await lazyRemote.fetchPRDiffChecked(cwd: path, prNumber: 1, summariesOnly: true)
+        try require(remoteSummary.files.count == 2 && remoteSummary.files.allSatisfy { $0.hunks.isEmpty }, "PR metadata excludes all patch bodies")
+        let remoteFile = remoteSummary.files.first { $0.filename == "quoted \"name\"\tü.txt" }!
+        let remotePage = try await lazyRemote.fetchReviewPage(file: remoteFile, at: path)
+        try require(remotePage.hunks.first?.lines.last?.content == "quoted", "disk-backed quoted PR path loads exact patch")
+        try require(remoteSummary.files.first { $0.filename == "binary \"name\".bin" }?.isBinary == true, "disk-backed PR binary metadata")
         try write("unexpected output", "pr.patch", at: path)
         state.refresh(); try await settle(state)
         try require(state.prError != nil && state.prDiff?.files.count == 2, "malformed PR patch retains evidence")
         state.selectedPR = nil; state.prDiff = nil
         state.refresh(); try await settle(state)
         try require(state.selectedPR == nil && state.prDiff == nil && !state.pullRequests.isEmpty, "refresh must preserve explicit PR list navigation")
+        state.activeTab = .branch; state.activeTab = .prDiffs
+        try await settle(state)
+        try require(state.selectedPR == nil && state.prDiff == nil, "tab switching preserves explicit PR list navigation")
         // Base changes invalidate pending PR diffs even when the subsequent lookup fails.
         try write("fail", "fail", at: path)
         state.selectPR(state.pullRequests[0])
@@ -255,7 +302,7 @@ private enum GitReviewChecks {
     @MainActor static func emptyRefreshChecks() async throws {
         let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
         try write("root\n", "root.txt", at: path); try commit("root", at: path)
-        let state = DiffState(gitService: GitService(ghPath: "/usr/bin/false"), observeChanges: false)
+        let state = DiffState(gitService: GitService(ghPath: "/usr/bin/false"), observeChanges: false, summariesOnly: false)
         defer { state.stopWatching() }
         state.loadForProject(root: path)
         try require(state.isInitiallyLoadingBranch && state.isInitiallyLoadingUnstaged, "new project shows initial loading")
@@ -290,11 +337,11 @@ private enum GitReviewChecks {
         let unavailable = GitCommitInfo(sha: String(repeating: "0", count: 40), subject: "Unavailable", author: "Test", date: "today")
         for _ in 0..<2 {
             // Refresh clears branchError before retrying a selected commit.
-            state.branchError = nil
+            state.commitError = nil
             state.selectCommit(unavailable)
             try require(state.isInitiallyLoadingCommit && state.commitDiff.isEmpty, "failed commit fetch retries show loading rather than false empty evidence")
             try await settle(state)
-            try require(state.branchError != nil && state.commitDiff.isEmpty, "unavailable commit exposes fetch failure")
+            try require(state.commitError != nil && state.commitDiff.isEmpty, "unavailable commit exposes fetch failure")
         }
         print("Empty review refresh checks passed")
     }
@@ -305,6 +352,243 @@ private enum GitReviewChecks {
             try await Task.sleep(for: .milliseconds(25))
         }
         throw Failure(message: "state refresh timed out")
+    }
+
+    @MainActor static func lazyReviewChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        try write("original\n", "large.txt", at: path); try commit("root", at: path)
+        _ = try git(["checkout", "-b", "feature"], at: path)
+        try write((0..<1000).map { "line \($0)" }.joined(separator: "\n") + "\n", "large.txt", at: path)
+        try commit("large change", at: path)
+        let service = GitService()
+        let review = await service.fetchBranchReview(at: path, baseBranch: "main", summariesOnly: true)
+        try require(review.error == nil && review.files.count == 1, "large changes remain navigable")
+        let file = review.files[0]
+        try require(file.hunks.isEmpty && file.added == 1000 && file.removed == 1, "overview loads counts without patch bodies")
+        try require(file.shouldCollapse, "large files start collapsed")
+        var page = try await service.fetchReviewPage(file: file, at: path)
+        try require(page.hunks.flatMap(\.lines).count == 200, "expanded files have bounded text layout")
+        var lines = page.hunks.flatMap(\.lines)
+        while page.hasMore {
+            page = try await service.fetchReviewPage(file: file, at: path, after: page)
+            lines += page.hunks.flatMap(\.lines)
+        }
+        try require(lines.count == 1001 && lines.last?.content == "line 999" && lines.last?.newLineNo == 1000, "all lower lines remain reachable without gaps")
+        try write("local\n", "large.txt", at: path)
+        try write("new\n", "new.txt", at: path)
+        let local = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(local.unstaged.first?.hunks.isEmpty == true && local.untracked.first?.hunks.isEmpty == true, "local overview defers all bodies")
+        let newPage = try await service.fetchReviewPage(file: local.untracked[0], at: path)
+        try require(newPage.hunks.first?.lines.first?.content == "new", "untracked content remains reachable")
+        let selectedSHA = try git(["rev-parse", "HEAD"], at: path)
+        let commitFiles = try await service.fetchCommitDiff(at: path, sha: selectedSHA, summariesOnly: true)
+        try require(commitFiles[0].hunks.isEmpty && commitFiles[0].added == 1000, "commit summaries defer bodies")
+        let initialSHA = try git(["rev-parse", "main"], at: path)
+        let initialFiles = try await service.fetchCommitDiff(at: path, sha: initialSHA, summariesOnly: true)
+        let initialPage = try await service.fetchReviewPage(file: initialFiles[0], at: path)
+        try require(initialPage.hunks.first?.lines.first?.content == "original", "initial commit uses empty baseline")
+        try write(String(repeating: "x", count: 1_100_000) + "\n", "minified.txt", at: path)
+        let longSummary = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let longPage = try await service.fetchReviewPage(file: longSummary.untracked.first { $0.filename == "minified.txt" }!, at: path)
+        try require(longPage.hasLongLines && longPage.hunks[0].lines[0].content.utf8.count < 2200, "minified lines cannot trigger unbounded layout")
+        let raw = try String(contentsOf: longPage.slice.snapshot.url, encoding: .utf8)
+        try require(raw.contains(String(repeating: "x", count: 1_100_000)), "full patch retains shortened line content")
+        for index in 0..<1000 { try write("new file\n", String(format: "file%04d.txt", index), at: path) }
+        try commit("many files", at: path)
+        let started = Date()
+        let many = await service.fetchBranchReview(at: path, baseBranch: "main", summariesOnly: true)
+        try require(many.error == nil && many.files.count == 1003 && many.files.allSatisfy { $0.hunks.isEmpty }, "complete navigation survives thousands of changed files")
+        let last = many.files.first { $0.filename == "file0999.txt" }!
+        let lastPage = try await service.fetchReviewPage(file: last, at: path)
+        try require(lastPage.hunks.first?.lines.last?.content == "new file", "direct access to lower files bypasses other patch bodies")
+        print("1,003-file metadata and direct-jump check: \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        let state = DiffState(gitService: GitService(ghPath: "/usr/bin/false"), observeChanges: false)
+        state.loadForProject(root: path)
+        try await settle(state)
+        try require(state.branchDiff.allSatisfy { $0.hunks.isEmpty }, "overview defaults to metadata-only loading")
+        state.stopWatching()
+        print("Lazy review and page checks passed")
+    }
+
+    @MainActor static func reviewRegressionChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        let service = GitService()
+        try write("first\n", "baseline.txt", at: path); try commit("first", at: path)
+        let first = try git(["rev-parse", "HEAD"], at: path)
+        try write("second\n", "baseline.txt", at: path); try commit("second", at: path)
+        try write("third\n", "baseline.txt", at: path); _ = try git(["add", "baseline.txt"], at: path)
+        let before = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let oldPage = try await service.fetchReviewPage(file: before.staged[0], at: path)
+        _ = try git(["reset", "--soft", first], at: path)
+        let after = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(before.staged[0].previewVersion != after.staged[0].previewVersion, "soft reset invalidates staged preview independently of index/work file")
+        let newPage = try await service.fetchReviewPage(file: after.staged[0], at: path)
+        try require(oldPage.hunks[0].lines.contains { $0.content == "second" && $0.type == .deletion }, "old staged snapshot baseline")
+        try require(newPage.hunks[0].lines.contains { $0.content == "first" && $0.type == .deletion }, "fresh staged snapshot follows moved HEAD")
+
+        let stagedVersion = after.staged[0].previewVersion
+        try write("working only\n", "baseline.txt", at: path)
+        let workingEdit = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(workingEdit.staged[0].previewVersion == stagedVersion, "working edits do not reset staged preview pages")
+        let unstagedVersion = workingEdit.unstaged[0].previewVersion
+        try write("unrelated\n", "other-index.txt", at: path); _ = try git(["add", "other-index.txt"], at: path)
+        _ = try git(["status", "--porcelain"], at: path)
+        let unrelatedIndex = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(unrelatedIndex.staged.first { $0.filename == "baseline.txt" }?.previewVersion == stagedVersion, "unrelated index changes do not reset staged preview pages")
+        try require(unrelatedIndex.unstaged[0].previewVersion == unstagedVersion, "unrelated index changes do not reset unstaged preview pages")
+        _ = try git(["add", "baseline.txt"], at: path)
+        let restaged = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(restaged.staged.first { $0.filename == "baseline.txt" }?.previewVersion != stagedVersion, "changing this path's index blob invalidates its staged preview")
+
+        try write((1...20_000).map { "history line \($0)" }.joined(separator: "\n") + "\n", "many.txt", at: path)
+        let summary = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let file = summary.untracked.first { $0.filename == "many.txt" }!
+        var history = ReviewPageHistory(), index = 0
+        while true {
+            let page = try await service.fetchReviewPage(file: file, at: path, cursor: history.cursor(at: index))
+            history.store(page, at: index)
+            try require(history.retainedLineCount <= 200, "visited pages retain only one bounded body")
+            if !page.hasMore { break }
+            index += 1
+        }
+        try require(index >= 99 && history.page(at: index)?.hunks.last?.lines.last?.newLineNo == 20_000, "all pages remain reachable with bounded retention")
+        history.releaseBody()
+        try require(history.retainedLineCount == 0, "collapsing/offscreen cards release page bodies")
+        try FileManager.default.removeItem(atPath: path + "/many.txt")
+        let revisited = try await service.fetchReviewPage(file: file, at: path, cursor: history.cursor(at: 0))
+        try require(revisited.hunks[0].lines.first?.content == "history line 1", "previous pages reread the existing snapshot without regenerating Git")
+
+        let fake = path + "/fake-gh"
+        try write("""
+        #!/bin/sh
+        if [ "$2" = list ]; then cat prs.json
+        else
+          if [ -f fail-diff ]; then echo temporary-diff-error >&2; exit 1; fi
+          if [ -f delay ]; then touch started; sleep 1; fi
+          cat pr.patch
+        fi
+        """, "fake-gh", at: path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake)
+        let list = """
+        [{"number":1,"title":"One","url":"https://example.test/1","state":"OPEN","headRefName":"main","baseRefName":"main","author":{"login":"test"},"labels":[],"additions":1,"deletions":0,"changedFiles":1,"isDraft":false,"createdAt":"today","updatedAt":"v1"}]
+        """
+        let patch = "diff --git a/remote.txt b/remote.txt\n--- a/remote.txt\n+++ b/remote.txt\n@@ -0,0 +1 @@\n+first remote\n"
+        try write(list, "prs.json", at: path); try write(patch, "pr.patch", at: path)
+        let state = DiffState(gitService: GitService(ghPath: fake), observeChanges: false)
+        state.loadForProject(root: path); try await settle(state)
+        state.activeTab = .prDiffs; try await settle(state)
+        try require(state.prDiff != nil && !state.isPRDiffStale, "initial PR snapshot is current")
+        try write(list.replacingOccurrences(of: "v1", with: "v2"), "prs.json", at: path)
+        try write(patch.replacingOccurrences(of: "first remote", with: "updated remote"), "pr.patch", at: path)
+        try write("delay", "delay", at: path)
+        state.refresh()
+        for _ in 0..<120 {
+            if FileManager.default.fileExists(atPath: path + "/started") { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        try require(state.isLoadingPRDiff && state.selectedPR?.updatedAt == "v2", "updated PR download is in flight")
+        state.activeTab = .branch
+        try require(state.prDiff != nil && state.isPRDiffStale, "interrupted PR refresh retains visibly stale evidence")
+        try FileManager.default.removeItem(atPath: path + "/delay")
+        state.activeTab = .prDiffs
+        try require(state.isLoadingPRDiff, "returning to stale PR resumes its interrupted refresh")
+        try await settle(state)
+        try require(!state.isPRDiffStale, "successful replacement marks the loaded PR revision current")
+        let refreshed = try await state.loadPage(state.prDiff!.files[0])
+        try require(refreshed.hunks[0].lines.last?.content == "updated remote", "reentry replaces stale PR patch content")
+        state.selectedPR = nil; state.prDiff = nil
+        try write("fail", "fail-diff", at: path)
+        state.selectPR(state.pullRequests[0]); try await settle(state)
+        try require(state.prError != nil && state.prDiff == nil, "failed selected PR has an actionable load error")
+        try FileManager.default.removeItem(atPath: path + "/fail-diff")
+        state.refreshPRs(); try await settle(state)
+        try require(state.prError == nil && state.prDiff != nil, "ordinary PR polling retries an unloaded selected PR even when updatedAt is unchanged")
+        state.stopWatching()
+
+        let rename = try repo(); defer { try? FileManager.default.removeItem(atPath: rename) }
+        try write("original\n", "old.txt", at: rename); try commit("root", at: rename)
+        _ = try git(["checkout", "-b", "renamed"], at: rename)
+        _ = try git(["mv", "old.txt", "new.txt"], at: rename)
+        try FileManager.default.createDirectory(atPath: rename + "/old.txt", withIntermediateDirectories: true)
+        try write("replacement\n", "old.txt/child.txt", at: rename)
+        _ = try git(["add", "--all"], at: rename)
+        let staged = await service.fetchLocalReview(at: rename, summariesOnly: true)
+        let stagedRename = staged.staged.first { $0.filename == "new.txt" }!
+        let stagedPage = try await service.fetchReviewPage(file: stagedRename, at: rename)
+        try require(stagedRename.oldFilename == "old.txt" && stagedPage.hunks.isEmpty, "staged rename cannot render a child file's patch")
+        try commit("rename with directory replacement", at: rename)
+        let branch = await service.fetchBranchReview(at: rename, baseBranch: "main", summariesOnly: true)
+        let branchRename = branch.files.first { $0.filename == "new.txt" }!
+        let branchPage = try await service.fetchReviewPage(file: branchRename, at: rename)
+        try require(branchPage.hunks.isEmpty, "branch rename remains scoped to its exact entry")
+        let sha = try git(["rev-parse", "HEAD"], at: rename)
+        let commit = try await service.fetchCommitDiff(at: rename, sha: sha, summariesOnly: true)
+        let commitPage = try await service.fetchReviewPage(file: commit.first { $0.filename == "new.txt" }!, at: rename)
+        try require(commitPage.hunks.isEmpty, "commit rename remains scoped to its exact entry")
+        print("Page retention, soft reset, rename scoping, and interrupted/failed PR regression checks passed")
+    }
+
+    static func prefixRegressionChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        let service = GitService()
+        for name in ["a", "b"] { try FileManager.default.createDirectory(atPath: path + "/" + name, withIntermediateDirectories: true) }
+        try write("original a\n", "a/plain.txt", at: path)
+        try write("original b\n", "b/plain.txt", at: path)
+        try write("mode only\n", "b/mode.txt", at: path)
+        try commit("root", at: path)
+        _ = try git(["checkout", "-b", "prefixes"], at: path)
+        _ = try git(["config", "core.filemode", "true"], at: path)
+        _ = try git(["config", "diff.mnemonicPrefix", "true"], at: path)
+        try write("staged a\n", "a/plain.txt", at: path); _ = try git(["add", "a/plain.txt"], at: path)
+        try write("working b\n", "b/plain.txt", at: path)
+        let mnemonic = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let staged = try await service.fetchReviewPage(file: mnemonic.staged.first { $0.filename == "a/plain.txt" }!, at: path)
+        let unstaged = try await service.fetchReviewPage(file: mnemonic.unstaged.first { $0.filename == "b/plain.txt" }!, at: path)
+        try require(staged.hunks[0].lines.contains { $0.content == "staged a" && $0.type == .addition }, "mnemonic prefixes preserve exact staged file identity in an a directory")
+        try require(unstaged.hunks[0].lines.contains { $0.content == "working b" && $0.type == .addition }, "mnemonic prefixes preserve exact unstaged file identity in a b directory")
+        _ = try git(["config", "diff.noprefix", "true"], at: path)
+        try Data([0, 1, 255, 0]).write(to: URL(fileURLWithPath: path + "/a/new.bin"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path + "/b/mode.txt")
+        let noPrefix = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let noPrefixStaged = try await service.fetchReviewPage(file: noPrefix.staged.first { $0.filename == "a/plain.txt" }!, at: path)
+        try require(noPrefixStaged.hunks[0].lines.contains { $0.content == "staged a" }, "no-prefix config cannot strip the real a directory")
+        let binary = try await service.fetchReviewPage(file: noPrefix.untracked.first { $0.filename == "a/new.bin" }!, at: path)
+        try require(binary.isBinary && binary.hunks.isEmpty, "no-prefix binary untracked files remain previewable")
+        let mode = try await service.fetchReviewPage(file: noPrefix.unstaged.first { $0.filename == "b/mode.txt" }!, at: path)
+        try require(mode.hunks.isEmpty, "no-prefix mode-only file keeps exact b-directory identity")
+        try commit("prefix changes", at: path)
+        let branch = await service.fetchBranchReview(at: path, baseBranch: "main", summariesOnly: true)
+        let branchMode = try await service.fetchReviewPage(file: branch.files.first { $0.filename == "b/mode.txt" }!, at: path)
+        try require(branchMode.hunks.isEmpty, "branch mode-only previews normalize configured prefixes")
+        let commitFiles = try await service.fetchCommitDiff(at: path, sha: try git(["rev-parse", "HEAD"], at: path), summariesOnly: true)
+        let commitBinary = try await service.fetchReviewPage(file: commitFiles.first { $0.filename == "a/new.bin" }!, at: path)
+        try require(commitBinary.isBinary, "commit binary previews normalize configured prefixes")
+        print("Git prefix and mode/binary regression checks passed")
+    }
+
+    static func rawConflictPathChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        let names = ["\"quoted\"", "line\nbreak.txt"]
+        for name in names { try write("base\n", name, at: path) }
+        try commit("base", at: path)
+        _ = try git(["checkout", "-b", "side"], at: path)
+        for name in names { try write("side\n", name, at: path) }
+        try commit("side", at: path)
+        _ = try git(["checkout", "main"], at: path)
+        for name in names { try write("ours\n", name, at: path) }
+        try commit("ours", at: path)
+        do { _ = try git(["merge", "side"], at: path); throw Failure(message: "merge unexpectedly succeeded") }
+        catch let failure as Failure { try require(failure.message.contains("CONFLICT"), "real unusual-path conflicts") }
+        let service = GitService()
+        let local = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(local.error == nil, "conflict metadata preserves raw quoted/newline paths")
+        for name in names {
+            let staged = try await service.fetchReviewPage(file: local.staged.first { $0.filename == name }!, at: path)
+            try require(staged.hunks.isEmpty && !staged.hasMore, "raw unusual-path staged marker is a valid conflict page")
+            let working = try await service.fetchReviewPage(file: local.unstaged.first { $0.filename == name }!, at: path)
+            try require(working.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "raw unusual-path marker preserves actual unstaged conflict evidence")
+        }
+        print("Raw quoted/newline conflict path checks passed")
     }
 
     static func concurrentProcessChecks() async throws {
@@ -327,7 +611,15 @@ private enum GitReviewChecks {
                 try require(stderrLines == 10001, "all stderr drained")
             }
         }
-        print("Concurrent Git pipe checks passed")
+        let cancelService = GitService()
+        let canceled = Task {
+            await cancelService.runGit(["-c", "alias.cancel-check=!exec /bin/sleep 2", "cancel-check"], cwd: NSTemporaryDirectory())
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        canceled.cancel()
+        let canceledResult = await canceled.value
+        try require(!canceledResult.success, "canceled Git work terminates instead of completing obsolete reads")
+        print("Concurrent Git pipe and cancellation checks passed")
     }
 }
 
@@ -337,6 +629,10 @@ private enum GitReviewChecks {
         try await GitReviewChecks.repositoryChecks()
         try await GitReviewChecks.stateChecks()
         try await GitReviewChecks.emptyRefreshChecks()
+        try await GitReviewChecks.lazyReviewChecks()
+        try await GitReviewChecks.reviewRegressionChecks()
+        try await GitReviewChecks.prefixRegressionChecks()
+        try await GitReviewChecks.rawConflictPathChecks()
         try await GitReviewChecks.concurrentProcessChecks()
     }
 }
@@ -345,6 +641,10 @@ struct GitReviewTests {
     @Test func realRepositories() async throws { try await GitReviewChecks.repositoryChecks() }
     @Test @MainActor func selectionsAndRemoteRefresh() async throws { try await GitReviewChecks.stateChecks() }
     @Test @MainActor func emptyResultsStayVisibleDuringRefresh() async throws { try await GitReviewChecks.emptyRefreshChecks() }
+    @Test @MainActor func boundedReviewPages() async throws { try await GitReviewChecks.lazyReviewChecks() }
+    @Test @MainActor func reviewRegressions() async throws { try await GitReviewChecks.reviewRegressionChecks() }
+    @Test func prefixRegressions() async throws { try await GitReviewChecks.prefixRegressionChecks() }
+    @Test func rawConflictPaths() async throws { try await GitReviewChecks.rawConflictPathChecks() }
     @Test func concurrentGitPipesComplete() async throws { try await GitReviewChecks.concurrentProcessChecks() }
 }
 #endif

@@ -6,6 +6,7 @@ struct PiPointGuardChatView: View {
     @ObservedObject var model: PiChatModel
     @Binding var showSidebar: Bool
     var isFocused = true
+    var compact = false
     @State private var search = ""
     @State private var pendingSession: PiConversation?
     @State private var confirmNew = false
@@ -18,7 +19,7 @@ struct PiPointGuardChatView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        PointGuardConversationLayout(isExpanded: $showSidebar) {
+        PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact) {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
             } label: {
@@ -113,18 +114,19 @@ struct PiPointGuardChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
                     if let history = model.browsing {
-                        HStack {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Reading: " + history.title).font(.system(size: 12, weight: .medium))
-                            Spacer()
-                            Button("Resume") {
-                                pendingSession = PiConversation(id: history.sessionId, title: history.title);
-                                if model.busy {
-                                    confirmResume = true
-                                } else {
-                                    Task { await model.changeSession(to: history.sessionId) }
+                            HStack {
+                                Button("Resume") {
+                                    pendingSession = PiConversation(id: history.sessionId, title: history.title);
+                                    if model.busy {
+                                        confirmResume = true
+                                    } else {
+                                        Task { await model.changeSession(to: history.sessionId) }
+                                    }
                                 }
+                                Button("Back to live") { model.browsing = nil }
                             }
-                            Button("Back to live") { model.browsing = nil }
                         }
                         ForEach(PiTranscriptRows.make(messages: history.messages, tools: [])) { row in
                             switch row {
@@ -151,7 +153,7 @@ struct PiPointGuardChatView: View {
                 }
                 .frame(maxWidth: PurePointTheme.chatContentWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, PurePointTheme.chatHorizontalPadding)
+                .padding(.horizontal, compact ? 8 : PurePointTheme.chatHorizontalPadding)
                 .padding(.vertical, 24)
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -234,14 +236,16 @@ struct PiPointGuardChatView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(model.recoverable) { receipt in
-                HStack {
+                VStack(alignment: .leading, spacing: 4) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(receipt.status).font(.system(size: 11)).lineLimit(2)
                         Text(receipt.text).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Spacer()
-                    Button("Restore") { model.restore(receipt) }
-                    Button("Dismiss") { model.dismissSubmission(receipt.id) }
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("Restore") { model.restore(receipt) }
+                        Button("Dismiss") { model.dismissSubmission(receipt.id) }
+                    }
                 }
             }
             if model.submissions.contains(where: { $0.status == "Sending" }) {
@@ -272,7 +276,7 @@ struct PiPointGuardChatView: View {
                         if model.canSend && !importingAttachment { submitDraft() }
                         return .handled
                     }
-                HStack(spacing: 12) {
+                HStack(spacing: compact ? 8 : 12) {
                     Button {
                         showFiles = true
                     } label: {
@@ -292,9 +296,14 @@ struct PiPointGuardChatView: View {
                             Button("Send after reply") { submitDraft(mode: "after") }
                             Button("Steer current work") { submitDraft(mode: "steer") }
                         } label: {
-                            Text("Send options").font(.system(size: 12, weight: .medium))
+                            if compact {
+                                composerActionIcon("arrow.up", enabled: model.canSend && !importingAttachment)
+                            } else {
+                                Text("Send options").font(.system(size: 12, weight: .medium))
+                            }
                         }
                         .menuStyle(.borderlessButton).fixedSize()
+                        .accessibilityLabel("Send options")
                         .disabled(!model.canSend || importingAttachment).help("Choose when to send your draft")
                         Button {
                             Task { _ = await model.stop() }
@@ -330,7 +339,7 @@ struct PiPointGuardChatView: View {
             }
         }
         .frame(maxWidth: PurePointTheme.chatContentWidth).frame(maxWidth: .infinity)
-        .padding(.horizontal, PurePointTheme.chatHorizontalPadding).padding(.top, 8).padding(.bottom, 16)
+        .padding(.horizontal, compact ? 8 : PurePointTheme.chatHorizontalPadding).padding(.top, 8).padding(.bottom, 16)
         .onAppear { composerFocused = isFocused }
         .onChange(of: isFocused) { _, focused in
             if !focused { composerFocused = false }
