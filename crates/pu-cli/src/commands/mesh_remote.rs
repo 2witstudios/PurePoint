@@ -10,10 +10,13 @@ use pu_core::mesh::{
     admin::{MeshAdminRequest, MeshAdminResponse, WorkerRoute},
     local::LocalRoute,
     response::{Body, Response as WireResponse},
-    wire::{self, AgentTarget, ControlGuard, Export, Mutation, Operation, WriterCheckpoint},
+    wire::{self, ControlGuard, Export, Mutation, Operation, WriterCheckpoint},
 };
 use pu_core::protocol::{Request, Response};
 use std::path::Path;
+
+/// Lifetime of windows the CLI issues; reuse within it to retry an operation.
+const DEFAULT_WINDOW_TTL: u32 = 3600;
 
 /// Remote run selection shared by run-scoped commands.
 #[derive(Debug, clap::Args)]
@@ -54,7 +57,7 @@ pub enum RemoteAction {
     },
     /// Issue an operation window for retry-safe mutations
     Window {
-        #[arg(long, default_value_t = 3600)]
+        #[arg(long, default_value_t = DEFAULT_WINDOW_TTL)]
         ttl_seconds: u32,
     },
     /// Spawn a granted runtime against an exact, existing source commit
@@ -127,12 +130,28 @@ pub enum RemoteAction {
         cols: u16,
         #[arg(long)]
         rows: u16,
+        #[command(flatten)]
+        operation: OperationArgs,
     },
     /// Stream the run's output (gaps are reported, never filled)
     Watch {
         #[command(flatten)]
         run: RunSelector,
+        /// Resume after the last output seen, as printed when a watch stops
+        /// (`<incarnation>:<offset>`); the worker reports any evicted gap.
+        #[arg(long, value_parser = parse_cursor)]
+        cursor: Option<wire::OutputCursor>,
     },
+}
+
+fn parse_cursor(value: &str) -> Result<wire::OutputCursor, String> {
+    let (incarnation, offset) = value
+        .split_once(':')
+        .ok_or("expected <incarnation>:<offset>")?;
+    Ok(wire::OutputCursor {
+        incarnation: incarnation.to_string(),
+        offset: offset.parse().map_err(|_| "offset must be a number")?,
+    })
 }
 
 /// Resolve a fingerprint or unique label against this host's own routes.
@@ -156,6 +175,14 @@ struct Remote<'a> {
     socket: &'a Path,
     worker: WorkerRoute,
     json: bool,
+}
+
+/// A worker refusal, keeping its exact error code for the caller.
+fn refused(what: &str, body: &Body) -> CliError {
+    match body {
+        Body::Error { code } => CliError::Other(format!("worker refused {what}: {code:?}")),
+        _ => CliError::Other(format!("unexpected worker reply to {what}")),
+    }
 }
 
 impl Remote<'_> {
@@ -189,9 +216,25 @@ impl Remote<'_> {
         }
     }
 
-    fn print(&self, response: WireResponse) -> Result<(), CliError> {
+    /// Print the reply. A mutation's identity is part of the output so the
+    /// exact operation can be retried: in JSON alongside the response,
+    /// otherwise as a line on stderr.
+    fn print(&self, response: WireResponse, issued: Option<Mutation>) -> Result<(), CliError> {
         let failed = matches!(response.body, Body::Error { .. });
-        output::print_response(&Response::MeshRoute { response }, self.json)?;
+        if self.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "operation": issued,
+                    "response": response,
+                }))?
+            );
+        } else {
+            if let Some(Mutation { window, id }) = &issued {
+                eprintln!("operation: --window {window} --operation {id}");
+            }
+            output::print_response(&Response::MeshRoute { response }, false)?;
+        }
         if failed {
             return Err(CliError::Other("worker refused the request".into()));
         }
@@ -223,38 +266,188 @@ impl Remote<'_> {
                     revision: agent.revision,
                 })
                 .ok_or_else(|| CliError::Other("no such remote agent".into())),
-            _ => Err(CliError::Other("worker refused the status request".into())),
+            body => Err(refused("the status request", &body)),
         }
     }
 
-    /// Reuse the supplied identity, or issue a fresh window and operation ID
-    /// and print them so the caller can retry the same operation.
+    /// Reuse the supplied identity, or issue a fresh window and operation ID.
     async fn mutation(&self, args: OperationArgs) -> Result<Mutation, CliError> {
         let window = match args.window {
             Some(window) => window,
             None => match self
-                .send(Operation::IssueWindow { ttl_seconds: 3600 })
+                .send(Operation::IssueWindow {
+                    ttl_seconds: DEFAULT_WINDOW_TTL,
+                })
                 .await?
                 .body
             {
                 Body::Window { window, .. } => window,
-                _ => return Err(CliError::Other("worker refused a window".into())),
+                body => return Err(refused("a window", &body)),
             },
         };
         let id = args
             .operation
             .unwrap_or_else(|| format!("op-{}", pu_core::id::session_id()));
-        eprintln!("operation: --window {window} --operation {id}");
         Ok(Mutation { window, id })
     }
 
-    async fn watch(&self, run: RunSelector) -> Result<(), CliError> {
+    async fn watch(
+        &self,
+        run: RunSelector,
+        cursor: Option<wire::OutputCursor>,
+    ) -> Result<(), CliError> {
         let guard = self.guard(&run).await?;
         let route = self.route(Operation::SubscribeOutput {
             target: guard.target,
-            cursor: None,
+            cursor,
         })?;
         stream(self.socket, Request::MeshWatch { route }, self.json).await
+    }
+
+    /// The bridge operation for an action, plus the identity it was issued.
+    async fn operation(
+        &self,
+        action: RemoteAction,
+    ) -> Result<(Operation, Option<Mutation>), CliError> {
+        Ok(match action {
+            RemoteAction::Watch { .. } => {
+                return Err(CliError::Other(
+                    "watch streams output; it is not a one-shot operation".into(),
+                ));
+            }
+            RemoteAction::Inventory => (Operation::Inventory {}, None),
+            RemoteAction::Status {
+                export,
+                export_generation,
+                agent,
+                after,
+                limit,
+            } => (
+                Operation::Status {
+                    export: Export {
+                        id: export,
+                        generation: export_generation,
+                    },
+                    agent_id: agent,
+                    after_agent: after,
+                    limit,
+                },
+                None,
+            ),
+            RemoteAction::Window { ttl_seconds } => (Operation::IssueWindow { ttl_seconds }, None),
+            RemoteAction::Spawn {
+                export,
+                export_generation,
+                runtime,
+                commit,
+                prompt,
+                operation,
+            } => {
+                let mutation = self.mutation(operation).await?;
+                (
+                    Operation::Spawn {
+                        mutation: mutation.clone(),
+                        export: Export {
+                            id: export,
+                            generation: export_generation,
+                        },
+                        runtime,
+                        source_commit: commit,
+                        prompt,
+                    },
+                    Some(mutation),
+                )
+            }
+            RemoteAction::Acquire { run, operation } => {
+                let guard = self.guard(&run).await?;
+                let mutation = self.mutation(operation).await?;
+                (
+                    Operation::AcquireControl {
+                        guard,
+                        mutation: mutation.clone(),
+                    },
+                    Some(mutation),
+                )
+            }
+            RemoteAction::Stop { run, operation } => {
+                let guard = self.guard(&run).await?;
+                let mutation = self.mutation(operation).await?;
+                (
+                    Operation::Stop {
+                        guard,
+                        mutation: mutation.clone(),
+                    },
+                    Some(mutation),
+                )
+            }
+            RemoteAction::Resize {
+                run,
+                cols,
+                rows,
+                operation,
+            } => {
+                let guard = self.guard(&run).await?;
+                let mutation = self.mutation(operation).await?;
+                (
+                    Operation::Resize {
+                        guard,
+                        mutation: mutation.clone(),
+                        cols,
+                        rows,
+                    },
+                    Some(mutation),
+                )
+            }
+            RemoteAction::Writer {
+                run,
+                previous_writer,
+                previous_sequence,
+            } => (
+                Operation::OpenWriter {
+                    guard: self.guard(&run).await?,
+                    previous: previous_writer.zip(previous_sequence).map(
+                        |(writer, last_sequence)| WriterCheckpoint {
+                            writer,
+                            last_sequence,
+                        },
+                    ),
+                },
+                None,
+            ),
+            RemoteAction::Input {
+                run,
+                writer,
+                sequence,
+                text,
+                submit,
+            } => {
+                let mut data = text.into_bytes();
+                if submit {
+                    data.push(b'\r');
+                }
+                (
+                    Operation::Input {
+                        guard: self.guard(&run).await?,
+                        writer,
+                        sequence,
+                        data,
+                    },
+                    None,
+                )
+            }
+            RemoteAction::InputReceipt {
+                run,
+                writer,
+                sequence,
+            } => (
+                Operation::InputReceipt {
+                    target: self.guard(&run).await?.target,
+                    writer,
+                    sequence,
+                },
+                None,
+            ),
+        })
     }
 }
 
@@ -270,10 +463,16 @@ async fn stream(socket: &Path, request: Request, json: bool) -> Result<(), CliEr
     writer.write_all(&line).await?;
     let mut reader = BufReader::new(reader);
     let mut text = String::new();
+    let mut cursor: Option<wire::OutputCursor> = None;
     loop {
         text.clear();
         if reader.read_line(&mut text).await? == 0 {
-            return Ok(());
+            let resume = cursor
+                .map(|c| format!("; resume with --cursor {}:{}", c.incarnation, c.offset))
+                .unwrap_or_default();
+            return Err(CliError::Other(format!(
+                "watch ended before the run's output ended{resume}"
+            )));
         }
         let response: Response = serde_json::from_str(text.trim())?;
         match output::check_response(response, json)? {
@@ -281,6 +480,10 @@ async fn stream(socket: &Path, request: Request, json: bool) -> Result<(), CliEr
                 if let Some(gap) = frame.gap {
                     eprintln!("[mesh] {gap} output bytes were evicted before delivery");
                 }
+                cursor = Some(wire::OutputCursor {
+                    incarnation: frame.incarnation.clone(),
+                    offset: frame.offset + frame.data.len() as u64,
+                });
                 let end = frame.end;
                 output::print_response(&Response::MeshOutput { frame }, json)?;
                 if end {
@@ -289,9 +492,10 @@ async fn stream(socket: &Path, request: Request, json: bool) -> Result<(), CliEr
                 }
             }
             Response::MeshRoute { response } => {
-                if let Body::Error { .. } = response.body {
+                if let Body::Error { code } = &response.body {
+                    let message = format!("worker refused the subscription: {code:?}");
                     output::print_response(&Response::MeshRoute { response }, json)?;
-                    return Err(CliError::Other("worker refused the subscription".into()));
+                    return Err(CliError::Other(message));
                 }
             }
             other => output::print_response(&other, json)?,
@@ -325,107 +529,62 @@ pub async fn run(
         worker: select_worker(workers, selector)?,
         json,
     };
-    let operation = match action {
-        RemoteAction::Watch { run } => return remote.watch(run).await,
-        RemoteAction::Inventory => Operation::Inventory {},
-        RemoteAction::Status {
-            export,
-            export_generation,
-            agent,
-            after,
-            limit,
-        } => Operation::Status {
-            export: Export {
-                id: export,
-                generation: export_generation,
-            },
-            agent_id: agent,
-            after_agent: after,
-            limit,
-        },
-        RemoteAction::Window { ttl_seconds } => Operation::IssueWindow { ttl_seconds },
-        RemoteAction::Spawn {
-            export,
-            export_generation,
-            runtime,
-            commit,
-            prompt,
-            operation,
-        } => Operation::Spawn {
-            mutation: remote.mutation(operation).await?,
-            export: Export {
-                id: export,
-                generation: export_generation,
-            },
-            runtime,
-            source_commit: commit,
-            prompt,
-        },
-        RemoteAction::Acquire { run, operation } => Operation::AcquireControl {
-            guard: remote.guard(&run).await?,
-            mutation: remote.mutation(operation).await?,
-        },
-        RemoteAction::Stop { run, operation } => Operation::Stop {
-            guard: remote.guard(&run).await?,
-            mutation: remote.mutation(operation).await?,
-        },
-        RemoteAction::Writer {
-            run,
-            previous_writer,
-            previous_sequence,
-        } => Operation::OpenWriter {
-            guard: remote.guard(&run).await?,
-            previous: previous_writer
-                .zip(previous_sequence)
-                .map(|(writer, last_sequence)| WriterCheckpoint {
-                    writer,
-                    last_sequence,
-                }),
-        },
-        RemoteAction::Input {
-            run,
-            writer,
-            sequence,
-            text,
-            submit,
-        } => {
-            let mut data = text.into_bytes();
-            if submit {
-                data.push(b'\r');
-            }
-            Operation::Input {
-                guard: remote.guard(&run).await?,
-                writer,
-                sequence,
-                data,
-            }
-        }
-        RemoteAction::InputReceipt {
-            run,
-            writer,
-            sequence,
-        } => Operation::InputReceipt {
-            target: AgentTarget {
-                ..remote.guard(&run).await?.target
-            },
-            writer,
-            sequence,
-        },
-        RemoteAction::Resize { run, cols, rows } => {
-            let guard = remote.guard(&run).await?;
-            Operation::Resize {
-                mutation: remote
-                    .mutation(OperationArgs {
-                        window: None,
-                        operation: None,
-                    })
-                    .await?,
-                guard,
-                cols,
-                rows,
-            }
-        }
-    };
+    if let RemoteAction::Watch { run, cursor } = action {
+        return remote.watch(run, cursor).await;
+    }
+    let (operation, issued) = remote.operation(action).await?;
     let response = remote.send(operation).await?;
-    remote.print(response)
+    remote.print(response, issued)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn route(fingerprint: char, label: &str) -> WorkerRoute {
+        WorkerRoute {
+            fingerprint: fingerprint.to_string().repeat(64),
+            daemon_id: "worker".into(),
+            label: label.into(),
+            control_address: "192.168.1.20:7443".parse().unwrap(),
+            bulk_address: "192.168.1.20:7444".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn given_fingerprint_or_unique_label_should_select_exactly_one_worker() {
+        // given
+        let workers = vec![route('a', "studio"), route('b', "laptop")];
+        // when / then
+        assert_eq!(
+            select_worker(workers.clone(), "studio").unwrap().label,
+            "studio"
+        );
+        assert_eq!(
+            select_worker(workers.clone(), &"b".repeat(64))
+                .unwrap()
+                .label,
+            "laptop"
+        );
+        assert!(select_worker(workers, "missing").is_err());
+    }
+
+    #[test]
+    fn given_ambiguous_label_should_require_a_fingerprint() {
+        // given
+        let workers = vec![route('a', "studio"), route('b', "studio")];
+        // when / then
+        assert!(select_worker(workers, "studio").is_err());
+    }
+
+    #[test]
+    fn given_cursor_text_should_parse_incarnation_and_offset() {
+        // given / when
+        let cursor = parse_cursor("abc123:4096").unwrap();
+        // then
+        assert_eq!(cursor.incarnation, "abc123");
+        assert_eq!(cursor.offset, 4096);
+        assert!(parse_cursor("no-offset").is_err());
+        assert!(parse_cursor("abc:x").is_err());
+    }
 }
