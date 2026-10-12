@@ -21,23 +21,15 @@ async fn main() {
             std::process::exit(1);
         })
     });
-    let pid_path = daemon_lifecycle::pid_path_for(&socket);
-
     // Setup tracing
     tracing_subscriber::fmt()
         .with_target(false)
         .with_writer(std::io::stderr)
         .init();
 
-    // Create global dir
-    if let Some(parent) = socket.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-
-    // One daemon per socket, in every mode. Binding unlinks the socket file, so
-    // a second daemon (a racing app launch, or the CLI auto-starting one) would
-    // steal the path and strand every agent the first one is running.
-    let _daemon_lock = match daemon_lifecycle::try_acquire_daemon_lock(&socket) {
+    // Validate/create a private state directory before any lifecycle writes.
+    // Both startup modes hold the same lock through agent shutdown.
+    let mut daemon_lock = match daemon_lifecycle::try_acquire_daemon_lock(&socket) {
         Ok(Some(lock)) => lock,
         Ok(None) => {
             eprintln!(
@@ -54,8 +46,9 @@ async fn main() {
 
     // Written in managed mode too, so the app can find and stop a daemon it
     // cannot reach over the socket.
-    if let Err(e) = daemon_lifecycle::claim_pid_file(&pid_path) {
+    if let Err(e) = daemon_lock.claim_pid_file() {
         eprintln!("failed to write PID file: {e}");
+        drop(daemon_lock);
         std::process::exit(1);
     }
 
@@ -65,18 +58,22 @@ async fn main() {
     // fds and every client stream holds a socket, so raise it to the hard limit.
     daemon_lifecycle::raise_fd_limit();
 
-    let engine = Engine::with_project_registry(paths::project_registry_path(&socket))
-        .unwrap_or_else(|e| {
+    let engine = match Engine::with_project_registry(paths::project_registry_path(&socket)) {
+        Ok(engine) => engine,
+        Err(e) => {
             eprintln!("failed to load project registry: {e}");
+            drop(daemon_lock);
             std::process::exit(1);
-        });
-    let server = match IpcServer::bind(&socket, engine) {
+        }
+    };
+    let server = match IpcServer::bind_with_lock(daemon_lock, engine) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("failed to bind socket: {e}");
             std::process::exit(1);
         }
     };
+    let lifecycle = server.lifecycle();
 
     // Start background reaper for dead sessions and orphaned channels
     server.engine().start_session_reaper();
@@ -91,8 +88,7 @@ async fn main() {
     if managed {
         let parent_pid = std::os::unix::process::parent_id();
         let engine_for_cleanup = server.engine().clone();
-        let pid_path_for_exit = pid_path.clone();
-        let socket_for_exit = socket.clone();
+        let lifecycle_for_exit = lifecycle.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -104,7 +100,7 @@ async fn main() {
                         engine_for_cleanup.kill_all_sessions(std::time::Duration::from_secs(1)),
                     )
                     .await;
-                    daemon_lifecycle::cleanup_files(&pid_path_for_exit, &socket_for_exit);
+                    lifecycle_for_exit.cleanup();
                     std::process::exit(0);
                 }
             }
@@ -125,7 +121,7 @@ async fn main() {
     )
     .await;
 
-    daemon_lifecycle::cleanup_files(&pid_path, &socket);
+    lifecycle.cleanup();
 
     tracing::info!("pu-engine stopped");
 

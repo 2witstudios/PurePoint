@@ -12,6 +12,7 @@ const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
 const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
 
+use crate::daemon_lifecycle::{self, DaemonLock};
 use crate::engine::Engine;
 use pu_core::protocol::{Request, Response};
 
@@ -22,6 +23,9 @@ mod streams;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod security_tests;
 
 enum StreamMode {
     None,
@@ -53,19 +57,33 @@ pub struct IpcServer {
     engine: Arc<Engine>,
     shutdown: Arc<Notify>,
     conn_limit: Arc<Semaphore>,
+    lifecycle: Arc<DaemonLock>,
 }
 
 impl IpcServer {
+    /// Bind an owner-only local socket and retain its exclusive lifetime lock.
     pub fn bind(socket_path: &Path, engine: Engine) -> Result<Self, std::io::Error> {
-        // Remove stale socket if it exists
-        let _ = std::fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path)?;
+        let lock = daemon_lifecycle::try_acquire_daemon_lock(socket_path)?.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::AddrInUse, "daemon lock is held")
+        })?;
+        Self::bind_with_lock(lock, engine)
+    }
+
+    /// Bind using the validated startup lock, retaining it for the server lifetime.
+    pub fn bind_with_lock(mut lock: DaemonLock, engine: Engine) -> Result<Self, std::io::Error> {
+        let listener = lock.bind_socket()?;
         Ok(Self {
             listener,
             engine: Arc::new(engine),
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            lifecycle: Arc::new(lock),
         })
+    }
+
+    /// Retain lifecycle ownership until agent shutdown finishes after `run`.
+    pub fn lifecycle(&self) -> Arc<DaemonLock> {
+        self.lifecycle.clone()
     }
 
     /// Override the concurrent connection cap (defaults to `MAX_CONNECTIONS`).
@@ -84,6 +102,9 @@ impl IpcServer {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+        // Dropping the server cancels accepted clients as well as the listener.
+        // Each task retains the lock until cancellation actually drops it.
+        let mut connections = tokio::task::JoinSet::new();
 
         loop {
             tokio::select! {
@@ -98,6 +119,12 @@ impl IpcServer {
                             continue;
                         }
                     };
+                    // SAFETY: geteuid has no preconditions or memory arguments.
+                    let owner_uid = unsafe { libc::geteuid() };
+                    if let Err(error) = validate_peer(&stream, owner_uid) {
+                        tracing::warn!(%error, "rejecting IPC peer");
+                        continue;
+                    }
                     // Never wait for a permit: waiting here would stall accepting,
                     // shutdown and signals, and parking the stream in a task would
                     // let stalled clients pile up descriptors past the cap.
@@ -108,25 +135,33 @@ impl IpcServer {
                     };
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
-                    tokio::spawn(async move {
+                    let lifecycle = self.lifecycle.clone();
+                    connections.spawn(async move {
+                        let _lifecycle = lifecycle;
                         let _permit = permit;
                         Self::handle_connection(stream, engine, shutdown).await;
                     });
                 }
+                _ = connections.join_next(), if !connections.is_empty() => {}
                 _ = self.shutdown.notified() => {
                     tracing::info!("shutdown requested via IPC");
-                    return Ok(());
+                    break;
                 }
                 _ = sigterm.recv() => {
                     tracing::info!("received SIGTERM, shutting down");
-                    return Ok(());
+                    break;
                 }
                 _ = sigint.recv() => {
                     tracing::info!("received SIGINT, shutting down");
-                    return Ok(());
+                    break;
                 }
             }
         }
+        // Abort is asynchronous: join every accepted dispatcher before normal
+        // shutdown releases ownership. If run itself is aborted, task-held
+        // lifecycle guards still prevent a successor until those tasks drop.
+        connections.shutdown().await;
+        Ok(())
     }
 
     async fn handle_connection(
@@ -220,6 +255,17 @@ impl IpcServer {
 
         true
     }
+}
+
+fn validate_peer(stream: &tokio::net::UnixStream, owner_uid: u32) -> std::io::Result<()> {
+    let uid = stream.peer_cred()?.uid();
+    if uid != owner_uid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "IPC peer is not the daemon user",
+        ));
+    }
+    Ok(())
 }
 
 /// Best-effort, non-blocking BUSY reply to a connection over the limit; a
