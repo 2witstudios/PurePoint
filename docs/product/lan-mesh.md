@@ -181,4 +181,17 @@ Platform evidence: macOS 26 (Apple silicon) runs all suites locally. Linux evide
 
 ### Fleet load (8 workers × 30 agents)
 
-LOAD_RESULTS_PLACEHOLDER
+Measured on 2026-10-12 with `cargo test --release -p pu-engine --test mesh_load -- --ignored` on macOS 26 (Apple silicon, one machine over loopback). The run used 9 real daemon processes and 240 guarded agents (480 processes, 240 PTYs), 16 live host viewers, one run flooding output, and one peer subscribed to it that never reads its bulk connection.
+
+| Measure | Result |
+|---|---|
+| Spawn request (240) | p50 357 ms, p95 895 ms, max 1.17 s (includes exact-source check and worktree creation) |
+| All 240 running | 19.4 s after first spawn |
+| Control `Status` round trip, all workers under load (320) | p50 16 ms, p95 174 ms, p99 288 ms, max 316 ms |
+| Same, on the worker with the stalled bulk reader (40) | p50 12 ms, p95 87 ms, max 98 ms |
+| Live viewers during the stall | 16 / 16 |
+| Host daemon | 15 MiB RSS, 50 fds |
+| Worker daemon | 21–30 MiB RSS, 52–53 fds |
+| Teardown (stop all 240 with guardian proof) | 5.4 s, every run tree ended |
+
+A debug build of the same workload measured a control p95 of 538 ms. These numbers are tested capacity for one machine over loopback; real-LAN latency adds network round trips. The macOS limit `kern.tty.ptmx_max` (511 by default) bounds PTYs per worker.
