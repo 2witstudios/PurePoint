@@ -13,6 +13,7 @@
 
 use std::io;
 use std::os::fd::RawFd;
+use std::os::unix::fs::MetadataExt;
 
 use super::supervisor::ProcEntry;
 
