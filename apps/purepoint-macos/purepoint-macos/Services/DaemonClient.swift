@@ -17,19 +17,36 @@ nonisolated final class DaemonClient: @unchecked Sendable {
             }()
     }
 
+    static let protocolVersion = 8
+
     /// Send a single request and return the response.
     /// Cancellation-aware: NWConnection ignores task cancellation, so cancelling
     /// the task cancels the connection, which completes any pending connect or
     /// receive with an error instead of leaving the caller suspended.
-    func send(_ request: DaemonRequest) async throws -> DaemonResponse {
-        let connection = makeConnection()
-        defer { connection.cancel() }
+    func send(_ request: DaemonRequest, timeout: TimeInterval = 30) async throws -> DaemonResponse {
+        try await withConnection(timeout: timeout) { connection, reader in
+            try await Self.write(request, to: connection)
+            return try await self.readOne(from: reader)
+        }
+    }
 
+    /// Keep all lifecycle requests on the endpoint whose health was verified.
+    /// The deadline cancels the connection itself, including pending receives.
+    func withConnection<T>(
+        timeout: TimeInterval,
+        _ operation: (NWConnection, DaemonLineReader) async throws -> T
+    ) async throws -> T {
+        let connection = makeConnection()
+        let deadline = DispatchWorkItem { connection.cancel() }
+        Self.connectionQueue.asyncAfter(deadline: .now() + timeout, execute: deadline)
+        defer {
+            deadline.cancel()
+            connection.cancel()
+        }
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             let reader = try await Self.connect(connection)
-            try await Self.write(request, to: connection)
-            return try await readOne(from: reader)
+            return try await operation(connection, reader)
         } onCancel: {
             connection.cancel()
         }
