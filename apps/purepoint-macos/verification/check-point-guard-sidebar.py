@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(source / "Views/DaemonErrorBanner.swift"),
         str(markdown / "ChatMarkdown.swift"),
         str(markdown / "ChatMarkdownView.swift"),
+        str(markdown / "ChatBubble.swift"),
         str(source / "Views/Chat/MarkdownTextView.swift"),
         str(source / "Views/Chat/CodeBlockView.swift"),
         str(source / "Views/Chat/PiPointGuardChatView.swift"),

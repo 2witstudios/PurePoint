@@ -10,7 +10,7 @@ import tempfile
 
 root = Path(__file__).resolve().parent
 mac = root.parent.parent / 'purepoint-macos/purepoint-macos'
-files = [root / 'ChatMarkdown.swift', root / 'ChatMarkdownView.swift', root / 'DesktopChatPreview.swift',
+files = [root / 'ChatMarkdown.swift', root / 'ChatMarkdownView.swift', root / 'ChatBubble.swift', root / 'DesktopChatPreview.swift',
          mac / 'Views/Chat/PiPointGuardChatView.swift', mac / 'Models/PiChatDomain.swift',
          mac / 'State/PiChatModel.swift', mac / 'Services/PiPairingSecret.swift',
          mac / 'Services/PiAttachmentImport.swift', mac / 'Theme/PurePointTheme.swift']
