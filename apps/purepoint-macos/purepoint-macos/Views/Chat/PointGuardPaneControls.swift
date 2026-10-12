@@ -11,7 +11,7 @@ struct PointGuardPaneControls: View {
         HStack(spacing: 6) {
             Group {
                 if model.busy {
-                    ProgressView().controlSize(.mini)
+                    TypingDots(diameter: 3, spacing: 1.5)
                 } else {
                     Circle().fill(model.connected ? Color.green : Color.secondary).frame(width: 6, height: 6)
                 }

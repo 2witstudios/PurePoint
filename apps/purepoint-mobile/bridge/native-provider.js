@@ -19,7 +19,7 @@ async function nativeDirectory(dir) {
     )
       throw new Error("Unsafe native directory.");
   } catch {
-    throw Object.assign(new Error("Native Pi directory is not safe to use."), {
+    throw Object.assign(new Error("Point Guard agent directory is not safe to use."), {
       code: "native_directory_unsafe",
     });
   }
@@ -39,7 +39,7 @@ export async function nativeProviderSetup(deviceId) {
   } catch (e) {
     if (e.code !== "ENOENT")
       throw new Error(
-        "Native Pi credentials are corrupt or not private. Restore permissions or a known backup before setup.",
+        "Point Guard credentials are corrupt or not private. Restore permissions or a known backup before setup.",
       );
   }
   const credentials = AuthStorage.create(authPath);

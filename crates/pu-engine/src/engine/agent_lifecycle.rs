@@ -458,6 +458,10 @@ impl Engine {
         // 5. Spawn PTY process
         env.push(("PU_AGENT_ID".into(), agent_id.to_string()));
         env.push(("PU_PROJECT_ROOT".into(), project_root.to_string()));
+        crate::build_cache::apply_cargo_target_env(
+            &mut env,
+            worktree_id.as_ref().map(|_| Path::new(&cwd)),
+        );
         let spawn_config = SpawnConfig {
             command,
             args,

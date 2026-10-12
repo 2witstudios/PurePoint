@@ -16,6 +16,7 @@ nonisolated enum Theme {
     static let chatBackground = darkOnly((0.11, 0.11, 0.12), light: .windowBackgroundColor)
     static let chatRailBackground = darkOnly((0.08, 0.08, 0.09), light: .controlBackgroundColor)
     static let composerBackground = darkOnly((0.137, 0.137, 0.153), light: NSColor.black.withAlphaComponent(0.045))
+    static let composerShadow = darkOnly((0, 0, 0), alpha: 0.3, light: .clear)
     static let userBubbleBackground = darkOnly((0.149, 0.149, 0.165), light: NSColor.black.withAlphaComponent(0.055))
 
     // MARK: - Cards
@@ -47,10 +48,10 @@ nonisolated enum Theme {
         }
     }
 
-    private static func darkOnly(_ dark: (CGFloat, CGFloat, CGFloat), light: NSColor) -> NSColor {
+    private static func darkOnly(_ dark: (CGFloat, CGFloat, CGFloat), alpha: CGFloat = 1.0, light: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-                return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: 1.0)
+                return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: alpha)
             } else {
                 return light
             }

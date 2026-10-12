@@ -1,7 +1,8 @@
 # Shared Point Guard Markdown
 
-Both Xcode app targets explicitly include `ChatMarkdown.swift` and
-`ChatMarkdownView.swift`. The other files in this directory are standalone
+Both Xcode app targets explicitly include `ChatMarkdown.swift`,
+`ChatMarkdownView.swift` and `ChatBubble.swift` (message bubbles and the
+typing pill). The other files in this directory are standalone
 verification tools and are excluded from the apps. No package dependency or
 WebView is required. Parsing is independent of networking and SwiftUI.
 

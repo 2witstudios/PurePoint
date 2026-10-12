@@ -2,6 +2,8 @@
 all-features = true
 
 [advisories]
+# pu-core parses YAML with safe-Rust serde-saphyr; unsafe-libyaml
+# (RUSTSEC-2024-0449) is no longer in the graph, so nothing is ignored.
 ignore = []
 
 [licenses]

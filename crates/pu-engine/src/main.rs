@@ -90,6 +90,9 @@ async fn daemon_main(args: Vec<String>) {
     // Start background scheduler for recurring tasks
     server.engine().start_scheduler();
 
+    // Delete agent build caches nothing is using any more
+    server.engine().start_build_cache_sweeper();
+
     // Apply persisted mesh listener intent. Uninitialized or disabled mesh state
     // opens no network listener.
     server.mesh().start().await;

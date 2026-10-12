@@ -60,10 +60,10 @@ and that Command-Shift-S toggles once with multiple chats or a terminal/file sib
 6. In Point Guard, use Cmd+N, Cmd+T, the tab strip plus and both split controls. Choose Terminal, a built-in agent, a custom agent command and Files. Keep a different coding project selected, then verify they run at Pi’s working folder (for example /Users/jono) outside worktrees and share the Point Guard grid without duplicate sidebar rows. Switch tabs, move tabs between panes, navigate away and back, and restart; chat drafts, terminal scrollback, file edits and layout should survive. Close chat without stopping Pi; closing the final tab returns to chat. Change Pi’s working folder and repeat the split checks; the new panes should use the new folder. Verify ordinary worktree pane behavior still works.
 7. Keep both connected and send from either. Race dialog answers/session changes; verify one winner. Queue from both and Stop from the other device; verify canceled recovery goes only to the submitter. Disconnect/reconnect one while the other continues.
 
-The engine process check runs with a separate Cargo target directory and temporary non-Git folder:
+The engine process check runs in a temporary non-Git folder. From a worktree it builds into that worktree's own `target/`, which is removed with the worktree:
 
 ```sh
-cargo test -p pu-engine --test integration given_point_guard_folder_without_git_should_spawn_split_agents_in_that_folder --target-dir /tmp/purepoint-pg-split-target
+cargo test -p pu-engine --test integration given_point_guard_folder_without_git_should_spawn_split_agents_in_that_folder
 ```
 
 It uses a shell fixture and a configured fixture agent to record their actual working directories; it does not invoke AI providers or replace installed binaries.

@@ -1,5 +1,6 @@
 pub mod agent_monitor;
 pub mod attach_handler;
+pub mod build_cache;
 pub mod daemon_lifecycle;
 pub mod delivery;
 pub mod engine;

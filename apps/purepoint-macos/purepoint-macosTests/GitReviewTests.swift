@@ -611,17 +611,27 @@ private enum GitReviewChecks {
                 try require(stderrLines == 10001, "all stderr drained")
             }
         }
+        // runProcess blocks a cooperative thread while it waits, so parallel tests can
+        // starve this task's wakeups for seconds. Cancel only once the child is known to
+        // be running, and give it a lifetime no starvation can outlast, so success means
+        // cancellation was missed rather than that the cancel arrived late.
+        let markerDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("purepoint-cancel-\(UUID())")
+        try FileManager.default.createDirectory(at: markerDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: markerDirectory) }
+        let marker = markerDirectory.appendingPathComponent("started").path
         let cancelService = GitService()
-        // Far longer than any scheduling delay: on a loaded runner the test's own
-        // continuation can wait seconds for a cooperative thread before it gets to
-        // cancel. A broken cancellation path still completes and fails below.
         let canceled = Task {
-            await cancelService.runGit(["-c", "alias.cancel-check=!exec /bin/sleep 30", "cancel-check"], cwd: NSTemporaryDirectory())
+            await cancelService.runGit(["-c", "alias.cancel-check=!touch '\(marker)' && exec /bin/sleep 60", "cancel-check"], cwd: markerDirectory.path)
         }
-        try await Task.sleep(for: .milliseconds(100))
+        let deadline = Date().addingTimeInterval(30)
+        while !FileManager.default.fileExists(atPath: marker) && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try require(FileManager.default.fileExists(atPath: marker), "cancellation check child started")
         canceled.cancel()
         let canceledResult = await canceled.value
         try require(!canceledResult.success, "canceled Git work terminates instead of completing obsolete reads")
+        try require([SIGTERM, SIGKILL].contains(canceledResult.exitCode), "canceled Git work ends by signal, got \(canceledResult.exitCode)")
         print("Concurrent Git pipe and cancellation checks passed")
     }
 }

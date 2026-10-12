@@ -38,4 +38,12 @@ NOTE: This manual protocol is temporary. PurePoint's daemon will handle context 
 **Rules:**
 - Never run `xcodebuild build`, `xcodebuild test`, or `swift build` for the macOS app from an agent session
 - Ask the user to build and run tests in Xcode directly
-- In worktrees: all builds share the same Cargo target directory and the same `~/.pu/bin/` and `~/.cargo/bin/` destinations — concurrent builds from multiple worktrees will race on these binaries and can kill any running daemon
+- In worktrees: all builds share the same `~/.pu/bin/` and `~/.cargo/bin/` destinations — concurrent installs from multiple worktrees will race on these binaries and can kill any running daemon
+
+## Rust Build Caches
+
+The daemon sets `CARGO_TARGET_DIR=<worktree>/target` for every agent it spawns in a worktree, so each worktree already has its own Cargo build cache and plain `cargo build` / `cargo test` is isolated from other agents.
+
+- Do not override `CARGO_TARGET_DIR` or pass `--target-dir` (in particular, no `/tmp/purepoint-*-target` dirs). The worktree cache is deleted with the worktree; anything elsewhere is left behind and fills the disk.
+- The daemon sweeps abandoned `/tmp/purepoint-*-target` caches once nothing has built into them for 6 hours (30 minutes when free disk is under 20 GiB, when it also drops idle caches of worktrees that still exist). A cache with a build in progress is never removed.
+- Check `df -h /` before long builds.

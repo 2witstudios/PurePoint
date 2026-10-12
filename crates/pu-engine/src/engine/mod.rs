@@ -1,4 +1,5 @@
 mod agent_lifecycle;
+mod build_cache;
 mod channel;
 mod definitions;
 mod helpers;

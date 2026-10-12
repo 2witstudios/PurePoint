@@ -69,7 +69,7 @@ test("switching waits for idle while browsing remains available", async () => {
   );
   c.dispose();
 });
-test("reconnect snapshots retain partial work and correlated extension requests", async () => {
+test("reconnect snapshots withhold partial replies but retain correlated extension requests", async () => {
   const rpc = new Runtime();
   const c = new Controller(rpc, {});
   await c.refresh();
@@ -92,8 +92,10 @@ test("reconnect snapshots retain partial work and correlated extension requests"
     method: "confirm",
     title: "Continue?",
   });
+  rpc.state.isStreaming = true;
   const s = await request(c, "sync");
-  assert.equal(s.messages[0].text, "Still working");
+  assert.equal(s.busy, true);
+  assert.deepEqual(s.messages, []);
   assert.equal(s.dialogs[0].id, "dialog");
   await request(c, "answer", { dialogId: "dialog", confirmed: false });
   assert.equal(rpc.answerValue.confirmed, false);
@@ -479,7 +481,7 @@ for (const op of ["stop", "new", "resume", "send"]) {
         const old = await sync;
         await mutation;
         if (fails) assert.match(old.error.message, /Older read failed/);
-        else assert.equal(old.snapshot.title, "Pi");
+        else assert.equal(old.snapshot.title, "Point Guard");
         const fresh = c.snapshot();
         assert.equal(fresh.title, "Post-mutation title");
         assert.equal(fresh.busy, false);
@@ -1240,4 +1242,58 @@ test("missing model asks for provider selection without a separate Pi installati
   } finally {
     c.dispose();
   }
+});
+test("assistant replies arrive whole at message_end", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  const message = { role: "assistant", timestamp: 7, content: [] };
+  rpc.emit("event", { type: "agent_start" });
+  rpc.emit("event", { type: "message_start", message });
+  rpc.emit("event", {
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "Half",
+    },
+  });
+  assert.deepEqual(c.snapshot().messages, []);
+  rpc.emit("event", {
+    type: "message_end",
+    message: { ...message, content: [{ type: "text", text: "Half done." }] },
+  });
+  const s = c.snapshot();
+  assert.equal(s.busy, true);
+  assert.deepEqual(
+    s.messages.map((m) => m.text),
+    ["Half done."],
+  );
+  c.dispose();
+});
+test("a reply interrupted before message_end appears once the run settles", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  rpc.emit("event", { type: "agent_start" });
+  rpc.emit("event", {
+    type: "message_start",
+    message: { role: "assistant", timestamp: 8, content: [] },
+  });
+  rpc.emit("event", {
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "Partial",
+    },
+  });
+  assert.deepEqual(c.snapshot().messages, []);
+  rpc.emit("event", { type: "agent_settled", aborted: true });
+  assert.equal(c.snapshot().busy, false);
+  assert.deepEqual(
+    c.snapshot().messages.map((m) => m.text),
+    ["Partial"],
+  );
+  c.dispose();
 });

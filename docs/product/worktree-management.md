@@ -27,6 +27,8 @@ Location: {project_root}/.pu/worktrees/{worktree-id}/  (e.g. .pu/worktrees/wt-ab
 
 **Stale cleanup:** Stale worktree cleanup on spawn implemented in engine — removes orphaned worktree directories.
 
+**Build caches (implemented 2026-10-12):** Agents spawned or resumed in a worktree get `CARGO_TARGET_DIR=<worktree>/target`, overriding any inherited value, so their Rust builds are isolated per worktree and the cache is deleted with the worktree (`git worktree remove --force` takes untracked files). Root agents keep the project's own target dir. The daemon sweeps at startup and every 30 minutes: it removes `purepoint-*-target` Cargo caches in `/tmp` and `$TMPDIR` (the old per-agent convention) once nothing has been written to them for 6 hours; when free space on `/` is under 20 GiB the idle limit drops to 30 minutes and idle `<worktree>/target` caches of registered projects are removed too. A dir is only removed if it carries Cargo's `CACHEDIR.TAG` or `.rustc_info.json`, is not a symlink, and no process holds an flock on any of its `.cargo-lock` files.
+
 **Shared access:** Current implementation supports multiple agents per worktree (worktree has `agents: IndexMap`, insertion-order preserved).
 
 ## Open Questions
