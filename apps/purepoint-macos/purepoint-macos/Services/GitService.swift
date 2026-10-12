@@ -208,11 +208,25 @@ actor GitService {
         }
         guard !entries.isEmpty else { return [] }
         if summariesOnly {
-            let stats = try checked(command + common + ["--numstat", "-z"] + revisions + ["--"], at: path).components(separatedBy: "\0")
-            var counts: [String: (Int, Int, Bool)] = [:], index = 0
+            let local = !root && (revisions.isEmpty || revisions == ["--cached"])
+            let options = local ? ["--raw", "--no-abbrev", "--numstat", "-z"] : ["--numstat", "-z"]
+            let stats = try checked(command + common + options + revisions + ["--"], at: path).components(separatedBy: "\0")
+            var counts: [String: (Int, Int, Bool)] = [:], identities: [String: String] = [:], index = 0
             while index < stats.count {
-                let parts = stats[index].split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
-                index += 1
+                let record = stats[index]; index += 1
+                if record.hasPrefix(":") {
+                    let fields = record.split(separator: " ")
+                    guard fields.count == 5, index < stats.count else { continue }
+                    var name = stats[index]; index += 1
+                    if fields[4].hasPrefix("R") || fields[4].hasPrefix("C") {
+                        guard index < stats.count else { break }
+                        name = stats[index]; index += 1
+                    }
+                    // Mode and per-path blob identities ignore opportunistic whole-index rewrites.
+                    identities[name] = fields.joined(separator: "/")
+                    continue
+                }
+                let parts = record.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
                 guard parts.count == 3 else { continue }
                 var name = String(parts[2])
                 if name.isEmpty {
@@ -223,8 +237,6 @@ actor GitService {
             }
             // A conflict may also appear as M; retain one path with the U identity.
             let conflicts = Set(entries.filter { $0.status == "U" }.map(\.name))
-            let indexPath = WorktreeWatcher.metadataPaths(worktreePath: path).first { $0.hasSuffix("/index") }
-            let indexStamp = indexPath.map { fileStamp($0, at: "/") } ?? ""
             var stagedBase = ""
             if revisions == ["--cached"] {
                 let head = runGit(["rev-parse", "--verify", "HEAD"], cwd: path)
@@ -238,9 +250,15 @@ actor GitService {
                 var file = FileDiff(filename: entry.name, statusCode: status, added: count.0, removed: count.1, hunks: [], oldFilename: entry.old, isBinary: count.2)
                 let paths = entry.old.map { [$0, entry.name] } ?? [entry.name]
                 file.patchArguments = command + common + ["--patch"] + revisions + ["--"] + paths
-                file.previewVersion = path + revisions.joined(separator: "/") + ((revisions.isEmpty || revisions == ["--cached"]) ? fileStamp(entry.name, at: path) + indexStamp + "/HEAD:" + stagedBase : "")
+                file.previewVersion = path + revisions.joined(separator: "/") + "/origin:" + (entry.old ?? "")
+                if revisions == ["--cached"] {
+                    file.previewVersion += "/HEAD:" + stagedBase + "/index:" + (identities[entry.name] ?? "missing")
+                } else if local {
+                    file.previewVersion += "/index:" + (identities[entry.name] ?? "missing") + "/working:" + fileStamp(entry.name, at: path)
+                }
                 if status == "U", revisions.isEmpty, !root {
                     let stages = try checked(["ls-files", "--unmerged", "-z", "--", entry.name], at: path).split(separator: "\0")
+                    file.previewVersion += "/stages:" + stages.map(String.init).joined(separator: "\0")
                     let hasOurs = stages.contains { $0.split(separator: "\t", maxSplits: 1).first?.split(separator: " ").last == "2" }
                     file.conflictBaseline = hasOurs ? "ours (index stage 2)" : "empty (ours deleted)"
                     if !hasOurs && FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(entry.name)) {

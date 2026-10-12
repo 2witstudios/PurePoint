@@ -15,7 +15,10 @@ final class DiffState {
     var activeTab: DiffTab = .branch {
         didSet {
             if summariesOnly, activeTab != .prDiffs { prDiffTask?.cancel(); isLoadingPRDiff = false }
-            if activeTab == .prDiffs, (prDiff == nil || isPRDiffStale), let pr = selectedPR ?? pullRequests.first { selectPR(pr) }
+            if activeTab == .prDiffs, (prDiff == nil || isPRDiffStale) {
+                if let selectedPR { selectPR(selectedPR) }
+                else if !hasSelectedPR, let first = pullRequests.first { selectPR(first) }
+            }
         }
     }
     var branchDiff: [FileDiff] = []
@@ -75,6 +78,7 @@ final class DiffState {
     private var prDiffTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var initialPRSelectionMade = false
+    private var hasSelectedPR = false
     private var lastPRRefresh = Date.distantPast
 
     func loadForWorktree(_ worktree: WorktreeModel) {
@@ -86,7 +90,7 @@ final class DiffState {
     private func load(path: String, branch: String?, base: String?) {
         stopWatching()
         self.path = path; self.branch = branch; requestedBase = base
-        initialPRSelectionMade = false
+        initialPRSelectionMade = false; hasSelectedPR = false
         activeTab = .branch; comparisonBase = base ?? ""; availableBases = []
         branchDiff = []; stagedDiff = []; unstagedDiff = []; untrackedDiff = []
         commits = []; selectedCommit = nil; commitDiff = []
@@ -143,6 +147,7 @@ final class DiffState {
     func selectPR(_ pr: PullRequestInfo) {
         guard let path else { return }
         let changed = selectedPR?.number != pr.number
+        hasSelectedPR = true
         selectedPR = pr; prDiffTask?.cancel(); isLoadingPRDiff = true
         if changed { prDiff = nil; loadedPRVersion = nil }
         let token = generation
@@ -223,7 +228,7 @@ final class DiffState {
                         selectedPR = updated
                     }
                 }
-                else if shouldSelectInitialPR, let first = prs.first, !summariesOnly || activeTab == .prDiffs { selectPR(first) }
+                else if shouldSelectInitialPR, !hasSelectedPR, let first = prs.first, !summariesOnly || activeTab == .prDiffs { selectPR(first) }
                 else if prs.isEmpty || selectedPR != nil { prDiffTask?.cancel(); selectedPR = nil; prDiff = nil; isLoadingPRDiff = false }
             } catch {
                 guard !Task.isCancelled, generation == token else { return }

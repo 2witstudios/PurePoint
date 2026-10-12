@@ -242,6 +242,10 @@ private enum GitReviewChecks {
         lazyState.refresh(); try await settle(lazyState)
         try require(lazyState.commitError == nil, "local refresh retries a selected commit that has not loaded successfully")
         try require(lazyState.commitDiff.first?.filename == "second.txt" && lazyState.commitDiff.first?.hunks.isEmpty == true, "selected commit loads metadata only")
+        lazyState.selectedPR = nil; lazyState.prDiff = nil
+        lazyState.activeTab = .branch; lazyState.activeTab = .prDiffs
+        try await settle(lazyState)
+        try require(lazyState.selectedPR == nil && lazyState.prDiff == nil, "lazy review tab switching preserves explicit PR list navigation")
         lazyState.stopWatching()
         state.selectCommit(state.commits[1]); state.selectCommit(state.commits[0])
         try await settle(state)
@@ -273,6 +277,9 @@ private enum GitReviewChecks {
         state.selectedPR = nil; state.prDiff = nil
         state.refresh(); try await settle(state)
         try require(state.selectedPR == nil && state.prDiff == nil && !state.pullRequests.isEmpty, "refresh must preserve explicit PR list navigation")
+        state.activeTab = .branch; state.activeTab = .prDiffs
+        try await settle(state)
+        try require(state.selectedPR == nil && state.prDiff == nil, "tab switching preserves explicit PR list navigation")
         // Base changes invalidate pending PR diffs even when the subsequent lookup fails.
         try write("fail", "fail", at: path)
         state.selectPR(state.pullRequests[0])
@@ -418,6 +425,20 @@ private enum GitReviewChecks {
         let newPage = try await service.fetchReviewPage(file: after.staged[0], at: path)
         try require(oldPage.hunks[0].lines.contains { $0.content == "second" && $0.type == .deletion }, "old staged snapshot baseline")
         try require(newPage.hunks[0].lines.contains { $0.content == "first" && $0.type == .deletion }, "fresh staged snapshot follows moved HEAD")
+
+        let stagedVersion = after.staged[0].previewVersion
+        try write("working only\n", "baseline.txt", at: path)
+        let workingEdit = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(workingEdit.staged[0].previewVersion == stagedVersion, "working edits do not reset staged preview pages")
+        let unstagedVersion = workingEdit.unstaged[0].previewVersion
+        try write("unrelated\n", "other-index.txt", at: path); _ = try git(["add", "other-index.txt"], at: path)
+        _ = try git(["status", "--porcelain"], at: path)
+        let unrelatedIndex = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(unrelatedIndex.staged.first { $0.filename == "baseline.txt" }?.previewVersion == stagedVersion, "unrelated index changes do not reset staged preview pages")
+        try require(unrelatedIndex.unstaged[0].previewVersion == unstagedVersion, "unrelated index changes do not reset unstaged preview pages")
+        _ = try git(["add", "baseline.txt"], at: path)
+        let restaged = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(restaged.staged.first { $0.filename == "baseline.txt" }?.previewVersion != stagedVersion, "changing this path's index blob invalidates its staged preview")
 
         try write((1...20_000).map { "history line \($0)" }.joined(separator: "\n") + "\n", "many.txt", at: path)
         let summary = await service.fetchLocalReview(at: path, summariesOnly: true)
