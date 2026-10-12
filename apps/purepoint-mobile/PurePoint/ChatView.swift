@@ -69,7 +69,7 @@ struct ChatView: View {
                     Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
                 }
             }
-            .confirmationDialog("Stop Pi before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
+            .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
                 Button("Stop and start new", role: .destructive) { let token = model.selectionToken; Task { await model.changeSession(stopFirst: true, selection: token) } }
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be canceled and recoverable. Delegated workers keep running.") }
@@ -257,7 +257,7 @@ struct ChatView: View {
                 }.font(.footnote).padding(.bottom, 2)
             }
             if let receipt = model.submissions.last, !receipt.recoverable, receipt.status != "Accepted" {
-                Text(receipt.status == "Queued" ? "Queued · waiting for Pi" : receipt.status).font(.caption).foregroundStyle(.secondary)
+                Text(receipt.status == "Queued" ? "Queued · waiting for Point Guard" : receipt.status).font(.caption).foregroundStyle(.secondary)
             }
             if let queue = model.snapshot?.queue, !queue.isEmpty { Text("\(queue.count) message\(queue.count == 1 ? "" : "s") queued").font(.caption).foregroundStyle(.secondary) }
             VStack(alignment: .leading, spacing: 10) {

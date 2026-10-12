@@ -42,7 +42,8 @@ struct WorkspaceFilesSidebar: View {
                 fileContent
             }
         }
-        .background(Color(nsColor: Theme.cardBackground))
+        // Point Guard's composer is raised against the chat surface; on the card color it would vanish.
+        .background(Color(nsColor: state.mode == .pointGuard ? Theme.chatBackground : Theme.cardBackground))
         .task { await state.observe() }
     }
 

@@ -92,7 +92,7 @@ struct Fixture: View {
                 VStack(spacing: 0) {
                     Color.gray.frame(height: 30)
                     PointGuardConversationLayout(isExpanded: $state.expanded) {
-                        Button {} label: { Label("New Pi Chat", systemImage: "square.and.pencil") }
+                        Button {} label: { Label("New Chat", systemImage: "square.and.pencil") }
                             .background(Probe(name: "newChat", probes: probes))
                     } sidebar: {
                         Probe(name: "history", probes: probes)
@@ -112,7 +112,7 @@ struct CompactFixture: View {
     let probes: Probes
     var body: some View {
         PointGuardConversationLayout(isExpanded: $state.expanded, compact: true) {
-            Button {} label: { Label("New Pi Chat", systemImage: "square.and.pencil") }
+            Button {} label: { Label("New Chat", systemImage: "square.and.pencil") }
                 .background(Probe(name: "newChat", probes: probes))
         } sidebar: {
             Probe(name: "history", probes: probes)

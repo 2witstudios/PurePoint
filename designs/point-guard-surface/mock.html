@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Point Guard surface — current vs proposed</title>
+<style>
+:root{
+  /* Shared app tokens (from Theme.swift / TerminalTheme.swift) */
+  --tabbar:#141417;         /* Theme.tabBarBackground 0.08/0.08/0.09 */
+  --terminal:#1c1c1f;       /* TerminalTheme.background 0.11/0.11/0.12 */
+  --termfg:#d9d9de;         /* TerminalTheme.foreground */
+  --sidebar:#1f1f22;
+  --window:#323232;         /* NSColor.windowBackgroundColor (dark) — what PG shows today */
+  --control:#1e1e1e;        /* NSColor.controlBackgroundColor (dark) */
+  --accent:#4f8cff;
+  --green:#6fae78; --yellow:#c9ab66; --blue:#6e9ce6; --quiet:#8a8a94;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#0b0b0d;color:var(--termfg);padding:28px 32px 60px}
+h1{font-size:18px;font-weight:600;margin:0 0 4px}
+.lede{color:#9a9aa4;font-size:13px;margin:0 0 18px;max-width:900px;line-height:1.5}
+.switch{display:inline-flex;background:#1b1b1e;border:1px solid #2a2a2f;border-radius:9px;padding:3px;margin-bottom:18px}
+.switch button{all:unset;cursor:pointer;font-size:12px;font-weight:500;padding:6px 14px;border-radius:6px;color:#9a9aa4}
+.switch button.on{background:#2c2c31;color:#ededf0}
+
+/* ---------- window chrome ---------- */
+.window{width:1180px;height:720px;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 0 0 1px rgba(255,255,255,.08),0 30px 80px rgba(0,0,0,.6);background:var(--sidebar)}
+.body{flex:1;display:flex;min-height:0}
+.appside{width:220px;background:var(--sidebar);border-right:1px solid rgba(255,255,255,.06);padding:44px 10px 10px;font-size:12px;color:#c8c8ce;position:relative}
+.traffic{position:absolute;top:14px;left:14px;display:flex;gap:8px}
+.traffic i{width:12px;height:12px;border-radius:50%;display:block}
+.appside .row{padding:5px 8px;border-radius:6px;display:flex;align-items:center;gap:8px}
+.appside .row.sel{background:rgba(255,255,255,.08);color:#fff}
+.appside .sec{font-size:11px;color:#77777f;font-weight:600;padding:14px 8px 4px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.grid{flex:1;display:flex;gap:1px;background:#0e0e10;min-width:0}
+.pane{flex:1;display:flex;flex-direction:column;min-width:0}
+.pane.pg{flex:1.45}
+
+/* tab strip — identical in both variants */
+.tabs{height:34px;background:var(--tabbar);display:flex;align-items:flex-end;padding:0 6px;gap:2px;font-size:12px}
+.tab{height:28px;padding:0 12px;display:flex;align-items:center;gap:7px;border-radius:7px 7px 0 0;color:#8a8a94}
+.tab.on{background:var(--terminal);color:var(--termfg)}
+.tabs .spacer{flex:1}
+.tabs .ctl{height:34px;display:flex;align-items:center;gap:10px;padding-right:6px;color:#8a8a94;font-size:13px}
+
+/* terminal pane */
+.term{flex:1;background:var(--terminal);font:12.5px/1.55 Menlo,monospace;padding:12px 14px;color:var(--termfg);white-space:pre;overflow:hidden}
+.term .g{color:var(--green)} .term .y{color:var(--yellow)} .term .b{color:var(--blue)} .term .q{color:var(--quiet)}
+
+/* ---------- Point Guard surface ---------- */
+.pg-surface{flex:1;display:flex;min-height:0}
+.rail{width:200px;display:flex;flex-direction:column;font-size:12px}
+.rail .head{display:flex;align-items:center;justify-content:space-between;padding:9px 10px}
+.rail .search{margin:0 10px 8px;padding:5px 8px;border-radius:6px;font-size:12px}
+.rail .conv{padding:6px 10px;margin:0 6px;border-radius:6px;line-height:1.35}
+.rail .foot{margin-top:auto;padding:10px;display:flex;justify-content:space-between;font-size:11px}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.actions{display:flex;justify-content:flex-end;padding:8px 12px;font-size:12px;gap:6px}
+.scroll{flex:1;overflow:hidden;padding:24px 28px 0}
+.col{max-width:620px;margin:0 auto;display:flex;flex-direction:column;gap:22px;font-size:14px;line-height:1.6}
+.user{align-self:flex-end;max-width:78%;padding:11px 16px}
+.asst p{margin:0 0 10px}
+.asst code{font:12.5px Menlo,monospace;padding:1px 5px;border-radius:5px}
+.tools{display:flex;align-items:center;gap:8px;font-size:12px}
+.composer-wrap{padding:10px 28px 18px}
+.composer{max-width:620px;margin:0 auto;padding:12px}
+.composer .ph{font-size:14px;padding:6px 4px 14px}
+.composer .bar{display:flex;align-items:center;justify-content:space-between}
+.composer .plus{width:30px;height:30px;display:grid;place-items:center;font-size:18px;border-radius:50%}
+.send{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:15px}
+
+/* ===== CURRENT (as shipped) ===== */
+.current .pg-surface{background:var(--window)}
+.current .rail{background:var(--control);border-right:1px solid #3d3d3d}
+.current .rail .search{background:#2b2b2b;border:1px solid #454545;color:#8a8a8a}
+.current .rail .conv{color:#dcdcdc}
+.current .rail .conv.sel{background:rgba(255,255,255,.1)}
+.current .rail .foot{color:#9a9a9a}
+.current .actions{border-bottom:1px solid #444;color:#dcdcdc}
+.current .col{color:#e6e6e6}
+.current .user{background:rgba(255,255,255,.055);border-radius:22px}
+.current .asst code{background:rgba(255,255,255,.08)}
+.current .tools{color:#9a9a9a}
+.current .composer{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:24px}
+.current .composer .ph{color:#8a8a8a}
+.current .composer .plus{color:#bdbdbd}
+.current .hint{display:none}
+.current .send{background:var(--accent);color:var(--control)}
+
+/* ===== PROPOSED ===== */
+.proposed .pg-surface{background:var(--terminal)}
+.proposed .rail{background:var(--tabbar);border-right:1px solid rgba(255,255,255,.05)}
+.proposed .rail .head{color:#8a8a94;font-size:11px;font-weight:600;letter-spacing:.02em;text-transform:uppercase}
+.proposed .rail .search{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);color:#6c6c76}
+.proposed .rail .conv{color:#b4b4bc}
+.proposed .rail .conv.sel{background:rgba(255,255,255,.06);color:#ededf0}
+.proposed .rail .foot{color:#6c6c76}
+.proposed .actions{color:#8a8a94}
+.proposed .actions .btn{padding:4px 9px;border-radius:6px}
+.proposed .actions .btn:hover{background:rgba(255,255,255,.06)}
+.proposed .col{color:var(--termfg)}
+.proposed .user{background:#26262a;border:1px solid rgba(255,255,255,.05);border-radius:18px 18px 6px 18px;color:#ededf0}
+.proposed .asst code{background:rgba(255,255,255,.06);color:#e6e6ea}
+.proposed .tools{color:#8a8a94;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.05);align-self:flex-start}
+.proposed .tools .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(111,174,120,.18)}
+.proposed .composer-wrap{background:linear-gradient(to bottom,rgba(28,28,31,0),var(--terminal) 30%)}
+.proposed .composer{background:#232327;border:1px solid rgba(255,255,255,.08);border-radius:20px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.35)}
+.proposed .composer.focus{border-color:rgba(79,140,255,.45);box-shadow:0 0 0 3px rgba(79,140,255,.12),0 8px 24px rgba(0,0,0,.35)}
+.proposed .composer .ph{color:#6c6c76}
+.proposed .composer .plus{color:#9a9aa4;border:1px solid rgba(255,255,255,.08)}
+.proposed .send{background:#ededf0;color:#1c1c1f}
+.proposed .hint{font-size:11px;color:#5c5c66;text-align:center;margin-top:8px}
+
+.notes{max-width:1180px;margin-top:22px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.note{background:#151518;border:1px solid #232328;border-radius:10px;padding:14px 16px;font-size:12.5px;line-height:1.55;color:#b4b4bc}
+.note b{color:#ededf0;display:block;margin-bottom:4px;font-size:13px}
+.swatches{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.sw{display:flex;align-items:center;gap:6px;font:11px Menlo,monospace;color:#8a8a94}
+.sw i{width:16px;height:16px;border-radius:4px;display:block;border:1px solid rgba(255,255,255,.1)}
+</style>
+</head>
+<body>
+<h1>Point Guard surface: current vs proposed</h1>
+<p class="lede">The chat pane sets no background, so it shows the window's default gray (#323232). Terminals use #1C1C1F, and the active tab is drawn in that color too. That leaves a light block hanging under a dark tab. The proposal puts the chat on the terminal color and moves the composer, bubbles and history rail onto the same dark scale.</p>
+<div class="switch"><button data-v="current">Current</button><button data-v="proposed" class="on">Proposed</button></div>
+
+<div id="win" class="window proposed">
+  <div class="body">
+    <div class="appside">
+      <div class="traffic"><i style="background:#ff6058"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+      <div class="row sel">◎ Point Guard</div>
+      <div class="sec">PUREPOINT</div>
+      <div class="row"><span class="dot"></span>pu/new-tab-button</div>
+      <div class="row"><span class="dot" style="background:var(--yellow)"></span>pu/loading</div>
+      <div class="row"><span class="dot" style="background:#555"></span>pu/review-pages</div>
+    </div>
+    <div class="grid">
+      <div class="pane">
+        <div class="tabs"><div class="tab on">▸ claude · loading</div><div class="tab">zsh</div></div>
+        <div class="term"><span class="q">~/dev/purepoint</span> <span class="g">❯</span> cargo test -p pu-engine
+<span class="q">   Compiling</span> pu-engine v0.4.0
+<span class="q">    Finished</span> test profile in 6.41s
+<span class="q">     Running</span> unittests src/lib.rs
+
+running 142 tests
+test daemon::spawn::tests::reuses_worktree ... <span class="g">ok</span>
+test daemon::spawn::tests::branch_name ... <span class="g">ok</span>
+test manifest::tests::round_trip ... <span class="g">ok</span>
+test triggers::tests::cron_next ... <span class="g">ok</span>
+
+test result: <span class="g">ok</span>. 142 passed; 0 failed
+
+<span class="b">⏺</span> All engine tests pass. Moving on to the
+  loading-state fix in the sidebar.
+
+<span class="q">~/dev/purepoint</span> <span class="g">❯</span> <span style="background:#d9d9de"> </span></div>
+      </div>
+      <div class="pane pg">
+        <div class="tabs"><div class="tab on">◎ Point Guard</div><div class="spacer"></div><div class="ctl">⧉ ⋯</div></div>
+        <div class="pg-surface">
+          <div class="rail">
+            <div class="head"><span>Conversations</span><span>▤</span></div>
+            <div class="search">Search conversations</div>
+            <div class="conv sel">Ship new-tab button fix</div>
+            <div class="conv">Review pages regression</div>
+            <div class="conv">Swarm plan for loading states</div>
+            <div class="conv">Weekly cleanup triggers</div>
+            <div class="foot"><span>↻ Refresh</span><span>⚙</span></div>
+          </div>
+          <div class="main">
+            <div class="actions"><span class="btn">✎ New Chat</span></div>
+            <div class="scroll"><div class="col">
+              <div class="user">Can you get the loading fix and the new tab button merged today? Run the tests first.</div>
+              <div class="tools"><span class="pulse"></span>3 tool calls · Working</div>
+              <div class="asst">
+                <p>Both branches are green. <code>pu/new-tab-button</code> passed CI and <code>pu/loading</code> just finished locally with 142/142 engine tests.</p>
+                <p>I'll merge the new-tab button first, since loading touches the same tab strip and should rebase onto it. Want me to go ahead?</p>
+              </div>
+            </div></div>
+            <div class="composer-wrap">
+              <div class="composer focus">
+                <div class="ph">Message Point Guard…</div>
+                <div class="bar"><span class="plus">+</span><span class="send">↑</span></div>
+              </div>
+              <div class="hint">Return to send · Shift-Return for a new line</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div class="note"><b>1 · One surface color</b>The chat sits on the terminal color, so the active tab connects to the content below it, like a terminal tab does. The history rail takes the darker tab-strip color, which gives two levels and no gray.
+    <div class="swatches"><span class="sw"><i style="background:#141417"></i>#141417 rail</span><span class="sw"><i style="background:#1c1c1f"></i>#1C1C1F chat</span><span class="sw"><i style="background:#232327"></i>#232327 composer</span><span class="sw"><i style="background:#26262a"></i>#26262A bubble</span></div></div>
+  <div class="note"><b>2 · Raised controls, not tinted ones</b>The composer becomes a solid, slightly lighter card with a hairline border, a faint top highlight and a soft shadow, instead of a 4.5% white wash. Focus gets a quiet accent ring. The send button turns light-on-dark, the way ChatGPT and Claude do it. It no longer depends on the system accent color.</div>
+  <div class="note"><b>3 · Less chrome</b>The divider under "New Chat" goes away, and the action becomes a quiet ghost button. Text uses the terminal foreground (#D9D9DE), so prose matches the agent output beside it. Tool activity becomes a small status pill with a live dot. The composer fades in over the transcript instead of cutting it off at a hard edge.</div>
+</div>
+
+<script>
+const win=document.getElementById('win');
+document.querySelectorAll('.switch button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.switch button').forEach(x=>x.classList.toggle('on',x===b));
+  win.className='window '+b.dataset.v;
+});
+</script>
+</body>
+</html>
