@@ -114,8 +114,15 @@ pub fn load_config_strict(project_root: &Path) -> Result<Config, PuError> {
 }
 
 fn load_config_result(project_root: &Path) -> Result<Config, PuError> {
+    let mut config = load_project_config(project_root)?;
+    apply_global_agent_settings(&mut config, &load_global_agent_settings()?);
+    Ok(config)
+}
+
+/// Project configuration before applying this machine's execution preferences.
+fn load_project_config(project_root: &Path) -> Result<Config, PuError> {
     let path = paths::config_path(project_root);
-    let mut config = match std::fs::read_to_string(&path) {
+    match std::fs::read_to_string(&path) {
         Ok(content) => {
             let mut config: Config = serde_yaml_ng::from_str(&content)?;
             // Fill in any agents missing from file with code defaults
@@ -126,9 +133,7 @@ fn load_config_result(project_root: &Path) -> Result<Config, PuError> {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
         Err(e) => Err(PuError::Io(e)),
-    }?;
-    apply_global_agent_settings(&mut config, &load_global_agent_settings()?);
-    Ok(config)
+    }
 }
 
 pub fn resolve_agent<'a>(config: &'a Config, name: &str) -> Option<&'a AgentConfig> {
@@ -484,7 +489,7 @@ envFiles: [".env"]
         let yaml = "defaultAgent: codex\nagents:\n  codex:\n    name: codex\n    command: \"codex --yolo\"\n";
         std::fs::write(crate::paths::config_path(root), yaml).unwrap();
 
-        let config = load_config(root);
+        let config = load_project_config(root).unwrap();
         assert_eq!(config.default_agent, "codex");
         // codex should keep file value
         assert_eq!(config.agents["codex"].command, "codex --yolo");
@@ -662,9 +667,11 @@ agents:
             config.agents["claude"].launch_args,
             Some(vec!["--verbose".to_string()])
         );
-        // Codex should be preserved
+        // The persisted Codex configuration is preserved regardless of this
+        // machine's later permission overrides on the effective configuration.
+        let project_config = load_project_config(root).unwrap();
         assert_eq!(
-            config.agents["codex"].launch_args,
+            project_config.agents["codex"].launch_args,
             Some(vec!["--search".to_string()])
         );
     }
