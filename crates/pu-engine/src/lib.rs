@@ -7,6 +7,7 @@ pub mod execution_state;
 pub mod gate;
 pub mod git;
 pub mod ipc_server;
+pub mod mesh_guardian;
 pub mod mesh_host;
 pub mod mesh_listener;
 pub mod mesh_read;
