@@ -22,7 +22,7 @@ def run(args):
 
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path'], env=env, text=True).strip()
 sources = [str(p) for p in (mobile / 'PurePoint').glob('*.swift') if p.name != 'PurePointApp.swift']
-run(['xcrun', '--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-swift-version', '5', '-target', 'arm64-apple-ios17.0-simulator', '-sdk', sdk, *sources, str(root / 'ChatMarkdown.swift'), str(root / 'ChatMarkdownView.swift'), str(root / 'PhonePreview.swift'), '-o', str(app / 'PointGuardMarkdownPreview')])
+run(['xcrun', '--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-swift-version', '5', '-target', 'arm64-apple-ios17.0-simulator', '-sdk', sdk, *sources, str(root / 'ChatMarkdown.swift'), str(root / 'ChatMarkdownView.swift'), str(root / 'ChatBubble.swift'), str(root / 'PhonePreview.swift'), '-o', str(app / 'PointGuardMarkdownPreview')])
 with (app / 'Info.plist').open('wb') as stream:
     plistlib.dump({
         'CFBundleExecutable': 'PointGuardMarkdownPreview',
