@@ -66,6 +66,7 @@ pub(super) struct SaveTriggerParams {
 }
 
 pub struct Engine {
+    work_owner: Option<Arc<crate::daemon_lifecycle::owned_work::WorkOwner>>,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
     start_time: Instant,
@@ -124,6 +125,7 @@ fn config_to_report(cfg: &pu_core::types::Config) -> Response {
 impl Engine {
     pub fn new() -> Self {
         Self {
+            work_owner: None,
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
             start_time: Instant::now(),
@@ -139,6 +141,13 @@ impl Engine {
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
+    }
+
+    pub(crate) fn bind_work_owner(
+        &mut self,
+        owner: Arc<crate::daemon_lifecycle::owned_work::WorkOwner>,
+    ) {
+        self.work_owner = Some(owner);
     }
 
     /// Start a background task that periodically removes session handles for

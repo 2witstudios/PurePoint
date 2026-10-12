@@ -11,14 +11,18 @@ impl Engine {
     /// Start a background task that periodically checks for due schedules and fires them.
     pub fn start_scheduler(self: &Arc<Self>) {
         let engine = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                engine.scheduler_tick().await;
-            }
+        let owner = self.work_owner.clone();
+        let service = scheduler_service(owner.clone(), Duration::from_secs(30), move || {
+            let engine = engine.clone();
+            async move { engine.scheduler_tick().await }
         });
+        if let Some(owner) = owner {
+            if let Err(error) = owner.spawn(service) {
+                tracing::debug!(%error, "scheduler not started after daemon shutdown");
+            }
+        } else {
+            tokio::spawn(service);
+        }
     }
 
     async fn scheduler_tick(&self) {
@@ -174,5 +178,166 @@ impl Engine {
         {
             tracing::warn!(error = %e, "failed to advance schedule");
         }
+    }
+}
+
+// A stop signal is selected only between ticks. Once a tick starts, keep its
+// owner and await every spawn/write/persistence stage before observing stop.
+async fn scheduler_service<F, Fut>(
+    owner: Option<Arc<crate::daemon_lifecycle::owned_work::WorkOwner>>,
+    period: Duration,
+    mut tick: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut interval = tokio::time::interval(period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            _ = async {
+                match &owner {
+                    Some(owner) => owner.stopping().await,
+                    None => std::future::pending().await,
+                }
+            } => break,
+            _ = interval.tick() => {}
+        }
+        // Stop may arrive between polling the stop future and a ready timer.
+        // Linearize tick admission with this final stop-state observation.
+        if owner.as_ref().is_some_and(|owner| owner.is_stopping()) {
+            break;
+        }
+        tick().await;
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use nix::fcntl::{Flock, FlockArg};
+    use pu_core::{
+        manifest,
+        types::{AgentEntry, Manifest},
+    };
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn given_idle_registered_scheduler_should_stop_when_unpolled_server_is_dropped() {
+        let tmp = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let socket = tmp.path().join("daemon.sock");
+        let server = crate::ipc_server::IpcServer::bind(&socket, Engine::new()).unwrap();
+        let owner = server.work();
+        // No registered projects: the real service never inspects global defs.
+        server.engine().start_scheduler();
+        drop(server);
+        tokio::time::timeout(Duration::from_secs(1), owner.wait_idle())
+            .await
+            .unwrap();
+        assert_eq!(owner.completed(), 1);
+        assert!(
+            crate::daemon_lifecycle::try_acquire_daemon_lock(&socket)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_stopping_scheduler_should_finish_blocked_tick_and_never_start_another_tick() {
+        let tmp = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let root = tmp.path().join("project");
+        fs::create_dir_all(paths::pu_dir(&root)).unwrap();
+        let mut m = Manifest::new(root.to_string_lossy().into_owned());
+        let agent: AgentEntry = serde_json::from_value(serde_json::json!({
+            "id":"ag-service", "name":"before", "agentType":"claude",
+            "status":"running", "startedAt":"2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        m.agents.insert(agent.id.clone(), agent);
+        manifest::write_manifest(&root, &m).unwrap();
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(paths::manifest_path(&root).with_extension("json.lock"))
+            .unwrap();
+        let manifest_lock = Flock::lock(file, FlockArg::LockExclusive).unwrap();
+        let socket = tmp.path().join("daemon.sock");
+        let server = crate::ipc_server::IpcServer::bind(&socket, Engine::new()).unwrap();
+        let owner = server.work();
+        let engine = server.engine().clone();
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let count = ticks.clone();
+        let project = root.to_string_lossy().into_owned();
+        // Exercise the production service loop with a real blocked engine
+        // mutation. No schedule-definition lookup can reach the user's home.
+        let service = scheduler_service(Some(owner.clone()), Duration::from_millis(1), move || {
+            let engine = engine.clone();
+            let project = project.clone();
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                assert!(matches!(
+                    engine
+                        .handle_request(Request::Rename {
+                            project_root: project,
+                            agent_id: "ag-service".into(),
+                            name: "tick-completed".into()
+                        })
+                        .await,
+                    Response::RenameResult { .. }
+                ));
+            }
+        });
+        let service = owner.spawn(service).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !crate::ipc_server::security_tests::another_descriptor_for(&manifest_lock) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(server); // stop the service even though server.run was never polled
+        assert_eq!(
+            owner
+                .drain_for(Duration::from_millis(20))
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert!(!service.is_finished());
+        assert!(
+            crate::daemon_lifecycle::try_acquire_daemon_lock(&socket)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(ticks.load(Ordering::SeqCst), 1);
+        drop(manifest_lock);
+        tokio::time::timeout(Duration::from_secs(3), service)
+            .await
+            .unwrap()
+            .unwrap();
+        owner.wait_idle().await;
+        assert_eq!(ticks.load(Ordering::SeqCst), 1);
+        assert_eq!(owner.completed(), 1);
+        assert_eq!(
+            manifest::read_manifest(&root).unwrap().agents["ag-service"].name,
+            "tick-completed"
+        );
+        assert!(
+            owner.spawn(async {}).is_err(),
+            "closed service owner refuses new work"
+        );
+        assert!(crate::ipc_server::IpcServer::bind(&socket, Engine::new()).is_ok());
     }
 }

@@ -24,7 +24,7 @@ impl Engine {
             Some(h) => h.pid,
             None => return,
         };
-        tokio::spawn(async move {
+        crate::daemon_lifecycle::owned_work::spawn_inherited(async move {
             let mut captured = None;
             loop {
                 let owned = sessions

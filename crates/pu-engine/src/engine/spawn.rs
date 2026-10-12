@@ -46,7 +46,7 @@ impl Engine {
         let exit_rx = handle.exit_rx.clone();
         let sessions = self.sessions.clone();
         let aid = agent_id.clone();
-        tokio::spawn(async move {
+        crate::daemon_lifecycle::owned_work::spawn_inherited(async move {
             let mut rx = exit_rx;
             while rx.changed().await.is_ok() {
                 if rx.borrow().is_some() {
@@ -378,7 +378,7 @@ impl Engine {
             let pty_host = NativePtyHost::new();
             let aid = agent_id.clone();
 
-            tokio::spawn(async move {
+            crate::daemon_lifecycle::owned_work::spawn_inherited(async move {
                 let mut watcher = output_buffer.subscribe();
                 let timeout = tokio::time::sleep(Duration::from_millis(1800));
                 tokio::pin!(timeout);

@@ -12,6 +12,7 @@ const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
 const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
 
+use crate::daemon_lifecycle::owned_work::WorkOwner;
 use crate::daemon_lifecycle::{self, DaemonLock};
 use crate::engine::Engine;
 use pu_core::protocol::{Request, Response};
@@ -25,7 +26,7 @@ mod streams;
 mod tests;
 
 #[cfg(test)]
-mod security_tests;
+pub(crate) mod security_tests;
 
 enum StreamMode {
     None,
@@ -58,6 +59,7 @@ pub struct IpcServer {
     shutdown: Arc<Notify>,
     conn_limit: Arc<Semaphore>,
     lifecycle: Arc<DaemonLock>,
+    work: Arc<WorkOwner>,
 }
 
 impl IpcServer {
@@ -70,20 +72,32 @@ impl IpcServer {
     }
 
     /// Bind using the validated startup lock, retaining it for the server lifetime.
-    pub fn bind_with_lock(mut lock: DaemonLock, engine: Engine) -> Result<Self, std::io::Error> {
+    pub fn bind_with_lock(
+        mut lock: DaemonLock,
+        mut engine: Engine,
+    ) -> Result<Self, std::io::Error> {
         let listener = lock.bind_socket()?;
+        let lifecycle = Arc::new(lock);
+        let work = WorkOwner::new(&lifecycle);
+        engine.bind_work_owner(work.clone());
         Ok(Self {
             listener,
             engine: Arc::new(engine),
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-            lifecycle: Arc::new(lock),
+            lifecycle,
+            work,
         })
     }
 
     /// Retain lifecycle ownership until agent shutdown finishes after `run`.
     pub fn lifecycle(&self) -> Arc<DaemonLock> {
         self.lifecycle.clone()
+    }
+
+    /// Stop services and await accepted effects independently of transport lifetime.
+    pub fn work(&self) -> Arc<WorkOwner> {
+        self.work.clone()
     }
 
     /// Override the concurrent connection cap (defaults to `MAX_CONNECTIONS`).
@@ -136,15 +150,20 @@ impl IpcServer {
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
                     let lifecycle = self.lifecycle.clone();
+                    let work = self.work.clone();
                     connections.spawn(async move {
                         let _lifecycle = lifecycle;
                         let _permit = permit;
-                        Self::handle_connection(stream, engine, shutdown).await;
+                        Self::handle_connection(stream, engine, shutdown, work).await;
                     });
                 }
                 _ = connections.join_next(), if !connections.is_empty() => {}
                 _ = self.shutdown.notified() => {
                     tracing::info!("shutdown requested via IPC");
+                    break;
+                }
+                _ = self.work.stopping() => {
+                    tracing::info!("service shutdown requested");
                     break;
                 }
                 _ = sigterm.recv() => {
@@ -157,17 +176,20 @@ impl IpcServer {
                 }
             }
         }
-        // Abort is asynchronous: join every accepted dispatcher before normal
-        // shutdown releases ownership. If run itself is aborted, task-held
-        // lifecycle guards still prevent a successor until those tasks drop.
+        self.work.begin_shutdown();
+        // Close/join transports, then await independently owned effect tasks.
+        // A drain timeout leaves those tasks and their singleton leases intact.
         connections.shutdown().await;
-        Ok(())
+        self.work
+            .drain_requests_for(std::time::Duration::from_secs(5))
+            .await
     }
 
     async fn handle_connection(
         stream: tokio::net::UnixStream,
         engine: Arc<Engine>,
         shutdown: Arc<Notify>,
+        work: Arc<WorkOwner>,
     ) {
         let (reader, writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -183,8 +205,15 @@ impl IpcServer {
             {
                 Ok(0) => break, // EOF
                 Ok(_) => {
-                    if !Self::dispatch_request(&line, &mut reader, &mut writer, &engine, &shutdown)
-                        .await
+                    if !Self::dispatch_request(
+                        &line,
+                        &mut reader,
+                        &mut writer,
+                        &engine,
+                        &shutdown,
+                        &work,
+                    )
+                    .await
                     {
                         break;
                     }
@@ -200,8 +229,9 @@ impl IpcServer {
         line: &str,
         reader: &mut IpcReader,
         writer: &mut IpcWriter,
-        engine: &Engine,
+        engine: &Arc<Engine>,
         shutdown: &Notify,
+        work: &Arc<WorkOwner>,
     ) -> bool {
         let mut request: Request = match serde_json::from_str(line.trim()) {
             Ok(r) => r,
@@ -214,13 +244,42 @@ impl IpcServer {
             }
         };
 
-        if let Err(response) = engine.prepare_request(&mut request).await {
-            return write_response(writer, &response).await.is_ok();
-        }
-        let is_shutdown = matches!(request, Request::Shutdown);
-        let stream_mode = StreamMode::from_request(&request);
-
-        let response = engine.handle_prepared_request(request).await;
+        let owned_engine = engine.clone();
+        let completed = run_effect(work, async move {
+            let prepared = owned_engine.prepare_request(&mut request).await;
+            let (response, stream_mode, is_shutdown) = match prepared {
+                Err(response) => (response, StreamMode::None, false),
+                Ok(()) => {
+                    let is_shutdown = matches!(request, Request::Shutdown);
+                    let stream_mode = StreamMode::from_request(&request);
+                    let response = owned_engine.handle_prepared_request(request).await;
+                    (response, stream_mode, is_shutdown)
+                }
+            };
+            let outcome = match &response {
+                Response::Error { code, .. } => code.as_str(),
+                _ => "OK",
+            };
+            tracing::info!(outcome, "accepted local request completed");
+            (response, stream_mode, is_shutdown)
+        })
+        .await;
+        let (response, stream_mode, is_shutdown) = match completed {
+            Ok(completed) => completed,
+            Err(error) => {
+                let code = if error.kind() == std::io::ErrorKind::Interrupted {
+                    "DAEMON_STOPPING"
+                } else {
+                    "INTERNAL_ERROR"
+                };
+                let response = Response::Error {
+                    code: code.into(),
+                    message: error.to_string(),
+                };
+                let _ = write_response(writer, &response).await;
+                return false;
+            }
+        };
         if write_response(writer, &response).await.is_err() {
             if is_shutdown {
                 shutdown.notify_one();
@@ -238,11 +297,11 @@ impl IpcServer {
                 if !matches!(response, Response::AttachReady { .. }) {
                     return false;
                 }
-                streams::handle_attach_stream(reader, writer, engine, &agent_id).await;
+                streams::handle_attach_stream(reader, writer, engine, &agent_id, work).await;
             }
             StreamMode::Grid(project_root) => {
                 if matches!(response, Response::GridSubscribed) {
-                    streams::handle_grid_stream(reader, writer, engine, &project_root).await;
+                    streams::handle_grid_stream(reader, writer, engine, &project_root, work).await;
                 }
             }
             StreamMode::Status(project_root) => {
@@ -255,6 +314,21 @@ impl IpcServer {
 
         true
     }
+}
+
+impl Drop for IpcServer {
+    fn drop(&mut self) {
+        // Also runs when the outer run future is externally aborted or never run.
+        self.work.begin_shutdown();
+    }
+}
+
+async fn run_effect<F, T>(work: &Arc<WorkOwner>, future: F) -> std::io::Result<T>
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    work.spawn(future)?.await.map_err(std::io::Error::other)
 }
 
 fn validate_peer(stream: &tokio::net::UnixStream, owner_uid: u32) -> std::io::Result<()> {
