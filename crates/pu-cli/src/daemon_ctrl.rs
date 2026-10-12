@@ -28,6 +28,39 @@ fn prepare_state_directory(path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+fn open_daemon_log(path: &Path) -> Result<std::fs::File, CliError> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let validate = |entry: &std::fs::Metadata| {
+        // SAFETY: geteuid has no preconditions.
+        if !entry.is_file()
+            || entry.uid() != unsafe { libc::geteuid() }
+            || entry.nlink() != 1
+            || entry.mode() & 0o7777 != 0o600
+        {
+            return Err(CliError::Other(format!(
+                "unsafe daemon log {}: expected an owned, single-link regular file with mode 0600; existing entry was left unchanged",
+                path.display()
+            )));
+        }
+        Ok(())
+    };
+    // Reject special files before opening them; nonblocking/no-follow flags also
+    // prevent a raced FIFO or link from hanging startup or following an alias.
+    match std::fs::symlink_metadata(path) {
+        Ok(entry) => validate(&entry)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)?;
+    validate(&file.metadata()?)?;
+    Ok(file)
+}
+
 pub fn find_daemon_binary() -> Option<PathBuf> {
     which::which("pu-engine").ok()
 }
@@ -82,25 +115,11 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
     }
 
     // Redirect daemon stderr to log file so startup errors are diagnosable
-    let stderr_target = match paths::daemon_log_path() {
-        Ok(log_path) => {
-            if let Some(parent) = log_path.parent() {
-                prepare_state_directory(parent)?;
-            }
-            use std::os::unix::fs::OpenOptionsExt;
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-                .open(&log_path)
-            {
-                Ok(file) => std::process::Stdio::from(file),
-                Err(_) => std::process::Stdio::null(),
-            }
-        }
-        Err(_) => std::process::Stdio::null(),
-    };
+    let log_path = paths::daemon_log_path()?;
+    if let Some(parent) = log_path.parent() {
+        prepare_state_directory(parent)?;
+    }
+    let stderr_target = std::process::Stdio::from(open_daemon_log(&log_path)?);
 
     // Start daemon
     std::process::Command::new(&binary)
@@ -135,6 +154,50 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_unsafe_log_should_reject_without_blocking_or_changing_existing_entries() {
+        use std::io::Write;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+        // given
+        let tmp = tempfile::TempDir::new().unwrap();
+        for kind in ["public", "link", "hardlink", "fifo", "directory"] {
+            let path = tmp.path().join(kind);
+            let target = tmp.path().join(format!("{kind}-target"));
+            std::fs::write(&target, b"preserved").unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+            match kind {
+                "public" => {
+                    std::fs::write(&path, b"preserved").unwrap();
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+                        .unwrap();
+                }
+                "link" => symlink(&target, &path).unwrap(),
+                "hardlink" => std::fs::hard_link(&target, &path).unwrap(),
+                "directory" => std::fs::create_dir(&path).unwrap(),
+                _ => {
+                    use std::os::unix::ffi::OsStrExt;
+                    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+                    // SAFETY: valid NUL-terminated path in this scratch directory.
+                    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                }
+            }
+            let before = std::fs::symlink_metadata(&path).unwrap();
+            // when / then: FIFO has no reader; a blocking open would hang here.
+            assert!(open_daemon_log(&path).is_err(), "{kind}");
+            let after = std::fs::symlink_metadata(&path).unwrap();
+            assert_eq!(
+                (before.ino(), before.mode(), before.len()),
+                (after.ino(), after.mode(), after.len())
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), b"preserved");
+        }
+        let safe = tmp.path().join("private");
+        open_daemon_log(&safe).unwrap().write_all(b"one").unwrap();
+        open_daemon_log(&safe).unwrap().write_all(b"two").unwrap();
+        assert_eq!(std::fs::read(&safe).unwrap(), b"onetwo");
+        assert_eq!(std::fs::metadata(&safe).unwrap().mode() & 0o7777, 0o600);
+    }
 
     #[test]
     fn given_new_daemon_state_should_create_private_directory_without_repairing_existing_state() {

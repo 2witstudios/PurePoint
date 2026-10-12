@@ -174,9 +174,7 @@ private actor DaemonLauncher {
         // the old daemon may still be writing, and without O_APPEND each process
         // keeps its own offset and overwrites the other's lines.
         let logFile = puDir.appendingPathComponent("daemon.log")
-        let logFd = open(logFile.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0o600)
-        process.standardError =
-            logFd >= 0 ? FileHandle(fileDescriptor: logFd, closeOnDealloc: true) : FileHandle.nullDevice
+        process.standardError = try DaemonStateDirectory.openLog(logFile)
 
         try process.run()
 
