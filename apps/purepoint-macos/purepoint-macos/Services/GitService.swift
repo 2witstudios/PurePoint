@@ -592,10 +592,21 @@ actor GitService {
 
     private func indexPatch(snapshot: PatchSnapshot, expected: FileDiff? = nil) throws -> IndexedPatch {
         let size = (try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber)?.uint64Value ?? 0
-        let reader = try PatchLineReader(slice: PatchSlice(snapshot: snapshot, start: 0, end: size), offset: 0)
-        var files: [FileDiff] = [], metadata: [String] = [], start: UInt64 = 0
+        var unmergedPaths = Set<String>(), offset: UInt64 = 0
+        if let expected, expected.statusCode == "U" {
+            // Unmerged markers use raw filenames, unlike C-quoted patch headers.
+            // Match the complete known marker before line parsing so quotes/newlines
+            // remain filename bytes rather than being decoded or split as metadata.
+            let marker = Data(("* Unmerged path " + expected.filename + "\n").utf8)
+            let handle = try FileHandle(forReadingFrom: snapshot.url)
+            defer { try? handle.close() }
+            if try handle.read(upToCount: marker.count) == marker {
+                unmergedPaths.insert(expected.filename); offset = UInt64(marker.count)
+            }
+        }
+        let reader = try PatchLineReader(slice: PatchSlice(snapshot: snapshot, start: 0, end: size), offset: offset)
+        var files: [FileDiff] = [], metadata: [String] = [], start: UInt64 = offset
         var added = 0, removed = 0, inHunk = false, binary = false
-        var unmergedPaths = Set<String>()
         func finish(end: UInt64) throws {
             guard !metadata.isEmpty else { return }
             let target = metadata.first { $0.hasPrefix("+++ ") && !$0.hasPrefix("+++ /dev/null") } ?? metadata.first { $0.hasPrefix("--- ") }
@@ -617,10 +628,6 @@ actor GitService {
                 try finish(end: record.start)
                 metadata = [line]; start = record.start; added = 0; removed = 0; inHunk = false; binary = false
             } else if metadata.isEmpty {
-                if expected?.statusCode == "U", line.hasPrefix("* Unmerged path ") {
-                    let name = decodeGitPath(String(line.dropFirst("* Unmerged path ".count)))
-                    if name == expected?.filename { unmergedPaths.insert(name); continue }
-                }
                 throw GitReviewError(message: "Git returned an unrecognized patch; refresh to retry.")
             }
             else if line.hasPrefix("@@ ") { inHunk = true }

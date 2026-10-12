@@ -545,6 +545,31 @@ private enum GitReviewChecks {
         print("Git prefix and mode/binary regression checks passed")
     }
 
+    static func rawConflictPathChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        let names = ["\"quoted\"", "line\nbreak.txt"]
+        for name in names { try write("base\n", name, at: path) }
+        try commit("base", at: path)
+        _ = try git(["checkout", "-b", "side"], at: path)
+        for name in names { try write("side\n", name, at: path) }
+        try commit("side", at: path)
+        _ = try git(["checkout", "main"], at: path)
+        for name in names { try write("ours\n", name, at: path) }
+        try commit("ours", at: path)
+        do { _ = try git(["merge", "side"], at: path); throw Failure(message: "merge unexpectedly succeeded") }
+        catch let failure as Failure { try require(failure.message.contains("CONFLICT"), "real unusual-path conflicts") }
+        let service = GitService()
+        let local = await service.fetchLocalReview(at: path, summariesOnly: true)
+        try require(local.error == nil, "conflict metadata preserves raw quoted/newline paths")
+        for name in names {
+            let staged = try await service.fetchReviewPage(file: local.staged.first { $0.filename == name }!, at: path)
+            try require(staged.hunks.isEmpty && !staged.hasMore, "raw unusual-path staged marker is a valid conflict page")
+            let working = try await service.fetchReviewPage(file: local.unstaged.first { $0.filename == name }!, at: path)
+            try require(working.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "raw unusual-path marker preserves actual unstaged conflict evidence")
+        }
+        print("Raw quoted/newline conflict path checks passed")
+    }
+
     static func concurrentProcessChecks() async throws {
         try await withThrowingTaskGroup(of: (Bool, Int, Int).self) { group in
             for _ in 0..<32 {
@@ -586,6 +611,7 @@ private enum GitReviewChecks {
         try await GitReviewChecks.lazyReviewChecks()
         try await GitReviewChecks.reviewRegressionChecks()
         try await GitReviewChecks.prefixRegressionChecks()
+        try await GitReviewChecks.rawConflictPathChecks()
         try await GitReviewChecks.concurrentProcessChecks()
     }
 }
@@ -597,6 +623,7 @@ struct GitReviewTests {
     @Test @MainActor func boundedReviewPages() async throws { try await GitReviewChecks.lazyReviewChecks() }
     @Test @MainActor func reviewRegressions() async throws { try await GitReviewChecks.reviewRegressionChecks() }
     @Test func prefixRegressions() async throws { try await GitReviewChecks.prefixRegressionChecks() }
+    @Test func rawConflictPaths() async throws { try await GitReviewChecks.rawConflictPathChecks() }
     @Test func concurrentGitPipesComplete() async throws { try await GitReviewChecks.concurrentProcessChecks() }
 }
 #endif
