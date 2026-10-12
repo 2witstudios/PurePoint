@@ -79,6 +79,27 @@ pub struct Welcome {
     pub control_binding: String,
 }
 
+impl Welcome {
+    /// Validate structure before comparing it to the client's expected receiver,
+    /// generation and (for a bulk connection) existing control binding.
+    pub fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.is_empty() || bytes.len() > 2048 {
+            return Err(WireError::Invalid);
+        }
+        let welcome: Self = serde_json::from_slice(bytes).map_err(|_| WireError::Invalid)?;
+        if welcome.version != BRIDGE_VERSION {
+            return Err(WireError::Version);
+        }
+        require(
+            valid_identifier(&welcome.daemon_id)
+                && valid_identifier(&welcome.incarnation)
+                && valid_identifier(&welcome.control_binding)
+                && counter(welcome.generation),
+        )?;
+        Ok(welcome)
+    }
+}
+
 /// No peer identity, authorization policy or paths can be supplied by a request.
 /// The receiver derives its caller from the authenticated connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +127,9 @@ pub enum Operation {
     Receipt {
         export: Export,
         mutation: Mutation,
+        /// Original operation digest, solely for matching retained evidence.
+        /// New mutations always compute their digest from canonical request data.
+        payload_digest: [u8; 32],
     },
     Spawn {
         mutation: Mutation,
@@ -276,7 +300,9 @@ impl Request {
             }
             Operation::IssueWindow { ttl_seconds } => require((1..=86400).contains(ttl_seconds)),
             Operation::CloseWindow { window } => require(counter(*window)),
-            Operation::Receipt { export, mutation } => {
+            Operation::Receipt {
+                export, mutation, ..
+            } => {
                 export.validate()?;
                 mutation.validate()
             }
@@ -394,6 +420,45 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_receipt_lookup_should_require_original_digest_without_accepting_asserted_mutation_digests()
+     {
+        // given
+        let mut receipt = serde_json::json!({"request_id":"lookup","target_daemon":"worker","operation":{"type":"receipt","export":{"id":"project","generation":1},"mutation":{"window":1,"id":"operation"},"payload_digest":vec![7u8;32]}});
+        // when / then
+        assert!(Request::decode(&serde_json::to_vec(&receipt).unwrap()).is_ok());
+        receipt["operation"]["payload_digest"] = serde_json::json!([7, 7]);
+        assert!(Request::decode(&serde_json::to_vec(&receipt).unwrap()).is_err());
+        receipt["operation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("payload_digest");
+        assert!(Request::decode(&serde_json::to_vec(&receipt).unwrap()).is_err());
+        let mutation = serde_json::json!({"request_id":"spawn","target_daemon":"worker","operation":{"type":"spawn","export":{"id":"project","generation":1},"mutation":{"window":1,"id":"operation"},"runtime":"codex","source_commit":"a".repeat(40),"prompt":"work","payload_digest":vec![7u8;32]}});
+        assert!(Request::decode(&serde_json::to_vec(&mutation).unwrap()).is_err());
+    }
+
+    #[test]
+    fn given_welcome_should_validate_receiver_binding_before_client_uses_it() {
+        // given
+        let mut value = serde_json::json!({"version":1,"daemon_id":"worker","generation":2,"incarnation":"boot","control_binding":"binding"});
+        // when / then
+        assert!(Welcome::decode(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for field in ["daemon_id", "incarnation", "control_binding"] {
+            let mut changed = value.clone();
+            changed[field] = "../invalid".into();
+            assert!(Welcome::decode(&serde_json::to_vec(&changed).unwrap()).is_err());
+        }
+        value["version"] = 2.into();
+        assert_eq!(
+            Welcome::decode(&serde_json::to_vec(&value).unwrap()),
+            Err(WireError::Version)
+        );
+        value["version"] = 1.into();
+        value["generation"] = 0.into();
+        assert!(Welcome::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
 
     #[test]
     fn given_network_request_should_reject_admin_forwarding_and_claimed_principal() {
