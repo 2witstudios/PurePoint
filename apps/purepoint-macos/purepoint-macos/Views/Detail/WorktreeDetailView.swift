@@ -48,7 +48,11 @@ struct WorktreeDetailView: View {
             editorState.stopWatching()
             editorState = EditorState()
             diffState.loadForWorktree(worktree)
-            fileTreeState.load(worktreePath: worktree.path)
+            if showFileTree { fileTreeState.load(worktreePath: worktree.path) }
+        }
+        .onChange(of: showFileTree) { _, visible in
+            if visible { fileTreeState.load(worktreePath: worktree.path) }
+            else { fileTreeState.stopWatching() }
         }
         .onDisappear {
             diffState.stopWatching()

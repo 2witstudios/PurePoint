@@ -19,6 +19,11 @@ nonisolated struct FileDiff: Identifiable, Sendable {
     /// Conflict working-file patches compare against stage 2, or empty if ours deleted the path.
     var conflictBaseline: String? = nil
 
+    /// Commands and immutable disk slices keep bodies out of overview metadata.
+    var patchArguments: [String]? = nil
+    var patchSlice: PatchSlice? = nil
+    var previewVersion: String = ""
+    var shouldCollapse: Bool { added + removed > 200 || statusCode == "??" }
     var id: String { filename }
 }
 
@@ -74,4 +79,102 @@ nonisolated struct GitLocalReview: Sendable {
 nonisolated struct GitReviewError: Error, LocalizedError, Sendable {
     let message: String
     var errorDescription: String? { message }
+}
+
+/// A patch snapshot lives only as long as a loaded review/page references it.
+nonisolated final class PatchSnapshot: @unchecked Sendable {
+    let url: URL
+    init(url: URL) { self.url = url }
+    deinit { try? FileManager.default.removeItem(at: url) }
+}
+
+nonisolated struct PatchSlice: Sendable {
+    let snapshot: PatchSnapshot
+    let start: UInt64
+    let end: UInt64
+}
+
+nonisolated struct ReviewPage: Sendable {
+    let slice: PatchSlice
+    let hunks: [Hunk]
+    let nextOffset: UInt64
+    let oldLine: Int
+    let newLine: Int
+    let header: String
+    let hasMore: Bool
+    let isBinary: Bool
+    let hasLongLines: Bool
+}
+
+/// Lightweight resume state; it never retains rendered hunk bodies.
+nonisolated struct ReviewPageCursor: Sendable {
+    let slice: PatchSlice
+    let nextOffset: UInt64
+    let oldLine: Int
+    let newLine: Int
+    let header: String
+    let isBinary: Bool
+}
+
+extension ReviewPage {
+    nonisolated var continuation: ReviewPageCursor {
+        ReviewPageCursor(slice: slice, nextOffset: nextOffset, oldLine: oldLine,
+                         newLine: newLine, header: header, isBinary: isBinary)
+    }
+}
+
+/// Keep one body in memory and reread previously visited pages from their disk checkpoints.
+nonisolated struct ReviewPageHistory {
+    private var checkpoints: [ReviewPageCursor?] = [nil]
+    private var current: ReviewPage?
+    private var currentIndex = 0
+
+    var retainedLineCount: Int { current?.hunks.reduce(0) { $0 + $1.lines.count } ?? 0 }
+    func page(at index: Int) -> ReviewPage? { currentIndex == index ? current : nil }
+    func cursor(at index: Int) throws -> ReviewPageCursor? {
+        guard checkpoints.indices.contains(index) else { throw GitReviewError(message: "Load the preceding page first.") }
+        return checkpoints[index]
+    }
+    mutating func store(_ page: ReviewPage, at index: Int) {
+        current = page; currentIndex = index
+        if index == 0 {
+            checkpoints[0] = ReviewPageCursor(slice: page.slice, nextOffset: page.slice.start,
+                                             oldLine: 0, newLine: 0, header: "", isBinary: page.isBinary)
+        }
+        if checkpoints.count == index + 1 { checkpoints.append(page.continuation) }
+        else if checkpoints.indices.contains(index + 1) { checkpoints[index + 1] = page.continuation }
+    }
+    mutating func releaseBody() { current = nil }
+}
+
+nonisolated struct DiffFileGroup: Sendable {
+    let title: String
+    let files: [FileDiff]
+}
+
+nonisolated struct ReviewFileEntry: Identifiable, Sendable {
+    let file: FileDiff
+    let group: String
+    var startsGroup: Bool = false
+    var id: String { group + "\0" + file.filename }
+}
+
+extension FileDiff {
+    /// Legacy full-patch consumers use the same bounded renderer.
+    nonisolated func pageHunks(offset: Int, limit: Int = 200) -> [Hunk] {
+        var skipped = 0, remaining = limit, result: [Hunk] = []
+        for hunk in hunks {
+            if skipped + hunk.lines.count <= offset { skipped += hunk.lines.count; continue }
+            let start = max(0, offset - skipped)
+            let lines = hunk.lines.dropFirst(start).prefix(remaining).map { line in
+                DiffLine(type: line.type,
+                         content: line.content.count > 2048 ? String(line.content.prefix(2048)) + " … [long line]" : line.content,
+                         oldLineNo: line.oldLineNo, newLineNo: line.newLineNo)
+            }
+            if !lines.isEmpty { result.append(Hunk(header: hunk.header, lines: lines)); remaining -= lines.count }
+            skipped += hunk.lines.count
+            if remaining == 0 { break }
+        }
+        return result
+    }
 }
