@@ -37,6 +37,8 @@ pub enum Error {
     Invalid,
     #[error("mesh identity already exists; refusing replacement")]
     AlreadyInitialized,
+    #[error("mesh transport peer limit exceeded")]
+    Capacity,
     #[error("mesh authority or policy anchor does not match")]
     Denied,
     #[error("execution ledger rejected mesh authority")]
@@ -82,6 +84,31 @@ pub fn peer_name(peer: PeerId) -> String {
         name.push(HEX[(byte & 15) as usize] as char);
     }
     name
+}
+
+/// Local public metadata only, never later-effect authorization or key material.
+pub type AdminPeer = (PeerRecord, PeerPolicy, Vec<u8>);
+
+/// Parse a locally selected authoritative ledger fingerprint name. This is only
+/// an expected pin/notification selector, not possession, authentication or Caller
+/// authority; it cannot construct an AuthenticatedConnection.
+pub fn peer_id_from_name(value: &str) -> Result<PeerId> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        }
+    }
+    if value.len() != 64 {
+        return Err(Error::Invalid);
+    }
+    let mut bytes = [0; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        bytes[index] = (nibble(pair[0]).ok_or(Error::Invalid)? << 4)
+            | nibble(pair[1]).ok_or(Error::Invalid)?;
+    }
+    Ok(PeerId::from_fingerprint(bytes))
 }
 
 fn name(lock: &DaemonLock, suffix: &str) -> OsString {
@@ -343,6 +370,98 @@ impl MeshStore {
             .visible_exports(&current.id, generation, now)
             .map_err(|_| Error::Denied)?;
         Ok(policy)
+    }
+
+    /// Owner-local display: even revoked/expired metadata must match canonical
+    /// policy bytes and exact enrolled certificate in the durable ledger anchor.
+    /// Call under the session authority barrier. This grants no remote authority.
+    pub fn admin_peer(
+        &self,
+        ledger: &Ledger,
+        _admin: &LocalAdmin,
+        peer: &str,
+    ) -> Result<AdminPeer> {
+        self.require_owner(ledger)?;
+        let pin = peer_id_from_name(peer)?;
+        let current = ledger.peer(peer)?;
+        if current.id != peer || current.generation == 0 || current.generation > i64::MAX as u64 {
+            return Err(Error::Invalid);
+        }
+        let record = self.read_policy(pin)?;
+        let bytes = self.policy_bytes(pin, &record)?;
+        if current.authorization_digest != Some(PayloadDigest(Sha256::digest(&bytes).into())) {
+            return Err(Error::Denied);
+        }
+        let mut policy = self.validate_policy(pin, &record)?;
+        policy.generation = current.generation;
+        policy.revoked = current.revoked;
+        policy.validate().map_err(|_| Error::Invalid)?;
+        Ok((current, policy, record.certificate_der))
+    }
+
+    /// Bounded authoritative LEDGER enumeration, never filesystem-name discovery.
+    /// Every returned record is checked; missing/unanchored/corrupt state denies.
+    pub fn list_admin_peers(
+        &self,
+        ledger: &Ledger,
+        admin: &LocalAdmin,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AdminPeer>> {
+        self.require_owner(ledger)?;
+        if let Some(after) = after {
+            peer_id_from_name(after)?;
+        }
+        let records = ledger.peers_page(after, limit)?;
+        records
+            .into_iter()
+            .map(|expected| {
+                let checked = self.admin_peer(ledger, admin, &expected.id)?;
+                if checked.0 != expected {
+                    return Err(Error::Denied);
+                }
+                Ok(checked)
+            })
+            .collect()
+    }
+
+    /// TLS setup input only. Validate ALL records, including revoked/expired
+    /// metadata, but include only current active exact pins. Never export keys.
+    /// A caller must retain shared authority through constructing its transport.
+    pub fn active_peer_certificates(
+        &self,
+        ledger: &Ledger,
+        admin: &LocalAdmin,
+        now: i64,
+    ) -> Result<Vec<Vec<u8>>> {
+        self.require_owner(ledger)?;
+        let records = ledger.peers_page(None, 256)?;
+        if let Some(last) = records.last()
+            && records.len() == 256
+            && !ledger.peers_page(Some(&last.id), 1)?.is_empty()
+        {
+            return Err(Error::Capacity);
+        }
+        let now = ledger.observe_time(now)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut certificates = Vec::new();
+        for expected in records {
+            if !seen.insert(expected.id.clone()) {
+                return Err(Error::Invalid);
+            }
+            let (current, policy, certificate) = self.admin_peer(ledger, admin, &expected.id)?;
+            if current != expected {
+                return Err(Error::Denied);
+            }
+            if policy.revoked || policy.expires_at.is_some_and(|expiry| now >= expiry) {
+                continue;
+            }
+            policy
+                .visible_exports(&current.id, current.generation, now)
+                .map_err(|_| Error::Denied)?;
+            certificates.push(certificate);
+        }
+        Ok(certificates)
     }
 
     /// Connection establishment/inventory check. The session authority must retain
