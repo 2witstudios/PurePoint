@@ -157,8 +157,8 @@ impl Ledger {
         guard: &MutationGuard,
         now: i64,
     ) -> Result<Recorded<AgentRecord>> {
-        let descriptor = encode(&("acquire", guard))?;
-        self.transaction(|tx| {
+        self.transaction_at(now, |tx, now| {
+            let descriptor = encode(&("acquire", guard))?;
             if let Some(receipt) = check_operation(tx, caller, key, &descriptor, now, &self.limits)?
             {
                 return agent_receipt(receipt);
@@ -193,8 +193,8 @@ impl Ledger {
         controller: Option<Principal>,
         now: i64,
     ) -> Result<Recorded<AgentRecord>> {
-        let descriptor = encode(&("takeover", guard, &controller))?;
-        self.transaction(|tx| {
+        self.transaction_at(now, |tx, now| {
+            let descriptor = encode(&("takeover", guard, &controller))?;
             if let Some(receipt) =
                 check_operation(tx, &admin.caller, key, &descriptor, now, &self.limits)?
             {
@@ -224,8 +224,8 @@ impl Ledger {
         guard: &MutationGuard,
         now: i64,
     ) -> Result<Recorded<AgentRecord>> {
-        let descriptor = encode(&("stop", guard))?;
-        self.transaction(|tx| {
+        self.transaction_at(now, |tx, now| {
+            let descriptor = encode(&("stop", guard))?;
             if let Some(receipt) = check_operation(tx, caller, key, &descriptor, now, &self.limits)?
             {
                 return agent_receipt(receipt);

@@ -23,6 +23,12 @@
 //! runtime and export before admission and supplies explicit supervisor evidence
 //! for resolution. This module offers no OS process-tree lifetime guarantee.
 //!
+//! Time-bearing calls commit only the receiver-clock fence before their separate
+//! operation transaction, under the same writer mutex. Every negative operation
+//! rolls back all operation writes; its observed time survives even an operation
+//! commit failure. If the clock cannot be persisted, the operation does not run
+//! and this instance retains the observation for its next attempt.
+//!
 //! Reopen fences writers, changes outstanding accepted input to Unknown, and
 //! marks live runs Unknown without releasing slots. The engine reconciles those
 //! records before resuming. It must never adopt/kill a process from a bare PID,

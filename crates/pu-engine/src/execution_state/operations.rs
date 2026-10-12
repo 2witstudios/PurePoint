@@ -21,12 +21,11 @@ impl Ledger {
         now: i64,
         ttl_seconds: i64,
     ) -> Result<OperationWindow> {
-        if ttl_seconds <= 0 || ttl_seconds > self.limits.max_window_seconds {
-            return Err(Error::Invalid("window TTL"));
-        }
-        self.transaction(|tx| {
+        self.transaction_at(now, |tx, now| {
+            if ttl_seconds <= 0 || ttl_seconds > self.limits.max_window_seconds {
+                return Err(Error::Invalid("window TTL"));
+            }
             authorize(tx, caller.principal())?;
-            let now = time(tx, now)?;
             budget(tx, "windows", self.limits.windows)?;
             let window = OperationWindow {
                 id: WindowId(next_id(tx, "next_window")?),
@@ -80,8 +79,7 @@ impl Ledger {
     /// and all run/agent records stay durable; full budgets reject further writes.
     /// Unknown old window/writer IDs always reject and counters never rewind.
     pub fn compact(&self, now: i64) -> Result<()> {
-        self.transaction(|tx| {
-            let now = time(tx, now)?;
+        self.transaction_at(now, |tx, now| {
             for mut window in all::<OperationWindow>(tx, "windows")? {
                 if window.closed || window.expires_at <= now {
                     window.closed = true;
@@ -155,7 +153,6 @@ pub(super) fn check_operation(
 ) -> Result<Option<OperationReceipt>> {
     key.validate()?;
     authorize(tx, caller.principal())?;
-    let now = time(tx, now)?;
     let window = owned_window(tx, caller, key.window)?;
     if let Some(operation) = operation(tx, key)? {
         if operation.key.digest != key.digest || operation.descriptor != descriptor {
