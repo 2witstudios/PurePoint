@@ -130,7 +130,7 @@ host_down ⇒ run continues ; worker_down ⇒ tree terminated ∧ run resolved a
 
 **CLI (owner-local):**
 
-- `pu mesh identity initialize|show`
+- `pu mesh identity initialize|show|export`
 - `pu mesh enroll-manual`, `pu mesh policy-update`, `pu mesh peers`
 - `pu mesh peer revoke|regrant|advance-generation`
 - `pu mesh export register|list|revoke`
@@ -154,6 +154,9 @@ host_down ⇒ run continues ; worker_down ⇒ tree terminated ∧ run resolved a
 - Host link heartbeat: 2 s.
 - Host budgets: 16 concurrent requests and 64 watches.
 - Ledger capacity: 256 global runs, 64 per project, 128 per runtime, 64 per principal, 16 starting.
+- Pre-authentication: 32 TLS handshakes in flight, 4 per source address (IPv6 per /64), 1 s handshake deadline. Session permits are reserved only after the pinned certificate check.
+- Ledger budgets count only live records. Each peer holds at most 16 open windows, 256 live operations and 64 live writers. The local owner has a reserve of 64 windows and 512 operations that peers cannot consume. The newest 256 terminal runs are retained; older history is compacted automatically.
+- Prompts: at most 32 KiB, never starting with `-`, no control characters other than newline and tab.
 
 ## Edge Cases
 
@@ -166,6 +169,13 @@ host_down ⇒ run continues ; worker_down ⇒ tree terminated ∧ run resolved a
 - **Concurrent worktree creation on one repository:** serialized per repository for both local and remote spawns.
 - **Disabling while viewers are attached:** the listener is stopped and drained before the reply. Host watches get `closed` and may resubscribe from their cursor; the worker reports any gap.
 - **Owner resolution of a run whose guardian left no record:** only for `unknown` runs with no live process; the attestation text is stored as evidence.
+
+- **Retained receipts:** a retried operation returns its receipt while its window is open or its run still holds capacity. After that it is refused as `receipt_expired`.
+- **Control ownership:** only the principal that spawned a run can acquire control of it.
+- **Residual limits:**
+  - A same-account process could pre-write a forged guardian outcome record (consistent with MESH-001).
+  - Several unauthenticated hosts working together can slow, but not lock out, an enrolled peer.
+  - Once compaction removes a terminal mesh agent from the ledger, its local manifest entry is no longer fenced.
 
 ## Research Notes
 

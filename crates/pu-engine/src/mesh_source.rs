@@ -246,9 +246,15 @@ async fn supervise(mut command: Command, input: Vec<u8>, timeout: Duration) -> R
                 return;
             }
         };
-        let mut stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
-        let stderr = child.stderr.take().expect("piped stderr");
+        let (Some(mut stdin), Some(stdout), Some(stderr)) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        else {
+            // Unreachable with piped stdio, but never panic in the daemon.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let _ = sender.send(Err(SourceVerificationError::GitFailed));
+            return;
+        };
         let result = {
             let inspect = async {
                 let write = async {

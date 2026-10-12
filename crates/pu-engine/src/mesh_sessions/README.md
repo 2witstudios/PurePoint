@@ -19,8 +19,10 @@ They do not add any network operation or bypass authenticated session, LocalAdmi
 WorkOwner or retained-barrier requirements. Embedders obtain WorkOwner from the
 local IPC server; the parent still supplies the exact resource/dispatch boundary.
 
-- `accept(transport, io, Role)` reserves a role permit before TLS, then a per-peer
-  permit using the actual certificate-derived identity. Build `transport` from
+- `accept(transport, io, Role)` holds only a bounded pre-authentication slot
+  (total and per source address, short handshake deadline) during TLS. Global
+  and per-peer role permits are reserved only after the pinned certificate
+  check passes, using the actual certificate-derived identity. Build `transport` from
   the consumed store's identity and explicitly enrolled pins before composition.
 - Control Hello must name the exact daemon, supported bridge version and current
   receiver-owned peer generation. Welcome contains fresh UUIDv4 incarnation and

@@ -72,7 +72,8 @@ pub enum MeshAction {
         #[command(subcommand)]
         action: RunAction,
     },
-    /// Read from a routed worker through its pinned, authenticated bridge
+    /// Inspect, spawn, control and watch runs on a routed worker through its
+    /// pinned, authenticated bridge
     Remote {
         /// Worker fingerprint or route label
         #[arg(long)]
@@ -273,7 +274,9 @@ impl MeshAction {
                     project_root,
                     label,
                 } => MeshAdminRequest::ExportRegister {
-                    project_root: project_root
+                    // Relative to where the owner runs the command; the daemon
+                    // still resolves and pins the canonical directory itself.
+                    project_root: std::path::absolute(&project_root)?
                         .into_os_string()
                         .into_string()
                         .map_err(|_| CliError::Other("export root must be UTF-8".into()))?,

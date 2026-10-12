@@ -48,25 +48,6 @@ pub trait BridgeHandler: Send + Sync + 'static {
     }
 }
 
-/// Read-only metadata handler used before execution is enabled.
-pub struct ReadOnly;
-
-impl BridgeHandler for ReadOnly {
-    fn dispatch(
-        &self,
-        _binding: &str,
-        ledger: &Ledger,
-        exports: &MeshExports,
-        caller: &Caller,
-        policy: &PeerPolicy,
-        request: &Request,
-    ) -> mesh_sessions::Result<Vec<u8>> {
-        Ok(crate::mesh_read::dispatch(
-            ledger, exports, caller, policy, request,
-        )?)
-    }
-}
-
 pub struct BoundListeners {
     control: TcpListener,
     bulk: TcpListener,

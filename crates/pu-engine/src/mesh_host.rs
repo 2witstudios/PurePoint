@@ -55,7 +55,7 @@ pub struct Target {
 
 impl Target {
     fn validate(&self) -> Result<(), Error> {
-        if specific(self.control) && specific(self.bulk) && self.control.ip() == self.bulk.ip() {
+        if pu_core::mesh::admin::valid_pair(self.control, self.bulk) {
             Ok(())
         } else {
             Err(Error::Invalid)
@@ -81,22 +81,11 @@ pub const MAX_WATCHES: usize = 64;
 
 /// Frames buffered per local watcher before it is cut off as lagging; a cut-off
 /// watcher resubscribes from its cursor and the worker reports the gap.
-const WATCH_BUFFER: usize = 256;
+const WATCH_BUFFER: usize = 64;
 /// Below the receiver's control read deadline.
 const KEEPALIVE: Duration = Duration::from_secs(2);
 /// A control session idle longer than this may already be closed remotely.
 const STALE: Duration = Duration::from_secs(4);
-
-fn specific(address: SocketAddr) -> bool {
-    let ip = match address.ip() {
-        std::net::IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(address.ip(), Into::into),
-        ip => ip,
-    };
-    address.port() != 0
-        && !ip.is_unspecified()
-        && !ip.is_multicast()
-        && !matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
-}
 
 /// Local watches per run, each with its own bounded queue. Frames fan out to
 /// every watch of a run; a lagging watch is cut off rather than starved.

@@ -13,28 +13,17 @@ pub struct ListenConfig {
 
 impl ListenConfig {
     pub fn validate(&self) -> bool {
-        fn specific(address: SocketAddr) -> bool {
-            let ip = address.ip();
-            address.port() != 0
-                && !ip.is_unspecified()
-                && !ip.is_multicast()
-                && !matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
-                && !matches!(ip, std::net::IpAddr::V6(ip) if ip.to_ipv4_mapped().is_some_and(|ip| ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast()))
-        }
         match (self.bind_address, self.bulk_bind_address) {
             (None, None) => true,
-            (Some(control), Some(bulk)) => {
-                specific(control)
-                    && specific(bulk)
-                    && control.ip() == bulk.ip()
-                    && control.port() != bulk.port()
-            }
+            (Some(control), Some(bulk)) => valid_pair(control, bulk),
             _ => false,
         }
     }
 }
 
-fn specific_address(address: SocketAddr) -> bool {
+/// A literal, routable interface address: nonzero port, never unspecified,
+/// multicast or broadcast (including IPv4-mapped forms).
+pub fn specific_address(address: SocketAddr) -> bool {
     let ip = match address.ip() {
         std::net::IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(address.ip(), Into::into),
         ip => ip,
@@ -43,6 +32,14 @@ fn specific_address(address: SocketAddr) -> bool {
         && !ip.is_unspecified()
         && !ip.is_multicast()
         && !matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
+}
+
+/// Control and bulk endpoints of one daemon: specific, same IP, distinct ports.
+pub fn valid_pair(control: SocketAddr, bulk: SocketAddr) -> bool {
+    specific_address(control)
+        && specific_address(bulk)
+        && control.ip() == bulk.ip()
+        && control.port() != bulk.port()
 }
 
 /// Host-side routing hint for one enrolled worker. Addresses never authenticate:
@@ -63,10 +60,7 @@ impl WorkerRoute {
         valid_fingerprint(&self.fingerprint)
             && super::valid_identifier(&self.daemon_id)
             && valid_label(&self.label)
-            && specific_address(self.control_address)
-            && specific_address(self.bulk_address)
-            && self.control_address.ip() == self.bulk_address.ip()
-            && self.control_address.port() != self.bulk_address.port()
+            && valid_pair(self.control_address, self.bulk_address)
     }
 }
 
