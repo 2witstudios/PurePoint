@@ -241,8 +241,8 @@ final class AppState {
 
     // MARK: - Lifecycle
 
-    /// Synchronously suspend all agents and shut down daemon.
-    /// Must complete before the process exits — uses DispatchSemaphore to block.
+    /// Attempt verified owned-child suspension/shutdown before quitting.
+    /// Wait boundedly and report uncertainty; never fall back to OS signals.
     func shutdownWithSuspend() {
         pointGuardService.stopForTermination()
         persistSelectedAgent()
@@ -258,20 +258,12 @@ final class AppState {
         let projectRoots = managedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            let client = DaemonClient()
-            // Only an instance that owns the daemon stops anything. A second app
-            // instance attached to a shared daemon must leave the owner's agents
-            // running: suspending them would strand them, since that daemon stays
-            // up and nothing would resume them.
-            guard await DaemonLifecycle.didLaunchDaemon() else {
-                semaphore.signal()
-                return
+            defer { semaphore.signal() }
+            do {
+                try await DaemonLifecycle.shutdownDaemon(projectRoots: projectRoots)
+            } catch {
+                print("[Daemon] Quit recovery required: \(error.localizedDescription)")
             }
-            for root in projectRoots {
-                _ = try? await client.send(.suspend(projectRoot: root, target: .all))
-            }
-            _ = try? await client.send(.shutdown)
-            semaphore.signal()
         }
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
         _ = semaphore.wait(timeout: .now() + 5.0)
@@ -330,6 +322,8 @@ final class AppState {
     private func restartDaemonAndRefresh() {
         Task {
             do {
+                // Binary changes never authorize replacing an attached daemon.
+                guard await DaemonLifecycle.hasLaunchedChild() else { return }
                 try await DaemonLifecycle.restartDaemon()
                 // Re-run the full open sequence, not just a refresh: init marks the
                 // agents the old daemon stopped as suspended, and they get resumed.
