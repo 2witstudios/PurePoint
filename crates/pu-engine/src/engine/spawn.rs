@@ -307,6 +307,10 @@ impl Engine {
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), agent_id.clone()));
         env.push(("PU_PROJECT_ROOT".into(), project_root.to_string()));
+        crate::build_cache::apply_cargo_target_env(
+            &mut env,
+            worktree_id.as_ref().map(|_| Path::new(&cwd)),
+        );
         let initial_binding = session_id.as_deref().and_then(|id| {
             let runtime = match agent_type.as_str() {
                 "claude" => pu_core::read::Runtime::Claude,

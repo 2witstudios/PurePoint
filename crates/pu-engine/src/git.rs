@@ -302,6 +302,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn given_worktree_with_build_cache_should_remove_cache_with_worktree() {
+        // given — worktree agents build into <worktree>/target (untracked)
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+        let wt_path = tmp.path().join("wt-cache");
+        create_worktree(tmp.path(), &wt_path, "pu/cache-branch", "HEAD")
+            .await
+            .unwrap();
+        let target = crate::build_cache::worktree_target_dir(&wt_path);
+        std::fs::create_dir_all(target.join("debug/deps")).unwrap();
+        std::fs::write(target.join("debug/deps/libfoo.rlib"), b"x").unwrap();
+
+        // when
+        remove_worktree(tmp.path(), &wt_path).await.unwrap();
+
+        // then
+        assert!(!target.exists());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn given_non_git_dir_should_fail() {
         let tmp = TempDir::new().unwrap();
         let wt_path = tmp.path().join("wt-fail");
