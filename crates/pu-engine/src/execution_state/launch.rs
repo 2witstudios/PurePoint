@@ -1,6 +1,11 @@
 use rusqlite::params;
 
-use super::{db::*, operations::*, types::*, *};
+use super::{db::*, operations::*, retention::retain, types::*, *};
+
+/// Agents mirror their current run's lifecycle; terminal history never blocks work.
+fn holds_capacity() -> String {
+    format!("json_extract(data,'$.lifecycle') NOT IN {TERMINAL}")
+}
 
 impl Ledger {
     /// Atomically deduplicate, reserve all budgets, and store the prelaunch intent.
@@ -19,6 +24,7 @@ impl Ledger {
     ) -> Result<Recorded<LaunchReceipt>> {
         self.transaction_at(now, |tx, now| {
             intent.validate()?;
+            retain(tx, now, &self.limits, self.limits.retention_batch)?;
             let descriptor = encode(&("launch", intent, resume))?;
             if let Some(receipt) = check_operation(tx, caller, key, &descriptor, now, &self.limits)?
             {
@@ -42,7 +48,7 @@ impl Ledger {
                 }
                 agent
             } else {
-                budget(tx, "agents", self.limits.agents)?;
+                budget_where(tx, "agents", &holds_capacity(), self.limits.agents)?;
                 AgentRecord {
                     agent_id: AgentId(pu_core::id::agent_id()),
                     owner_daemon: self.owner.clone(),
@@ -54,11 +60,21 @@ impl Ledger {
                     current_writer: None,
                 }
             };
-            budget(tx, "runs", self.limits.runs)?;
-            let runs: Vec<_> = all::<RunRecord>(tx, "runs")?
-                .into_iter()
-                .filter(|run| run.lifecycle.holds_capacity())
-                .collect();
+            budget_where(tx, "runs", &holds_capacity(), self.limits.runs)?;
+            // Decode only capacity-holding runs; retained terminal history is skipped.
+            let runs: Vec<RunRecord> = {
+                let mut statement = tx.prepare(&format!(
+                    "SELECT data FROM runs WHERE {} ORDER BY rowid",
+                    holds_capacity()
+                ))?;
+                statement
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .map(|row| decode(row?))
+                    .collect::<Result<_>>()?
+            };
+            if runs.iter().any(|run| !run.lifecycle.holds_capacity()) {
+                return Err(Error::Corrupt("run lifecycle encoding"));
+            }
             for (scope, count, limit) in [
                 (CapacityScope::Global, runs.len(), self.limits.global_runs),
                 (

@@ -489,9 +489,9 @@ fn given_global_writer_or_input_budget_should_not_fence_or_advance_on_rejection(
         )
         .unwrap();
     ledger
-        .finish_input(writer.id, 1, InputOutcome::Written)
+        .finish_input(writer.id, 1, InputOutcome::Partial { bytes: 3 })
         .unwrap();
-    // when / then
+    // when / then: uncertain evidence, unlike Written receipts, consumes the budget
     assert!(matches!(
         ledger.open_writer(
             &caller,
@@ -521,7 +521,7 @@ fn given_global_writer_or_input_budget_should_not_fence_or_advance_on_rejection(
     assert_eq!(ledger.writer(writer.id).unwrap().last_sequence, 1);
     assert_eq!(
         ledger.input_receipt(writer.id, 1).unwrap().unwrap().outcome,
-        InputOutcome::Written
+        InputOutcome::Partial { bytes: 3 }
     );
 }
 

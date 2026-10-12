@@ -4,6 +4,7 @@ use std::sync::{Arc, Barrier};
 mod admission;
 mod authority;
 mod input;
+mod retention;
 mod review_regressions;
 mod storage;
 

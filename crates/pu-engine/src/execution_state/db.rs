@@ -181,10 +181,9 @@ impl Ledger {
         }
         super::validation::validate_records(&tx, owner)?;
         recover(&tx)?;
-        let observed_time =
-            tx.query_row("SELECT last_time FROM meta WHERE singleton=1", [], |row| {
-                row.get(0)
-            })?;
+        let observed_time = observed_time(&tx)?;
+        // After reopen fencing: only proven-terminal, unreferenced history goes.
+        super::retention::retain_all(&tx, observed_time, &limits)?;
         tx.commit()?;
         Ok(Self {
             inner: Mutex::new(Inner {
@@ -380,8 +379,135 @@ pub(super) fn put<T: Serialize>(
 }
 
 pub(super) fn budget(tx: &Transaction<'_>, table: &'static str, limit: usize) -> Result<()> {
-    let count: usize = tx.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
+    budget_where(tx, table, "1", limit)
+}
+
+/// Serialized names of proven-terminal lifecycles; every other lifecycle holds capacity.
+pub(super) const TERMINAL: &str = "('Failed','Terminated','Interrupted')";
+/// Input outcomes that are final and certain; anything else is retained evidence.
+pub(super) const CERTAIN: &str = "('Written','NotWritten')";
+
+/// Count only rows matching a module-private constant predicate, never caller SQL.
+pub(super) fn budget_where(
+    tx: &Transaction<'_>,
+    table: &'static str,
+    predicate: &str,
+    limit: usize,
+) -> Result<()> {
+    let count: usize = tx.query_row(
+        &format!("SELECT count(*) FROM {table} WHERE {predicate}"),
+        [],
+        |r| r.get(0),
+    )?;
     if count >= limit {
+        return Err(Error::Capacity {
+            scope: CapacityScope::Records(table),
+            limit,
+        });
+    }
+    Ok(())
+}
+
+/// Principal-scoped record kinds. Terminal history never counts against these.
+#[derive(Clone, Copy)]
+pub(super) enum Live {
+    /// Open and unexpired at trusted receiver time.
+    Windows,
+    /// In an open, unexpired window, or naming a run that still holds capacity.
+    Operations,
+    /// Live writers only; fenced evidence is bounded by the input receipt budget.
+    Writers,
+}
+
+impl Live {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Operations => "operations",
+            Self::Writers => "writers",
+        }
+    }
+
+    /// `?1` is trusted receiver time. The principal-bearing row is aliased `w`.
+    fn rows(self) -> String {
+        const OPEN: &str =
+            "(json_extract(w.data,'$.closed')=0 AND json_extract(w.data,'$.expires_at')>?1)";
+        match self {
+            Self::Windows => format!("FROM windows w WHERE {OPEN}"),
+            Self::Operations => format!(
+                "FROM operations o JOIN windows w ON w.id=o.window \
+                 JOIN runs r ON r.id=json_extract(o.data,'$.run') \
+                 WHERE ({OPEN} OR json_extract(r.data,'$.lifecycle') NOT IN {TERMINAL})"
+            ),
+            Self::Writers => {
+                "FROM writers w WHERE json_extract(w.data,'$.live')=1 AND ?1 IS NOT NULL".into()
+            }
+        }
+    }
+
+    /// (all principals, all peers excluding the local reserve, one peer principal).
+    fn limits(self, limits: &Limits) -> (usize, usize, usize) {
+        match self {
+            Self::Windows => (
+                limits.windows,
+                limits.windows.saturating_sub(limits.local_reserved_windows),
+                limits.principal_windows,
+            ),
+            Self::Operations => (
+                limits.operations,
+                limits
+                    .operations
+                    .saturating_sub(limits.local_reserved_operations),
+                limits.principal_operations,
+            ),
+            // Only peers open writers; there is no local writer reserve.
+            Self::Writers => (limits.writers, limits.writers, limits.principal_writers),
+        }
+    }
+}
+
+/// A peer first exhausts its own quota, then the shared peer pool; neither ever
+/// reaches the slice reserved for local owners. Local principals are bounded only
+/// by the overall budget, so peers can never deny local window/operation issuance.
+pub(super) fn live_budget(
+    tx: &Transaction<'_>,
+    kind: Live,
+    principal: &Principal,
+    now: i64,
+    limits: &Limits,
+) -> Result<()> {
+    let (limit, peer_limit, principal_limit) = kind.limits(limits);
+    let table = kind.table();
+    let count = |filter: &str, peer: Option<&str>| -> Result<usize> {
+        let sql = format!("SELECT count(*) {} {filter}", kind.rows());
+        Ok(match peer {
+            Some(peer) => tx.query_row(&sql, params![now, peer], |r| r.get(0))?,
+            None => tx.query_row(&sql, params![now], |r| r.get(0))?,
+        })
+    };
+    if let Principal::Peer { id, .. } = principal {
+        if count(
+            "AND json_extract(w.data,'$.principal.Peer.id')=?2",
+            Some(id),
+        )? >= principal_limit
+        {
+            return Err(Error::Capacity {
+                scope: CapacityScope::PrincipalRecords(table),
+                limit: principal_limit,
+            });
+        }
+        if count(
+            "AND json_extract(w.data,'$.principal.Peer') IS NOT NULL",
+            None,
+        )? >= peer_limit
+        {
+            return Err(Error::Capacity {
+                scope: CapacityScope::PeerRecords(table),
+                limit: peer_limit,
+            });
+        }
+    }
+    if count("", None)? >= limit {
         return Err(Error::Capacity {
             scope: CapacityScope::Records(table),
             limit,
@@ -402,6 +528,15 @@ pub(super) fn next_id(tx: &Transaction<'_>, field: &str) -> Result<u64> {
         [next],
     )?;
     Ok(id)
+}
+
+/// The durable receiver-time high-water mark, for calls without their own `now`.
+pub(super) fn observed_time(tx: &Transaction<'_>) -> Result<i64> {
+    Ok(
+        tx.query_row("SELECT last_time FROM meta WHERE singleton=1", [], |r| {
+            r.get(0)
+        })?,
+    )
 }
 
 fn advance_clock(tx: &Transaction<'_>, now: i64) -> Result<i64> {
