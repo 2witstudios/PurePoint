@@ -41,7 +41,7 @@ struct ProjectDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("WORKTREES").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(.secondary).padding(18)
                     ScrollView {
-                        VStack(spacing: 0) {
+                        LazyVStack(spacing: 0) {
                             Button { showRootFiles = true } label: { row(name: "Root checkout", branch: project.projectName, agents: project.rootAgents, summary: summaries[project.projectRoot], root: true) }.buttonStyle(.plain)
                             Divider().padding(.horizontal, 18)
                             ForEach(project.worktrees) { worktree in
@@ -56,20 +56,26 @@ struct ProjectDetailView: View {
             selectedTab = .overview
             showRootFiles = false
             summaries = [:]
-        }.task(id: project.projectRoot) {
+        }.task(id: project.projectRoot + selectedTab.rawValue + String(showRootFiles)) {
+            guard selectedTab == .overview, !showRootFiles else { return }
             while !Task.isCancelled {
                 guard NSApplication.shared.isActive else {
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
                     continue
                 }
                 let service = GitService()
-                var next: [String: GitReviewSummary] = [:]
-                next[project.projectRoot] = await service.reviewSummary(at: project.projectRoot, baseBranch: nil)
-                for worktree in project.worktrees {
-                    next[worktree.path] = await service.reviewSummary(at: worktree.path, baseBranch: worktree.baseBranch)
-                    if Task.isCancelled { return }
+                let root = project.projectRoot
+                let worktrees = project.worktrees
+                let rootSummary = await service.reviewSummary(at: root, baseBranch: nil)
+                guard !Task.isCancelled, project.projectRoot == root else { return }
+                summaries[root] = rootSummary
+                for worktree in worktrees {
+                    let summary = await service.reviewSummary(at: worktree.path, baseBranch: worktree.baseBranch)
+                    guard !Task.isCancelled, project.projectRoot == root else { return }
+                    summaries[worktree.path] = summary
                 }
-                summaries = next
+                let paths = Set([root] + worktrees.map(\.path))
+                summaries = summaries.filter { paths.contains($0.key) }
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }

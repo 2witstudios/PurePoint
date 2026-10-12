@@ -28,6 +28,7 @@ nonisolated enum WorkingTreeDiffError: LocalizedError {
 actor GitService {
     static let shared = GitService()
     private var cachedGhPath: String?
+    private var branchSummaryCache: [String: GitBranchReview] = [:]
     private var untrackedCache: [String: (stamp: String, file: FileDiff, bytes: Int)] = [:]
     private var untrackedCacheOrder: [String] = []
     private var untrackedCacheBytes = 0
@@ -54,7 +55,7 @@ actor GitService {
         throw GitReviewError(message: "Choose a comparison base; no recorded base, upstream or default branch is available.")
     }
 
-    func fetchBranchReview(at path: String, baseBranch: String?) -> GitBranchReview {
+    func fetchBranchReview(at path: String, baseBranch: String?, summariesOnly: Bool = false) -> GitBranchReview {
         var review = GitBranchReview()
         do {
             let (base, refs) = try resolvedBase(at: path, requested: baseBranch)
@@ -64,13 +65,22 @@ actor GitService {
             let baseSHA = try checked(["rev-parse", "--verify", "--end-of-options", base + "^{commit}"], at: path).trimmingCharacters(in: .whitespacesAndNewlines)
             let merge = try checked(["merge-base", baseSHA, head], at: path).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !merge.isEmpty else { throw GitReviewError(message: "The comparison base and HEAD have no common ancestor.") }
-            review.files = try patches([merge, head], at: path)
+            let cacheKey = path + "\0" + base + "\0" + baseSHA + "\0" + head
+            if summariesOnly, let cached = branchSummaryCache[cacheKey] {
+                review.files = cached.files; review.commits = cached.commits
+                return review
+            }
+            review.files = try patches([merge, head], at: path, summariesOnly: summariesOnly)
             let log = try checked(["log", "--format=%H%x00%s%x00%an%x00%aI%x00", baseSHA + ".." + head, "--"], at: path)
             let fields = log.components(separatedBy: "\0")
             var i = 0
             while i + 3 < fields.count {
                 review.commits.append(GitCommitInfo(sha: fields[i].trimmingCharacters(in: .newlines), subject: fields[i+1], author: fields[i+2], date: fields[i+3]))
                 i += 4
+            }
+            if summariesOnly {
+                if branchSummaryCache.count >= 8 { branchSummaryCache.removeAll() }
+                branchSummaryCache[cacheKey] = review
             }
         } catch {
             review.error = "Cannot compare with \(review.comparisonBase.isEmpty ? (baseBranch ?? "a base") : review.comparisonBase): \(error.localizedDescription)"
@@ -82,16 +92,23 @@ actor GitService {
         return review
     }
 
-    func fetchLocalReview(at path: String) -> GitLocalReview {
+    func fetchLocalReview(at path: String, summariesOnly: Bool = false) -> GitLocalReview {
         var review = GitLocalReview()
-        do { review.staged = try patches(["--cached"], at: path) }
+        do { review.staged = try patches(["--cached"], at: path, summariesOnly: summariesOnly) }
         catch { review.stagedError = error.localizedDescription }
-        do { review.unstaged = try patches([], at: path) }
+        do { review.unstaged = try patches([], at: path, summariesOnly: summariesOnly) }
         catch { review.unstagedError = error.localizedDescription }
         do {
             let names = try checked(["ls-files", "--others", "--exclude-standard", "-z"], at: path).split(separator: "\0").map(String.init)
             var remaining = 32
             for name in names {
+                if summariesOnly {
+                    var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
+                    file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name]
+                    file.previewVersion = fileStamp(name, at: path)
+                    review.untracked.append(file)
+                    continue
+                }
                 let key = (path as NSString).appendingPathComponent(name)
                 let attributes = try? FileManager.default.attributesOfItem(atPath: key)
                 let stamp = "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.type] ?? "missing")"
@@ -160,12 +177,12 @@ actor GitService {
         return GitReviewSummary(commitCount: commitCount, localFileCount: localFileCount, error: errors.joined(separator: "\n").nilIfEmpty)
     }
 
-    func fetchCommitDiff(at path: String, sha: String) throws -> [FileDiff] {
+    func fetchCommitDiff(at path: String, sha: String, summariesOnly: Bool = false) throws -> [FileDiff] {
         let commit = try checked(["rev-parse", "--verify", "--end-of-options", sha + "^{commit}"], at: path).trimmingCharacters(in: .whitespacesAndNewlines)
         // First-parent patch for merges; --root also supports the initial commit.
         let parents = try checked(["rev-list", "--parents", "-n", "1", commit], at: path).split(whereSeparator: { $0.isWhitespace })
-        if parents.count > 1 { return try patches([String(parents[1]), commit], at: path) }
-        return try patches([commit], at: path, root: true)
+        if parents.count > 1 { return try patches([String(parents[1]), commit], at: path, summariesOnly: summariesOnly) }
+        return try patches([commit], at: path, root: true, summariesOnly: summariesOnly)
     }
 
     /// Existing editor API, preserving its DiffData return shape.
@@ -174,7 +191,7 @@ actor GitService {
         return DiffData(files: local.unstaged + local.untracked)
     }
 
-    private func patches(_ revisions: [String], at path: String, root: Bool = false) throws -> [FileDiff] {
+    private func patches(_ revisions: [String], at path: String, root: Bool = false, summariesOnly: Bool = false) throws -> [FileDiff] {
         let command = root ? ["diff-tree", "--root", "--no-commit-id", "-r"] : ["diff"]
         // Unmerged index stages cannot be expressed as a staged patch. In the
         // working-file group use stage 2 (ours) as the disclosed conflict baseline.
@@ -190,6 +207,44 @@ actor GitService {
             entries.append((name, String(code.prefix(1)), renamed ? old : nil))
         }
         guard !entries.isEmpty else { return [] }
+        if summariesOnly {
+            let stats = try checked(command + common + ["--numstat", "-z"] + revisions + ["--"], at: path).components(separatedBy: "\0")
+            var counts: [String: (Int, Int, Bool)] = [:], index = 0
+            while index < stats.count {
+                let parts = stats[index].split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                index += 1
+                guard parts.count == 3 else { continue }
+                var name = String(parts[2])
+                if name.isEmpty {
+                    guard index + 1 < stats.count else { break }
+                    name = stats[index + 1]; index += 2
+                }
+                counts[name] = (Int(parts[0]) ?? 0, Int(parts[1]) ?? 0, parts[0] == "-")
+            }
+            // A conflict may also appear as M; retain one path with the U identity.
+            let conflicts = Set(entries.filter { $0.status == "U" }.map(\.name))
+            let indexPath = WorktreeWatcher.metadataPaths(worktreePath: path).first { $0.hasSuffix("/index") }
+            let indexStamp = indexPath.map { fileStamp($0, at: "/") } ?? ""
+            var seen = Set<String>()
+            return try entries.compactMap { entry -> FileDiff? in
+                guard seen.insert(entry.name).inserted else { return nil }
+                let count = counts[entry.name] ?? (0, 0, false)
+                let status = conflicts.contains(entry.name) ? "U" : entry.status
+                var file = FileDiff(filename: entry.name, statusCode: status, added: count.0, removed: count.1, hunks: [], oldFilename: entry.old, isBinary: count.2)
+                let paths = entry.old.map { [$0, entry.name] } ?? [entry.name]
+                file.patchArguments = command + common + ["--patch"] + revisions + ["--"] + paths
+                file.previewVersion = path + revisions.joined(separator: "/") + ((revisions.isEmpty || revisions == ["--cached"]) ? fileStamp(entry.name, at: path) + indexStamp : "")
+                if status == "U", revisions.isEmpty, !root {
+                    let stages = try checked(["ls-files", "--unmerged", "-z", "--", entry.name], at: path).split(separator: "\0")
+                    let hasOurs = stages.contains { $0.split(separator: "\t", maxSplits: 1).first?.split(separator: " ").last == "2" }
+                    file.conflictBaseline = hasOurs ? "ours (index stage 2)" : "empty (ours deleted)"
+                    if !hasOurs && FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(entry.name)) {
+                        file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", entry.name]
+                    }
+                }
+                return file
+            }.sorted { $0.filename < $1.filename }
+        }
         // One patch process per group, rather than one per file on every foreground poll.
         let output = try checked(["-c", "core.quotePath=true"] + command + common + ["--patch"] + revisions + ["--"], at: path)
         var sections: [String] = [], section = ""
@@ -231,6 +286,62 @@ actor GitService {
             files.append(file)
         }
         return files.sorted { $0.filename < $1.filename }
+    }
+
+    private func fileStamp(_ name: String, at path: String) -> String {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: (path as NSString).appendingPathComponent(name))
+        return "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.systemFileNumber] ?? 0)"
+    }
+
+    /// Generate an on-disk snapshot once; subsequent pages never regenerate Git output.
+    func fetchReviewPage(file: FileDiff, at path: String, after previous: ReviewPage? = nil) throws -> ReviewPage {
+        try Task.checkCancellation()
+        let slice: PatchSlice
+        if let previous { slice = previous.slice }
+        else if let stored = file.patchSlice { slice = stored }
+        else {
+            guard let arguments = file.patchArguments else { throw GitReviewError(message: "Refresh to load this file's diff.") }
+            let snapshot = PatchSnapshot(url: FileManager.default.temporaryDirectory.appendingPathComponent("purepoint-review-\(UUID()).patch"))
+            let result = runProcess("/usr/bin/git", args: ["--literal-pathspecs"] + arguments, cwd: path, timeoutSeconds: 15, outputFile: snapshot.url)
+            try Task.checkCancellation()
+            guard result.success || (arguments.contains("--no-index") && result.exitCode == 1) else {
+                throw GitReviewError(message: result.stderr.nilIfEmpty ?? "Diff loading timed out or failed. Retry to load this file.")
+            }
+            let size = try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber
+            slice = PatchSlice(snapshot: snapshot, start: 0, end: size?.uint64Value ?? 0)
+        }
+        let reader = try PatchLineReader(slice: slice, offset: previous?.nextOffset ?? slice.start)
+        var old = previous?.oldLine ?? 0, new = previous?.newLine ?? 0
+        var header = previous?.header ?? "", hunks: [Hunk] = [], lines: [DiffLine] = []
+        var count = 0, characters = 0, binary = file.isBinary, longLines = false
+        while let record = try reader.next() {
+            try Task.checkCancellation()
+            let line = record.text
+            if line.hasPrefix("@@ ") {
+                if !lines.isEmpty { hunks.append(Hunk(header: header, lines: lines)); lines = [] }
+                header = line
+                let parts = line.split(separator: " ")
+                guard parts.count >= 3 else { continue }
+                old = Int(parts[1].dropFirst().split(separator: ",")[0]) ?? 0
+                new = Int(parts[2].dropFirst().split(separator: ",")[0]) ?? 0
+            } else if line.hasPrefix("Binary files ") || line == "GIT binary patch" { binary = true }
+            else if !header.isEmpty {
+                let type: LineType
+                if line.hasPrefix("+") { type = .addition }
+                else if line.hasPrefix("-") { type = .deletion }
+                else if line.hasPrefix(" ") { type = .context }
+                else { continue }
+                let content = String(line.dropFirst()) + (record.truncated ? " … [long line; open full patch]" : "")
+                lines.append(DiffLine(type: type, content: content, oldLineNo: type == .addition ? nil : old, newLineNo: type == .deletion ? nil : new))
+                if type != .addition { old += 1 }
+                if type != .deletion { new += 1 }
+                longLines = longLines || record.truncated
+                count += 1; characters += content.utf8.count
+                if count == 200 || characters >= 32_768 { break }
+            }
+        }
+        if !lines.isEmpty { hunks.append(Hunk(header: header, lines: lines)) }
+        return ReviewPage(slice: slice, hunks: hunks, nextOffset: reader.offset, oldLine: old, newLine: new, header: header, hasMore: reader.offset < slice.end, isBinary: binary, hasLongLines: longLines)
     }
 
     private func emptyBaselinePatch(name: String, status: String, at path: String, outputLimit: Int? = nil) throws -> FileDiff {
@@ -426,7 +537,8 @@ actor GitService {
         return try JSONDecoder().decode([PullRequestInfo].self, from: Data(result.stdout.utf8))
     }
 
-    func fetchPRDiffChecked(cwd: String, prNumber: Int) throws -> DiffData {
+    func fetchPRDiffChecked(cwd: String, prNumber: Int, summariesOnly: Bool = false) throws -> DiffData {
+        if summariesOnly { return try fetchPRSummary(cwd: cwd, prNumber: prNumber) }
         let result = runGh(["pr", "diff", String(prNumber)], cwd: cwd)
         guard result.success else { throw GitReviewError(message: result.stderr.nilIfEmpty ?? "GitHub PR diff failed") }
         guard result.stdout.isEmpty || result.stdout.hasPrefix("diff --git ") else {
@@ -453,6 +565,50 @@ actor GitService {
         guard result.stdout.isEmpty || !files.isEmpty else {
             throw GitReviewError(message: "GitHub patch paths could not be read; refresh to retry.")
         }
+        return DiffData(files: files)
+    }
+
+    /// Index a PR patch on disk without retaining all its lines or creating text views.
+    private func fetchPRSummary(cwd: String, prNumber: Int) throws -> DiffData {
+        let snapshot = PatchSnapshot(url: FileManager.default.temporaryDirectory.appendingPathComponent("purepoint-pr-\(UUID()).patch"))
+        let result = runGh(["pr", "diff", String(prNumber)], cwd: cwd, outputFile: snapshot.url)
+        try Task.checkCancellation()
+        guard result.success else { throw GitReviewError(message: result.stderr.nilIfEmpty ?? "GitHub PR diff failed") }
+        let size = (try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        let reader = try PatchLineReader(slice: PatchSlice(snapshot: snapshot, start: 0, end: size), offset: 0)
+        var files: [FileDiff] = [], metadata: [String] = [], start: UInt64 = 0
+        var added = 0, removed = 0, inHunk = false, binary = false
+        func finish(end: UInt64) throws {
+            guard !metadata.isEmpty else { return }
+            let target = metadata.first { $0.hasPrefix("+++ ") && !$0.hasPrefix("+++ /dev/null") } ?? metadata.first { $0.hasPrefix("--- ") }
+            let rename = metadata.first { $0.hasPrefix("rename to ") }
+            let raw = rename.map { String($0.dropFirst(10)) } ?? target.map { String($0.dropFirst(4)).components(separatedBy: "\t")[0] } ?? prHeaderPath(metadata[0])
+            guard let raw else { throw GitReviewError(message: "GitHub patch paths could not be read; refresh to retry.") }
+            let decoded = decodeGitPath(raw)
+            let name = rename != nil ? decoded : (decoded.hasPrefix("a/") || decoded.hasPrefix("b/") ? String(decoded.dropFirst(2)) : decoded)
+            let status = metadata.contains { $0.hasPrefix("new file mode ") } ? "A" : metadata.contains { $0.hasPrefix("deleted file mode ") } ? "D" : rename != nil ? "R" : "M"
+            var file = FileDiff(filename: name, statusCode: status, added: added, removed: removed, hunks: [], oldFilename: metadata.first { $0.hasPrefix("rename from ") }.map { decodeGitPath(String($0.dropFirst(12))) }, isBinary: binary)
+            file.patchSlice = PatchSlice(snapshot: snapshot, start: start, end: end)
+            file.previewVersion = snapshot.url.path
+            files.append(file)
+        }
+        while let record = try reader.next() {
+            try Task.checkCancellation()
+            let line = record.text
+            if line.hasPrefix("diff --git ") {
+                try finish(end: record.start)
+                metadata = [line]; start = record.start; added = 0; removed = 0; inHunk = false; binary = false
+            } else if metadata.isEmpty { throw GitReviewError(message: "GitHub returned an unrecognized patch; refresh to retry.") }
+            else if line.hasPrefix("@@ ") { inHunk = true }
+            else if inHunk {
+                if line.hasPrefix("+") { added += 1 }
+                else if line.hasPrefix("-") { removed += 1 }
+            } else {
+                if metadata.count < 32 { metadata.append(line) }
+                if line.hasPrefix("Binary files ") || line == "GIT binary patch" { binary = true }
+            }
+        }
+        try finish(end: size)
         return DiffData(files: files)
     }
 
@@ -499,7 +655,7 @@ actor GitService {
         runProcess("/usr/bin/git", args: ["--literal-pathspecs"] + args, cwd: cwd, outputLimit: outputLimit)
     }
 
-    private func runGh(_ args: [String], cwd: String) -> CommandResult {
+    private func runGh(_ args: [String], cwd: String, outputFile: URL? = nil) -> CommandResult {
         let ghPath: String
         if let cached = cachedGhPath {
             ghPath = cached
@@ -510,7 +666,7 @@ actor GitService {
             cachedGhPath = resolved
             ghPath = resolved
         }
-        return runProcess(ghPath, args: args, cwd: cwd, timeoutSeconds: 25)
+        return runProcess(ghPath, args: args, cwd: cwd, timeoutSeconds: 25, outputFile: outputFile)
     }
 
     private nonisolated func locateGh() -> String? {
@@ -547,7 +703,7 @@ actor GitService {
         return nil
     }
 
-    private func runProcess(_ path: String, args: [String], cwd: String, outputLimit: Int? = nil, timeoutSeconds: TimeInterval? = nil) -> CommandResult {
+    private func runProcess(_ path: String, args: [String], cwd: String, outputLimit: Int? = nil, timeoutSeconds: TimeInterval? = nil, outputFile: URL? = nil) -> CommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
@@ -555,7 +711,15 @@ actor GitService {
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
+        var fileHandle: FileHandle?
+        if let outputFile {
+            _ = FileManager.default.createFile(atPath: outputFile.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            do { fileHandle = try FileHandle(forWritingTo: outputFile) }
+            catch { return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1) }
+        }
+        defer { try? fileHandle?.close() }
+        if let fileHandle { process.standardOutput = fileHandle }
+        else { process.standardOutput = stdoutPipe }
         process.standardError = stderrPipe
 
         do {
@@ -572,27 +736,29 @@ actor GitService {
         nonisolated(unsafe) var outputExceededLimit = false
         let group = DispatchGroup()
 
-        group.enter()
-        Thread.detachNewThread {
-            if let outputLimit {
-                // Fixed-size reads bound capture before decoding. Keep draining
-                // after termination so a full pipe cannot prevent process exit.
-                while true {
-                    let chunk = stdoutPipe.fileHandleForReading.readData(ofLength: 16_384)
-                    if chunk.isEmpty { break }
-                    if outputExceededLimit { continue }
-                    if chunk.count > outputLimit - stdoutData.count {
-                        outputExceededLimit = true
-                        stdoutData.removeAll(keepingCapacity: false)
-                        process.terminate()
-                    } else {
-                        stdoutData.append(chunk)
+        if outputFile == nil {
+            group.enter()
+            Thread.detachNewThread {
+                if let outputLimit {
+                    // Fixed-size reads bound capture before decoding. Keep draining
+                    // after termination so a full pipe cannot prevent process exit.
+                    while true {
+                        let chunk = stdoutPipe.fileHandleForReading.readData(ofLength: 16_384)
+                        if chunk.isEmpty { break }
+                        if outputExceededLimit { continue }
+                        if chunk.count > outputLimit - stdoutData.count {
+                            outputExceededLimit = true
+                            stdoutData.removeAll(keepingCapacity: false)
+                            process.terminate()
+                        } else {
+                            stdoutData.append(chunk)
+                        }
                     }
+                } else {
+                    stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                 }
-            } else {
-                stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                group.leave()
             }
-            group.leave()
         }
         group.enter()
         Thread.detachNewThread {
@@ -600,11 +766,26 @@ actor GitService {
             group.leave()
         }
 
-        // Only remote/auth commands use a deadline. Local Git work may be slow.
+        // Remote lookups and explicit overview previews have deadlines; legacy local APIs retain theirs.
         let timeout = timeoutSeconds.map { seconds in
-            let work = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            let work = DispatchWorkItem {
+                if process.isRunning {
+                    process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    }
+                }
+            }
             DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: work)
             return work
+        }
+        var canceledAt: Date?
+        while process.isRunning {
+            if Task.isCancelled {
+                if canceledAt == nil { canceledAt = Date(); process.terminate() }
+                else if Date().timeIntervalSince(canceledAt!) > 1 { kill(process.processIdentifier, SIGKILL) }
+            }
+            Thread.sleep(forTimeInterval: 0.02)
         }
         process.waitUntilExit()
         timeout?.cancel()
@@ -620,4 +801,41 @@ actor GitService {
 
 private extension String {
     nonisolated var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// Stream a disk patch with bounded memory, even for minified/generated single lines.
+private nonisolated final class PatchLineReader {
+    struct Record { let text: String; let start: UInt64; let truncated: Bool }
+    private let handle: FileHandle
+    private let end: UInt64
+    private var buffer = Data()
+    private var index = 0
+    private(set) var offset: UInt64
+    init(slice: PatchSlice, offset: UInt64) throws {
+        handle = try FileHandle(forReadingFrom: slice.snapshot.url)
+        self.offset = offset; end = slice.end
+        try handle.seek(toOffset: offset)
+    }
+    deinit { try? handle.close() }
+    func next() throws -> Record? {
+        guard offset < end else { return nil }
+        let start = offset
+        var bytes = Data(), truncated = false
+        while offset < end {
+            if index == buffer.count {
+                buffer = try handle.read(upToCount: Int(min(65_536, end - offset))) ?? Data()
+                index = 0
+                if buffer.isEmpty { offset = end; break }
+            }
+            let newline = buffer[index...].firstIndex(of: 10)
+            let stop = newline ?? buffer.endIndex
+            let available = stop - index
+            let retained = min(available, 2048 - bytes.count)
+            if retained > 0 { bytes.append(buffer[index..<(index + retained)]) }
+            if retained < available { truncated = true }
+            offset += UInt64(available); index = stop
+            if newline != nil { index += 1; offset += 1; break }
+        }
+        return Record(text: String(decoding: bytes, as: UTF8.self), start: start, truncated: truncated)
+    }
 }

@@ -6,7 +6,8 @@ import SwiftUI
 class DiffContentNSView: NSView {
     private let textView = NSTextView()
     private var hunks: [Hunk] = []
-    private var cachedHeight: CGFloat = 0
+    private var cachedHeight: CGFloat = 20
+    private var cachedWidth: CGFloat?
 
     init(hunks: [Hunk]) {
         self.hunks = hunks
@@ -32,7 +33,7 @@ class DiffContentNSView: NSView {
         textView.backgroundColor = Theme.cardBackground
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.widthTracksTextView = false
         textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.autoresizingMask = [.width]
         textView.translatesAutoresizingMaskIntoConstraints = false
@@ -50,19 +51,21 @@ class DiffContentNSView: NSView {
         let attributed = buildDiffAttributedString()
         textView.textStorage?.setAttributedString(attributed)
 
-        // Compute and cache height once per render, so intrinsicContentSize
-        // never calls ensureLayout — that was causing freezes during rapid scroll
-        // as SwiftUI queries intrinsicContentSize repeatedly during layout.
-        if let container = textView.textContainer,
-            let layoutManager = textView.layoutManager,
-            textView.textStorage?.length ?? 0 > 0
-        {
-            layoutManager.ensureLayout(for: container)
-            cachedHeight = layoutManager.usedRect(for: container).height + 12
-        } else {
-            cachedHeight = 0
-        }
+        cachedWidth = nil
         invalidateIntrinsicContentSize()
+    }
+
+    /// Measure bounded pages at the proposed width, never the initial zero-width frame.
+    func height(for width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 20 }
+        if cachedWidth == width { return cachedHeight }
+        if let container = textView.textContainer, let manager = textView.layoutManager {
+            container.containerSize = NSSize(width: max(1, width - 8), height: .greatestFiniteMagnitude)
+            manager.ensureLayout(for: container)
+            cachedHeight = ceil(manager.usedRect(for: container).height) + 12
+        }
+        cachedWidth = width
+        return cachedHeight
     }
 
     override var intrinsicContentSize: NSSize {
@@ -168,6 +171,11 @@ struct DiffContentRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> DiffContentNSView {
         DiffContentNSView(hunks: hunks)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: DiffContentNSView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        return CGSize(width: width, height: nsView.height(for: width))
     }
 
     func updateNSView(_ nsView: DiffContentNSView, context: Context) {
