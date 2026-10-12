@@ -191,7 +191,7 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        view.window?.makeFirstResponder(searchField)
+        focusSearchFieldIfSelecting()
     }
 
     // MARK: - Setup
@@ -414,8 +414,15 @@ class CommandPaletteViewController: NSViewController, NSTextFieldDelegate, NSTex
         resizePanel(rowCount: filteredItems.count)
 
         DispatchQueue.main.async { [weak self] in
-            self?.view.window?.makeFirstResponder(self?.searchField)
+            self?.focusSearchFieldIfSelecting()
         }
+    }
+
+    /// Deferred search focus must not steal focus from a naming/prompt step entered
+    /// in the meantime (e.g. `show(initialItem:)` selects an item right after loadView).
+    private func focusSearchFieldIfSelecting() {
+        guard case .selection = phase else { return }
+        view.window?.makeFirstResponder(searchField)
     }
 
     /// Lays out the naming step directly (never via the prompt layout) so the panel
