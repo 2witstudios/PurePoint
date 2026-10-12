@@ -12,6 +12,7 @@ struct PaneTabBar: View {
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
     @State private var isDropTargeted = false
+    @State private var tabStripWidth: CGFloat = 0
 
     static let height: CGFloat = 30
 
@@ -30,10 +31,16 @@ struct PaneTabBar: View {
                             isFocusedPane: isFocused
                         )
                     }
-                    TabBarButton(icon: "plus", help: "New Tab") { newTab() }
-                        .padding(.horizontal, 4)
+                }
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.width
+                } action: { width in
+                    tabStripWidth = width
                 }
             }
+            // Hug short tab stacks; shrink to the available viewport when tabs overflow.
+            .frame(minWidth: 0, maxWidth: tabStripWidth)
+            .layoutPriority(1)
             // Dropping past the last tab appends to this pane.
             .dropDestination(for: String.self) { items, _ in
                 guard let surfaceId = items.lazy.compactMap(TabDragPayload.surfaceId(from:)).first else { return false }
@@ -43,8 +50,13 @@ struct PaneTabBar: View {
                 isDropTargeted = $0
             }
 
+            TabBarButton(icon: "plus", help: "New Tab") { newTab() }
+                .padding(.horizontal, 4)
+                .fixedSize()
+            Spacer(minLength: 0)
             Divider()
             actions
+                .fixedSize(horizontal: true, vertical: false)
         }
         .frame(height: Self.height)
         .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color(nsColor: Theme.tabBarBackground))
