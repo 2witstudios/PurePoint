@@ -84,6 +84,9 @@ async fn main() {
     // Start background scheduler for recurring tasks
     server.engine().start_scheduler();
 
+    // Delete agent build caches nothing is using any more
+    server.engine().start_build_cache_sweeper();
+
     // In managed mode, exit when the parent process (macOS app) dies.
     // Without this, the daemon outlives app restarts and stale binaries persist.
     // process::exit(0) skips Drop, so explicitly kill agent process groups first
