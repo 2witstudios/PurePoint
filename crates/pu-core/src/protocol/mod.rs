@@ -23,6 +23,10 @@ pub const PROTOCOL_VERSION: u32 = 8;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    /// Owner-local only; never accepted by the restricted bridge protocol.
+    MeshAdmin {
+        request: crate::mesh::admin::MeshAdminRequest,
+    },
     Read {
         project_root: String,
         agent_id: String,
@@ -394,6 +398,9 @@ fn default_enabled() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
+    MeshAdmin {
+        response: crate::mesh::admin::MeshAdminResponse,
+    },
     ChannelHistory {
         messages: Vec<ChannelMessage>,
         revision: u64,

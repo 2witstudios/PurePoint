@@ -1,5 +1,6 @@
 //! Transport-independent, receiver-owned authorization for the LAN bridge.
 
+pub mod admin;
 pub mod response;
 pub mod wire;
 
