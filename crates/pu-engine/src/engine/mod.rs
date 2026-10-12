@@ -334,6 +334,10 @@ impl Engine {
             return response;
         }
         match request {
+            Request::MeshAdmin { .. } => Response::Error {
+                code: "MESH_NOT_CONFIGURED".into(),
+                message: "local mesh administration is not configured for this engine".into(),
+            },
             request @ (Request::ChannelRead { .. }
             | Request::ChannelSend { .. }
             | Request::ChannelEdit { .. }
