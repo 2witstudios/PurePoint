@@ -5,10 +5,18 @@ use pu_engine::daemon_lifecycle;
 use pu_engine::engine::Engine;
 use pu_engine::ipc_server::IpcServer;
 
-#[tokio::main]
-async fn main() {
-    // Parse args
+fn main() {
+    // Guardian mode runs before any daemon setup: synchronous, no runtime,
+    // no tracing, no state directory, no daemon lock.
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--mesh-guardian") {
+        std::process::exit(pu_engine::mesh_guardian::run_guardian(&args[2..]));
+    }
+    daemon_main(args);
+}
+
+#[tokio::main]
+async fn daemon_main(args: Vec<String>) {
     let managed = args.contains(&"--managed".to_string());
     let socket_path = args
         .windows(2)
