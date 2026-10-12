@@ -266,7 +266,13 @@ export class Controller extends EventEmitter {
       busy: this.busy,
       sessionId: this.state.sessionId ?? "",
       title: this.titleOverride ?? clip(this.state.sessionName ?? "Pi", 200),
-      messages: boundedRows(this.projection.messages, 1024 * 1024),
+      // While a run is active, withhold the in-progress assistant reply; it
+      // arrives whole at message_end and clients show a typing pill meanwhile.
+      // Once settled, include it so an interrupted reply is never lost.
+      messages: boundedRows(
+        this.busy ? this.projection.settledMessages : this.projection.messages,
+        1024 * 1024,
+      ),
       tools: boundedRows(this.projection.tools, 256 * 1024),
       queue: boundedRows(this.queue, 128 * 1024),
       canceled: boundedRows(this.canceled, 128 * 1024),

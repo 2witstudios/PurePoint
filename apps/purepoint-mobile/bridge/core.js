@@ -148,6 +148,10 @@ export class Projection {
       ...(this.live ? [row(this.live, this.liveId)] : []),
     ].slice(-500);
   }
+  // Completed rows only: clients receive assistant replies whole, like texts.
+  get settledMessages() {
+    return this.rows.slice(-500);
+  }
   load(entries, leafId) {
     const path = activeBranch(entries, leafId);
     const rows = [];

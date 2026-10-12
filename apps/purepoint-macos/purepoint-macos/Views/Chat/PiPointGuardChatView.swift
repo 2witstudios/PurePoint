@@ -112,7 +112,7 @@ struct PiPointGuardChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     if let history = model.browsing {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Reading: " + history.title).font(.system(size: 12, weight: .medium))
@@ -143,6 +143,9 @@ struct PiPointGuardChatView: View {
                             case .activity(let tools): PiToolActivityView(tools: tools)
                             }
                         }
+                    }
+                    if model.browsing == nil && model.busy {
+                        TypingIndicatorBubble(compact: compact)
                     }
                     if model.browsing == nil {
                         ForEach(Array((model.snapshot?.notices ?? []).enumerated()), id: \.offset) { _, notice in
@@ -212,24 +215,26 @@ struct PiPointGuardChatView: View {
     @ViewBuilder
     private func messageView(_ message: PiChatMessage) -> some View {
         if message.role == "user" {
-            HStack {
-                Spacer(minLength: 48)
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .trailing, spacing: 6) {
+                ChatBubble(sender: .user, compact: compact) {
                     Text(message.text).font(PurePointTheme.chatFont).lineSpacing(3).textSelection(.enabled)
-                    if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 }
-                .padding(.horizontal, 17).padding(.vertical, 13)
-                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 22))
+                .accessibilityElement(children: .combine)
                 .accessibilityLabel("You: " + message.text)
-            }
+                if let error = message.error {
+                    Text(error).font(.system(size: 12)).foregroundStyle(.red).textSelection(.enabled)
+                }
+            }.frame(maxWidth: .infinity, alignment: .trailing)
         } else if message.role == "notice" {
             Label(message.text, systemImage: "text.alignleft")
                 .font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
         } else {
-            VStack(alignment: .leading, spacing: 14) {
-                ChatMarkdownView(text: message.text).equatable()
-                if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+            ChatBubble(sender: .assistant, compact: compact) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ChatMarkdownView(text: message.text).equatable()
+                    if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                }
+            }
         }
     }
 

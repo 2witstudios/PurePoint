@@ -182,13 +182,13 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         if (model.snapshot?.messages ?? []).isEmpty {
                             Image("PurePointLogo").resizable().scaledToFit().frame(width: 88, height: 88)
                                 .frame(maxWidth: .infinity).padding(.top, 64).padding(.bottom, 40).accessibilityHidden(true)
                         }
                         ForEach(model.transcriptRows) { row in TranscriptRowView(row: row).equatable() }
-                        if model.busy { HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Working…").font(.callout).foregroundStyle(.secondary) }.accessibilityElement(children: .combine) }
+                        if model.busy { TypingIndicatorBubble() }
                         ForEach(Array((model.snapshot?.notices ?? []).enumerated()), id: \.offset) { _, notice in Text(notice).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
                         Color.clear.frame(height: 1).id("bottom")
                             .background(GeometryReader { geometry in
@@ -325,13 +325,13 @@ struct MessageView: View {
     let message: ChatMessage
     var body: some View {
         if message.role == "user" {
-            HStack { Spacer(minLength: 32); Text(message.text).font(.body).lineSpacing(3).textSelection(.enabled).padding(.horizontal, 17).padding(.vertical, 13).foregroundStyle(.primary).background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22)).accessibilityLabel("You: \(message.text)") }
+            ChatBubble(sender: .user) { Text(message.text).font(.body).lineSpacing(3).textSelection(.enabled) }.accessibilityElement(children: .combine).accessibilityLabel("You: \(message.text)")
         } else if message.role == "toolResult" {
             ToolGroupView(tools: [ToolActivity(id: message.id, name: message.activity ?? "Tool", state: message.error == nil ? "finished" : "failed", text: message.text + (message.error.map { "\n\n" + $0 } ?? ""))])
         } else if message.role == "notice" {
             Label { Text(message.text).font(.footnote).textSelection(.enabled) } icon: { Image(systemName: "text.alignleft") }.foregroundStyle(.secondary)
         } else {
-            VStack(alignment: .leading, spacing: 12) { RichText(text: message.text).equatable(); if let error = message.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) } }
+            ChatBubble(sender: .assistant) { VStack(alignment: .leading, spacing: 12) { RichText(text: message.text).equatable(); if let error = message.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) } } }
         }
     }
 }
