@@ -188,3 +188,26 @@ fn given_separate_instances_should_enforce_capacity_atomically_and_retain_daemon
             .is_some()
     );
 }
+
+#[test]
+fn given_concurrent_resolution_from_many_sessions_should_wait_for_the_catalog_not_fail() {
+    // given: several handles over one catalog, as concurrent sessions hold
+    let (tmp, lock, admin) = setup();
+    let mut exports = MeshExports::open(lock.clone(), "worker", 8).unwrap();
+    let export = exports.register(&admin, tmp.path(), "project").unwrap();
+    let handles: Vec<_> = (0..8)
+        .map(|_| Arc::new(MeshExports::open(lock.clone(), "worker", 8).unwrap()))
+        .collect();
+    // when: all resolve repeatedly at the same time
+    let threads: Vec<_> = handles
+        .into_iter()
+        .map(|exports| {
+            let id = export.id.clone();
+            std::thread::spawn(move || (0..200).all(|_| exports.resolve(&id, 1).is_ok()))
+        })
+        .collect();
+    // then: contention never surfaces as an unavailable export
+    for thread in threads {
+        assert!(thread.join().unwrap());
+    }
+}

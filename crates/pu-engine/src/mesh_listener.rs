@@ -313,15 +313,26 @@ mod tests {
         assert!(
             matches!(response.body,pu_core::mesh::response::Body::Inventory {exports} if exports.is_empty())
         );
-        let discovery = ControlClient::discover(
-            &client_transport,
-            tokio::net::TcpStream::connect(control).await.unwrap(),
-            pin,
-            authority.daemon_id().into(),
-            limits.clone(),
-        )
-        .await
-        .unwrap();
+        // The host link above closes asynchronously; its single control slot
+        // (control_total = 1) frees once the server observes the close.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let discovery = loop {
+            match ControlClient::discover(
+                &client_transport,
+                tokio::net::TcpStream::connect(control).await.unwrap(),
+                pin,
+                authority.daemon_id().into(),
+                limits.clone(),
+            )
+            .await
+            {
+                Ok(discovery) => break discovery,
+                Err(error) => {
+                    assert!(std::time::Instant::now() < deadline, "{error:?}");
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+        };
         let mut client = ControlClient::connect(
             &client_transport,
             tokio::net::TcpStream::connect(control).await.unwrap(),

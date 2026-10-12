@@ -80,6 +80,9 @@ impl ResolvedExport {
     }
 }
 
+/// Bound on waiting for another catalog transaction to finish.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub struct MeshExports {
     lock: Arc<DaemonLock>,
     owner_daemon: String,
@@ -130,12 +133,26 @@ impl MeshExports {
 
     // Nonblocking: this synchronous API never waits indefinitely for another
     // operation. Callers may explicitly retry local administration on contention.
+    /// Exclusive catalog access. Concurrent sessions resolve exports under the
+    /// shared authority barrier, so contention is normal: wait briefly for the
+    /// holder instead of failing, but never block indefinitely on a stuck one.
     fn transaction(&self) -> Result<Flock<File>> {
         self.lock.verify_lock()?;
         let name = self.name(".mesh-exports.lock");
-        let file = self.lock.directory.open_file(&name, true)?;
-        let guard = Flock::lock(file, FlockArg::LockExclusiveNonblock)
-            .map_err(|(_, error)| std::io::Error::from(error))?;
+        let deadline = std::time::Instant::now() + LOCK_WAIT;
+        let mut file = self.lock.directory.open_file(&name, true)?;
+        let guard = loop {
+            match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+                Ok(guard) => break guard,
+                Err((returned, nix::errno::Errno::EWOULDBLOCK))
+                    if std::time::Instant::now() < deadline =>
+                {
+                    file = returned;
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err((_, error)) => return Err(std::io::Error::from(error).into()),
+            }
+        };
         self.lock
             .directory
             .require_identity(&name, Entry::from_file(&guard)?)?

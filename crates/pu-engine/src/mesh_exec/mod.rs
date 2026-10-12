@@ -523,6 +523,7 @@ impl Executor {
         let _held = boundary.lock().unwrap_or_else(|e| e.into_inner());
         ledger.begin_start(caller, &launch.guard).map_err(code)?;
         let prelaunch = |reason: String| {
+            tracing::warn!(run = %launch.run_id.0, %reason, "mesh run failed before launch");
             let _ = ledger.resolve_run(
                 &launch.run_id,
                 &state::OutcomeProof::PrelaunchFailure { evidence: reason },
@@ -716,7 +717,10 @@ fn code(error: state::Error) -> ErrorCode {
         E::InputPending => ErrorCode::InputPending,
         E::InvalidTransition | E::RunUnresolved | E::Invalid(_) => ErrorCode::InvalidState,
         E::Unauthorized | E::PeerFenced | E::NotFound(_) => ErrorCode::Denied,
-        _ => ErrorCode::Unavailable,
+        other => {
+            tracing::warn!(error = %other, "mesh ledger operation failed");
+            ErrorCode::Unavailable
+        }
     }
 }
 

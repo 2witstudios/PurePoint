@@ -222,7 +222,10 @@ impl Engine {
             let wt_path = paths::worktree_path(root_path, &wt_id);
             let branch = format!("pu/{agent_name}");
 
-            if let Err(e) = git::create_worktree(root_path, &wt_path, &branch, &base_branch).await {
+            if let Err(e) = self
+                .create_worktree_serialized(root_path, &wt_path, &branch, &base_branch)
+                .await
+            {
                 return Response::Error {
                     code: "SPAWN_FAILED".into(),
                     message: format!("failed to create worktree: {e}"),

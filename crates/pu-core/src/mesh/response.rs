@@ -168,6 +168,10 @@ pub struct AgentSummary {
     pub revision: u64,
     pub controller: Controller,
     pub runtime: String,
+    /// Current writer checkpoint, shown only to the controlling peer so it can
+    /// inspect receipts and explicitly replace the writer after reconnecting.
+    #[serde(default)]
+    pub writer: Option<super::wire::WriterCheckpoint>,
 }
 
 /// A historical acceptance snapshot, never the current lifecycle or permission
@@ -392,6 +396,7 @@ mod tests {
             revision: 1,
             controller: Controller::None,
             runtime: "codex".into(),
+            writer: None,
         };
         let mut response = Response {
             request_id: "request".into(),

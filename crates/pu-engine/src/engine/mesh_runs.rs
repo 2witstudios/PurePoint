@@ -98,7 +98,7 @@ impl Engine {
     ) -> Result<MeshSpawned, MeshSpawnError> {
         let root = spec.project_root.clone();
         let wt_path = paths::worktree_path(&root, &spec.worktree_id);
-        crate::git::create_worktree(&root, &wt_path, &spec.branch, &spec.source_commit)
+        self.create_worktree_serialized(&root, &wt_path, &spec.branch, &spec.source_commit)
             .await
             .map_err(|_| MeshSpawnError::Prelaunch("worktree creation".into()))?;
         let cwd = wt_path.to_string_lossy().to_string();

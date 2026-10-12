@@ -97,6 +97,9 @@ pub struct Engine {
     /// Worker-owned mesh runs started by this daemon. Their lifetime belongs to
     /// the guardian and the ledger; local mutations are fenced (mesh_runs.rs).
     mesh_agents: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Serializes `git worktree add` per repository: concurrent local and
+    /// remote spawns otherwise race on git's own repository locks.
+    worktree_creation: Arc<std::sync::Mutex<HashMap<std::path::PathBuf, Arc<Mutex<()>>>>>,
 }
 
 impl Default for Engine {
@@ -192,7 +195,27 @@ impl Engine {
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
             mesh_agents: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            worktree_creation: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Create a worktree while holding this repository's creation lock.
+    pub(super) async fn create_worktree_serialized(
+        &self,
+        root: &Path,
+        worktree: &Path,
+        branch: &str,
+        base: &str,
+    ) -> std::io::Result<()> {
+        let lock = self
+            .worktree_creation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(root.to_path_buf())
+            .or_default()
+            .clone();
+        let _held = lock.lock().await;
+        crate::git::create_worktree(root, worktree, branch, base).await
     }
 
     pub(crate) fn bind_mesh(&mut self, mesh: &Arc<crate::mesh_runtime::MeshRuntime>) {

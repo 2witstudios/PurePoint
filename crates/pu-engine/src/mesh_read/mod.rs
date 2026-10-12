@@ -112,8 +112,8 @@ fn read(
             let agents = records
                 .into_iter()
                 .take(usize::from(*limit))
-                .map(|(agent, run)| summary(export, &agent, &run, caller))
-                .collect::<Vec<_>>();
+                .map(|(agent, run)| summary(ledger, export, &agent, &run, caller))
+                .collect::<Result<Vec<_>, _>>()?;
             let next_agent = if more {
                 agents.last().map(|a| a.target.agent_id.clone())
             } else {
@@ -246,12 +246,24 @@ fn same_principal(left: &state::Principal, right: &state::Principal) -> bool {
 }
 
 fn summary(
+    ledger: &state::Ledger,
     export: &wire::Export,
     agent: &state::AgentRecord,
     run: &state::RunRecord,
     caller: &state::Caller,
-) -> response::AgentSummary {
-    response::AgentSummary {
+) -> Result<response::AgentSummary, ErrorCode> {
+    let controls = agent.controller.as_ref() == Some(caller.principal());
+    let writer = match agent.current_writer {
+        Some(id) if controls => {
+            let checkpoint = ledger.writer(id).map_err(map_state)?.checkpoint();
+            Some(wire::WriterCheckpoint {
+                writer: checkpoint.writer.0,
+                last_sequence: checkpoint.last_sequence,
+            })
+        }
+        _ => None,
+    };
+    Ok(response::AgentSummary {
         target: wire::AgentTarget {
             export: export.clone(),
             agent_id: agent.agent_id.0.clone(),
@@ -275,7 +287,8 @@ fn summary(
             Some(_) => response::Controller::Other,
         },
         runtime: run.intent.runtime.clone(),
-    }
+        writer,
+    })
 }
 
 fn map_state(error: state::Error) -> ErrorCode {
