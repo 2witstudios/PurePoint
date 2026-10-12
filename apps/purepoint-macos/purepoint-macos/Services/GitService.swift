@@ -104,7 +104,7 @@ actor GitService {
             for name in names {
                 if summariesOnly {
                     var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
-                    file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", name]
+                    file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", name]
                     file.previewVersion = fileStamp(name, at: path)
                     review.untracked.append(file)
                     continue
@@ -195,7 +195,7 @@ actor GitService {
         let command = root ? ["diff-tree", "--root", "--no-commit-id", "-r"] : ["diff"]
         // Unmerged index stages cannot be expressed as a staged patch. In the
         // working-file group use stage 2 (ours) as the disclosed conflict baseline.
-        let common = ["--no-color", "--no-ext-diff", "--no-textconv", "--find-renames"] + (revisions.isEmpty && !root ? ["--ours"] : [])
+        let common = ["--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/"] + (revisions.isEmpty && !root ? ["--ours"] : [])
         let names = try checked(command + common + ["--name-status", "-z"] + revisions + ["--"], at: path).components(separatedBy: "\0")
         var entries: [(name: String, status: String, old: String?)] = [], i = 0
         while i + 1 < names.count && !names[i].isEmpty {
@@ -244,7 +244,7 @@ actor GitService {
                     let hasOurs = stages.contains { $0.split(separator: "\t", maxSplits: 1).first?.split(separator: " ").last == "2" }
                     file.conflictBaseline = hasOurs ? "ours (index stage 2)" : "empty (ours deleted)"
                     if !hasOurs && FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(entry.name)) {
-                        file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--", "/dev/null", entry.name]
+                        file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", entry.name]
                     }
                 }
                 return file
@@ -315,9 +315,9 @@ actor GitService {
             }
             let size = try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber
             let indexed = try indexPatch(snapshot: snapshot, expected: file)
-            if let matching = indexed.first(where: { $0.filename == file.filename && $0.oldFilename == file.oldFilename }), let selected = matching.patchSlice {
+            if let matching = indexed.files.first(where: { $0.filename == file.filename && $0.oldFilename == file.oldFilename }), let selected = matching.patchSlice {
                 slice = selected
-            } else if size?.uint64Value == 0 {
+            } else if size?.uint64Value == 0 || (file.statusCode == "U" && indexed.unmergedPaths.contains(file.filename) && indexed.files.isEmpty) {
                 slice = PatchSlice(snapshot: snapshot, start: 0, end: 0)
             } else {
                 throw GitReviewError(message: "The file changed while its diff loaded. Refresh to retry.")
@@ -587,14 +587,15 @@ actor GitService {
         let result = runGh(["pr", "diff", String(prNumber)], cwd: cwd, outputFile: snapshot.url)
         try Task.checkCancellation()
         guard result.success else { throw GitReviewError(message: result.stderr.nilIfEmpty ?? "GitHub PR diff failed") }
-        return DiffData(files: try indexPatch(snapshot: snapshot))
+        return DiffData(files: try indexPatch(snapshot: snapshot).files)
     }
 
-    private func indexPatch(snapshot: PatchSnapshot, expected: FileDiff? = nil) throws -> [FileDiff] {
+    private func indexPatch(snapshot: PatchSnapshot, expected: FileDiff? = nil) throws -> IndexedPatch {
         let size = (try FileManager.default.attributesOfItem(atPath: snapshot.url.path)[.size] as? NSNumber)?.uint64Value ?? 0
         let reader = try PatchLineReader(slice: PatchSlice(snapshot: snapshot, start: 0, end: size), offset: 0)
         var files: [FileDiff] = [], metadata: [String] = [], start: UInt64 = 0
         var added = 0, removed = 0, inHunk = false, binary = false
+        var unmergedPaths = Set<String>()
         func finish(end: UInt64) throws {
             guard !metadata.isEmpty else { return }
             let target = metadata.first { $0.hasPrefix("+++ ") && !$0.hasPrefix("+++ /dev/null") } ?? metadata.first { $0.hasPrefix("--- ") }
@@ -616,7 +617,10 @@ actor GitService {
                 try finish(end: record.start)
                 metadata = [line]; start = record.start; added = 0; removed = 0; inHunk = false; binary = false
             } else if metadata.isEmpty {
-                if expected?.statusCode == "U", line.hasPrefix("* Unmerged path ") { continue }
+                if expected?.statusCode == "U", line.hasPrefix("* Unmerged path ") {
+                    let name = decodeGitPath(String(line.dropFirst("* Unmerged path ".count)))
+                    if name == expected?.filename { unmergedPaths.insert(name); continue }
+                }
                 throw GitReviewError(message: "Git returned an unrecognized patch; refresh to retry.")
             }
             else if line.hasPrefix("@@ ") { inHunk = true }
@@ -629,7 +633,7 @@ actor GitService {
             }
         }
         try finish(end: size)
-        return files
+        return IndexedPatch(files: files, unmergedPaths: unmergedPaths)
     }
 
     private func prHeaderPath(_ header: String) -> String? {
@@ -858,4 +862,9 @@ private nonisolated final class PatchLineReader {
         }
         return Record(text: String(decoding: bytes, as: UTF8.self), start: start, truncated: truncated)
     }
+}
+
+private nonisolated struct IndexedPatch {
+    let files: [FileDiff]
+    let unmergedPaths: Set<String>
 }

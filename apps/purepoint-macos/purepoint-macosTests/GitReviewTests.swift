@@ -136,6 +136,8 @@ private enum GitReviewChecks {
         try require(conflicted.uniquePathCount == 3, "conflict path counted once")
         let lazyConflict = await service.fetchLocalReview(at: conflict, summariesOnly: true)
         try require(lazyConflict.error == nil && lazyConflict.staged.count == 2 && lazyConflict.unstaged.count == 2, "lazy conflicts retain unique paths in both groups")
+        let stagedConflictPage = try await service.fetchReviewPage(file: lazyConflict.staged.first { $0.filename == "conflict.txt" }!, at: conflict)
+        try require(stagedConflictPage.hunks.isEmpty && !stagedConflictPage.hasMore, "marker-only staged conflict is a valid no-body preview")
         let conflictPage = try await service.fetchReviewPage(file: lazyConflict.unstaged.first { $0.filename == "conflict.txt" }!, at: conflict)
         try require(conflictPage.hunks.first?.lines.contains { $0.content == "<<<<<<< HEAD" } == true, "lazy conflict baseline retains actual working content")
         _ = try git(["reset", "--hard", "HEAD"], at: conflict)
@@ -505,6 +507,44 @@ private enum GitReviewChecks {
         print("Page retention, soft reset, rename scoping, and interrupted/failed PR regression checks passed")
     }
 
+    static func prefixRegressionChecks() async throws {
+        let path = try repo(); defer { try? FileManager.default.removeItem(atPath: path) }
+        let service = GitService()
+        for name in ["a", "b"] { try FileManager.default.createDirectory(atPath: path + "/" + name, withIntermediateDirectories: true) }
+        try write("original a\n", "a/plain.txt", at: path)
+        try write("original b\n", "b/plain.txt", at: path)
+        try write("mode only\n", "b/mode.txt", at: path)
+        try commit("root", at: path)
+        _ = try git(["checkout", "-b", "prefixes"], at: path)
+        _ = try git(["config", "core.filemode", "true"], at: path)
+        _ = try git(["config", "diff.mnemonicPrefix", "true"], at: path)
+        try write("staged a\n", "a/plain.txt", at: path); _ = try git(["add", "a/plain.txt"], at: path)
+        try write("working b\n", "b/plain.txt", at: path)
+        let mnemonic = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let staged = try await service.fetchReviewPage(file: mnemonic.staged.first { $0.filename == "a/plain.txt" }!, at: path)
+        let unstaged = try await service.fetchReviewPage(file: mnemonic.unstaged.first { $0.filename == "b/plain.txt" }!, at: path)
+        try require(staged.hunks[0].lines.contains { $0.content == "staged a" && $0.type == .addition }, "mnemonic prefixes preserve exact staged file identity in an a directory")
+        try require(unstaged.hunks[0].lines.contains { $0.content == "working b" && $0.type == .addition }, "mnemonic prefixes preserve exact unstaged file identity in a b directory")
+        _ = try git(["config", "diff.noprefix", "true"], at: path)
+        try Data([0, 1, 255, 0]).write(to: URL(fileURLWithPath: path + "/a/new.bin"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path + "/b/mode.txt")
+        let noPrefix = await service.fetchLocalReview(at: path, summariesOnly: true)
+        let noPrefixStaged = try await service.fetchReviewPage(file: noPrefix.staged.first { $0.filename == "a/plain.txt" }!, at: path)
+        try require(noPrefixStaged.hunks[0].lines.contains { $0.content == "staged a" }, "no-prefix config cannot strip the real a directory")
+        let binary = try await service.fetchReviewPage(file: noPrefix.untracked.first { $0.filename == "a/new.bin" }!, at: path)
+        try require(binary.isBinary && binary.hunks.isEmpty, "no-prefix binary untracked files remain previewable")
+        let mode = try await service.fetchReviewPage(file: noPrefix.unstaged.first { $0.filename == "b/mode.txt" }!, at: path)
+        try require(mode.hunks.isEmpty, "no-prefix mode-only file keeps exact b-directory identity")
+        try commit("prefix changes", at: path)
+        let branch = await service.fetchBranchReview(at: path, baseBranch: "main", summariesOnly: true)
+        let branchMode = try await service.fetchReviewPage(file: branch.files.first { $0.filename == "b/mode.txt" }!, at: path)
+        try require(branchMode.hunks.isEmpty, "branch mode-only previews normalize configured prefixes")
+        let commitFiles = try await service.fetchCommitDiff(at: path, sha: try git(["rev-parse", "HEAD"], at: path), summariesOnly: true)
+        let commitBinary = try await service.fetchReviewPage(file: commitFiles.first { $0.filename == "a/new.bin" }!, at: path)
+        try require(commitBinary.isBinary, "commit binary previews normalize configured prefixes")
+        print("Git prefix and mode/binary regression checks passed")
+    }
+
     static func concurrentProcessChecks() async throws {
         try await withThrowingTaskGroup(of: (Bool, Int, Int).self) { group in
             for _ in 0..<32 {
@@ -545,6 +585,7 @@ private enum GitReviewChecks {
         try await GitReviewChecks.emptyRefreshChecks()
         try await GitReviewChecks.lazyReviewChecks()
         try await GitReviewChecks.reviewRegressionChecks()
+        try await GitReviewChecks.prefixRegressionChecks()
         try await GitReviewChecks.concurrentProcessChecks()
     }
 }
@@ -555,6 +596,7 @@ struct GitReviewTests {
     @Test @MainActor func emptyResultsStayVisibleDuringRefresh() async throws { try await GitReviewChecks.emptyRefreshChecks() }
     @Test @MainActor func boundedReviewPages() async throws { try await GitReviewChecks.lazyReviewChecks() }
     @Test @MainActor func reviewRegressions() async throws { try await GitReviewChecks.reviewRegressionChecks() }
+    @Test func prefixRegressions() async throws { try await GitReviewChecks.prefixRegressionChecks() }
     @Test func concurrentGitPipesComplete() async throws { try await GitReviewChecks.concurrentProcessChecks() }
 }
 #endif
