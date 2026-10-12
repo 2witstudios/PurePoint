@@ -185,10 +185,21 @@ impl MeshTransport {
         io: S,
         role: Role,
     ) -> Result<AuthenticatedConnection<S>, Error> {
+        self.accept_within(io, role, HANDSHAKE_DEADLINE).await
+    }
+    /// Server handshake under a caller's (shorter) deadline, e.g. a receiver's
+    /// pre-authentication budget. Never extends past `HANDSHAKE_DEADLINE`. A
+    /// returned connection has already passed the exact enrolled-pin check.
+    pub async fn accept_within<S: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        io: S,
+        role: Role,
+        deadline: Duration,
+    ) -> Result<AuthenticatedConnection<S>, Error> {
         let mut config = self.server.clone();
         config.alpn_protocols = vec![role.alpn().to_vec()];
         let stream = tokio::time::timeout(
-            HANDSHAKE_DEADLINE,
+            deadline.min(HANDSHAKE_DEADLINE),
             TlsAcceptor::from(Arc::new(config)).accept(io),
         )
         .await

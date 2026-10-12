@@ -10,10 +10,10 @@ use crate::{
 };
 use pu_core::mesh::admin::ListenConfig;
 use pu_core::mesh::{PeerPolicy, wire::Request};
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Semaphore, watch},
+    sync::watch,
     task::JoinSet,
 };
 
@@ -70,6 +70,8 @@ impl BridgeHandler for ReadOnly {
 pub struct BoundListeners {
     control: TcpListener,
     bulk: TcpListener,
+    #[cfg(test)]
+    faults: std::sync::Mutex<std::collections::VecDeque<io::Error>>,
 }
 
 impl BoundListeners {
@@ -87,17 +89,34 @@ impl BoundListeners {
         };
         let control = TcpListener::bind(control).await?;
         let bulk = TcpListener::bind(bulk).await?;
-        Ok(Some(Self { control, bulk }))
+        Ok(Some(Self {
+            control,
+            bulk,
+            #[cfg(test)]
+            faults: Default::default(),
+        }))
     }
 
     pub fn addresses(&self) -> io::Result<(SocketAddr, SocketAddr)> {
         Ok((self.control.local_addr()?, self.bulk.local_addr()?))
     }
 
-    /// Bound TCP tasks independently before spawning them, then let the session
-    /// authority enforce its own global/per-peer limits across listener reloads.
-    /// Stopping closes transports; accepted owned effects retain their barriers
-    /// until actual completion. This does not stop local IPC or worker execution.
+    /// Every accepted TCP stream must first win an unauthenticated pre-auth
+    /// slot (bounded total and per-source share, short handshake deadline)
+    /// before a task is spawned; the session authority reserves its global and
+    /// per-peer session permits only after the exact enrolled pin is proven,
+    /// across listener reloads. Live tasks are therefore bounded by the pre-auth
+    /// budget plus the session budgets, and unauthenticated traffic can slow,
+    /// but never hold, an enrolled peer's admission.
+    ///
+    /// Transient `accept` failures (descriptor/buffer exhaustion, aborted or
+    /// reset connections, interrupts) are logged and retried with bounded
+    /// exponential backoff, so the endpoint survives them. Returns `Ok` on an
+    /// explicit stop or work shutdown, and `Err` only when the listening socket
+    /// itself is unusable (`EBADF`, `EINVAL`, `ENOTSOCK`, `EOPNOTSUPP`), where
+    /// retrying cannot succeed. Stopping closes transports; accepted owned
+    /// effects retain their barriers until actual completion. This does not
+    /// stop local IPC or worker execution.
     pub async fn run<H: BridgeHandler>(
         self,
         authority: Arc<SessionAuthority>,
@@ -106,9 +125,8 @@ impl BoundListeners {
         mut stop: watch::Receiver<bool>,
         handler: Arc<H>,
     ) -> io::Result<()> {
-        let control = Arc::new(Semaphore::new(authority.limits().control_total));
-        let bulk = Arc::new(Semaphore::new(authority.limits().bulk_total));
         let mut connections = JoinSet::new();
+        let mut failures = 0u32;
         let outcome = loop {
             if *stop.borrow() || work.is_stopping() {
                 break Ok(());
@@ -119,21 +137,37 @@ impl BoundListeners {
                 _=work.stopping()=>break Ok(()),
                 _=connections.join_next(),if !connections.is_empty()=>continue,
                 incoming=async {
+                    #[cfg(test)]
+                    if let Some(fault) = self.faults.lock().unwrap().pop_front() {
+                        return Err(fault);
+                    }
                     tokio::select! {
-                        stream=self.control.accept()=>stream.map(|(io,_)|(io,Role::Control)),
-                        stream=self.bulk.accept()=>stream.map(|(io,_)|(io,Role::Bulk)),
+                        stream=self.control.accept()=>stream.map(|(io,from)|(io,from,Role::Control)),
+                        stream=self.bulk.accept()=>stream.map(|(io,from)|(io,from,Role::Bulk)),
                     }
                 }=>incoming,
             };
-            let (stream, role) = match incoming {
-                Ok(value) => value,
-                Err(error) => break Err(error),
+            let (stream, from, role) = match incoming {
+                Ok(value) => {
+                    failures = 0;
+                    value
+                }
+                Err(error) if listener_unusable(&error) => break Err(error),
+                Err(error) => {
+                    failures = failures.saturating_add(1);
+                    let delay = accept_backoff(failures);
+                    tracing::warn!(%error, ?delay, "mesh listener accept failed; retrying");
+                    tokio::select! {
+                        biased;
+                        _=stop.changed()=>break Ok(()),
+                        _=work.stopping()=>break Ok(()),
+                        _=tokio::time::sleep(delay)=>continue,
+                    }
+                }
             };
-            let pool = match role {
-                Role::Control => &control,
-                Role::Bulk => &bulk,
-            };
-            let Ok(admission) = pool.clone().try_acquire_owned() else {
+            // No queue: an exhausted budget or source share drops the stream
+            // before any TLS work or task is spent on it.
+            let Ok(preauth) = authority.preauthorize(Some(from.ip())) else {
                 continue;
             };
             if stream.set_nodelay(true).is_err() {
@@ -144,17 +178,12 @@ impl BoundListeners {
             let work = work.clone();
             let handler = handler.clone();
             connections.spawn(async move {
-                let _admission = admission;
-                let mut session = match role {
-                    Role::Control => match authority.accept_incoming(&transport, stream).await {
-                        Ok(Accepted::Discovery) => return,
-                        Ok(Accepted::Session(session)) => session,
-                        Err(_) => return,
-                    },
-                    Role::Bulk => match authority.accept(&transport, stream, Role::Bulk).await {
-                        Ok(session) => session,
-                        Err(_) => return,
-                    },
+                let mut session = match authority
+                    .accept_admitted(&transport, stream, role, preauth)
+                    .await
+                {
+                    Ok(Accepted::Session(session)) => session,
+                    Ok(Accepted::Discovery) | Err(_) => return,
                 };
                 if role == Role::Bulk {
                     handler.serve_bulk(session).await;
@@ -181,6 +210,24 @@ impl BoundListeners {
         connections.shutdown().await;
         outcome
     }
+}
+
+/// Errors that describe the listening socket itself rather than one incoming
+/// connection or a temporary resource shortage.
+fn listener_unusable(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EBADF | libc::EINVAL | libc::ENOTSOCK | libc::EOPNOTSUPP)
+    )
+}
+
+/// 5 ms doubling per consecutive failure, capped at 1 s; reset on success.
+fn accept_backoff(failures: u32) -> Duration {
+    const FIRST: Duration = Duration::from_millis(5);
+    const MAX: Duration = Duration::from_secs(1);
+    FIRST
+        .saturating_mul(1u32 << failures.saturating_sub(1).min(16))
+        .min(MAX)
 }
 
 #[cfg(test)]
@@ -281,6 +328,7 @@ mod tests {
         let pair = BoundListeners {
             control: TcpListener::bind("127.0.0.1:0").await.unwrap(),
             bulk: TcpListener::bind("127.0.0.1:0").await.unwrap(),
+            faults: Default::default(),
         };
         let (control, bulk) = pair.addresses().unwrap();
         let (stop, rx) = tokio::sync::watch::channel(false);
@@ -404,5 +452,292 @@ mod tests {
         drop(occupied);
         let listeners = BoundListeners::bind(&config).await.unwrap().unwrap();
         assert_eq!(listeners.addresses().unwrap(), (control, bulk));
+    }
+
+    /// One enrolled host against a real paired listener over loopback.
+    struct Served {
+        _tmp: tempfile::TempDir,
+        work: Arc<WorkOwner>,
+        authority: Arc<SessionAuthority>,
+        client: MeshTransport,
+        pin: crate::mesh_transport::PeerId,
+        control: SocketAddr,
+        bulk: SocketAddr,
+        stop: tokio::sync::watch::Sender<bool>,
+        serve: tokio::task::JoinHandle<io::Result<()>>,
+    }
+
+    async fn serve(limits: SessionLimits, faults: Vec<io::Error>) -> Served {
+        let tmp = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let lock = Arc::new(
+            try_acquire_daemon_lock(&tmp.path().join("daemon.sock"))
+                .unwrap()
+                .unwrap(),
+        );
+        let work = WorkOwner::new(&lock);
+        let admin =
+            LocalAdmin::authorized_by_local_policy(&Caller::authenticated_local("admin").unwrap())
+                .unwrap();
+        let mut store = MeshStore::initialize(lock.clone(), &admin).unwrap();
+        let exports =
+            crate::daemon_lifecycle::mesh_exports::MeshExports::open(lock, store.daemon_id(), 8)
+                .unwrap();
+        let ledger = Ledger::open(
+            tmp.path().join("ledger.sqlite"),
+            store.daemon_id(),
+            Limits::default(),
+        )
+        .unwrap();
+        let peer = Identity::generate().unwrap();
+        store
+            .enroll(
+                &ledger,
+                &admin,
+                peer.certificate_der(),
+                vec![ExportGrant {
+                    export_id: "export".into(),
+                    capabilities: BTreeSet::from([Capability::Inspect]),
+                    runtimes: BTreeSet::new(),
+                }],
+                None,
+            )
+            .unwrap();
+        let pin = store.identity().peer_id();
+        let client = MeshTransport::new(
+            &peer,
+            EnrolledPeers::new([store.identity().certificate_der()]).unwrap(),
+        )
+        .unwrap();
+        let transport = Arc::new(
+            MeshTransport::new(
+                store.identity(),
+                EnrolledPeers::new([peer.certificate_der()]).unwrap(),
+            )
+            .unwrap(),
+        );
+        let authority = SessionAuthority::new(store, ledger, exports, limits).unwrap();
+        let pair = BoundListeners {
+            control: TcpListener::bind("127.0.0.1:0").await.unwrap(),
+            bulk: TcpListener::bind("127.0.0.1:0").await.unwrap(),
+            faults: std::sync::Mutex::new(faults.into()),
+        };
+        let (control, bulk) = pair.addresses().unwrap();
+        let (stop, rx) = tokio::sync::watch::channel(false);
+        let serve = tokio::spawn(pair.run(
+            authority.clone(),
+            transport,
+            work.clone(),
+            rx,
+            Arc::new(EmptyInventory),
+        ));
+        Served {
+            _tmp: tmp,
+            work,
+            authority,
+            client,
+            pin,
+            control,
+            bulk,
+            stop,
+            serve,
+        }
+    }
+
+    impl Served {
+        /// Discover, bind control and its bulk stream, retrying until `within`.
+        async fn enroll_connect(
+            &self,
+            within: Duration,
+        ) -> (
+            ControlClient<tokio::net::TcpStream>,
+            mesh_sessions::BulkClient<tokio::net::TcpStream>,
+        ) {
+            let deadline = std::time::Instant::now() + within;
+            loop {
+                let attempt = async {
+                    let limits = self.authority.limits().clone();
+                    let discovery = ControlClient::discover(
+                        &self.client,
+                        TcpStream::connect(self.control).await?,
+                        self.pin,
+                        self.authority.daemon_id().into(),
+                        limits.clone(),
+                    )
+                    .await
+                    .map_err(io::Error::other)?;
+                    let client = ControlClient::connect(
+                        &self.client,
+                        TcpStream::connect(self.control).await?,
+                        self.pin,
+                        self.authority.daemon_id().into(),
+                        discovery.generation,
+                        limits,
+                    )
+                    .await
+                    .map_err(io::Error::other)?;
+                    let bulk = client
+                        .connect_bulk(&self.client, TcpStream::connect(self.bulk).await?)
+                        .await
+                        .map_err(io::Error::other)?;
+                    Ok::<_, io::Error>((client, bulk))
+                };
+                match tokio::time::timeout_at(deadline.into(), attempt).await {
+                    Ok(Ok(connected)) => return connected,
+                    Ok(Err(error)) if std::time::Instant::now() < deadline => {
+                        let _ = error;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Ok(Err(error)) => panic!("enrolled peer locked out for {within:?}: {error}"),
+                    Err(_) => panic!("enrolled peer locked out for {within:?}: timed out"),
+                }
+            }
+        }
+
+        fn inventory(&self) -> wire::Request {
+            wire::Request {
+                request_id: "query".into(),
+                target_daemon: self.authority.daemon_id().into(),
+                operation: wire::Operation::Inventory {},
+            }
+        }
+
+        async fn shutdown(self) -> io::Result<()> {
+            self.stop.send(true).unwrap();
+            let result = tokio::time::timeout(Duration::from_secs(2), self.serve)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(!self.work.is_stopping());
+            result
+        }
+    }
+
+    fn single_session_limits() -> SessionLimits {
+        SessionLimits {
+            control_total: 1,
+            control_per_peer: 1,
+            bulk_total: 1,
+            bulk_per_peer: 1,
+            ..SessionLimits::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn given_unauthenticated_flood_should_not_lock_out_enrolled_peer() {
+        // given: far more idle TCP connections than session permits on BOTH
+        // ports, none of which ever starts TLS (loopback is a single source, so
+        // the per-source cap is lifted to isolate the session-permit property).
+        let s = serve(
+            SessionLimits {
+                preauth_total: 32,
+                preauth_per_source: 32,
+                ..single_session_limits()
+            },
+            vec![],
+        )
+        .await;
+        let mut flood = Vec::new();
+        for _ in 0..12 {
+            flood.push(TcpStream::connect(s.control).await.unwrap());
+            flood.push(TcpStream::connect(s.bulk).await.unwrap());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // when: the enrolled host connects while every flood stream is held,
+        // well before the pre-auth handshake deadline could reclaim any of them
+        let started = std::time::Instant::now();
+        let (mut client, _bulk) = s.enroll_connect(Duration::from_millis(800)).await;
+        // then
+        assert!(started.elapsed() < Duration::from_millis(800));
+        let response = client
+            .request::<pu_core::mesh::response::Response>(&s.inventory())
+            .await
+            .unwrap();
+        assert!(matches!(
+            response.body,
+            pu_core::mesh::response::Body::Inventory { .. }
+        ));
+        drop(flood);
+        s.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn given_saturated_preauth_budget_should_reclaim_idle_handshakes_within_deadline() {
+        // given: idle connections exceed the whole pre-auth budget
+        let s = serve(
+            SessionLimits {
+                preauth_total: 4,
+                preauth_per_source: 4,
+                handshake_deadline: Duration::from_millis(300),
+                ..SessionLimits::default()
+            },
+            vec![],
+        )
+        .await;
+        let mut flood = Vec::new();
+        for _ in 0..8 {
+            flood.push(TcpStream::connect(s.control).await.unwrap());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // when / then: admission is slowed only within the pre-auth deadline
+        let (_client, _bulk) = s.enroll_connect(Duration::from_secs(2)).await;
+        // and the idle flood streams were closed by the receiver, not retained
+        for mut stream in flood {
+            let mut byte = [0u8; 1];
+            let read = tokio::time::timeout(
+                Duration::from_secs(2),
+                tokio::io::AsyncReadExt::read(&mut stream, &mut byte),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(read, Ok(0) | Err(_)));
+        }
+        s.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn given_transient_accept_error_should_keep_listening() {
+        // given: resource exhaustion and per-connection accept failures
+        let s = serve(
+            SessionLimits::default(),
+            vec![
+                io::Error::from(io::ErrorKind::ConnectionAborted),
+                io::Error::from_raw_os_error(libc::EMFILE),
+                io::Error::from_raw_os_error(libc::ENFILE),
+                io::Error::from(io::ErrorKind::Interrupted),
+                io::Error::from_raw_os_error(libc::ENOBUFS),
+            ],
+        )
+        .await;
+        // when / then: the listener backs off and keeps serving
+        let (mut client, _bulk) = s.enroll_connect(Duration::from_secs(3)).await;
+        assert!(
+            client
+                .request::<pu_core::mesh::response::Response>(&s.inventory())
+                .await
+                .is_ok()
+        );
+        assert!(!s.serve.is_finished());
+        // and an explicit stop still ends it cleanly
+        s.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn given_unrecoverable_listener_error_should_stop_with_error() {
+        // given: the listening socket itself is no longer valid
+        let s = serve(
+            SessionLimits::default(),
+            vec![io::Error::from_raw_os_error(libc::EBADF)],
+        )
+        .await;
+        // when
+        let result = tokio::time::timeout(Duration::from_secs(2), s.serve)
+            .await
+            .unwrap()
+            .unwrap();
+        // then
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EBADF));
     }
 }
