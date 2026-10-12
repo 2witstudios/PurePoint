@@ -41,6 +41,15 @@
 //! quarantine restored state, reconcile every potentially live run explicitly, and
 //! re-enroll under a fresh authority identity. Copying an old database cannot safely
 //! rewind replay fences; this is not an anti-rollback hardware store.
+//!
+//! Record budgets count only live records: open unexpired windows, operations in
+//! such windows or naming a capacity-holding run, capacity-holding agents/runs,
+//! live writers, and input receipts that are not Written/NotWritten. Terminal
+//! history never blocks new work. Each peer principal has its own window,
+//! operation and writer quota, and peers together never reach the slice of
+//! windows/operations reserved for local owners, so `pu mesh run takeover/stop`
+//! cannot be starved by peers. Retention (see `retention`) bounds storage on open
+//! and, in bounded batches, inside window/admission/writer calls.
 
 mod authority;
 mod db;
@@ -49,6 +58,7 @@ mod input;
 mod launch;
 mod operations;
 mod queries;
+mod retention;
 mod types;
 mod validation;
 

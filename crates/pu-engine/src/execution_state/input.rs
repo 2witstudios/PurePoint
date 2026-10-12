@@ -1,6 +1,6 @@
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use super::{db::*, launch::fence_writers, operations::*, types::*, *};
+use super::{db::*, launch::fence_writers, operations::*, retention::retain, types::*, *};
 
 impl Ledger {
     /// Opens exactly one receiver-issued writer per agent/run/epoch, fencing its
@@ -29,7 +29,9 @@ impl Ledger {
             if required != reconciled {
                 return Err(Error::ReconciliationRequired);
             }
-            budget(tx, "writers", self.limits.writers)?;
+            let now = observed_time(tx)?;
+            retain(tx, now, &self.limits, self.limits.retention_batch)?;
+            live_budget(tx, Live::Writers, caller.principal(), now, &self.limits)?;
             fence_writers(tx, &agent.agent_id)?;
             let writer = WriterRecord {
                 id: WriterId(next_id(tx, "next_writer")?),
@@ -121,7 +123,14 @@ impl Ledger {
                     params![writer_id.0, old.sequence],
                 )?;
             }
-            budget(tx, "inputs", self.limits.input_receipts)?;
+            // Final-certain receipts are bounded per writer; only evidence that
+            // can never be compacted consumes the global receipt budget.
+            budget_where(
+                tx,
+                "inputs",
+                &format!("json_extract(data,'$.outcome') NOT IN {CERTAIN}"),
+                self.limits.input_receipts,
+            )?;
             let value = InputAck {
                 writer: writer_id,
                 sequence,

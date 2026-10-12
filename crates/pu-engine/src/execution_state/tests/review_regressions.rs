@@ -18,23 +18,26 @@ fn given_window_capacity_rejection_should_preserve_observed_expiry_time() {
     let ledger = Ledger::in_memory(
         "daemon-a",
         Limits {
-            windows: 1,
+            windows: 2,
             ..Limits::default()
         },
     )
     .unwrap();
     let caller = local();
     let operation = key(&ledger, &caller, "expires");
+    // Budgets count only open, unexpired windows: fill both slots with live ones.
+    ledger.issue_window(&caller, 100, 1_000).unwrap();
+    ledger.issue_window(&caller, 200, 1_000).unwrap();
     // when
     assert!(matches!(
-        ledger.issue_window(&caller, 200, 100),
+        ledger.issue_window(&caller, 250, 100),
         Err(Error::Capacity {
             scope: CapacityScope::Records("windows"),
             ..
         })
     ));
     // then
-    assert_eq!(clock(&ledger), 200);
+    assert_eq!(clock(&ledger), 250);
     assert!(matches!(
         ledger.admit_launch(&caller, &operation, &intent(), None, 100),
         Err(Error::WindowClosed)

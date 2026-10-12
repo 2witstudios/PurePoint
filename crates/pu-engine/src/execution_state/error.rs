@@ -5,7 +5,12 @@ pub enum CapacityScope {
     Runtime,
     Principal,
     Starting,
+    /// Every principal's live records together.
     Records(&'static str),
+    /// All peers' live records together; excludes the local owner reserve.
+    PeerRecords(&'static str),
+    /// One peer principal's own live records.
+    PrincipalRecords(&'static str),
 }
 
 #[derive(Debug, thiserror::Error)]

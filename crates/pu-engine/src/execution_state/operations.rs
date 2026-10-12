@@ -1,7 +1,12 @@
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::{db::*, types::*, *};
+use super::{
+    db::*,
+    retention::{retain, retain_all},
+    types::*,
+    *,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,7 +31,8 @@ impl Ledger {
                 return Err(Error::Invalid("window TTL"));
             }
             authorize(tx, caller.principal())?;
-            budget(tx, "windows", self.limits.windows)?;
+            retain(tx, now, &self.limits, self.limits.retention_batch)?;
+            live_budget(tx, Live::Windows, caller.principal(), now, &self.limits)?;
             let window = OperationWindow {
                 id: WindowId(next_id(tx, "next_window")?),
                 principal: caller.principal().clone(),
@@ -74,44 +80,13 @@ impl Ledger {
         })
     }
 
-    /// Compacts only closed/expired receipts whose run is proven terminal and
-    /// obsolete writers with exclusively Written receipts. Unknown/partial evidence
-    /// and all run/agent records stay durable; full budgets reject further writes.
-    /// Unknown old window/writer IDs always reject and counters never rewind.
+    /// Runs every retention step to completion at trusted receiver time. The same
+    /// steps also run on open and, bounded, inside window/admission/writer calls,
+    /// so no external scheduler is required. See `retention` for the horizons.
+    /// Unknown/partial evidence and capacity-holding runs stay durable. Removed
+    /// window/writer IDs always reject and counters never rewind.
     pub fn compact(&self, now: i64) -> Result<()> {
-        self.transaction_at(now, |tx, now| {
-            for mut window in all::<OperationWindow>(tx, "windows")? {
-                if window.closed || window.expires_at <= now {
-                    window.closed = true;
-                    put(tx, "windows", window.id.0, &window)?;
-                    let mut statement = tx.prepare("SELECT data FROM operations WHERE window=?1")?;
-                    let records: Vec<StoredOperation> = statement.query_map([window.id.0], |r| r.get::<_, String>(0))?
-                        .map(|row| decode(row?)).collect::<Result<_>>()?;
-                    for operation in records {
-                        let run: RunRecord = get(tx, "runs", &operation.run.0)?.ok_or(Error::Corrupt("operation run"))?;
-                        if !run.lifecycle.holds_capacity() {
-                            tx.execute("DELETE FROM operations WHERE window=?1 AND id=?2", params![window.id.0, operation.key.id.0])?;
-                        }
-                    }
-                    tx.execute("DELETE FROM windows WHERE id=?1 AND NOT EXISTS (SELECT 1 FROM operations WHERE window=?1)", [window.id.0])?;
-                }
-            }
-            for writer in all::<WriterRecord>(tx, "writers")? {
-                if writer.live { continue; }
-                let agent: AgentRecord = get(tx, "agents", &writer.agent_id.0)?.ok_or(Error::Corrupt("writer agent"))?;
-                if agent.current_writer == Some(writer.id) { continue; }
-                let mut statement = tx.prepare("SELECT data FROM inputs WHERE writer=?1")?;
-                let acks: Vec<InputAck> = statement.query_map([writer.id.0], |r| r.get::<_, String>(0))?
-                    .map(|row| decode(row?)).collect::<Result<_>>()?;
-                if acks.iter().all(|ack| {
-                    matches!(ack.outcome, InputOutcome::Written | InputOutcome::NotWritten)
-                }) {
-                    tx.execute("DELETE FROM inputs WHERE writer=?1", [writer.id.0])?;
-                    tx.execute("DELETE FROM writers WHERE id=?1", [writer.id.0])?;
-                }
-            }
-            Ok(())
-        })
+        self.transaction_at(now, |tx, now| retain_all(tx, now, &self.limits))
     }
 }
 
@@ -165,7 +140,7 @@ pub(super) fn check_operation(
     if window.closed || window.expires_at <= now {
         return Err(Error::WindowClosed);
     }
-    budget(tx, "operations", limits.operations)?;
+    live_budget(tx, Live::Operations, caller.principal(), now, limits)?;
     Ok(None)
 }
 

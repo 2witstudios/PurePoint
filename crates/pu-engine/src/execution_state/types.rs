@@ -127,6 +127,22 @@ pub struct Limits {
     pub receipts_per_writer: usize,
     pub max_window_seconds: i64,
     pub max_input_bytes: u32,
+    /// Open, unexpired windows one peer principal may hold at once.
+    pub principal_windows: usize,
+    /// Live operation receipts (open window or capacity-holding run) per peer.
+    pub principal_operations: usize,
+    /// Live writers one peer principal may hold at once.
+    pub principal_writers: usize,
+    /// Slice of `windows` that peers can never consume, kept for local owners.
+    pub local_reserved_windows: usize,
+    /// Slice of `operations` that peers can never consume, kept for local owners.
+    pub local_reserved_operations: usize,
+    /// Retention horizon: newest proven-terminal runs (by admission order) whose
+    /// run/agent records survive compaction. Older ones are removed only once no
+    /// receipt references them and none of their input evidence is uncertain.
+    pub retained_terminal_runs: usize,
+    /// Rows each retention step may remove during one admission/window call.
+    pub retention_batch: usize,
 }
 
 impl Default for Limits {
@@ -147,6 +163,13 @@ impl Default for Limits {
             receipts_per_writer: 64,
             max_window_seconds: 86_400,
             max_input_bytes: 65_536,
+            principal_windows: 16,
+            principal_operations: 256,
+            principal_writers: 64,
+            local_reserved_windows: 64,
+            local_reserved_operations: 512,
+            retained_terminal_runs: 256,
+            retention_batch: 64,
         }
     }
 }
@@ -167,6 +190,13 @@ impl Limits {
             self.writers,
             self.input_receipts,
             self.receipts_per_writer,
+            self.principal_windows,
+            self.principal_operations,
+            self.principal_writers,
+            self.local_reserved_windows,
+            self.local_reserved_operations,
+            self.retained_terminal_runs,
+            self.retention_batch,
         ] {
             if limit > 100_000 {
                 return Err(Error::Invalid("limit exceeds hard record bound"));
@@ -176,6 +206,7 @@ impl Limits {
             || self.max_window_seconds > 86_400 * 30
             || self.max_input_bytes == 0
             || self.max_input_bytes > 1_048_576
+            || self.retention_batch == 0
         {
             return Err(Error::Invalid("window or input limit"));
         }
