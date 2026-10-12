@@ -32,7 +32,8 @@ pub fn dispatch(
     .encode()
 }
 
-fn read(
+/// Authorized read of durable metadata as a response body.
+pub(crate) fn read(
     ledger: &state::Ledger,
     exports: &MeshExports,
     caller: &state::Caller,

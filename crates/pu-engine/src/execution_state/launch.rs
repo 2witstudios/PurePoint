@@ -224,6 +224,7 @@ impl Ledger {
                 OutcomeProof::ProcessTreeTerminated {
                     interrupted: false, ..
                 } => Lifecycle::Terminated,
+                OutcomeProof::OwnerAttested { .. } => Lifecycle::Interrupted,
             };
             run.startup_pending = false;
             run.outcome = Some(proof.clone());

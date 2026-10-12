@@ -42,6 +42,17 @@ impl Ledger {
         })
     }
 
+    /// Every worker-owned agent identity, bounded by the ledger's agent
+    /// budget. Engine-local fencing only; never a bridge response.
+    pub fn agent_ids(&self) -> Result<Vec<AgentId>> {
+        self.transaction(|tx| {
+            let mut statement = tx.prepare("SELECT id FROM agents ORDER BY id LIMIT ?1")?;
+            let rows =
+                statement.query_map(params![self.limits.agents], |row| row.get::<_, String>(0))?;
+            rows.map(|row| Ok(AgentId(row?))).collect()
+        })
+    }
+
     /// Local trusted administration/transport setup only. Includes revoked and
     /// unanchored records so callers cannot mistake catalog membership for access.
     pub fn peers_page(&self, after: Option<&str>, limit: usize) -> Result<Vec<PeerRecord>> {

@@ -17,8 +17,19 @@ pub struct Prepared {
     pub identity: SupervisionIdentity,
 }
 
+/// Why a supervised run tree ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The agent process exited on its own.
+    AgentExit,
+    /// The supervisor was asked to stop the run (a stop request or shutdown).
+    Signal,
+    /// The supervisor saw its daemon die.
+    DaemonExit,
+}
+
 pub enum Proof {
-    Terminated { evidence: String, interrupted: bool },
+    Terminated { evidence: String, cause: Cause },
     Unproven,
 }
 
@@ -30,6 +41,8 @@ pub trait Supervisor: Send + Sync + 'static {
         args: Vec<String>,
     ) -> std::io::Result<Prepared>;
     fn outcome(&self, run_id: &str, identity: &SupervisionIdentity) -> Proof;
+    /// Forget a consumed outcome once the ledger has recorded it.
+    fn discard(&self, _run_id: &str) {}
 }
 
 pub struct Guardian {
@@ -90,10 +103,20 @@ impl Supervisor for Guardian {
                         "{} verified tree termination: trigger={trigger} exit={:?}",
                         identity.mechanism, outcome.agent_exit
                     ),
-                    interrupted: matches!(outcome.trigger, Trigger::DaemonExit),
+                    cause: match outcome.trigger {
+                        Trigger::DaemonExit => Cause::DaemonExit,
+                        Trigger::AgentExit => Cause::AgentExit,
+                        Trigger::Signal => Cause::Signal,
+                    },
                 }
             }
             _ => Proof::Unproven,
+        }
+    }
+
+    fn discard(&self, run_id: &str) {
+        if let Err(error) = mesh_guardian::discard_outcome(&self.outcome_dir, run_id) {
+            tracing::warn!(run = run_id, %error, "consumed run outcome not discarded");
         }
     }
 }

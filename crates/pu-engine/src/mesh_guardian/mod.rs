@@ -418,6 +418,19 @@ pub fn read_outcome_by_digest(
     Ok(Some(outcome))
 }
 
+/// Remove a consumed outcome record (after the ledger recorded its proof).
+/// Missing records are fine; the directory must still be private.
+pub fn discard_outcome(outcome_dir: &Path, run_id: &str) -> io::Result<()> {
+    validate_run_id(run_id).map_err(|e| denied(&e))?;
+    let dir = PrivateDir::open(outcome_dir, false)?;
+    let name = outcome_name(run_id);
+    if dir.entry(OsStr::new(&name))?.is_none() {
+        return Ok(());
+    }
+    let file = dir.open_file(OsStr::new(&name), false)?;
+    dir.remove_file(OsStr::new(&name), &file)
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }

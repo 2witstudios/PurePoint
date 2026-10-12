@@ -72,6 +72,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ControlClient<S> {
         &self.welcome
     }
     pub async fn request<T: DeserializeOwned>(&mut self, request: &Request) -> Result<T> {
+        let deadline = self.limits.read_deadline;
+        self.request_within(request, deadline).await
+    }
+
+    /// Like `request`, waiting up to `reply_deadline` for the reply. Effects
+    /// that create worktrees or processes can legitimately exceed the session
+    /// read deadline; the caller bounds the overall wait.
+    pub async fn request_within<T: DeserializeOwned>(
+        &mut self,
+        request: &Request,
+        reply_deadline: std::time::Duration,
+    ) -> Result<T> {
         request.validate()?;
         if request.target_daemon != self.welcome.daemon_id {
             return Err(Error::Denied);
@@ -83,10 +95,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ControlClient<S> {
         self.connection
             .write_frame(&bytes, self.limits.send_deadline)
             .await?;
-        let bytes = self
-            .connection
-            .read_frame(self.limits.read_deadline)
-            .await?;
+        let bytes = self.connection.read_frame(reply_deadline).await?;
         if bytes.len() > self.limits.control_frame {
             return Err(Error::Frame);
         }

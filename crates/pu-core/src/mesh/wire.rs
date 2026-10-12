@@ -313,6 +313,18 @@ fn counter(value: u64) -> bool {
     value > 0 && value <= i64::MAX as u64
 }
 
+/// A remote prompt is text for the agent, never runtime configuration: it may
+/// be passed as a positional argument (so it must not look like an option) or
+/// typed into a terminal (so no control characters beyond newline and tab can
+/// submit text or drive the TUI).
+fn safe_prompt(prompt: &str) -> bool {
+    prompt.len() <= MAX_PROMPT_BYTES
+        && !prompt.trim_start().starts_with('-')
+        && !prompt
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
+}
+
 fn exact_commit(value: &str) -> bool {
     matches!(value.len(), 40 | 64)
         && value
@@ -369,10 +381,7 @@ impl Request {
                 mutation.validate()?;
                 export.validate()?;
                 require(
-                    valid_identifier(runtime)
-                        && exact_commit(source_commit)
-                        && prompt.len() <= MAX_PROMPT_BYTES
-                        && !prompt.contains('\0'),
+                    valid_identifier(runtime) && exact_commit(source_commit) && safe_prompt(prompt),
                 )
             }
             Operation::AcquireControl { guard, mutation }
@@ -700,5 +709,45 @@ mod tests {
         assert!(Request::decode(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(Request::decode(&vec![b' '; MAX_CONTROL_FRAME + 1]).is_err());
         assert!(Request::decode(br#"{"request_id":"req","target_daemon":"worker","operation":{"type":"stop","target":"all"}}"#).is_err());
+    }
+
+    #[test]
+    fn given_remote_prompt_resembling_options_or_terminal_controls_should_reject() {
+        // given
+        let spawn = |prompt: &str| Request {
+            request_id: "spawn".into(),
+            target_daemon: "worker".into(),
+            operation: Operation::Spawn {
+                mutation: Mutation {
+                    window: 1,
+                    id: "operation".into(),
+                },
+                export: Export {
+                    id: "project".into(),
+                    generation: 1,
+                },
+                runtime: "codex".into(),
+                source_commit: "a".repeat(40),
+                prompt: prompt.into(),
+            },
+        };
+        // when / then
+        for allowed in [
+            "",
+            "fix the test",
+            "line one\nline two\twith tab",
+            "a -flag later",
+        ] {
+            assert!(spawn(allowed).validate().is_ok(), "{allowed:?}");
+        }
+        for refused in [
+            "--dangerously-bypass-approvals-and-sandbox",
+            "  -c model=x",
+            "text\rsubmitted",
+            "escape \u{1b}[A",
+            "nul \0",
+        ] {
+            assert!(spawn(refused).validate().is_err(), "{refused:?}");
+        }
     }
 }

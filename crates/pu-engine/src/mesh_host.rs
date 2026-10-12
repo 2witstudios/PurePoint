@@ -72,6 +72,7 @@ pub struct HostClient {
     /// Open watches; separate so long-lived observers never starve control.
     watches: Arc<Semaphore>,
     links: std::sync::Mutex<HashMap<PeerId, Arc<Link>>>,
+    next_watch: std::sync::atomic::AtomicU64,
 }
 
 /// Concurrent watches per host across all workers. Each holds no buffering
@@ -97,7 +98,26 @@ fn specific(address: SocketAddr) -> bool {
         && !matches!(ip, std::net::IpAddr::V4(ip) if ip.is_broadcast())
 }
 
-type Watchers = Arc<std::sync::Mutex<HashMap<AgentTarget, mpsc::Sender<OutputFrame>>>>;
+/// Local watches per run, each with its own bounded queue. Frames fan out to
+/// every watch of a run; a lagging watch is cut off rather than starved.
+type Watchers =
+    Arc<std::sync::Mutex<HashMap<AgentTarget, HashMap<u64, mpsc::Sender<OutputFrame>>>>>;
+
+/// Reply deadline for operations that create worktrees or processes.
+const SLOW_REPLY: Duration = Duration::from_secs(60);
+/// Overall bound on one request, including any (re)connection handshakes.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(90);
+/// Bound on subscribing or resubscribing a watch.
+const SUBSCRIBE_DEADLINE: Duration = Duration::from_secs(20);
+/// Resubscription attempts after a lost link before a watch reports Closed.
+const RESUBSCRIBE_ATTEMPTS: usize = 5;
+
+fn reply_deadline(operation: &Operation) -> Duration {
+    match operation {
+        Operation::Spawn { .. } | Operation::Stop { .. } => SLOW_REPLY,
+        _ => SessionLimits::default().read_deadline,
+    }
+}
 
 struct Conn {
     client: ControlClient<TcpStream>,
@@ -116,6 +136,8 @@ struct Link {
     conn: tokio::sync::Mutex<Option<Conn>>,
     watchers: Watchers,
     keepalive: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Set when local trust or routing changed; the link must not be reused.
+    retired: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for Link {
@@ -132,6 +154,21 @@ impl Drop for Link {
 }
 
 impl Link {
+    fn retired(&self) -> bool {
+        self.retired.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Every subscription lived on the dropped bulk connection; closing the
+    /// local queues makes each watch resubscribe and learn any gap.
+    fn drop_conn(&self, slot: &mut Option<Conn>) {
+        if slot.take().is_some() {
+            self.watchers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+        }
+    }
+
     /// Fresh authenticated control + bulk pair. Discovery supplies only the
     /// current generation; nothing is replayed.
     async fn connect(&self, transport: &MeshTransport) -> Result<Conn, Error> {
@@ -155,76 +192,130 @@ impl Link {
         )
         .await
         .map_err(session_error)?;
-        let mut bulk = client
+        let bulk = client
             .connect_bulk(transport, connect(self.target.bulk).await?)
             .await
             .map_err(session_error)?;
-        let watchers = self.watchers.clone();
-        let reader = tokio::spawn(async move {
-            loop {
-                let Ok(frame) = bulk.read::<OutputFrame>().await else {
-                    break;
-                };
-                // Re-validate the frame shape after the session's own framing.
-                let Ok(frame) = serde_json::to_vec(&frame)
-                    .map_err(|_| ())
-                    .and_then(|bytes| OutputFrame::decode(&bytes).map_err(|_| ()))
-                else {
-                    break;
-                };
-                let mut watchers = watchers.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(sender) = watchers.get(&frame.target)
-                    && sender.try_send(frame.clone()).is_err()
-                {
-                    // Lagging or gone: cut it off rather than drop frames silently.
-                    watchers.remove(&frame.target);
-                }
-            }
-            // Bulk ended: every watcher must resubscribe and learn any gap.
-            watchers.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        });
         Ok(Conn {
             client,
-            reader,
+            reader: tokio::spawn(demultiplex(bulk, self.watchers.clone())),
             used: Instant::now(),
         })
     }
 
-    async fn request(
+    /// The current connection, replacing one that is stale or whose bulk ended.
+    async fn ensure<'a>(
         &self,
+        slot: &'a mut Option<Conn>,
         transport: &MeshTransport,
-        request: &Request,
-    ) -> Result<Response, Error> {
-        let mut slot = self.conn.lock().await;
+    ) -> Result<&'a mut Conn, Error> {
+        if self.retired() {
+            return Err(Error::Closed);
+        }
         if slot
             .as_ref()
             .is_some_and(|conn| conn.reader.is_finished() || conn.used.elapsed() > STALE)
         {
-            *slot = None;
+            self.drop_conn(slot);
         }
         if slot.is_none() {
             *slot = Some(self.connect(transport).await?);
         }
-        let conn = slot.as_mut().ok_or(Error::Closed)?;
-        let result = conn.client.request::<Response>(request).await;
+        slot.as_mut().ok_or(Error::Closed)
+    }
+
+    /// Connect if needed, then register a watch queue for `run` on that
+    /// connection before any frame for it can arrive.
+    async fn register(
+        &self,
+        transport: &MeshTransport,
+        run: &AgentTarget,
+        id: u64,
+    ) -> Result<mpsc::Receiver<OutputFrame>, Error> {
+        let mut slot = self.conn.lock().await;
+        self.ensure(&mut slot, transport).await?;
+        let (tx, rx) = mpsc::channel(WATCH_BUFFER);
+        self.watchers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(run.clone())
+            .or_default()
+            .insert(id, tx);
+        Ok(rx)
+    }
+
+    /// One request on the link. The connection is taken out for the duration:
+    /// if the caller is cancelled mid-request, or the reply does not correlate,
+    /// it is dropped instead of leaving a half-read reply for the next request.
+    /// Never retried: mutations are durable per operation window on the
+    /// receiver, so the caller decides.
+    async fn request(
+        &self,
+        transport: &MeshTransport,
+        request: &Request,
+        admission: Option<&Semaphore>,
+    ) -> Result<Response, Error> {
+        let mut slot = self.conn.lock().await;
+        // Admission is per request actually sent, taken after the per-worker
+        // lock so one stalled worker cannot hold the host's whole budget.
+        let _admission = match admission {
+            Some(admission) => Some(admission.try_acquire().map_err(|_| Error::Capacity)?),
+            None => None,
+        };
+        self.ensure(&mut slot, transport).await?;
+        let mut conn = slot.take().ok_or(Error::Closed)?;
+        let result = conn
+            .client
+            .request_within::<Response>(request, reply_deadline(&request.operation))
+            .await;
         conn.used = Instant::now();
         let response = match result {
             Ok(response) => response,
             Err(error) => {
-                // Never retried: the caller decides, and mutations are durable
-                // per operation window on the receiver.
-                *slot = None;
+                self.drop_conn(&mut Some(conn));
                 return Err(session_error(error));
             }
         };
         // The session client validates framing; this checks exact receiver,
         // request, kind and resource correlation as well.
-        Response::decode(
-            &response.encode().map_err(|_| Error::Incompatible)?,
-            request,
-        )
-        .map_err(|_| Error::Incompatible)
+        let decoded = response
+            .encode()
+            .ok()
+            .and_then(|bytes| Response::decode(&bytes, request).ok());
+        match decoded {
+            Some(response) => {
+                *slot = Some(conn);
+                Ok(response)
+            }
+            None => {
+                self.drop_conn(&mut Some(conn));
+                Err(Error::Incompatible)
+            }
+        }
     }
+}
+
+/// Route bulk frames to the local watches of their run.
+async fn demultiplex(mut bulk: mesh_sessions::BulkClient<TcpStream>, watchers: Watchers) {
+    loop {
+        let Ok(frame) = bulk.read::<OutputFrame>().await else {
+            break;
+        };
+        // Re-validate the frame shape after the session's own framing.
+        let Ok(frame) = serde_json::to_vec(&frame)
+            .map_err(|_| ())
+            .and_then(|bytes| OutputFrame::decode(&bytes).map_err(|_| ()))
+        else {
+            break;
+        };
+        let mut watchers = watchers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(watches) = watchers.get_mut(&frame.target) {
+            // Lagging or gone: cut that watch off rather than drop its frames.
+            watches.retain(|_, sender| sender.try_send(frame.clone()).is_ok());
+        }
+    }
+    // Bulk ended: every watch must resubscribe and learn any gap.
+    watchers.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 impl HostClient {
@@ -236,12 +327,21 @@ impl HostClient {
             admission: Arc::new(Semaphore::new(max_concurrent)),
             watches: Arc::new(Semaphore::new(MAX_WATCHES)),
             links: std::sync::Mutex::new(HashMap::new()),
+            next_watch: std::sync::atomic::AtomicU64::new(1),
         })
     }
 
-    /// Drop every link; called when local trust or routing changes.
+    /// Retire every link, ending open watches; called when local trust or
+    /// routing changes so nothing keeps using a superseded trust set.
     pub fn reset(&self) {
-        self.links.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        for (_, link) in self.links.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+            link.retired
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            link.watchers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+        }
     }
 
     fn link(&self, target: &Target) -> Arc<Link> {
@@ -256,8 +356,13 @@ impl HostClient {
             conn: tokio::sync::Mutex::new(None),
             watchers: Arc::default(),
             keepalive: std::sync::Mutex::new(None),
+            retired: std::sync::atomic::AtomicBool::new(false),
         });
-        links.insert(target.receiver, link.clone());
+        if let Some(previous) = links.insert(target.receiver, link.clone()) {
+            previous
+                .retired
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         link
     }
 
@@ -279,17 +384,18 @@ impl HostClient {
         if request.target_daemon != target.daemon {
             return Err(Error::Invalid);
         }
-        let _admission = self.admission.try_acquire().map_err(|_| Error::Capacity)?;
         let link = self.link(target);
-        // One overall deadline bounds handshakes and a spawn's worktree setup.
-        timeout(Duration::from_secs(60), link.request(transport, request))
-            .await
-            .map_err(|_| Error::Timeout)?
+        timeout(
+            REQUEST_DEADLINE,
+            link.request(transport, request, Some(&self.admission)),
+        )
+        .await
+        .map_err(|_| Error::Timeout)?
     }
 
-    /// Subscribe to one run's output over the worker's link. The watch holds an
-    /// admission permit for its lifetime and resubscribes from its cursor after
-    /// a lost link, so any evicted output is reported as a gap.
+    /// Subscribe to one run's output over the worker's link. The watch holds a
+    /// watch permit for its lifetime and resubscribes from its cursor after a
+    /// lost link, so any evicted output is reported as a gap.
     pub async fn watch(
         &self,
         transport: Arc<MeshTransport>,
@@ -309,12 +415,14 @@ impl HostClient {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Capacity)?;
-        let link = self.link(target);
         let mut watch = Watch {
-            link,
+            link: self.link(target),
             transport,
             run: run.clone(),
             daemon: target.daemon.clone(),
+            id: self
+                .next_watch
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             rx: None,
             cursor: None,
             _admission: admission,
@@ -331,6 +439,7 @@ pub struct Watch {
     transport: Arc<MeshTransport>,
     run: AgentTarget,
     daemon: String,
+    id: u64,
     rx: Option<mpsc::Receiver<OutputFrame>>,
     cursor: Option<OutputCursor>,
     _admission: tokio::sync::OwnedSemaphorePermit,
@@ -338,24 +447,29 @@ pub struct Watch {
 
 impl Watch {
     async fn subscribe(&mut self, request: Request) -> Result<Response, Error> {
-        // Register before subscribing so no early frame is lost.
-        let (tx, rx) = mpsc::channel(WATCH_BUFFER);
-        self.link
-            .watchers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(self.run.clone(), tx);
-        let response = timeout(
-            Duration::from_secs(20),
-            self.link.request(&self.transport, &request),
-        )
+        let response = timeout(SUBSCRIBE_DEADLINE, async {
+            let rx = self
+                .link
+                .register(&self.transport, &self.run, self.id)
+                .await?;
+            let response = self.link.request(&self.transport, &request, None).await?;
+            Ok::<_, Error>((rx, response))
+        })
         .await
         .map_err(|_| Error::Timeout)
         .and_then(|result| result);
         match response {
-            Ok(response) => match &response.body {
+            Ok((rx, response)) => match &response.body {
                 Body::Subscribed { cursor, .. } => {
-                    self.cursor = Some(cursor.clone());
+                    // A resubscription after a different incarnation resets the
+                    // cursor; within one incarnation keep the furthest offset.
+                    if self
+                        .cursor
+                        .as_ref()
+                        .is_none_or(|current| current.incarnation != cursor.incarnation)
+                    {
+                        self.cursor = Some(cursor.clone());
+                    }
                     self.rx = Some(rx);
                     self.keepalive();
                     Ok(response)
@@ -391,11 +505,12 @@ impl Watch {
                 let Some(link) = link.upgrade() else {
                     return;
                 };
-                if link
-                    .watchers
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_empty()
+                if link.retired()
+                    || link
+                        .watchers
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_empty()
                 {
                     return;
                 }
@@ -410,36 +525,72 @@ impl Watch {
                         target_daemon: daemon.clone(),
                         operation: Operation::Inventory {},
                     };
-                    let _ = link.request(&transport, &ping).await;
+                    let _ = link.request(&transport, &ping, None).await;
                 }
             }
         }));
     }
 
-    fn forget(&self) {
-        self.link
-            .watchers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.run);
+    /// Remove this watch; true if it was the run's last local watch.
+    fn forget(&self) -> bool {
+        let mut watchers = self.link.watchers.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(watches) = watchers.get_mut(&self.run) else {
+            return true;
+        };
+        watches.remove(&self.id);
+        if watches.is_empty() {
+            watchers.remove(&self.run);
+            return true;
+        }
+        false
+    }
+
+    /// Drop bytes this watch already delivered; another watch of the same run
+    /// may have restarted the worker's subscription from an earlier offset.
+    fn unseen(&self, mut frame: OutputFrame) -> Option<OutputFrame> {
+        let Some(cursor) = &self.cursor else {
+            return Some(frame);
+        };
+        if cursor.incarnation != frame.incarnation || frame.offset >= cursor.offset {
+            return Some(frame);
+        }
+        let seen = usize::try_from(cursor.offset - frame.offset).ok()?;
+        if seen >= frame.data.len() && !frame.end {
+            return None;
+        }
+        frame.data.drain(..seen.min(frame.data.len()));
+        frame.offset = cursor.offset;
+        frame.gap = None;
+        Some(frame)
     }
 
     pub async fn next(&mut self) -> Result<OutputFrame, Error> {
-        for _ in 0..3 {
+        let mut attempts = 0;
+        loop {
+            if self.link.retired() {
+                return Err(Error::Closed);
+            }
             if let Some(rx) = self.rx.as_mut()
                 && let Some(frame) = rx.recv().await
             {
                 if frame.target != self.run {
                     return Err(Error::Incompatible);
                 }
+                let Some(frame) = self.unseen(frame) else {
+                    continue;
+                };
                 self.cursor = Some(OutputCursor {
                     incarnation: frame.incarnation.clone(),
                     offset: frame.offset + frame.data.len() as u64,
                 });
                 return Ok(frame);
             }
-            // The link or this watcher was cut: resubscribe from the cursor. The
+            // The link or this watch was cut: resubscribe from the cursor. The
             // worker reports evicted bytes as a gap; observation is never an effect.
+            if attempts == RESUBSCRIBE_ATTEMPTS || self.link.retired() {
+                return Err(Error::Closed);
+            }
+            attempts += 1;
             self.rx = None;
             let request = Request {
                 request_id: pu_core::id::session_id(),
@@ -453,13 +604,15 @@ impl Watch {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
-        Err(Error::Closed)
     }
 }
 
 impl Drop for Watch {
     fn drop(&mut self) {
-        self.forget();
+        // Other local watches of this run keep the worker's subscription.
+        if !self.forget() || self.link.retired() {
+            return;
+        }
         let link = self.link.clone();
         let transport = self.transport.clone();
         let request = Request {
@@ -472,7 +625,11 @@ impl Drop for Watch {
         // Best effort: release the receiver's subscription slot.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                let _ = timeout(Duration::from_secs(5), link.request(&transport, &request)).await;
+                let _ = timeout(
+                    Duration::from_secs(5),
+                    link.request(&transport, &request, None),
+                )
+                .await;
             });
         }
     }
@@ -542,29 +699,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn given_stalled_peer_should_bound_host_fanout_and_release_on_cancellation() {
-        let (transport, _, pin) = transport_pair();
-        let transport = Arc::new(transport);
-        let host = Arc::new(HostClient::new(1).unwrap());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let bulk = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let route = target(
-            pin,
-            listener.local_addr().unwrap(),
-            bulk.local_addr().unwrap(),
+    async fn given_stalled_workers_should_bound_host_fanout_and_release_on_cancellation() {
+        // given: a host budget of one request and two stalled workers
+        let client = Identity::generate().unwrap();
+        let first = Identity::generate().unwrap();
+        let second = Identity::generate().unwrap();
+        let transport = Arc::new(
+            MeshTransport::new(
+                &client,
+                EnrolledPeers::new([first.certificate_der(), second.certificate_der()]).unwrap(),
+            )
+            .unwrap(),
         );
-        let (h, t, r) = (host.clone(), transport.clone(), route.clone());
+        let host = Arc::new(HostClient::new(1).unwrap());
+        let listen = || async { tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap() };
+        let (control_a, bulk_a, control_b, bulk_b) = (
+            listen().await,
+            listen().await,
+            listen().await,
+            listen().await,
+        );
+        let route_a = target(
+            first.peer_id(),
+            control_a.local_addr().unwrap(),
+            bulk_a.local_addr().unwrap(),
+        );
+        let route_b = target(
+            second.peer_id(),
+            control_b.local_addr().unwrap(),
+            bulk_b.local_addr().unwrap(),
+        );
+        // when: one request stalls on the first worker
+        let (h, t, r) = (host.clone(), transport.clone(), route_a.clone());
         let pending = tokio::spawn(async move { h.request(&t, &r, &inventory()).await });
-        let (_stalled, _) = listener.accept().await.unwrap();
+        let (_stalled, _) = control_a.accept().await.unwrap();
+        // then: a request to another worker is refused, not queued
         assert!(matches!(
-            host.request(&transport, &route, &inventory()).await,
+            host.request(&transport, &route_b, &inventory()).await,
             Err(Error::Capacity)
         ));
+        assert!(
+            timeout(Duration::from_millis(50), control_b.accept())
+                .await
+                .is_err()
+        );
+        // when: the stalled request is cancelled, its permit is released
         pending.abort();
         assert!(pending.await.unwrap_err().is_cancelled());
-        let (h, t, r) = (host.clone(), transport.clone(), route.clone());
+        let (h, t, r) = (host.clone(), transport.clone(), route_b.clone());
         let next = tokio::spawn(async move { h.request(&t, &r, &inventory()).await });
-        let (_next, _) = timeout(Duration::from_secs(1), listener.accept())
+        let (_next, _) = timeout(Duration::from_secs(1), control_b.accept())
             .await
             .unwrap()
             .unwrap();

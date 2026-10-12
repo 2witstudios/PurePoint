@@ -43,9 +43,10 @@ impl Engine {
     }
 
     pub(super) async fn handle_input(&self, agent_id: &str, data: &[u8], submit: bool) -> Response {
-        if let Some(refusal) = self.mesh_input_fence(agent_id).await {
-            return refusal;
-        }
+        let _permit = match self.mesh_input_permit(agent_id).await {
+            Ok(permit) => permit,
+            Err(refusal) => return refusal,
+        };
         if submit {
             let text = String::from_utf8_lossy(data);
             return match self.deliver_text(agent_id, &text).await {
@@ -121,9 +122,10 @@ impl Engine {
     }
 
     pub(super) async fn handle_resize(&self, agent_id: &str, cols: u16, rows: u16) -> Response {
-        if let Some(refusal) = self.mesh_input_fence(agent_id).await {
-            return refusal;
-        }
+        let _permit = match self.mesh_input_permit(agent_id).await {
+            Ok(permit) => permit,
+            Err(refusal) => return refusal,
+        };
         if let Some(handle) = self.sessions.lock().await.get(agent_id) {
             handle.output_buffer.resize_terminal(rows, cols);
         }

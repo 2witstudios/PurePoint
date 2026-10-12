@@ -167,6 +167,7 @@ pub(super) fn validate_records(tx: &Transaction<'_>, owner: &str) -> Result<()> 
                             Lifecycle::Terminated
                         }
                 }
+                OutcomeProof::OwnerAttested { .. } => run.lifecycle == Lifecycle::Interrupted,
             };
             ensure(valid_proof, "outcome/lifecycle mismatch")?;
         }

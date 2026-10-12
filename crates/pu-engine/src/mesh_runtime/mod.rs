@@ -276,18 +276,17 @@ impl MeshRuntime {
         self.executor(authority).await
     }
 
-    /// Whether the local owner currently controls this worker-owned run.
-    pub async fn local_controls(self: &Arc<Self>, agent_id: &str) -> bool {
-        match self.executor.lock().await.as_ref() {
-            Some(executor) => executor.clone(),
-            None => return false,
-        }
-        .local_controls(agent_id)
-        .await
+    /// Boundary permit for one local write to a run the local owner controls.
+    pub async fn local_input_permit(
+        self: &Arc<Self>,
+        agent_id: &str,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        let executor = self.executor.lock().await.as_ref()?.clone();
+        executor.local_input_permit(agent_id).await
     }
 
-    /// Forward one request to an explicitly routed, pinned worker. Only read
-    /// operations are accepted on this one-shot path.
+    /// Forward one request to an explicitly routed, pinned worker over the
+    /// host's link. Every operation except output subscription (use `watch`).
     pub async fn route(self: &Arc<Self>, route: LocalRoute) -> Result<Response, Error> {
         if !route.validate() {
             return Err(mesh_host::Error::Invalid.into());

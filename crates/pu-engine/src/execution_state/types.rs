@@ -332,14 +332,25 @@ impl SupervisionIdentity {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum OutcomeProof {
-    PrelaunchFailure { evidence: String },
-    ProcessTreeTerminated { evidence: String, interrupted: bool },
+    PrelaunchFailure {
+        evidence: String,
+    },
+    ProcessTreeTerminated {
+        evidence: String,
+        interrupted: bool,
+    },
+    /// The owner's explicit disposition of a run with no supervisor proof,
+    /// after checking its processes are gone. Distinct from verified proof.
+    OwnerAttested {
+        evidence: String,
+    },
 }
 
 impl OutcomeProof {
     pub(super) fn validate(&self) -> Result<()> {
-        let (Self::PrelaunchFailure { evidence } | Self::ProcessTreeTerminated { evidence, .. }) =
-            self;
+        let (Self::PrelaunchFailure { evidence }
+        | Self::ProcessTreeTerminated { evidence, .. }
+        | Self::OwnerAttested { evidence }) = self;
         bounded(evidence, 1024, "outcome evidence")
     }
 }

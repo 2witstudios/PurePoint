@@ -43,6 +43,18 @@ pub enum MeshSpawnError {
     Prelaunch(String),
 }
 
+/// The receiver's own launch for a runtime: executable, arguments, the native
+/// session to bind, and whether the prompt is typed in after start.
+pub struct RuntimeCommand {
+    pub command: String,
+    pub args: Vec<String>,
+    pub session_id: Option<String>,
+    pub inject_prompt: bool,
+}
+
+/// Bound on `git worktree add` for one run; a stuck git never holds the bridge.
+const WORKTREE_DEADLINE: Duration = Duration::from_secs(60);
+
 pub struct MeshSpawned {
     pub exit_rx: watch::Receiver<Option<i32>>,
 }
@@ -73,7 +85,7 @@ impl Engine {
         project_root: &Path,
         runtime: &str,
         prompt: &str,
-    ) -> Result<(String, Vec<String>, Option<String>, bool), MeshSpawnError> {
+    ) -> Result<RuntimeCommand, MeshSpawnError> {
         if !paths::manifest_path(project_root).exists() {
             return Err(MeshSpawnError::Prelaunch(
                 "exported project is not initialized".into(),
@@ -84,8 +96,15 @@ impl Engine {
         let agent_cfg = config::resolve_agent(&cfg, runtime)
             .ok_or_else(|| MeshSpawnError::Prelaunch("runtime not configured".into()))?
             .clone();
-        Self::agent_command(&agent_cfg, runtime, prompt, false, &[])
-            .map_err(|_| MeshSpawnError::Prelaunch("runtime command".into()))
+        let (command, args, session_id, inject_prompt) =
+            Self::agent_command(&agent_cfg, runtime, prompt, false, &[])
+                .map_err(|_| MeshSpawnError::Prelaunch("runtime command".into()))?;
+        Ok(RuntimeCommand {
+            command,
+            args,
+            session_id,
+            inject_prompt,
+        })
     }
 
     /// Create the run's worktree at the exact commit and start the guarded
@@ -98,9 +117,13 @@ impl Engine {
     ) -> Result<MeshSpawned, MeshSpawnError> {
         let root = spec.project_root.clone();
         let wt_path = paths::worktree_path(&root, &spec.worktree_id);
-        self.create_worktree_serialized(&root, &wt_path, &spec.branch, &spec.source_commit)
-            .await
-            .map_err(|_| MeshSpawnError::Prelaunch("worktree creation".into()))?;
+        tokio::time::timeout(
+            WORKTREE_DEADLINE,
+            self.create_worktree_serialized(&root, &wt_path, &spec.branch, &spec.source_commit),
+        )
+        .await
+        .map_err(|_| MeshSpawnError::Prelaunch("worktree creation timed out".into()))?
+        .map_err(|_| MeshSpawnError::Prelaunch("worktree creation".into()))?;
         let cwd = wt_path.to_string_lossy().to_string();
         let mut env = self.agent_env().await;
         env.push(("PU_AGENT_ID".into(), spec.agent_id.clone()));
@@ -218,6 +241,15 @@ impl Engine {
             .contains(agent_id)
     }
 
+    /// Agents the worker ledger owns, including those from a previous daemon
+    /// incarnation, so local lifecycle paths stay fenced after a restart.
+    pub(crate) fn register_mesh_agents(&self, agents: impl IntoIterator<Item = String>) {
+        self.mesh_agents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(agents);
+    }
+
     /// Lifecycle changes to a worker-owned run go through the ledger and its
     /// guardian, never through local kill/suspend/resume/rename paths.
     pub(super) fn mesh_owned(&self, agent_id: &str) -> Option<pu_core::protocol::Response> {
@@ -230,25 +262,28 @@ impl Engine {
             })
     }
 
-    /// Local input/resize reaches a mesh run only while the local owner holds
-    /// control. A remote controller (or none) fences every local writer.
-    pub(crate) async fn mesh_input_fence(
+    /// Permission for one local input/resize. Ordinary agents need none. A mesh
+    /// run requires local control, checked while holding its per-agent command
+    /// boundary; the returned guard keeps that boundary through the write, so a
+    /// release and remote acquire cannot interleave with it.
+    pub(crate) async fn mesh_input_permit(
         &self,
         agent_id: &str,
-    ) -> Option<pu_core::protocol::Response> {
+    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, pu_core::protocol::Response> {
         if !self.is_mesh_agent(agent_id) {
-            return None;
+            return Ok(None);
         }
-        let local = match self.mesh() {
-            Some(mesh) => mesh.local_controls(agent_id).await,
-            None => false,
-        };
-        (!local).then(|| pu_core::protocol::Response::Error {
+        let refused = || pu_core::protocol::Response::Error {
             code: "MESH_REMOTE_CONTROL".into(),
             message: format!(
                 "agent {agent_id} is not under local control; run `pu mesh run takeover {agent_id}` first"
             ),
-        })
+        };
+        let mesh = self.mesh().ok_or_else(refused)?;
+        mesh.local_input_permit(agent_id)
+            .await
+            .ok_or_else(refused)
+            .map(Some)
     }
 
     pub(crate) async fn mesh_session(&self, agent_id: &str) -> Option<MeshSession> {
@@ -319,17 +354,18 @@ pub(crate) fn write_once(master: &Arc<OwnedFd>, data: &[u8], deadline: Duration)
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return outcome(written, data.len(), true);
+            return outcome(written, data.len());
         }
         if ready == 0 {
             break;
         }
         if poll.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-            return outcome(written, data.len(), true);
+            return outcome(written, data.len());
         }
-        // Small chunks keep each write below the tty queue so POLLOUT means it
-        // completes without blocking past the deadline.
-        let chunk = (data.len() - written).min(256);
+        // The master is a blocking descriptor shared with the PTY reader, so it
+        // cannot be made non-blocking here. POLLOUT only guarantees room for
+        // one byte; writing more can block past the deadline on a stalled reader.
+        let chunk = 1;
         // SAFETY: the slice is valid for `chunk` bytes; fd is open.
         let n = unsafe { libc::write(fd, data[written..].as_ptr().cast(), chunk) };
         if n < 0 {
@@ -340,17 +376,17 @@ pub(crate) fn write_once(master: &Arc<OwnedFd>, data: &[u8], deadline: Duration)
             ) {
                 continue;
             }
-            return outcome(written, data.len(), true);
+            return outcome(written, data.len());
         }
         written += n as usize;
     }
-    outcome(written, data.len(), false)
+    outcome(written, data.len())
 }
 
-fn outcome(written: usize, total: usize, failed: bool) -> Delivery {
+/// Exact evidence for one attempt. No byte written (by error or deadline) is a
+/// certain non-delivery.
+fn outcome(written: usize, total: usize) -> Delivery {
     match written {
-        0 if failed => Delivery::NotWritten,
-        // A deadline before any byte is also a certain non-delivery.
         0 => Delivery::NotWritten,
         n if n >= total => Delivery::Written,
         n => u32::try_from(n).map_or(Delivery::Unknown, Delivery::Partial),
@@ -360,6 +396,33 @@ fn outcome(written: usize, total: usize, failed: bool) -> Delivery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_real_pty_with_stalled_reader_should_return_within_deadline() {
+        // given: a blocking PTY master whose raw-mode slave is never read
+        let pty = nix::pty::openpty(None, None).unwrap();
+        let mut termios = nix::sys::termios::tcgetattr(&pty.slave).unwrap();
+        nix::sys::termios::cfmakeraw(&mut termios);
+        nix::sys::termios::tcsetattr(&pty.slave, nix::sys::termios::SetArg::TCSANOW, &termios)
+            .unwrap();
+        let master = Arc::new(pty.master);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = master.clone();
+        // when: more input than the tty queue holds
+        std::thread::spawn(move || {
+            let delivery = write_once(&writer, &[b'x'; 8192], Duration::from_millis(200));
+            let _ = done_tx.send(delivery);
+        });
+        // then: the attempt ends near its deadline with an exact partial count
+        let delivery = done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("input write blocked past its deadline");
+        assert!(
+            matches!(delivery, Delivery::Partial(n) if n > 0),
+            "{delivery:?}"
+        );
+        drop(pty.slave);
+    }
 
     fn pipe() -> (Arc<OwnedFd>, OwnedFd) {
         let (read, write) = nix::unistd::pipe().unwrap();

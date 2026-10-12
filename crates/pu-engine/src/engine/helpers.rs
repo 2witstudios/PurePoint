@@ -131,7 +131,9 @@ impl Engine {
     }
 
     /// True if `pid` is alive and is still the agent process for `session_id`
-    /// (not an unrelated process that reused the pid).
+    /// (not an unrelated process that reused the pid). A mesh run guardian is
+    /// never treated as an orphan: it terminates its own run tree after the
+    /// daemon dies and must survive to record the outcome proof.
     fn is_orphaned_session(pid: u32, session_id: &str) -> bool {
         if !daemon_lifecycle::is_process_alive(pid) {
             return false;
@@ -140,7 +142,10 @@ impl Engine {
             .args(["-o", "command=", "-p", &pid.to_string()])
             .stdin(std::process::Stdio::null())
             .output()
-            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(session_id))
+            .is_ok_and(|out| {
+                let command = String::from_utf8_lossy(&out.stdout);
+                command.contains(session_id) && !command.contains("--mesh-guardian")
+            })
     }
 
     /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
