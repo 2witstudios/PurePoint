@@ -30,6 +30,8 @@ struct PaneTabBar: View {
                             isFocusedPane: isFocused
                         )
                     }
+                    TabBarButton(icon: "plus", help: "New Tab") { newTab() }
+                        .padding(.horizontal, 4)
                 }
             }
             // Dropping past the last tab appends to this pane.
@@ -55,7 +57,6 @@ struct PaneTabBar: View {
             if pane?.activeTab?.content == .pointGuard {
                 PointGuardPaneControls(model: appState.pointGuardChat)
             }
-            TabBarButton(icon: "plus", help: "New Tab") { newTab() }
             if let workspace, workspace.root.canSplit(axis: .vertical) {
                 TabBarButton(icon: "rectangle.split.2x1", help: "Split Right") { split(.vertical) }
             }
