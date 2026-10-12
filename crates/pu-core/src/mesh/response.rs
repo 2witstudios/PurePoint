@@ -1,0 +1,313 @@
+//! Correlated bridge metadata. Receiver-local paths, supervisor tokens and
+//! private ledger records are deliberately absent from this network schema.
+use super::{
+    valid_identifier,
+    wire::{AgentTarget, Export, MAX_CONTROL_FRAME, Request, WireError},
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Response {
+    pub request_id: String,
+    pub daemon_id: String,
+    pub body: Body,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Body {
+    Inventory {
+        exports: Vec<ExportSummary>,
+    },
+    Status {
+        agents: Vec<AgentSummary>,
+        next_agent: Option<String>,
+    },
+    Receipt {
+        evidence: Option<ReceiptEvidence>,
+    },
+    InputReceipt {
+        evidence: Option<InputEvidence>,
+    },
+    Error {
+        code: ErrorCode,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    Denied,
+    Unavailable,
+    Conflict,
+    ReceiptExpired,
+    ExecutionDisabled,
+    Unsupported,
+    Capacity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportSummary {
+    pub export: Export,
+    pub runtimes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Lifecycle {
+    Accepted,
+    Starting,
+    Running,
+    Stopping,
+    Unknown,
+    Failed,
+    Terminated,
+    Interrupted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Controller {
+    None,
+    ThisPeer,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSummary {
+    pub target: AgentTarget,
+    pub lifecycle: Lifecycle,
+    pub epoch: u64,
+    pub revision: u64,
+    pub controller: Controller,
+    pub runtime: String,
+}
+
+/// A historical acceptance snapshot, never the current lifecycle or permission
+/// to execute again. Query Status to reconcile current durable state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptEvidence {
+    pub target: AgentTarget,
+    pub epoch: u64,
+    pub revision: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InputOutcome {
+    Accepted,
+    Written,
+    Partial { bytes: u32 },
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputEvidence {
+    pub target: AgentTarget,
+    pub writer: u64,
+    pub sequence: u64,
+    pub digest: [u8; 32],
+    pub payload_bytes: u32,
+    pub outcome: InputOutcome,
+}
+
+impl Response {
+    /// Match identity/correlation and response kind before exposing a decoded
+    /// payload to the host. Transport authentication remains a separate step.
+    pub fn decode(bytes: &[u8], request: &Request) -> Result<Self, WireError> {
+        request.validate()?;
+        if bytes.is_empty() || bytes.len() > MAX_CONTROL_FRAME {
+            return Err(WireError::Invalid);
+        }
+        let response: Self = serde_json::from_slice(bytes).map_err(|_| WireError::Invalid)?;
+        response.validate()?;
+        if response.request_id != request.request_id || response.daemon_id != request.target_daemon
+        {
+            return Err(WireError::Invalid);
+        }
+        use super::wire::Operation;
+        let matches = match (&request.operation, &response.body) {
+            (_, Body::Error { .. }) | (Operation::Inventory {}, Body::Inventory { .. }) => true,
+            (
+                Operation::Status {
+                    export, agent_id, ..
+                },
+                Body::Status { agents, .. },
+            ) => {
+                agents.iter().all(|a| {
+                    a.target.export == *export
+                        && agent_id.as_ref().is_none_or(|id| a.target.agent_id == *id)
+                }) && (agent_id.is_none() || agents.len() <= 1)
+            }
+            (Operation::Receipt { export, .. }, Body::Receipt { evidence }) => {
+                evidence.as_ref().is_none_or(|e| e.target.export == *export)
+            }
+            (
+                Operation::InputReceipt {
+                    target,
+                    writer,
+                    sequence,
+                },
+                Body::InputReceipt { evidence },
+            ) => evidence.as_ref().is_none_or(|e| {
+                e.target == *target && e.writer == *writer && e.sequence == *sequence
+            }),
+            _ => false,
+        };
+        if !matches {
+            return Err(WireError::Invalid);
+        }
+        Ok(response)
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, WireError> {
+        self.validate()?;
+        let bytes = serde_json::to_vec(self).map_err(|_| WireError::Invalid)?;
+        if bytes.len() > MAX_CONTROL_FRAME {
+            return Err(WireError::Invalid);
+        }
+        Ok(bytes)
+    }
+
+    fn validate(&self) -> Result<(), WireError> {
+        let counter = |n: u64| n > 0 && n <= i64::MAX as u64;
+        let export = |e: &Export| valid_identifier(&e.id) && counter(e.generation);
+        let target = |t: &AgentTarget| {
+            export(&t.export) && valid_identifier(&t.agent_id) && valid_identifier(&t.run_id)
+        };
+        let valid = valid_identifier(&self.request_id)
+            && valid_identifier(&self.daemon_id)
+            && match &self.body {
+                Body::Inventory { exports } => {
+                    exports.len() <= 64
+                        && exports.iter().all(|e| {
+                            export(&e.export)
+                                && e.runtimes.len() <= 32
+                                && e.runtimes.iter().all(|r| valid_identifier(r))
+                        })
+                }
+                Body::Status { agents, next_agent } => {
+                    agents.len() <= 64
+                        && agents.iter().all(|a| {
+                            target(&a.target)
+                                && counter(a.epoch)
+                                && counter(a.revision)
+                                && valid_identifier(&a.runtime)
+                        })
+                        && next_agent.as_ref().is_none_or(|n| {
+                            valid_identifier(n)
+                                && agents.last().is_some_and(|a| a.target.agent_id == *n)
+                        })
+                }
+                Body::Receipt { evidence } => evidence
+                    .as_ref()
+                    .is_none_or(|r| target(&r.target) && counter(r.epoch) && counter(r.revision)),
+                Body::InputReceipt { evidence } => evidence.as_ref().is_none_or(|r| {
+                    target(&r.target)
+                        && counter(r.writer)
+                        && counter(r.sequence)
+                        && (1..=super::wire::MAX_INPUT_BYTES as u32).contains(&r.payload_bytes)
+                        && match r.outcome {
+                            InputOutcome::Partial { bytes } => bytes < r.payload_bytes,
+                            _ => true,
+                        }
+                }),
+                Body::Error { .. } => true,
+            };
+        if valid {
+            Ok(())
+        } else {
+            Err(WireError::Invalid)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn given_correlated_receipt_for_another_run_should_reject_before_host_reconciliation() {
+        let target = AgentTarget {
+            export: Export {
+                id: "project".into(),
+                generation: 1,
+            },
+            agent_id: "agent".into(),
+            run_id: "run".into(),
+        };
+        let request = Request {
+            request_id: "request".into(),
+            target_daemon: "worker".into(),
+            operation: super::super::wire::Operation::InputReceipt {
+                target: target.clone(),
+                writer: 4,
+                sequence: 7,
+            },
+        };
+        let evidence = InputEvidence {
+            target,
+            writer: 4,
+            sequence: 7,
+            digest: [1; 32],
+            payload_bytes: 5,
+            outcome: InputOutcome::Unknown,
+        };
+        let mut response = Response {
+            request_id: "request".into(),
+            daemon_id: "worker".into(),
+            body: Body::InputReceipt {
+                evidence: Some(evidence),
+            },
+        };
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_ok());
+        if let Body::InputReceipt { evidence: Some(e) } = &mut response.body {
+            e.target.run_id = "another-run".into();
+        }
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_err());
+    }
+    #[test]
+    fn given_remote_metadata_should_require_exact_receiver_request_and_bounded_shape() {
+        let request = Request {
+            request_id: "request".into(),
+            target_daemon: "worker".into(),
+            operation: super::super::wire::Operation::Inventory {},
+        };
+        let mut response = Response {
+            request_id: "request".into(),
+            daemon_id: "worker".into(),
+            body: Body::Inventory { exports: vec![] },
+        };
+        assert_eq!(
+            Response::decode(&response.encode().unwrap(), &request).unwrap(),
+            response
+        );
+        response.daemon_id = "other".into();
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_err());
+        response.daemon_id = "worker".into();
+        response.request_id = "old".into();
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_err());
+        response.request_id = "request".into();
+        response.body = Body::Receipt { evidence: None };
+        assert!(Response::decode(&response.encode().unwrap(), &request).is_err());
+        let bytes=br#"{"request_id":"request","daemon_id":"worker","body":{"type":"inventory","exports":[],"path":"/private"}}"#;
+        assert!(Response::decode(bytes, &request).is_err());
+        response.body = Body::Inventory {
+            exports: vec![
+                ExportSummary {
+                    export: Export {
+                        id: "export".into(),
+                        generation: 1
+                    },
+                    runtimes: vec![]
+                };
+                65
+            ],
+        };
+        assert!(response.encode().is_err());
+    }
+}
