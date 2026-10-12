@@ -42,7 +42,7 @@ pub enum PuError {
     Json(#[from] serde_json::Error),
 
     #[error("yaml error: {0}")]
-    Yaml(#[from] serde_yaml_ng::Error),
+    Yaml(#[from] crate::yaml::Error),
 }
 
 impl PuError {

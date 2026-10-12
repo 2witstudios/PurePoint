@@ -7,6 +7,9 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 ### Fixed
 - `pu spawn` and `pu send` to Claude agents now deliver the full text as one submitted turn, or fail with a non-zero exit. Typing starts only once the agent's input box is on screen, Enter is pressed only after the box shows the complete text (retyping if characters were dropped), and success requires the box to clear and the turn to be echoed. Trigger injection uses the same path. Callers no longer need an empty `pu send` "nudge"; remove it, since it can submit a fragment or a duplicate.
 
+### Changed
+- YAML files under `.pu/` and `~/.pu/` are now read and written with the safe-Rust `serde-saphyr` library instead of the unmaintained `unsafe-libyaml` stack (RUSTSEC-2024-0449). Existing files load with the same values. Newly written files use double quotes and also quote YAML 1.1 look-alikes such as `"yes"` and `"on"`. A few hand-written edge cases now load where they used to fail: a repeated key keeps its last value, `1_000` reads as a number, and a `~` document reads as empty. A plain `~`/`null` in a text field reads as empty text rather than the literal word. An unquoted leading-zero number such as `012` in a schedule `trigger:` must now be quoted.
+
 ## [0.2.0] — 2026-03-09
 
 ### Added
