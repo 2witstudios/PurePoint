@@ -74,6 +74,7 @@ async fn main() {
         }
     };
     let lifecycle = server.lifecycle();
+    let work = server.work();
 
     // Start background reaper for dead sessions and orphaned channels
     server.engine().start_session_reaper();
@@ -83,25 +84,18 @@ async fn main() {
 
     // In managed mode, exit when the parent process (macOS app) dies.
     // Without this, the daemon outlives app restarts and stale binaries persist.
-    // process::exit(0) skips Drop, so explicitly kill agent process groups first
-    // — otherwise vitest/node workers and other grandchildren orphan to launchd.
+    // Use the same request/service drain and agent teardown as ordinary shutdown.
     if managed {
         let parent_pid = std::os::unix::process::parent_id();
-        let engine_for_cleanup = server.engine().clone();
-        let lifecycle_for_exit = lifecycle.clone();
+        let work_for_exit = work.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 // On macOS, orphaned processes get reparented to PID 1 (launchd)
                 if std::os::unix::process::parent_id() != parent_pid {
                     tracing::info!("parent process died, shutting down managed daemon");
-                    let _ = tokio::time::timeout(
-                        std::time::Duration::from_secs(4),
-                        engine_for_cleanup.kill_all_sessions(std::time::Duration::from_secs(1)),
-                    )
-                    .await;
-                    lifecycle_for_exit.cleanup();
-                    std::process::exit(0);
+                    work_for_exit.begin_shutdown();
+                    break;
                 }
             }
         });
@@ -111,6 +105,9 @@ async fn main() {
     if let Err(e) = server.run().await {
         tracing::error!("server error: {e}");
     }
+    // A bounded IPC drain can time out without relinquishing ownership. Do not
+    // tear down sessions or exit while an admitted spawn/tick can still publish.
+    work.wait_requests().await;
 
     // Stop agents gracefully (SIGTERM, then SIGKILL) while the runtime is still
     // up. They stay resumable: kill_all_sessions keeps the exits it causes from
@@ -120,6 +117,11 @@ async fn main() {
         engine.kill_all_sessions(std::time::Duration::from_secs(2)),
     )
     .await;
+
+    if let Err(error) = work.drain_for(std::time::Duration::from_secs(5)).await {
+        tracing::warn!(%error, "shutdown still draining; keeping singleton and runtime artifacts");
+        work.wait_idle().await;
+    }
 
     lifecycle.cleanup();
 

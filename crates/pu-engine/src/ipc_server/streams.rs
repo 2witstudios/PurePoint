@@ -1,7 +1,9 @@
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
+use crate::daemon_lifecycle::owned_work::WorkOwner;
 use crate::engine::Engine;
 use pu_core::protocol::{Request, Response};
+use std::sync::Arc;
 
 use super::{
     ATTACH_OUTPUT_CHUNK_SIZE, IpcReader, IpcWriter, MAX_MESSAGE_SIZE, parse_stream_request,
@@ -13,8 +15,9 @@ use super::{
 pub(super) async fn handle_attach_stream(
     reader: &mut IpcReader,
     writer: &mut IpcWriter,
-    engine: &Engine,
+    engine: &Arc<Engine>,
     agent_id: &str,
+    work: &Arc<WorkOwner>,
 ) {
     let (buffer, master_fd, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
         Some(handles) => handles,
@@ -80,10 +83,14 @@ pub(super) async fn handle_attach_stream(
             } => {
                 match parse_stream_request(result, &line) {
                     Some(Request::Input { data, .. }) => {
-                        engine.write_to_pty(&master_fd, &data).await.ok();
+                        let engine = engine.clone();
+                        let fd = master_fd.clone();
+                        super::run_effect(work, async move { engine.write_to_pty(&fd, &data).await }).await.ok();
                     }
                     Some(Request::Resize { cols, rows, .. }) => {
-                        engine.resize_pty(&master_fd, cols, rows).await.ok();
+                        let engine = engine.clone();
+                        let fd = master_fd.clone();
+                        super::run_effect(work, async move { engine.resize_pty(&fd, cols, rows).await }).await.ok();
                     }
                     _ => break,
                 }
@@ -98,8 +105,9 @@ pub(super) async fn handle_attach_stream(
 pub(super) async fn handle_grid_stream(
     reader: &mut IpcReader,
     writer: &mut IpcWriter,
-    engine: &Engine,
+    engine: &Arc<Engine>,
     project_root: &str,
+    work: &Arc<WorkOwner>,
 ) {
     let mut rx = engine.subscribe_grid(project_root).await;
     let pr = project_root.to_string();
@@ -132,7 +140,9 @@ pub(super) async fn handle_grid_stream(
             } => {
                 match parse_stream_request(result, &line) {
                     Some(Request::GridCommand { command, .. }) => {
-                        let resp = engine.handle_grid_command(&pr, command).await;
+                        let engine = engine.clone();
+                        let project = pr.clone();
+                        let Ok(resp) = super::run_effect(work, async move { engine.handle_grid_command(&project, command).await }).await else { break; };
                         if write_response(writer, &resp).await.is_err() {
                             break;
                         }

@@ -4,6 +4,7 @@ use std::io::{self, Read, Seek, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
@@ -11,6 +12,7 @@ use nix::sys::signal;
 use nix::unistd::Pid;
 use tokio::net::{UnixListener, UnixSocket};
 
+pub mod owned_work;
 mod private_state;
 use private_state::{Entry, PrivateDir, denied};
 
@@ -25,6 +27,7 @@ pub struct DaemonLock {
     lock: Flock<File>,
     pid: Option<File>,
     socket: Option<Entry>,
+    active_work: AtomicUsize,
 }
 
 /// Lock file guarding the full socket name.
@@ -66,6 +69,7 @@ pub fn try_acquire_daemon_lock(socket_path: &Path) -> io::Result<Option<DaemonLo
         lock,
         pid: None,
         socket: None,
+        active_work: AtomicUsize::new(0),
     };
     guard.verify_lock()?;
     guard.lock.sync_all()?;
@@ -145,6 +149,10 @@ impl DaemonLock {
     /// Remove only artifacts still matching the descriptors/identity we own.
     /// Safe to call explicitly before process::exit and again from Drop.
     pub fn cleanup(&self) {
+        if self.active_work.load(Ordering::Acquire) != 0 {
+            tracing::debug!("retaining lifecycle artifacts while accepted work is pending");
+            return;
+        }
         if let Err(error) = self.verify_lock() {
             tracing::warn!(%error, "preserving lifecycle files: ownership validation failed");
             return;

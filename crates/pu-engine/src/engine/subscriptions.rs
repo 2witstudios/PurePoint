@@ -124,7 +124,7 @@ impl Engine {
         let shutdown_killed = self.shutdown_killed.clone();
         let project_root = project_root.to_string();
         let agent_id = agent_id.to_string();
-        tokio::spawn(async move {
+        crate::daemon_lifecycle::owned_work::spawn_inherited(async move {
             // A dropped sender also means the process is gone.
             while exit_rx.borrow_and_update().is_none() {
                 if exit_rx.changed().await.is_err() {

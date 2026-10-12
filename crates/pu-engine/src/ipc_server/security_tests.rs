@@ -11,6 +11,290 @@ fn private_dir() -> TempDir {
         .unwrap()
 }
 
+// Observe the real manifest updater's descriptor before cancelling transport.
+// A second open descriptor for this unique locked inode proves the blocking
+// closure has entered update_manifest, without a production marker or mock.
+pub(crate) fn another_descriptor_for(file: &std::fs::File) -> bool {
+    use std::os::fd::AsRawFd;
+    let metadata = file.metadata().unwrap();
+    // SAFETY: sysconf has no memory arguments; fstat receives valid storage and
+    // safely reports EBADF for closed descriptor numbers.
+    let limit = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) }.clamp(0, 65_536);
+    for fd in 0..limit as i32 {
+        if fd == file.as_raw_fd() {
+            continue;
+        }
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &mut stat) } == 0
+            && stat.st_dev as u64 == metadata.dev()
+            && stat.st_ino == metadata.ino()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_blocked_rename_should_keep_singleton_until_old_effect_finishes_after_shutdown_or_abort()
+ {
+    use nix::fcntl::{Flock, FlockArg};
+    use pu_core::{
+        manifest, paths,
+        types::{AgentEntry, Manifest},
+    };
+    use std::time::Duration;
+    for stopping in ["graceful", "abort", "timeout"] {
+        let abort = stopping == "abort";
+        let tmp = private_dir();
+        let root = tmp.path().join("project");
+        fs::create_dir_all(paths::pu_dir(&root)).unwrap();
+        let mut manifest = Manifest::new(root.to_string_lossy().into_owned());
+        let agent: AgentEntry = serde_json::from_value(serde_json::json!({
+            "id":"ag-effect", "name":"before", "agentType":"claude",
+            "status":"running", "startedAt":"2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        manifest.agents.insert(agent.id.clone(), agent);
+        manifest::write_manifest(&root, &manifest).unwrap();
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(paths::manifest_path(&root).with_extension("json.lock"))
+            .unwrap();
+        let manifest_lock = Flock::lock(file, FlockArg::LockExclusive).unwrap();
+        let socket = tmp.path().join("daemon.sock");
+        let mut lock = crate::daemon_lifecycle::try_acquire_daemon_lock(&socket)
+            .unwrap()
+            .unwrap();
+        lock.claim_pid_file().unwrap();
+        let server = IpcServer::bind_with_lock(lock, Engine::new()).unwrap();
+        let shutdown = server.shutdown.clone();
+        let work = server.work();
+        let lifecycle = server.lifecycle();
+        let task = tokio::spawn(server.run());
+        let mut task = Some(task);
+        let mut client = tokio::net::UnixStream::connect(&socket).await.unwrap();
+        let rename = Request::Rename {
+            project_root: root.to_string_lossy().into_owned(),
+            agent_id: "ag-effect".into(),
+            name: "old-effect-completed".into(),
+        };
+        client
+            .write_all((serde_json::to_string(&rename).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !another_descriptor_for(&manifest_lock) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("real Rename must be blocked on the held manifest lock");
+        if abort {
+            let task = task.take().unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        } else {
+            shutdown.notify_one();
+        }
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), reader.read_line(&mut line))
+                .await
+                .expect("transport closes promptly while its effect drains")
+                .unwrap(),
+            0
+        );
+        if stopping == "timeout" {
+            let result = tokio::time::timeout(Duration::from_secs(6), task.take().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        }
+        assert_eq!(
+            work.drain_for(Duration::from_millis(10))
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        lifecycle.cleanup();
+        assert!(
+            socket.exists(),
+            "cleanup must preserve the runtime artifacts of pending work"
+        );
+        assert!(crate::daemon_lifecycle::pid_path_for(&socket).exists());
+        drop(lifecycle);
+        assert_eq!(
+            manifest::read_manifest(&root).unwrap().agents["ag-effect"].name,
+            "before"
+        );
+        // EOF can precede the abortable dispatcher's guard drop. Observe the
+        // ownership barrier across that asynchronous cancellation window.
+        for _ in 0..20 {
+            assert!(
+                crate::daemon_lifecycle::try_acquire_daemon_lock(&socket)
+                    .unwrap()
+                    .is_none(),
+                "successor must not acquire ownership while the old blocking effect is pending"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            IpcServer::bind(&socket, Engine::new())
+                .err()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::AddrInUse
+        );
+
+        drop(manifest_lock);
+        if let Some(task) = task {
+            task.await.unwrap().unwrap();
+        }
+        let successor = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match IpcServer::bind(&socket, Engine::new()) {
+                    Ok(server) => break server,
+                    Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                        tokio::time::sleep(Duration::from_millis(5)).await
+                    }
+                    Err(error) => panic!("unexpected successor bind error: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("ownership is released after the actual effect finishes");
+        assert_eq!(
+            manifest::read_manifest(&root).unwrap().agents["ag-effect"].name,
+            "old-effect-completed"
+        );
+        assert_eq!(
+            work.completed(),
+            1,
+            "cancelled waiters must leave a recorded completed operation"
+        );
+        drop(successor);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_completed_spawn_should_retain_ownership_for_its_later_blocked_exit_persistence() {
+    use nix::fcntl::{Flock, FlockArg};
+    use pu_core::{manifest, paths, types::AgentStatus};
+    use std::time::Duration;
+    let tmp = private_dir();
+    let root = tmp.path().join("project");
+    fs::create_dir(&root).unwrap();
+    let engine = Engine::new();
+    assert!(matches!(
+        engine
+            .handle_request(Request::Init {
+                project_root: root.to_string_lossy().into_owned(),
+            })
+            .await,
+        Response::InitResult { .. }
+    ));
+    let script = tmp.path().join("exit-on-release.sh");
+    let release = tmp.path().join("release-child");
+    // Natural exit only; the finite fallback also prevents a failed test from
+    // stranding its scratch child or the runtime's PTY reader.
+    fs::write(&script, "i=0\nwhile [ ! -f \"$1\" ] && [ \"$i\" -lt 2000 ]; do\n  sleep 0.01\n  i=$((i+1))\ndone\nexit 0\n").unwrap();
+    let socket = tmp.path().join("daemon.sock");
+    let server = IpcServer::bind(&socket, engine).unwrap();
+    // Keep the old in-memory engine alive so its existing Drop cannot terminate
+    // the scratch child. Its idle WorkOwner must not itself hold the flock.
+    let engine = server.engine().clone();
+    let work = server.work();
+    let task = tokio::spawn(server.run());
+    let mut client = tokio::net::UnixStream::connect(&socket).await.unwrap();
+    let spawn = Request::Spawn {
+        project_root: root.to_string_lossy().into_owned(),
+        prompt: String::new(),
+        agent: "terminal".into(),
+        name: None,
+        base: None,
+        root: true,
+        worktree: None,
+        command: Some(format!(
+            "/bin/sh {} {}",
+            script.display(),
+            release.display()
+        )),
+        no_auto: false,
+        extra_args: vec![],
+        plan_mode: false,
+        no_trigger: true,
+        trigger: None,
+    };
+    client
+        .write_all((serde_json::to_string(&spawn).unwrap() + "\n").as_bytes())
+        .await
+        .unwrap();
+    let mut client = BufReader::new(client);
+    let mut line = String::new();
+    client.read_line(&mut line).await.unwrap();
+    let agent_id = match serde_json::from_str::<Response>(&line).unwrap() {
+        Response::SpawnResult { agent_id, .. } => agent_id,
+        other => panic!("unexpected spawn outcome: {other:?}"),
+    };
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(paths::manifest_path(&root).with_extension("json.lock"))
+        .unwrap();
+    let manifest_lock = Flock::lock(file, FlockArg::LockExclusive).unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    line.clear();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), client.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    fs::write(&release, "exit naturally").unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !another_descriptor_for(&manifest_lock) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the detached natural-exit observer must reach its real manifest lock");
+    assert!(
+        crate::daemon_lifecycle::try_acquire_daemon_lock(&socket)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        work.drain_for(Duration::from_millis(20))
+            .await
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    drop(manifest_lock);
+    tokio::time::timeout(Duration::from_secs(3), work.wait_idle())
+        .await
+        .unwrap();
+    assert_eq!(
+        manifest::read_manifest(&root).unwrap().agents[&agent_id].status,
+        AgentStatus::Broken
+    );
+    assert_eq!(
+        work.completed(),
+        2,
+        "both the accepted spawn and its descendant reached outcomes"
+    );
+    let successor = IpcServer::bind(&socket, Engine::new()).unwrap();
+    drop(successor);
+    drop(engine);
+}
+
 #[tokio::test]
 async fn given_non_socket_entries_should_refuse_binding_without_deleting_them() {
     for kind in ["file", "directory", "symlink", "dangling_symlink"] {
