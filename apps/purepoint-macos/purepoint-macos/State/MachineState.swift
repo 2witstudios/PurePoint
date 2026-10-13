@@ -6,7 +6,7 @@ import Observation
 @Observable
 @MainActor
 final class MachineState: Identifiable {
-    let machine: Machine
+    var machine: Machine
     nonisolated var id: UUID { machine.id }
     private(set) var state: MachineConnectionState = .disconnected
     private(set) var projects: [ProjectState] = []
@@ -36,11 +36,29 @@ final class MachineState: Identifiable {
         self.appState = appState
         self.registry = registry
         hiddenRoots = Set(UserDefaults.standard.stringArray(forKey: Self.hiddenKey(machine.id)) ?? [])
+        connection = Self.makeConnection(for: self)
+    }
+
+    /// Update from a fresh registry read: refresh the name, and when the SSH host changed,
+    /// recreate the connection on the new host. Called by `AppState.reloadMachines()`.
+    func update(from machine: Machine) {
+        guard machine.id == self.machine.id else { return }
+        let hostChanged = machine.sshHost != self.machine.sshHost
+        self.machine = machine
+        guard hostChanged else { return }
+        let wasActive = state != .disconnected
+        disconnect()
+        connection = Self.makeConnection(for: self)
+        if wasActive && !Self.isUserDisconnected(machine.id) { connect() }
+    }
+
+    private static func makeConnection(for state: MachineState) -> MachineConnection {
         let owner = WeakMachineState()
-        connection = MachineConnection(machine: machine) { state in
-            Task { @MainActor in owner.value?.apply(state) }
+        let connection = MachineConnection(machine: state.machine) { newState in
+            Task { @MainActor in owner.value?.apply(newState) }
         }
-        owner.value = self
+        owner.value = state
+        return connection
     }
 
     var statusText: String {

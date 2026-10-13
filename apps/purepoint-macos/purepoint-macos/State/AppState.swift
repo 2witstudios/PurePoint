@@ -68,6 +68,7 @@ final class AppState {
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
+    @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
 
     private static let openProjectsKey = "PurePointOpenProjects"
 
@@ -169,8 +170,17 @@ final class AppState {
     // MARK: - Machines
 
     /// Read `~/.pu/machines.json` and connect every machine the user has not disconnected.
+    /// Starts a file watcher so later CLI or other-instance edits show up without a restart.
     func loadMachines() {
         FileIOService.removeLocalCopies()
+        reloadMachines()
+        startMachineRegistryWatcher()
+    }
+
+    /// Re-read `~/.pu/machines.json` and diff against the current machines: connect any new
+    /// ones, update existing ones whose name or SSH host changed. Called at startup and by the
+    /// registry file watcher.
+    func reloadMachines() {
         let registered: [Machine]
         do {
             registered = try MachineRegistryStore.load()
@@ -178,10 +188,22 @@ final class AppState {
             daemonError = "Could not read machines from ~/.pu/machines.json: \(error.localizedDescription)"
             return
         }
-        for machine in registered where !machines.contains(where: { $0.machine.id == machine.id }) {
-            let state = MachineState(machine: machine, appState: self, registry: registry)
-            machines.append(state)
-            if !MachineState.isUserDisconnected(machine.id) { state.connect() }
+        for machine in registered {
+            if let existing = machines.first(where: { $0.machine.id == machine.id }) {
+                existing.update(from: machine)
+            } else {
+                let state = MachineState(machine: machine, appState: self, registry: registry)
+                machines.append(state)
+                if !MachineState.isUserDisconnected(machine.id) { state.connect() }
+            }
+        }
+    }
+
+    /// Watch `~/.pu/machines.json` for changes from the CLI or another app instance.
+    private func startMachineRegistryWatcher() {
+        guard machineRegistryWatcher == nil else { return }
+        machineRegistryWatcher = MachineRegistryWatcher { [weak self] in
+            self?.reloadMachines()
         }
     }
 
@@ -380,6 +402,8 @@ final class AppState {
         }
         binaryWatcher?.stop()
         binaryWatcher = nil
+        machineRegistryWatcher?.stop()
+        machineRegistryWatcher = nil
         FileIOService.removeLocalCopies()
 
         // Block until daemon RPCs complete (macOS terminates shortly after willTerminate)
