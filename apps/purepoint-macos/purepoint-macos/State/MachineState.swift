@@ -7,7 +7,8 @@ import Observation
 @MainActor
 final class MachineState: Identifiable {
     var machine: Machine
-    nonisolated var id: UUID { machine.id }
+    private let machineId: UUID
+    nonisolated var id: UUID { machineId }
     private(set) var state: MachineConnectionState = .disconnected
     private(set) var projects: [ProjectState] = []
     /// The latest failure of an explicit action (start daemon, project discovery).
@@ -33,6 +34,7 @@ final class MachineState: Identifiable {
 
     init(machine: Machine, appState: AppState?, registry: WorkspaceRegistry?) {
         self.machine = machine
+        self.machineId = machine.id
         self.appState = appState
         self.registry = registry
         hiddenRoots = Set(UserDefaults.standard.stringArray(forKey: Self.hiddenKey(machine.id)) ?? [])
