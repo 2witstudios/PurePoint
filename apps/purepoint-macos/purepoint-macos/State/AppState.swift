@@ -127,6 +127,25 @@ final class AppState {
         return projectState(forRoot: root) == nil
     }
 
+    /// Whether a path is too broad to open as a project: `/`, `$HOME`, or an ancestor
+    /// of `$HOME`. Mirrors the daemon's `is_too_broad_project_root` validation so the
+    /// app doesn't attempt to open roots the daemon will reject.
+    private func isTooBroadProjectRoot(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let canonical = url.resolvingSymlinksInPath().standardizedFileURL.path
+        // Filesystem root
+        if canonical == "/" { return true }
+        // $HOME or an ancestor of $HOME
+        if let home = ProcessInfo.processInfo.environment["HOME"] {
+            let homeCanonical = URL(fileURLWithPath: home)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            if homeCanonical.hasPrefix(canonical + "/") || homeCanonical == canonical {
+                return true
+            }
+        }
+        return false
+    }
+
     func restoreProjects(projectRoot: String? = nil) {
         let paths = projectRoot.map { [$0] }
             ?? UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
@@ -135,10 +154,12 @@ final class AppState {
         pointGuardFolders.formUnion(savedPointGuardFolders)
         for path in paths {
             guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else { continue }
+            guard !isTooBroadProjectRoot(path) else { continue }
             openProject(path)
         }
         for root in savedPointGuardFolders {
             guard FileManager.default.fileExists(atPath: root) else { continue }
+            guard !isTooBroadProjectRoot(root) else { continue }
             ensurePointGuardProject(root: root)
         }
         // Workspace layouts load lazily in WorkspaceRegistry.reconcile, on the first
@@ -245,6 +266,8 @@ final class AppState {
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
         pointGuardProjects[root] = project
+        // Broad roots have no ProjectState owner for routing; skip daemon registration.
+        guard !isTooBroadProjectRoot(root) else { return }
         startProject(project)
         startBinaryWatcherIfNeeded()
     }
@@ -253,6 +276,10 @@ final class AppState {
     func activatePointGuardWorkspace() -> String? {
         guard let registry else { return nil }
         guard let root = pointGuardRoot else {
+            registry.activeWorkspaceId = nil
+            return nil
+        }
+        guard !isTooBroadProjectRoot(root) else {
             registry.activeWorkspaceId = nil
             return nil
         }
