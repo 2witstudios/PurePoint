@@ -224,11 +224,13 @@ final class ProjectState: Identifiable {
                 guard !Task.isCancelled else { return }
                 saver.loaded(modifiedMs: layout.modifiedMs)
                 let target = WeakRegistryRef(registry)
-                saver.onConflict { [saver] document, modified in
+                // Weak: the saver keeps this handler, which must not keep the saver.
+                let weakSaver = WeakSaverRef(saver)
+                saver.onConflict { document, modified in
                     Task { @MainActor in
                         target.value?.adoptRemoteLayout(
                             projectId, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectId))
-                        saver.loaded(modifiedMs: modified)
+                        weakSaver.value?.loaded(modifiedMs: modified)
                     }
                 }
                 registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in
@@ -594,6 +596,15 @@ nonisolated final class WeakRegistryRef: @unchecked Sendable {
     @MainActor weak var value: WorkspaceRegistry?
 
     @MainActor init(_ value: WorkspaceRegistry) {
+        self.value = value
+    }
+}
+
+/// Lets a saver's own conflict handler reach it without retaining it.
+nonisolated final class WeakSaverRef: @unchecked Sendable {
+    weak var value: RemoteLayoutSaver?
+
+    init(_ value: RemoteLayoutSaver) {
         self.value = value
     }
 }

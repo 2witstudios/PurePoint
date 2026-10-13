@@ -1043,7 +1043,8 @@ fn exec_args(program: &str, args: Vec<String>) -> Vec<String> {
 /// Git runs with the global config disabled, so without this the remote view
 /// would list files the user ignores everywhere (`.DS_Store`, `.idea/`, ...).
 /// Only this one setting is passed through; it names an ignore list, never a
-/// program.
+/// program. As a `-c` value it takes precedence over a repository's own
+/// `core.excludesFile` (rare); the repository's `.gitignore` files still apply.
 fn global_excludes_args() -> Vec<String> {
     static EXCLUDES: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     EXCLUDES
@@ -1245,7 +1246,7 @@ impl Engine {
         // repository (a dotfiles repo at `$HOME`, say): stop discovery at the
         // innermost root containing `cwd`.
         let is_git = program == "git";
-        let (ceiling, operands) = {
+        let (ceiling, operands, excludes) = {
             let (cwd, args) = (cwd.clone(), args.clone());
             tokio::task::spawn_blocking(move || {
                 let ceiling = git_ceiling(&cwd, &all_roots);
@@ -1254,10 +1255,16 @@ impl Engine {
                 } else {
                     Ok(())
                 };
-                (ceiling, operands)
+                // The first call reads git config: keep it off the async runtime.
+                let excludes = if is_git {
+                    global_excludes_args()
+                } else {
+                    Vec::new()
+                };
+                (ceiling, operands, excludes)
             })
             .await
-            .unwrap_or_else(|e| (None, Err(format!("task join error: {e}"))))
+            .unwrap_or_else(|e| (None, Err(format!("task join error: {e}")), Vec::new()))
         };
         if let Err(message) = operands {
             return fs_error("args_not_allowed", message);
@@ -1273,9 +1280,7 @@ impl Engine {
             .map(|(_, v)| v.clone());
 
         let mut command = tokio::process::Command::new(program);
-        if is_git {
-            command.args(global_excludes_args());
-        }
+        command.args(excludes);
         command
             .args(exec_args(program, args))
             .current_dir(&cwd)
