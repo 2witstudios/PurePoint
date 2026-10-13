@@ -187,7 +187,7 @@ Start, stop or supervise the daemon. Other commands start it automatically when 
 pu daemon start          # start if not running (through the service when installed)
 pu daemon stop           # stop; running agents are suspended and resume on next start
 pu daemon status         # health and service state
-pu daemon install [--now]  # run as a user service: systemd on Linux, launchd on macOS
+pu daemon install [--now]  # run as a user service (systemd on Linux, launchd on macOS); --now also starts it
 pu daemon uninstall      # remove that service
 ```
 
