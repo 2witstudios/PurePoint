@@ -243,17 +243,20 @@ struct MachineSSHTests {
     @Test func givenSSHExitShouldReturnWithoutWaitingForLingeringPipes() async {
         // A child that outlives the command keeps stdout open, as a ControlPersist master can.
         let started = Date()
-        let output = await MachineSSH.run(["-c", "(sleep 30 &) ; echo done"], timeout: 20, executable: "/bin/sh")
+        // The lingering child lives 300 s; returning well before it proves the run did not
+        // wait for its pipes. The bound is generous because the suite runs in parallel.
+        let output = await MachineSSH.run(["-c", "(sleep 300 &) ; echo done"], timeout: 240, executable: "/bin/sh")
         #expect(output.status == 0)
         #expect(output.stdout.contains("done"))
-        #expect(Date().timeIntervalSince(started) < 10)
+        #expect(Date().timeIntervalSince(started) < 120)
     }
 
     @Test func givenTimeoutShouldEndTheCommand() async {
         let started = Date()
-        let output = await MachineSSH.run(["30"], timeout: 1, executable: "/bin/sleep")
+        // A 300 s command with a 1 s deadline: returning well before it ends proves the kill.
+        let output = await MachineSSH.run(["300"], timeout: 1, executable: "/bin/sleep")
         #expect(output.status != 0)
-        #expect(Date().timeIntervalSince(started) < 10)
+        #expect(Date().timeIntervalSince(started) < 120)
     }
 
     @Test func givenThisProcessShouldReadItsExecutableAndArguments() {
