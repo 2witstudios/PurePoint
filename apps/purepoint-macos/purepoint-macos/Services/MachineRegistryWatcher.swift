@@ -13,7 +13,9 @@ final class MachineRegistryWatcher: @unchecked Sendable {
     private let path: String
     private let onChange: @MainActor @Sendable () -> Void
     private var debounceWork: DispatchWorkItem?
+    private var retryTimer: DispatchSourceTimer?
     private static let debounceInterval: TimeInterval = 0.1
+    private static let retryInterval: TimeInterval = 1.0
 
     var isWatching: Bool { queue.sync { source != nil } }
 
@@ -24,6 +26,7 @@ final class MachineRegistryWatcher: @unchecked Sendable {
         self.path = path
         self.onChange = onChange
         startWatching()
+        if source == nil { startRetryTimer() }
     }
 
     /// Re-attempt watching if the file didn't exist at creation time.
@@ -31,7 +34,25 @@ final class MachineRegistryWatcher: @unchecked Sendable {
         queue.async { [self] in
             guard source == nil else { return }
             startWatching()
+            if source != nil { stopRetryTimer() }
         }
+    }
+
+    /// Poll for the file's appearance when it doesn't exist yet.
+    private func startRetryTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.retryInterval, repeating: Self.retryInterval)
+        timer.setEventHandler { [weak self] in
+            self?.retry()
+        }
+        timer.resume()
+        retryTimer = timer
+    }
+
+    /// Must be called on `queue`.
+    private func stopRetryTimer() {
+        retryTimer?.cancel()
+        retryTimer = nil
     }
 
     /// Must be called on `queue` (or from init, which is single-threaded).
@@ -104,12 +125,14 @@ final class MachineRegistryWatcher: @unchecked Sendable {
     func stop() {
         queue.sync {
             debounceWork?.cancel()
+            stopRetryTimer()
             stopSource()
         }
     }
 
     deinit {
         debounceWork?.cancel()
+        retryTimer?.cancel()
         if source != nil {
             // Cancel handler will close the fd — do not also close it here.
             source?.cancel()

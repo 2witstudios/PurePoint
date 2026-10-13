@@ -69,6 +69,8 @@ final class AppState {
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
+    /// Machine IDs being added by this app, so the watcher doesn't create a duplicate.
+    private var pendingMachineIds = Set<UUID>()
 
     private static let openProjectsKey = "PurePointOpenProjects"
 
@@ -178,8 +180,8 @@ final class AppState {
     }
 
     /// Re-read `~/.pu/machines.json` and diff against the current machines: connect any new
-    /// ones, update existing ones whose name or SSH host changed. Called at startup and by the
-    /// registry file watcher.
+    /// ones, update existing ones whose name or SSH host changed, and remove any that are no
+    /// longer registered. Called at startup and by the registry file watcher.
     func reloadMachines() {
         let registered: [Machine]
         do {
@@ -189,12 +191,23 @@ final class AppState {
             return
         }
         for machine in registered {
+            if pendingMachineIds.contains(machine.id) { continue }
             if let existing = machines.first(where: { $0.machine.id == machine.id }) {
                 existing.update(from: machine)
             } else {
                 let state = MachineState(machine: machine, appState: self, registry: registry)
                 machines.append(state)
                 if !MachineState.isUserDisconnected(machine.id) { state.connect() }
+            }
+        }
+        // Remove machines no longer in the registry (CLI remove or another instance).
+        let registeredIds = Set(registered.map(\.id))
+        let removed = machines.filter { !registeredIds.contains($0.machine.id) }
+        for state in removed {
+            state.disconnect()
+            machines.removeAll { $0 === state }
+            if let active = activeProjectRoot, ProjectKey(id: active).machineId == state.machine.id {
+                activeProjectRoot = projects.first?.projectRoot
             }
         }
     }
@@ -216,9 +229,13 @@ final class AppState {
                 try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
             }
         }.value
+        // Mark as pending so the watcher doesn't create a duplicate if it fires
+        // between the registry write and the append below.
+        pendingMachineIds.insert(machine.id)
         let state = MachineState(machine: machine, appState: self, registry: registry)
         machines.append(state)
         state.connect()
+        pendingMachineIds.remove(machine.id)
         return state
     }
 
