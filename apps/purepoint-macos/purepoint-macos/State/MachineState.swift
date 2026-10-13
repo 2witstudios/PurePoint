@@ -52,6 +52,7 @@ final class MachineState: Identifiable {
         if wasActive && !Self.isUserDisconnected(machine.id) { connect() }
     }
 
+    @MainActor
     private static func makeConnection(for state: MachineState) -> MachineConnection {
         let owner = WeakMachineState()
         let connection = MachineConnection(machine: state.machine) { newState in
