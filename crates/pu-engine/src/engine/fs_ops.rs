@@ -76,13 +76,9 @@ const GIT_ALLOWED_SUBCOMMANDS: [&str; 10] = [
     "for-each-ref",
     "symbolic-ref",
 ];
-/// `gh` commands the app runs; extensions and aliases are refused.
-/// gh commands the app runs (`GitService.swift`), with the options each may take.
-const GH_ALLOWED: [(&str, &[&str]); 3] = [
-    ("pr", &["list", "diff"]),
-    ("auth", &["status"]),
-    ("repo", &["view"]),
-];
+/// gh commands (and subcommands) the app runs (`GitService.swift`); extensions,
+/// aliases and everything else are refused. Options are checked in `check_gh_args`.
+const GH_ALLOWED: [(&str, &[&str]); 2] = [("pr", &["list", "diff"]), ("auth", &["status"])];
 
 fn fs_error(code: &str, message: impl Into<String>) -> Response {
     Response::Error {
@@ -125,6 +121,23 @@ fn path_string(path: &Path) -> String {
 /// A manifest worktree path is trusted only where the daemon creates
 /// worktrees: strictly inside `<root>/.pu/worktrees/` (canonicalized), and
 /// never `/` or an ancestor of the project root or `$HOME`.
+/// Whether a manifest worktree path is one the daemon itself would have made
+/// for `project_root`. `Diff` and `Pulse` run git there, and the manifest is
+/// client-writable through `fs_write`.
+pub(crate) fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool {
+    let root = Path::new(project_root);
+    let (Ok(project), Ok(dir)) = (
+        root.canonicalize(),
+        pu_core::paths::pu_dir(root)
+            .join("worktrees")
+            .canonicalize(),
+    ) else {
+        return false;
+    };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    trusted_worktree(path, &dir, &project, home.as_deref()).is_some()
+}
+
 fn trusted_worktree(
     worktree: &Path,
     worktrees_dir: &Path,
@@ -521,6 +534,21 @@ fn check_regular_file(path: &Path, meta: &std::fs::Metadata) -> Result<(), Respo
     }
 }
 
+/// Daemon definitions under `<project>/.pu/` that make it run agents or commands
+/// (agents, schedules, triggers, swarms, templates). Writing them is as strong
+/// as `Spawn`, so fs writes and deletes leave them to the CLI; the app only
+/// writes layout files there.
+fn is_executable_pu_config(path: &Path) -> bool {
+    const DIRS: [&str; 5] = ["agents", "schedules", "triggers", "swarms", "templates"];
+    let parts: Vec<_> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect();
+    parts
+        .windows(2)
+        .any(|w| w[0] == ".pu" && DIRS.iter().any(|d| w[1].eq_ignore_ascii_case(d)))
+}
+
 /// Whether `path` is inside git metadata (any component git would read as
 /// `.git`). Writes there could plant repository config such as
 /// `diff.external` that a later `git_exec` would run, so fs writes and
@@ -567,7 +595,7 @@ fn fs_write(
         Ok(p) => p,
         Err(e) => return e,
     };
-    if is_git_metadata(&resolved) {
+    if is_git_metadata(&resolved) || is_executable_pu_config(&resolved) {
         return not_allowed(&resolved);
     }
     let data = match BASE64_STANDARD.decode(data_base64) {
@@ -665,7 +693,10 @@ fn fs_delete(path: &str, roots: &FsRoots) -> Response {
     };
     // A root (project, worktree, transcript dir) or any ancestor of one, such
     // as `<project>/.pu/worktrees`, is never deletable here.
-    if roots.all.iter().any(|root| root.starts_with(&resolved)) || is_git_metadata(&resolved) {
+    if roots.all.iter().any(|root| root.starts_with(&resolved))
+        || is_git_metadata(&resolved)
+        || is_executable_pu_config(&resolved)
+    {
         return not_allowed(&resolved);
     }
     let meta = match std::fs::symlink_metadata(&resolved) {
@@ -840,9 +871,9 @@ fn git_option_rule(subcommand: &str, arg: &str) -> Option<GitOption> {
         "log" | "for-each-ref" if arg.starts_with("--format=") => return Some(GitOption::Flag),
         "rev-parse" => &["--abbrev-ref", "--symbolic-full-name", "--verify"],
         "rev-list" if arg == "-n" => return Some(GitOption::Count),
-        "rev-list" => &["--count", "--parents", "--stdin"],
+        "rev-list" => &["--count", "--parents"],
         "ls-files" => &["--others", "--exclude-standard", "-z", "--unmerged"],
-        "symbolic-ref" => &["--short", "-q", "--quiet"],
+        "symbolic-ref" => &["--short"],
         _ => &[],
     };
     flags.contains(&arg).then_some(GitOption::Flag)
@@ -860,7 +891,10 @@ fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Resu
         if std::fs::symlink_metadata(&candidate).is_err() {
             continue; // a revision, or a path that doesn't exist
         }
-        let inside = candidate
+        // git never follows the operand's own final symlink (it diffs the link
+        // text), so only the directories leading to it must stay inside.
+        let parent = candidate.parent().unwrap_or(cwd);
+        let inside = parent
             .canonicalize()
             .is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
         if !inside {
@@ -905,9 +939,11 @@ fn check_gh_args(args: &[String]) -> Result<(), String> {
         ("pr", "list") => &["--json", "--limit", "--head"],
         _ => &[],
     };
+    let mut positionals = Vec::new();
     let mut rest = args[2..].iter();
     while let Some(arg) = rest.next() {
         if !arg.starts_with('-') {
+            positionals.push(arg);
             continue;
         }
         if !valued.contains(&arg.as_str()) || rest.next().is_none() {
@@ -915,6 +951,19 @@ fn check_gh_args(args: &[String]) -> Result<(), String> {
                 "gh {command} {subcommand} option {arg:?} is not allowed"
             ));
         }
+    }
+    // Only `pr diff` takes an argument, and only a PR number (a URL could name
+    // another repository).
+    let positionals_ok = match (command, subcommand) {
+        ("pr", "diff") => {
+            positionals.len() == 1 && positionals[0].bytes().all(|b| b.is_ascii_digit())
+        }
+        _ => positionals.is_empty(),
+    };
+    if !positionals_ok {
+        return Err(format!(
+            "gh {command} {subcommand} arguments are not allowed"
+        ));
     }
     Ok(())
 }
@@ -1015,6 +1064,11 @@ impl Engine {
     /// Canonical, confined, existing directory for `subscribe_fs` and `git_exec`.
     pub(crate) async fn resolve_fs_dir(&self, path: &str) -> Result<PathBuf, Response> {
         let roots = self.fs_roots().await;
+        Self::resolve_fs_dir_in(roots, path).await
+    }
+
+    /// `resolve_fs_dir` against roots the caller already computed.
+    async fn resolve_fs_dir_in(roots: FsRoots, path: &str) -> Result<PathBuf, Response> {
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {
             let dir = resolve_confined(&path, &roots.all, true)?;
@@ -1115,14 +1169,20 @@ impl Engine {
             Some(Err(e)) => return fs_error("invalid_base64", format!("stdin_base64: {e}")),
             None => None,
         };
-        let cwd = match self.resolve_fs_dir(cwd).await {
+        // Computed once: each computation re-reads every project's manifest.
+        let roots = self.fs_roots().await;
+        let all_roots = roots.all.clone();
+        let cwd = match Self::resolve_fs_dir_in(roots, cwd).await {
             Ok(dir) => dir,
             Err(e) => return e,
+        };
+        let roots = FsRoots {
+            writable: Vec::new(),
+            all: all_roots,
         };
         // git must not walk up out of the confined root into an enclosing
         // repository (a dotfiles repo at `$HOME`, say): stop discovery at the
         // innermost root containing `cwd`.
-        let roots = self.fs_roots().await;
         let ceiling = git_ceiling(&cwd, &roots.all);
         if program == "git"
             && let Err(message) = check_operand_targets(&cwd, &args, &roots.all)

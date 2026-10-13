@@ -181,7 +181,10 @@ impl Engine {
 
             // Get git diff stats
             let wt_path = std::path::PathBuf::from(&wt.path);
-            let (files_changed, insertions, deletions, diff_error) = if wt_path.exists() {
+            // Only a worktree the daemon made: the manifest is client-writable.
+            let trusted = super::fs_ops::is_trusted_worktree_path(project_root, &wt_path);
+            let (files_changed, insertions, deletions, diff_error) = if trusted && wt_path.exists()
+            {
                 let base = wt.base_branch.as_deref();
                 match git::diff_worktree(&wt_path, base, true).await {
                     Ok(output) => (
@@ -251,7 +254,10 @@ impl Engine {
         let mut diffs = Vec::new();
         for wt in &worktrees {
             let wt_path = std::path::PathBuf::from(&wt.path);
-            if !wt_path.exists() {
+            // Only a worktree the daemon made (the manifest is client-writable):
+            // anything else is reported like a missing directory.
+            if !wt_path.exists() || !super::fs_ops::is_trusted_worktree_path(project_root, &wt_path)
+            {
                 if is_targeted {
                     // Targeted query: report the error so callers can distinguish
                     // a deleted worktree from a clean one.

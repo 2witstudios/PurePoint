@@ -1167,7 +1167,8 @@ async fn given_stdin_and_failing_command_should_pass_input_and_exit_code() {
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: strings(&["rev-list", "--stdin", "-n", "1"]),
+            // No allowlisted command reads stdin; supplying it must still work.
+            args: strings(&["rev-list", "-n", "1", "HEAD"]),
             stdin_base64: Some(b64(b"HEAD\n")),
             timeout_ms: 10_000,
         })
@@ -1486,4 +1487,77 @@ fn given_gh_options_outside_the_apps_should_refuse_them() {
             "{args:?} should be refused"
         );
     }
+}
+
+#[test]
+fn given_gh_positionals_should_allow_only_a_pr_number() {
+    assert_eq!(
+        check_exec_args("gh", &strings(&["pr", "diff", "226"])),
+        Ok(())
+    );
+    for args in [
+        vec!["pr", "diff", "https://github.com/other/repo/pull/1"],
+        vec!["pr", "list", "extra"],
+        vec!["repo", "view", "other/repo"],
+        vec!["auth", "status", "x"],
+    ] {
+        assert!(
+            check_exec_args("gh", &strings(&args)).is_err(),
+            "{args:?} should be refused"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_executable_pu_definitions_should_refuse_fs_writes() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    for path in [
+        ".pu/schedules/x.yaml",
+        ".pu/agents/x.yaml",
+        ".pu/Triggers/x.yaml",
+    ] {
+        let resp = engine
+            .handle_request(Request::FsWrite {
+                path: p(&root.join(path)),
+                data_base64: b64(b"command: touch /tmp/x\n"),
+                expected_modified_ms: None,
+                create_dirs: true,
+            })
+            .await;
+        assert_error(resp, "path_not_allowed");
+    }
+    // The app's own layout file stays writable.
+    let resp = engine
+        .handle_request(Request::FsWrite {
+            path: p(&root.join(".pu/workspaces.json")),
+            data_base64: b64(b"{}"),
+            expected_modified_ms: None,
+            create_dirs: true,
+        })
+        .await;
+    assert!(matches!(resp, Response::FsWriteResult { .. }), "{resp:?}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_operand_symlink_pointing_outside_should_diff_the_link_itself() {
+    let (engine, _tmp, root, outside) = setup().await;
+    std::fs::write(outside.join("payload.txt"), "PAYLOAD-CONTENT").unwrap();
+    std::os::unix::fs::symlink(outside.join("payload.txt"), root.join("link")).unwrap();
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&["diff", "--no-index", "--", "/dev/null", "link"]),
+            stdin_base64: None,
+            timeout_ms: 10_000,
+        })
+        .await;
+    let Response::GitExecResult { stdout_base64, .. } = resp else {
+        panic!("{resp:?}")
+    };
+    let stdout = String::from_utf8(BASE64_STANDARD.decode(stdout_base64).unwrap()).unwrap();
+    assert!(
+        !stdout.contains("PAYLOAD-CONTENT"),
+        "the target's contents leaked: {stdout}"
+    );
 }
