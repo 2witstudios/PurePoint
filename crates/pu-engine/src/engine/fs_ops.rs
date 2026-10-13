@@ -902,10 +902,14 @@ fn git_option_rule(subcommand: &str, arg: &str) -> Option<GitOption> {
 /// resolved: `diff --no-index` (explicit, or implicit outside a repository)
 /// reads operands straight from the filesystem.
 fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Result<(), String> {
-    for arg in args
+    // Every argument after the first `--` is a path, whatever it starts with
+    // (a file may be named `-dir`); before it, non-option arguments may be.
+    let separator = args.iter().position(|a| a == "--");
+    let before = args[..separator.unwrap_or(args.len())]
         .iter()
-        .filter(|a| !a.starts_with('-') && a.as_str() != "/dev/null")
-    {
+        .filter(|a| !a.starts_with('-'));
+    let after = separator.map_or(&args[args.len()..], |s| &args[s + 1..]);
+    for arg in before.chain(after).filter(|a| a.as_str() != "/dev/null") {
         let candidate = cwd.join(arg);
         let Ok(meta) = std::fs::symlink_metadata(&candidate) else {
             continue; // a revision, or a path that doesn't exist

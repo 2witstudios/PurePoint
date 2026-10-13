@@ -159,7 +159,10 @@ actor GitService {
                 let key = (path as NSString).appendingPathComponent(name)
                 if summariesOnly {
                     var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
-                    file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", name]
+                    // An untracked nested repository is listed as `name/`; it has no patch.
+                    if !name.hasSuffix("/") {
+                        file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", name]
+                    }
                     file.previewVersion = host.isLocal ? fileStamp(name, at: path) : Self.stamp(remoteStats[key] ?? .missing, includeIdentity: true)
                     review.untracked.append(file)
                     continue
@@ -396,7 +399,12 @@ actor GitService {
         if let resume { slice = resume.slice }
         else if let stored = file.patchSlice { slice = stored }
         else {
-            guard let arguments = file.patchArguments else { throw GitReviewError(message: "Refresh to load this file's diff.") }
+            guard let arguments = file.patchArguments else {
+                throw GitReviewError(
+                    message: file.filename.hasSuffix("/")
+                        ? "This is an untracked nested repository; it has no diff here."
+                        : "Refresh to load this file's diff.")
+            }
             let snapshot = PatchSnapshot(url: FileManager.default.temporaryDirectory.appendingPathComponent("purepoint-review-\(UUID()).patch"))
             let result = host.run(HostCommand(
                 program: "git", executablePath: "/usr/bin/git", args: ["--literal-pathspecs"] + arguments, cwd: path,

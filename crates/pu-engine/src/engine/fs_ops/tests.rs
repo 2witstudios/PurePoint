@@ -1637,3 +1637,33 @@ async fn given_dot_pu_config_yaml_should_refuse_fs_write() {
         .await;
     assert_error(resp, "path_not_allowed");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_dash_named_symlink_operand_should_be_checked_after_separator() {
+    let (engine, _tmp, root, outside) = setup().await;
+    std::fs::create_dir_all(outside.join("d")).unwrap();
+    std::fs::write(outside.join("d/f"), "DASH-SECRET").unwrap();
+    std::os::unix::fs::symlink(outside.join("d"), root.join("-dir")).unwrap();
+    for args in [
+        vec![
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--",
+            "/dev/null",
+            "-dir/f",
+        ],
+        vec!["diff", "--", "-dir/f", "other"],
+    ] {
+        let resp = engine
+            .handle_request(Request::GitExec {
+                cwd: p(&root),
+                program: "git".into(),
+                args: strings(&args),
+                stdin_base64: None,
+                timeout_ms: 10_000,
+            })
+            .await;
+        assert_error(resp, "args_not_allowed");
+    }
+}
