@@ -5,6 +5,8 @@ import SwiftUI
 /// owned by `FileTabStore`, so they survive the view being unmounted when the tab is hidden.
 struct FilePaneView: View {
     let rootPath: String
+    /// Where the root lives; remote files are read and saved through the machine's daemon.
+    var host: any ProjectHost = LocalProjectHost.shared
     let initialPath: String?
     @Bindable var session: FileTabSession
     let onFocus: () -> Void
@@ -38,8 +40,9 @@ struct FilePaneView: View {
         .onAppear {
             // Returning to a tab finds its session as it was left: only a first appearance
             // (or a new root) loads the tree and opens the tab's file.
+            editor.host = host
             if session.loadedRoot != rootPath {
-                fileTree.load(worktreePath: rootPath)
+                fileTree.load(worktreePath: rootPath, host: host)
                 session.loadedRoot = rootPath
             }
             if editor.currentFile == nil { openInitial() }
@@ -99,6 +102,7 @@ struct FilePaneView: View {
             if let saveError {
                 banner(saveError, color: .red) { self.saveError = nil }
             }
+            EditorNoticeBanners(editor: editor) { saveError = $0 }
             if editor.externalChangeAlert != nil {
                 HStack {
                     Text("File changed on disk.").font(.caption)
@@ -116,6 +120,7 @@ struct FilePaneView: View {
                     MarkdownPreviewView(
                         markdown: file.content,
                         baseDirectory: (file.id as NSString).deletingLastPathComponent,
+                        isRemote: !editor.host.isLocal,
                         onOpenFile: { path in editor.openFile(path: path, name: (path as NSString).lastPathComponent) }
                     )
                 } else {
@@ -123,7 +128,7 @@ struct FilePaneView: View {
                         content: file.content,
                         language: file.language,
                         isBinary: false,
-                        isEditable: true,
+                        isEditable: !file.isReadOnly,
                         onContentChanged: { editor.updateContent(content: $0) },
                         onSave: save
                     )

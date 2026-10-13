@@ -7,9 +7,26 @@ import Observation
 @Observable
 @MainActor
 final class ProjectState: Identifiable {
+    /// The root on the machine that owns the project — what daemon requests and file paths use.
     let projectRoot: String
-    nonisolated var id: String { projectRoot }
+    /// Identity: `(machine, root)`. Its string form keys the registry, sidebar and selection.
+    nonisolated let key: ProjectKey
+    nonisolated var id: String { key.id }
+    nonisolated var projectId: String { key.id }
+    var isRemote: Bool { key.isRemote }
     var projectName: String { URL(fileURLWithPath: projectRoot).lastPathComponent }
+
+    /// The daemon this project belongs to; remote projects reach theirs over an SSH forward.
+    @ObservationIgnored let endpoint: DaemonEndpoint
+    @ObservationIgnored let client: DaemonClient
+    /// Where the project's files live and its git runs.
+    @ObservationIgnored let host: any ProjectHost
+    @ObservationIgnored let git: GitService
+    /// Remote projects write their layout through the host; quit and disconnect flush it.
+    @ObservationIgnored let remoteLayoutSaver: RemoteLayoutSaver?
+    /// A remote project kept in the sidebar while its machine is unreachable, because it has
+    /// file tabs with unsaved edits. Nothing is watched until the daemon is back.
+    var isUnavailable = false
 
     let channel: ChannelState
 
@@ -27,6 +44,9 @@ final class ProjectState: Identifiable {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var gridSubscriptionTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteLayoutTask: Task<Void, Never>?
+    /// The delayed resubscribe after a remote daemon was lost.
+    @ObservationIgnored private var resubscribeTask: Task<Void, Never>?
 
     /// Agents killed locally whose removal the daemon has not written to the manifest yet.
     /// Without this, a refresh landing in that window would re-adopt the dead agent into a
@@ -36,10 +56,24 @@ final class ProjectState: Identifiable {
     /// How long to keep retrying daemon start + init before surfacing an error.
     private static let daemonConnectBudget: Duration = .seconds(20)
 
-    init(projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil)
-    {
+    init(
+        projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil,
+        endpoint: DaemonEndpoint = .local, host: any ProjectHost = LocalProjectHost.shared
+    ) {
+        let key = ProjectKey(machineId: endpoint.machineId, root: projectRoot)
+        let client = endpoint.makeClient()
         self.projectRoot = projectRoot
-        self.channel = channel ?? ChannelState(projectRoot: projectRoot)
+        self.key = key
+        self.endpoint = endpoint
+        self.client = client
+        self.host = host
+        self.git = host.isLocal ? GitService.shared : GitService(host: host)
+        self.remoteLayoutSaver = endpoint.isLocal ? nil : RemoteLayoutSaver(projectRoot: projectRoot, host: host)
+        self.channel =
+            channel
+            ?? (endpoint.isLocal
+                ? ChannelState(projectRoot: projectRoot)
+                : ChannelState(projectRoot: projectRoot, defaultsScope: key.id) { try await client.send($0) })
         self.service = service
         self.registry = registry
     }
@@ -47,6 +81,10 @@ final class ProjectState: Identifiable {
     // MARK: - Lifecycle
 
     func startWatching() {
+        guard endpoint.isLocal else {
+            startWatchingRemote()
+            return
+        }
         let root = projectRoot
         let svc = service
 
@@ -116,9 +154,105 @@ final class ProjectState: Identifiable {
         }
     }
 
+    /// A remote daemon is never started or initialized from here (MACH-003): the machine's
+    /// connection owns reachability, and the project is already registered there. Load the
+    /// layout through the host, then follow status and grid like a local project.
+    private func startWatchingRemote() {
+        let root = projectRoot
+        let projectId = self.projectId
+        let svc = service
+        openTask?.cancel()
+        refreshTask?.cancel()
+        resubscribeTask?.cancel()
+        manifestWatcher?.stop()
+        manifestWatcher = nil
+
+        startRemoteLayoutRestore()
+
+        openTask = Task { [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            self.channel.startBackground()
+            self.startGridSubscription()
+            self.startStatusSubscription()
+            do {
+                let snapshot = try await svc.loadWorkspace(projectRoot: root)
+                guard !Task.isCancelled else { return }
+                self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+            } catch is CancellationError {
+                return
+            } catch {
+                // The machine row reports reachability; the status stream retries on its own.
+                print("[Remote \(projectId)] status failed: \(error)")
+            }
+        }
+    }
+
+    /// (Re)start reading the remote layout. Retry Layout calls it to try now instead of
+    /// waiting out the backoff.
+    func retryRemoteLayout() {
+        guard isRemote, !isUnavailable else { return }
+        startRemoteLayoutRestore()
+    }
+
+    private func startRemoteLayoutRestore() {
+        remoteLayoutTask?.cancel()
+        remoteLayoutTask = nil
+        guard let registry, let saver = remoteLayoutSaver else { return }
+        let root = projectRoot
+        let projectId = self.projectId
+        let host = self.host
+        remoteLayoutTask = Task {
+            await Self.restoreRemoteLayout(
+                projectRoot: root, projectId: projectId, host: host, registry: registry, saver: saver)
+        }
+    }
+
+    /// Read a remote layout through its host until it arrives, then adopt it and route the
+    /// project's saves to `saver`. A failed read (anything but a missing file) surfaces as a
+    /// layout error and is retried with backoff; the saver is not registered meanwhile, so no
+    /// empty layout can be saved over the real one.
+    static func restoreRemoteLayout(
+        projectRoot: String, projectId: String, host: any ProjectHost, registry: WorkspaceRegistry,
+        saver: RemoteLayoutSaver, retryDelay: @escaping (Int) -> Duration = { .seconds(min(2 * $0, 30)) }
+    ) async {
+        var attempt = 0
+        while !Task.isCancelled {
+            do {
+                let layout = try await HostIO.run {
+                    try WorkspacePersistence.loadRemote(projectRoot: projectRoot, projectId: projectId, host: host)
+                }
+                guard !Task.isCancelled else { return }
+                saver.loaded(modifiedMs: layout.modifiedMs)
+                let target = WeakRegistryRef(registry)
+                // Weak: the saver keeps this handler, which must not keep the saver.
+                let weakSaver = WeakSaverRef(saver)
+                saver.onConflict { document, modified in
+                    Task { @MainActor in
+                        target.value?.adoptRemoteLayout(
+                            projectId, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectId))
+                        weakSaver.value?.loaded(modifiedMs: modified)
+                    }
+                }
+                registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in
+                    saver.save(workspaces, activeWorkspaceId: active)
+                }
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                attempt += 1
+                registry.setRemoteLayoutError(projectId, error.localizedDescription)
+                do { try await Task.sleep(for: retryDelay(attempt)) } catch { return }
+            }
+        }
+    }
+
     func stopWatching() {
         channel.shutdown()
         openTask?.cancel()
+        remoteLayoutTask?.cancel()
+        remoteLayoutTask = nil
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
         refreshTask?.cancel()
         gridSubscriptionTask?.cancel()
         statusSubscriptionTask?.cancel()
@@ -194,8 +328,8 @@ final class ProjectState: Identifiable {
             )
         ) { response in
             if case .spawnResult(_, let agentId, _) = response {
-                if self.appState?.projectState(forRoot: self.projectRoot) != nil {
-                    self.appState?.activeProjectRoot = self.projectRoot
+                if self.appState?.projectState(forId: self.projectId) != nil {
+                    self.appState?.activeProjectRoot = self.projectId
                 }
                 self.appState?.pendingSelectAgentId = agentId
             }
@@ -212,14 +346,14 @@ final class ProjectState: Identifiable {
         name: String? = nil, command: String? = nil
     ) {
         guard let registry, let workspace = registry.workspace(id: workspaceId) else { return }
-        let root = projectRoot
+        let root = projectId
         let spawnWorktree = workspace.container.worktreeId
 
         registry.reserveSurface(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
 
         sendDaemonRequest(
             .spawn(
-                projectRoot: root, prompt: prompt, agent: agent,
+                projectRoot: projectRoot, prompt: prompt, agent: agent,
                 name: name, root: spawnWorktree == nil, worktree: spawnWorktree, command: command
             ),
             onFailure: { [weak registry] in
@@ -238,8 +372,8 @@ final class ProjectState: Identifiable {
     func createWorktree(name: String?) {
         sendDaemonRequest(.createWorktree(projectRoot: projectRoot, name: name)) { response in
             if case .createWorktreeResult(let worktreeId) = response {
-                if self.appState?.projectState(forRoot: self.projectRoot) != nil {
-                    self.appState?.activeProjectRoot = self.projectRoot
+                if self.appState?.projectState(forId: self.projectId) != nil {
+                    self.appState?.activeProjectRoot = self.projectId
                 }
                 self.appState?.pendingSelectWorktreeId = worktreeId
             }
@@ -258,7 +392,12 @@ final class ProjectState: Identifiable {
                 name: name, selection: selection, command: def.command)
         case .runSwarm(let def):
             let root = projectRoot
-            Task { await hub.runSwarm(projectRoot: root, name: def.name) }
+            if isRemote {
+                // The swarm runs on this project's machine, resolved by its daemon.
+                sendDaemonCommand(.runSwarm(projectRoot: root, swarmName: def.name, vars: [:]))
+            } else {
+                Task { await hub.runSwarm(projectRoot: root, name: def.name) }
+            }
         case .createWorktree(let name):
             createWorktree(name: name)
         case .openFilePane:
@@ -274,7 +413,7 @@ final class ProjectState: Identifiable {
         for i in worktrees.indices {
             worktrees[i].agents.removeAll { $0.id == agentId }
         }
-        registry?.reconcile(projectRoot: projectRoot, rootAgents: rootAgents, worktrees: worktrees)
+        registry?.reconcile(projectRoot: projectId, rootAgents: rootAgents, worktrees: worktrees)
         killAgent(agentId)
     }
 
@@ -312,8 +451,8 @@ final class ProjectState: Identifiable {
     private func resumeSuspendedAgents() {
         for agent in allAgents where agent.suspended {
             let name = agent.displayName
+            let client = self.client
             Task {
-                let client = DaemonClient()
                 let response = try? await client.send(.resume(projectRoot: projectRoot, agentId: agent.id))
                 if case .error(_, let msg) = response {
                     self.appState?.daemonError = "Resume failed for \(name): \(msg)"
@@ -345,7 +484,7 @@ final class ProjectState: Identifiable {
 
         mergeWorktrees(filteredWorktrees)
         mergeRootAgents(filteredRoot)
-        registry?.reconcile(projectRoot: projectRoot, rootAgents: rootAgents, worktrees: worktrees)
+        registry?.reconcile(projectRoot: projectId, rootAgents: rootAgents, worktrees: worktrees)
     }
 
     // MARK: - Selective Merge
@@ -373,9 +512,9 @@ final class ProjectState: Identifiable {
 
     /// Fire-and-forget daemon command with standard error handling.
     private func sendDaemonCommand(_ request: DaemonRequest) {
+        let client = self.client
         Task {
             do {
-                let client = DaemonClient()
                 let response = try await client.send(request)
                 if case .error(_, let message) = response { self.appState?.daemonError = message }
             } catch {
@@ -390,9 +529,9 @@ final class ProjectState: Identifiable {
         onFailure: (() -> Void)? = nil,
         onSuccess: @escaping (DaemonResponse) -> Void
     ) {
+        let client = self.client
         Task {
             do {
-                let client = DaemonClient()
                 let response = try await client.send(request)
                 if case .error(_, let message) = response {
                     self.appState?.daemonError = message
@@ -411,7 +550,7 @@ final class ProjectState: Identifiable {
         statusSubscriptionTask?.cancel()
         let previousStatus = statusSubscription
         Task { await previousStatus?.stop() }
-        let sub = DaemonStatusSubscription(projectRoot: projectRoot)
+        let sub = DaemonStatusSubscription(projectRoot: projectRoot, client: client)
         statusSubscription = sub
         statusSubscriptionTask = Task { [weak self] in
             await sub.start(
@@ -422,7 +561,17 @@ final class ProjectState: Identifiable {
                 // that launched it). startWatching ensures a daemon, then inits and
                 // resumes, so this project's agents come back on the new one.
                 onDaemonLost: {
-                    self?.startWatching()
+                    guard let self else { return }
+                    if self.isRemote {
+                        // Never start a remote daemon; resubscribe once it answers again.
+                        self.resubscribeTask?.cancel()
+                        self.resubscribeTask = Task { [weak self] in
+                            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                            self?.startWatching()
+                        }
+                    } else {
+                        self.startWatching()
+                    }
                 }
             )
         }
@@ -436,8 +585,26 @@ final class ProjectState: Identifiable {
         gridSubscription = nil
         Task { await previousGrid?.stop() }
         guard let registry else { return }
-        let sub = DaemonGridSubscription(projectRoot: projectRoot, registry: registry)
+        let sub = DaemonGridSubscription(projectRoot: projectRoot, projectId: projectId, registry: registry, client: client)
         gridSubscription = sub
         gridSubscriptionTask = Task { await sub.start() }
+    }
+}
+
+/// Lets a save callback running off the main thread reach the registry without retaining it.
+nonisolated final class WeakRegistryRef: @unchecked Sendable {
+    @MainActor weak var value: WorkspaceRegistry?
+
+    @MainActor init(_ value: WorkspaceRegistry) {
+        self.value = value
+    }
+}
+
+/// Lets a saver's own conflict handler reach it without retaining it.
+nonisolated final class WeakSaverRef: @unchecked Sendable {
+    weak var value: RemoteLayoutSaver?
+
+    init(_ value: RemoteLayoutSaver) {
+        self.value = value
     }
 }

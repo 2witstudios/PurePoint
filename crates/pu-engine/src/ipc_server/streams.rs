@@ -219,3 +219,272 @@ async fn write_output_chunks(
     }
     Ok(())
 }
+
+/// How long file events are gathered before one `FsEvent` goes out.
+const FS_EVENT_COALESCE: std::time::Duration = std::time::Duration::from_millis(200);
+const FS_EVENT_QUEUE: usize = 4096;
+/// A client that hasn't drained an `FsEvent` within this long (e.g. a laptop
+/// asleep at the far end of an ssh forward) is treated as gone.
+const FS_EVENT_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Writes one `FsEvent`; false when the write failed or timed out, which ends
+/// the stream.
+async fn write_fs_event(
+    writer: &mut IpcWriter,
+    resp: &Response,
+    timeout: std::time::Duration,
+) -> bool {
+    matches!(
+        tokio::time::timeout(timeout, write_response(writer, resp)).await,
+        Ok(Ok(()))
+    )
+}
+/// Scan interval of the polling fallback. It only runs on trees too large for
+/// native watches, where every scan walks and stats the whole tree.
+const FS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+type BoxedWatcher = Box<dyn notify::Watcher + Send>;
+
+/// Watch `root` with the native backend; if a recursive watch cannot be set up
+/// (e.g. Linux inotify watch limit on a huge tree), fall back to polling.
+/// Returns the watcher and whether it polls.
+fn watch_dir<H, F>(
+    root: &std::path::Path,
+    recursive: bool,
+    poll_interval: std::time::Duration,
+    handler: F,
+    native: impl FnOnce(H) -> notify::Result<BoxedWatcher>,
+) -> notify::Result<(BoxedWatcher, bool)>
+where
+    H: notify::EventHandler,
+    F: Fn() -> H,
+{
+    use notify::{RecursiveMode, Watcher};
+    let mode = if recursive {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    let native_error = match native(handler()).and_then(|mut w| w.watch(root, mode).map(|()| w)) {
+        Ok(watcher) => return Ok((watcher, false)),
+        Err(e) => e,
+    };
+    if !recursive {
+        return Err(native_error);
+    }
+    tracing::warn!(
+        root = %root.display(),
+        error = %native_error,
+        "native recursive watch failed; polling instead"
+    );
+    let config = notify::Config::default()
+        .with_poll_interval(poll_interval)
+        .with_follow_symlinks(false);
+    let mut poller = notify::PollWatcher::new(handler(), config)?;
+    poller.watch(root, mode)?;
+    Ok((Box::new(poller), true))
+}
+
+/// Streaming file-watch subscription: pushes coalesced `FsEvent`s for changes
+/// under `root` until the client disconnects (or sends anything).
+pub(super) async fn handle_fs_stream(
+    reader: &mut IpcReader,
+    writer: &mut IpcWriter,
+    engine: &Engine,
+    root: &str,
+    recursive: bool,
+) {
+    use notify::EventKind;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let root = match engine.resolve_fs_dir(root).await {
+        Ok(dir) => dir,
+        Err(resp) => {
+            let _ = write_response(writer, &resp).await;
+            return;
+        }
+    };
+    let root_str = root.to_string_lossy().into_owned();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<std::path::PathBuf>>(FS_EVENT_QUEUE);
+    // A full queue or a watcher error means events were lost: report the root
+    // so the client rescans instead of trusting a partial picture.
+    let overflowed = Arc::new(AtomicBool::new(false));
+    let overflow_flag = overflowed.clone();
+    let watch_root = root.clone();
+    let watcher = tokio::task::spawn_blocking(move || {
+        let handler = move || {
+            let tx = tx.clone();
+            let overflow_flag = overflow_flag.clone();
+            move |res: notify::Result<notify::Event>| {
+                let paths = match res {
+                    Ok(event) if matches!(event.kind, EventKind::Access(_)) => return,
+                    Ok(event) => event.paths,
+                    Err(_) => {
+                        overflow_flag.store(true, Ordering::Relaxed);
+                        Vec::new()
+                    }
+                };
+                if tx.try_send(paths).is_err() {
+                    overflow_flag.store(true, Ordering::Relaxed);
+                }
+            }
+        };
+        watch_dir(&watch_root, recursive, FS_POLL_INTERVAL, handler, |h| {
+            // Never follow a symlink out of the root (inotify and kqueue would).
+            let config = notify::Config::default().with_follow_symlinks(false);
+            <notify::RecommendedWatcher as notify::Watcher>::new(h, config)
+                .map(|w| Box::new(w) as BoxedWatcher)
+        })
+    })
+    .await;
+    let _watcher = match watcher {
+        Ok(Ok((watcher, _polling))) => watcher,
+        Ok(Err(e)) => {
+            let resp = Response::Error {
+                code: "watch_failed".into(),
+                message: format!("cannot watch {root_str}: {e}"),
+            };
+            let _ = write_response(writer, &resp).await;
+            return;
+        }
+        Err(e) => {
+            let resp = Response::Error {
+                code: "INTERNAL_ERROR".into(),
+                message: format!("task join error: {e}"),
+            };
+            let _ = write_response(writer, &resp).await;
+            return;
+        }
+    };
+
+    tracing::debug!(root = root_str, "fs stream started");
+
+    let mut pending: BTreeSet<String> = BTreeSet::new();
+    let mut flush_at: Option<tokio::time::Instant> = None;
+    let mut line = String::new();
+    loop {
+        let flush = async {
+            match flush_at {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            Some(paths) = rx.recv() => {
+                pending.extend(
+                    paths
+                        .into_iter()
+                        .filter(|p| p.starts_with(&root))
+                        .map(|p| p.to_string_lossy().into_owned()),
+                );
+                if overflowed.load(Ordering::Relaxed) {
+                    pending.insert(root_str.clone());
+                }
+                if !pending.is_empty() && flush_at.is_none() {
+                    flush_at = Some(tokio::time::Instant::now() + FS_EVENT_COALESCE);
+                }
+            }
+            _ = flush => {
+                flush_at = None;
+                if overflowed.swap(false, Ordering::Relaxed) {
+                    pending.insert(root_str.clone());
+                }
+                let resp = Response::FsEvent {
+                    root: root_str.clone(),
+                    paths: std::mem::take(&mut pending).into_iter().collect(),
+                };
+                if !write_fs_event(writer, &resp, FS_EVENT_WRITE_TIMEOUT).await {
+                    break;
+                }
+            }
+            _ = async {
+                line.clear();
+                reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
+            } => {
+                break;
+            }
+        }
+    }
+    tracing::debug!(root = root_str, "fs stream ended");
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_client_not_reading_should_time_out_fs_event_write() {
+        let (ours, _theirs) = tokio::net::UnixStream::pair().unwrap();
+        let (_reader, mut writer) = ours.into_split();
+        // Far more than the socket buffers hold, and nobody reads `_theirs`.
+        let resp = Response::FsEvent {
+            root: "/r".into(),
+            paths: vec!["/r/".to_string() + &"x".repeat(1000); 16_384],
+        };
+        let started = std::time::Instant::now();
+        let written =
+            write_fs_event(&mut writer, &resp, std::time::Duration::from_millis(200)).await;
+        assert!(!written);
+        // Bounded (it never blocks on the stalled reader); generous for loaded CI.
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+    use std::sync::mpsc;
+
+    fn collector() -> (
+        impl Fn() -> mpsc::Sender<notify::Result<notify::Event>>,
+        mpsc::Receiver<notify::Result<notify::Event>>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        (move || tx.clone(), rx)
+    }
+
+    fn failing_native(
+        _: mpsc::Sender<notify::Result<notify::Event>>,
+    ) -> notify::Result<BoxedWatcher> {
+        Err(notify::Error::new(notify::ErrorKind::MaxFilesWatch))
+    }
+
+    #[test]
+    fn given_native_recursive_watch_fails_should_poll_and_still_report_changes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let (handler, rx) = collector();
+        let interval = std::time::Duration::from_millis(200);
+        let (_watcher, polling) =
+            watch_dir(&root, true, interval, handler, failing_native).unwrap();
+        assert!(polling);
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/new.txt"), "x").unwrap();
+        let deadline = std::time::Instant::now() + interval * 20;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let event = rx
+                .recv_timeout(remaining)
+                .expect("polling watcher reported no change")
+                .unwrap();
+            if event.paths.iter().any(|p| p.ends_with("sub/new.txt")) {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn given_native_non_recursive_watch_fails_should_report_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (handler, _rx) = collector();
+        assert!(watch_dir(tmp.path(), false, FS_POLL_INTERVAL, handler, failing_native).is_err());
+    }
+
+    #[test]
+    fn given_native_watch_works_should_not_poll() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (handler, _rx) = collector();
+        let (_watcher, polling) = watch_dir(tmp.path(), true, FS_POLL_INTERVAL, handler, |h| {
+            notify::recommended_watcher(h).map(|w| Box::new(w) as BoxedWatcher)
+        })
+        .unwrap();
+        assert!(!polling);
+    }
+}

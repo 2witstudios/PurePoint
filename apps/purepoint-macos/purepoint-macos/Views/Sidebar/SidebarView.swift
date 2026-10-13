@@ -53,7 +53,7 @@ struct SidebarView: View {
                 .padding(.horizontal, 8)
 
             // Project tree — NSOutlineView for compact 24pt rows
-            if appState.isLoaded {
+            if appState.isLoaded || !appState.machines.isEmpty {
                 SidebarOutlineView(
                     selection: $selection,
                     appState: appState,

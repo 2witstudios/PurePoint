@@ -26,9 +26,9 @@ struct ChannelReferenceView: View {
             let path = project.worktrees.first(where: { $0.id == selection.message.author.worktreeId })?.path ?? project.projectRoot
             do {
                 if selection.reference.kind == "commit" {
-                    diff = DiffData(files: try await GitService.shared.fetchCommitDiff(at: path, sha: selection.reference.value))
+                    diff = DiffData(files: try await project.git.fetchCommitDiff(at: path, sha: selection.reference.value))
                 } else if let number = Int(selection.reference.value) {
-                    diff = try await GitService.shared.fetchPRDiffChecked(cwd: path, prNumber: number)
+                    diff = try await project.git.fetchPRDiffChecked(cwd: path, prNumber: number)
                 } else { error = "Invalid pull request reference" }
             } catch { self.error = error.localizedDescription }
             loading = false

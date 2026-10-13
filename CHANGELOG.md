@@ -7,6 +7,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 ### Added
 - The daemon and CLI now run on Linux servers. Releases include static `pu` and `pu-engine` builds for x86_64 and aarch64 Linux, and `scripts/install.sh` installs them into `~/.pu/bin`. See `docs/guide/linux-server.md`.
 - `pu daemon start|stop|status|install|uninstall`. `install` runs the daemon as a user service (systemd on Linux, launchd on macOS) that restarts after a crash and, on Linux with lingering enabled, keeps running with no one logged in.
+- **Machines over SSH** in the macOS app. Add a machine (a name plus an `~/.ssh/config` alias or `user@host[:port]`) from the sidebar footer, and its PurePoint daemon's projects appear under a new MACHINES section. Remote projects work like local ones: open terminals, spawn agents, create worktrees, browse, edit and save files, and review git changes, all running on that machine. The app connects with your own `ssh` configuration, never starts a remote daemon on its own (use Start Daemon), and leaves remote agents running when you disconnect or quit. Machines are shared with `pu machine` through `~/.pu/machines.json`.
 
 ### Fixed
 - A daemon started by the CLI no longer dies when the terminal or SSH session that started it closes. It now runs in its own session and ignores SIGHUP.

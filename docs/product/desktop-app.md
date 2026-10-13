@@ -1,6 +1,6 @@
 # Desktop App
 
-**Maturity: CONVERGING** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`
+**Maturity: CONVERGING** | ID Prefix: APP | Dependencies: `architecture/desktop-app-integration.md`, `product/machines.md`
 
 ## Purpose
 
@@ -14,6 +14,7 @@ Desktop App
   Sidebar (NSOutlineView: projects → worktrees → agents)
     Live updates via manifest watcher + daemon status
     Context menus (rename, delete worktree, kill all)
+    MACHINES section (machine → its daemon's projects → worktrees → agents, over SSH)
   Content area
     Terminal views (SwiftTerm → daemon attach/output)
     Terminal view cache (hide/show, LRU eviction)
@@ -32,6 +33,8 @@ Desktop App
 ```
 
 ## Decisions
+
+! [APP-016] Machines over SSH ([machines.md](machines.md)). Below the local projects the sidebar shows a "MACHINES" section header and one row per machine registered in `~/.pu/machines.json` (shared with `pu machine`): a status dot, the machine name and its state — Connecting, project count when connected, Daemon stopped, Incompatible (protocol N), Offline or Disconnected. Each machine row nests the projects its daemon has registered (`inventory`, refreshed on connect and every 30 s), rendered with the same project/worktree/workspace rows as local projects. The machine context menu offers Connect/Disconnect, Start Daemon (only when connected with the daemon stopped; never automatic) and Remove Machine (closes the forward and forgets it; nothing on the machine changes). The footer's machine button opens Add Machine: name, SSH host (with `Host` aliases from `~/.ssh/config`, wildcards skipped) and Test Connection. Remote projects have full parity through their daemon endpoint and a project host: status, attach, spawn, worktrees, grid commands, channel, files (browse, preview, edit, save with conflict rejection), git/gh review and workspace layouts (`.pu/workspaces.json` on the machine). Identity is `(machine, root)`: local keys keep their bare-root form for persisted state, remote keys are `machine:<uuid>:<root>`. Local-only actions adapt: Reveal in Finder becomes Open Local Copy (fetched to a private temp file), and Remove Project only hides a remote project in this app. Agents Hub, Schedule, Triggers and agent settings stay scoped to the local daemon. Disconnecting or quitting closes the SSH forward and leaves remote agents running.
 
 ! [APP-015] Root checkout and worktree changes review use the workspace right-sidebar visual design for a resizable, hideable, searchable list of every changed file. Selecting any file reveals its inline diff in the middle view, independent of scroll position. Branch Changes, Uncommitted (separate Staged/Unstaged/Untracked identities), selected commits, and selected PRs share this behavior. Files with more than 200 changed lines, and untracked files whose counts are not yet known, start collapsed. Bodies load only for visible expanded files, with selectable pages of at most 200 lines and a 32 KB text budget, previous/next navigation, and access to the complete disk-backed patch. Retain one page body per mounted card and lightweight disk checkpoints for previous-page navigation; release bodies when collapsed or off screen. Very long individual lines are shortened only in the preview. Overview refreshes read metadata instead of all patch bodies; immutable branch comparisons are cached by resolved revisions. GitHub lookups run separately from local Git work, and PR patches load only in their review context. Workspace files-sidebar inline expansion remains as defined in APP-010.
 

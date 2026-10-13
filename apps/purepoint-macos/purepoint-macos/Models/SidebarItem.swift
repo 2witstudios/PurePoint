@@ -29,8 +29,8 @@ enum SidebarSelection: Hashable {
     case nav(SidebarNavItem)
     case workspace(String)
     case worktree(String)
-    case channel(String)
-    case project(String)  // projectRoot path
+    case channel(String)  // ProjectKey.id
+    case project(String)  // ProjectKey.id — the root path for local projects
 }
 
 // MARK: - SidebarNode (NSOutlineView reference-type wrapper)
@@ -40,6 +40,9 @@ class SidebarNode {
         case project(ProjectState)
         case worktree(WorktreeModel)
         case workspace(Workspace)
+        /// The "MACHINES" section title below the local projects.
+        case sectionHeader(String)
+        case machine(MachineState)
     }
 
     let kind: Kind
@@ -52,9 +55,11 @@ class SidebarNode {
 
     var id: String {
         switch kind {
-        case .project(let p): return p.projectRoot
+        case .project(let p): return p.projectId
         case .worktree(let w): return w.id
         case .workspace(let w): return w.id
+        case .sectionHeader(let title): return "section:" + title
+        case .machine(let m): return "machine-node:" + m.machine.id.uuidString.lowercased()
         }
     }
 }

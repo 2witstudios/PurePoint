@@ -1,6 +1,6 @@
 # CLI
 
-**Maturity: DECIDED** | ID Prefix: CLI | Dependencies: `architecture/ipc-api.md`
+**Maturity: DECIDED** | ID Prefix: CLI | Dependencies: `architecture/ipc-api.md`, `product/machines.md`
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Key behaviors:
 
 ## Decisions
 
-! [CLI-001] Auto-start with a 3s wall-clock startup budget, exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health (up to three 2s-bounded probes, 200ms apart; a `BUSY` reply counts as a live daemon), then spawns `pu-engine` (found via `which`) as a detached process with stderr redirected to `~/.pu/daemon.log`. A redundant spawn is harmless: it exits on the daemon lock. Then polls `Request::Health` with exponential backoff (10ms doubling to 640ms) inside a 3s timeout that includes the probes. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
+! [CLI-001] Auto-start with a 3s wall-clock startup budget, exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health (up to three 2s-bounded probes, 200ms apart; a `BUSY` reply counts as a live daemon), then spawns `pu-engine` (found on `PATH`, else next to the `pu` executable, else in `~/.pu/bin` or `~/.cargo/bin`) in its own session (`setsid`, null stdin/stdout) so it outlives an SSH session that started it with stderr redirected to `~/.pu/daemon.log`. A redundant spawn is harmless: it exits on the daemon lock. Then polls `Request::Health` with exponential backoff (10ms doubling to 640ms) inside a 3s timeout that includes the probes. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
 ! [CLI-002] `--json` flag for machine-readable output — provides raw JSON responses for conductor agents and scripts. Available on nearly every command: `init`, `spawn`, `status`, `bench`, `play`, `kill`, `logs`, `health`, `pulse`, `diff`, `clean`, and all CRUD subcommands (`prompt`, `agent`, `swarm`, `schedule`, `trigger`). Per-command flag (not global). Implemented across command handlers in `pu-cli/src/commands/`.
 
@@ -87,12 +87,18 @@ Key behaviors:
 | `pu trigger delete <name>` | `--scope`, `--json` | Delete trigger definition |
 | `pu trigger assign <agent_id> <trigger_name>` | `--json` | Assign trigger to idle agent |
 | `pu gate <event>` | `--project-root` | Evaluate git hook gates (pre-commit, pre-push) |
+| `pu machine list` | `--json` | List machines registered in `~/.pu/machines.json` |
+| `pu machine add <name> <ssh_host>` | `--json` | Register a machine (`~/.ssh/config` alias or `user@host[:port]`) |
+| `pu machine remove <name>` | `--json` | Forget a machine; its daemon and agents keep running |
+| `pu machine status [name]` | `--json` | Probe machine daemons over SSH: `running`, `busy`, `stopped`, `incompatible` or `unreachable`. Never starts a daemon |
+| `pu machine start <name>` | — | Start a machine's daemon by running `pu health` there over ssh |
+| `pu --machine <name> <command>` | conflicts with `--socket` | Run a command against a machine's daemon (see below) |
 
 ## Research Notes
 
 **Client implementation (`pu-cli/src/client.rs`):** Connects to Unix socket, writes `{json}\n`, reads one newline-terminated response. 30-second request timeout. `ConnectionRefused`/`NotFound` errors converted to `DaemonNotRunning` error type.
 
-**Daemon discovery:** Socket path resolved from `pu_core::paths::daemon_socket_path()` → `~/.pu/daemon.sock`. No environment variable override currently.
+**Daemon discovery:** Socket path resolved from `pu_core::paths::daemon_socket_path()` → `~/.pu/daemon.sock`, overridden by the global `--socket PATH` or `--machine NAME` flags. No environment variable override for the socket.
 
 ## Global Inventory and Routing Contract
 
@@ -110,7 +116,20 @@ Global summary and list commands ignore PU_PROJECT_ROOT unless --project is supp
 
 Validation: `crates/pu-cli/tests/global_inventory.rs` exercises real CLI processes and IPC from an unrelated cwd across two projects, root/worktree agents, scoped rejection, send/logs, bench/kill, standalone shells and registry restart. Engine inventory tests cover aliases, corrupt stores, invalid registrations, duplicate IDs, partial inventories and exited handles before reaping.
 
-The CLI verifies protocol v8 before daemon commands. An older or newer daemon produces an explicit incompatibility error with restart guidance; it is never automatically stopped because that would terminate active agents. A busy daemon reports BUSY until compatibility can be verified.
+The CLI verifies protocol v9 before daemon commands. An older or newer daemon produces an explicit incompatibility error with restart guidance; it is never automatically stopped because that would terminate active agents. A busy daemon reports BUSY until compatibility can be verified.
 
 
 Conversation reads (protocol 8): `Read { project_root, agent_id, limit, since?, session_id? }` returns `ReadResult` with runtime, exact session ID, source kind, normalized records, cursor and completeness indicators. See [Agent Conversation Reads](../product/agent-read.md). Resume uses exact recorded native identity; legacy unbound workers require `pu read AGENT --session ID`. No newest-session selection.
+
+## Machines (`--machine`)
+
+See [Machines over SSH](machines.md) (MACH-003, MACH-006, MACH-008). `pu --machine <name> <command>` looks the name up case-insensitively in `~/.pu/machines.json` and talks to that machine's daemon:
+
+- If the app's forward `~/.pu/machines/<id>/daemon.sock` answers `Health`, it is reused. Otherwise the CLI resolves the remote `$HOME` (`ssh -o BatchMode=yes <host> 'printf %s "$HOME"'`), opens a private `ssh -N -L ~/.pu/machines/<id>/cli-<pid>.sock:<home>/.pu/daemon.sock` forward, waits up to 10s for it, and kills ssh and removes the socket when the command ends. Sockets left by CLI processes that died are swept on the next run.
+- The daemon is never auto-started. A stopped daemon fails with ``daemon not running on <name>; start it with `pu machine start <name>` ``; a protocol mismatch or unreachable host fails too. No local daemon is ever started.
+- Local paths are never sent: project-scoped commands require `--project <root on that machine>` (`PU_PROJECT_ROOT` and cwd are ignored); agent-targeted commands (`status --agent`, `kill --agent`, `send`, `attach`, `read`, `logs`, `bench`, `play`) resolve the agent by id on that daemon.
+- `init`, `channel` and `gate` work on local files and reject `--machine`. `spawn --template` fetches the template from the machine's daemon (`GetTemplate`); `spawn --file` still reads the local file. `prompt list` never falls back to local templates.
+- The global plugin freshness check is skipped, as for `--socket`.
+- `PU_SSH` overrides the ssh binary (default `/usr/bin/ssh`); used by tests.
+
+Validation: `crates/pu-cli/tests/machines.rs` drives real CLI processes through a fake `PU_SSH` against an in-process daemon, including a stopped daemon (no local daemon started, no sockets left) and an unreachable host.

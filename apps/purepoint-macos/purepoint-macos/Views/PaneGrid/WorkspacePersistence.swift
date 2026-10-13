@@ -134,6 +134,16 @@ nonisolated enum WorkspacePersistence {
     /// a v3 file this way is how tab groupings would be lost), so a newer file is left alone.
     static func save(_ workspaces: [Workspace], projectRoot: String, activeWorkspaceId: String? = nil) {
         guard !isNewerThanSupported(projectRoot: projectRoot) else { return }
+        guard let data = documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else { return }
+
+        let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// The encoded layout document. Shared by local saves and saves through a remote host.
+    static func documentData(_ workspaces: [Workspace], activeWorkspaceId: String?) -> Data? {
         let document = PersistedWorkspaceDocument(
             version: PersistedWorkspaceDocument.currentVersion,
             workspaces: workspaces.map { workspace in
@@ -152,20 +162,83 @@ nonisolated enum WorkspacePersistence {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(document) else { return }
-
-        let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        return try? encoder.encode(document)
     }
 
     static func isNewerThanSupported(projectRoot: String) -> Bool {
         let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
-        guard let data = try? Data(contentsOf: url),
-            let probe = try? JSONDecoder().decode(PersistedVersionProbe.self, from: data)
-        else { return false }
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return isNewerThanSupported(data: data)
+    }
+
+    static func isNewerThanSupported(data: Data) -> Bool {
+        guard let probe = try? JSONDecoder().decode(PersistedVersionProbe.self, from: data) else { return false }
         return probe.version > PersistedWorkspaceDocument.currentVersion
+    }
+
+    /// Decode a layout document read through a host. `projectId` keys Point Guard workspaces.
+    static func workspaces(from data: Data, projectId: String) -> [Workspace] {
+        guard let document = try? JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data) else { return [] }
+        return document.workspaces.map { workspace(from: $0, projectRoot: projectId) }
+    }
+
+    // MARK: - Remote hosts
+
+    /// Load a remote project's layout through its host. Blocking: call off the main thread.
+    /// Only a missing file is an empty layout. Any other failure throws, because an empty
+    /// layout adopted after a failed read would be saved over the real one.
+    static func loadRemote(projectRoot: String, projectId: String, host: any ProjectHost) throws -> RemoteLayout {
+        let read: HostFileData
+        do {
+            read = try host.read(path: filePath(projectRoot: projectRoot), maxBytes: maxRemoteLayoutBytes)
+        } catch HostError.notFound {
+            return RemoteLayout(workspaces: [], modifiedMs: nil)
+        }
+        guard !read.truncated else { throw RemoteLayoutError.tooLarge }
+        return RemoteLayout(workspaces: workspaces(from: read.data, projectId: projectId), modifiedMs: read.modifiedMs)
+    }
+
+    static let maxRemoteLayoutBytes = 4 * 1_048_576
+
+    /// Save a remote project's layout through its host, never downgrading a newer document.
+    /// The write is conditional on the modification time of the document this app last read
+    /// or wrote (`expectedModifiedMs`), else of the one just read. When the document changed
+    /// meanwhile (another Mac, or `pu grid` on the machine) nothing is written: the outcome
+    /// carries that document so the caller adopts it instead of reverting it. Nothing is
+    /// written either when the current document cannot be read (anything but a missing file).
+    /// Blocking: call off the main thread.
+    @discardableResult
+    static func saveRemote(
+        _ data: Data, projectRoot: String, host: any ProjectHost, expectedModifiedMs: Int64?
+    ) -> RemoteSaveOutcome {
+        let path = filePath(projectRoot: projectRoot)
+        let onDisk: Int64?
+        do {
+            let existing = try host.read(path: path, maxBytes: maxRemoteLayoutBytes)
+            if existing.truncated || isNewerThanSupported(data: existing.data) { return .skipped }
+            if let expectedModifiedMs, existing.modifiedMs != expectedModifiedMs {
+                return .conflict(existing.data, modifiedMs: existing.modifiedMs)
+            }
+            onDisk = existing.modifiedMs
+        } catch HostError.notFound {
+            onDisk = nil
+        } catch {
+            return .skipped
+        }
+        do {
+            return .written(
+                modifiedMs: try host.write(
+                    path: path, data: data, expectedModifiedMs: expectedModifiedMs ?? onDisk, createDirectories: true
+                ).modifiedMs)
+        } catch HostError.conflict {
+            // Changed between the read and the write: adopt what is there now.
+            guard let current = try? host.read(path: path, maxBytes: maxRemoteLayoutBytes), !current.truncated,
+                !isNewerThanSupported(data: current.data)
+            else { return .skipped }
+            return .conflict(current.data, modifiedMs: current.modifiedMs)
+        } catch {
+            return .skipped
+        }
     }
 
     // MARK: - Load
@@ -348,5 +421,101 @@ nonisolated enum WorkspacePersistence {
 
     static func clear(projectRoot: String) {
         try? FileManager.default.removeItem(atPath: filePath(projectRoot: projectRoot))
+    }
+}
+
+/// A remote layout as read: its workspaces and the document's modification time (nil when
+/// there is no document yet).
+nonisolated struct RemoteLayout {
+    let workspaces: [Workspace]
+    let modifiedMs: Int64?
+}
+
+nonisolated enum RemoteLayoutError: LocalizedError {
+    case tooLarge
+
+    var errorDescription: String? {
+        switch self {
+        case .tooLarge: "The layout file on the remote machine is larger than 4 MB."
+        }
+    }
+}
+
+/// What a remote layout save did.
+nonisolated enum RemoteSaveOutcome: Equatable, Sendable {
+    case written(modifiedMs: Int64)
+    /// The machine's document changed since this app last read or wrote it; it was not
+    /// overwritten. Carries that document for the caller to adopt.
+    case conflict(Data, modifiedMs: Int64)
+    /// Nothing written: the document could not be read safely, or is a newer version.
+    case skipped
+}
+
+/// Writes a remote project's layout through its host on a serial queue. Quit and disconnect
+/// wait (bounded) for the writes already queued, so closing the SSH forward cannot cut off
+/// the last layout change.
+nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "purepoint.remote-layout-save")
+    private let group = DispatchGroup()
+    /// Writes `data` given the document's last known modification time.
+    private let write: @Sendable (Data, Int64?) -> RemoteSaveOutcome
+    /// Modification time of the document as this app last read or wrote it. Queue-confined.
+    private var knownModifiedMs: Int64?
+    private let conflictLock = NSLock()
+    nonisolated(unsafe) private var conflictHandler: (@Sendable (Data, Int64) -> Void)?
+
+    convenience init(projectRoot: String, host: any ProjectHost) {
+        self.init { data, expected in
+            WorkspacePersistence.saveRemote(data, projectRoot: projectRoot, host: host, expectedModifiedMs: expected)
+        }
+    }
+
+    init(write: @escaping @Sendable (Data, Int64?) -> RemoteSaveOutcome) {
+        self.write = write
+    }
+
+    /// Called (off the main thread) with the machine's document and its modification time
+    /// when a save found it changed. The handler adopts it and then calls `loaded`, so
+    /// writes already queued behind the conflict conflict too instead of reverting it.
+    func onConflict(_ handler: @escaping @Sendable (Data, Int64) -> Void) {
+        conflictLock.lock()
+        conflictHandler = handler
+        conflictLock.unlock()
+    }
+
+    /// The document as just loaded, so the next save is conditional on it.
+    func loaded(modifiedMs: Int64?) {
+        queue.async { self.knownModifiedMs = modifiedMs }
+    }
+
+    func save(_ workspaces: [Workspace], activeWorkspaceId: String?) {
+        guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else { return }
+        enqueue(data)
+    }
+
+    func enqueue(_ data: Data) {
+        let group = self.group
+        group.enter()
+        queue.async {
+            switch self.write(data, self.knownModifiedMs) {
+            case .written(let modified):
+                self.knownModifiedMs = modified
+            case .conflict(let document, let modified):
+                // The stamp advances only once the document is adopted (`loaded`).
+                self.conflictLock.lock()
+                let handler = self.conflictHandler
+                self.conflictLock.unlock()
+                handler?(document, modified)
+            case .skipped:
+                break
+            }
+            group.leave()
+        }
+    }
+
+    /// Wait until every queued write finished or `deadline` passed; false on timeout.
+    @discardableResult
+    func flush(until deadline: DispatchTime) -> Bool {
+        group.wait(timeout: deadline) == .success
     }
 }

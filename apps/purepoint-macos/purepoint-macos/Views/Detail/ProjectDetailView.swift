@@ -52,18 +52,18 @@ struct ProjectDetailView: View {
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-        }.onChange(of: project.projectRoot) { _, _ in
+        }.onChange(of: project.projectId) { _, _ in
             selectedTab = .overview
             showRootFiles = false
             summaries = [:]
-        }.task(id: project.projectRoot + selectedTab.rawValue + String(showRootFiles)) {
+        }.task(id: project.projectId + selectedTab.rawValue + String(showRootFiles)) {
             guard selectedTab == .overview, !showRootFiles else { return }
             while !Task.isCancelled {
                 guard NSApplication.shared.isActive else {
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
                     continue
                 }
-                let service = GitService()
+                let service = project.host.isLocal ? GitService() : project.git
                 let root = project.projectRoot
                 let worktrees = project.worktrees
                 let rootSummary = await service.reviewSummary(at: root, baseBranch: nil)

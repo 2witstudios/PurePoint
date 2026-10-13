@@ -329,6 +329,15 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         } => {
             system::print_config_report(default_agent, agents);
         }
+        Response::FsListResult { .. }
+        | Response::FsStatResult { .. }
+        | Response::FsReadResult { .. }
+        | Response::FsWriteResult { .. }
+        | Response::FsSubscribed
+        | Response::FsEvent { .. }
+        | Response::GitExecResult { .. } => {
+            println!("{}", serde_json::to_string_pretty(response)?);
+        }
     }
     Ok(())
 }

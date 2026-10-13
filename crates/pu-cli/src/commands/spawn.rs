@@ -3,7 +3,7 @@ use crate::commands;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::output;
-use pu_core::protocol::Request;
+use pu_core::protocol::{Request, Response};
 use pu_core::template;
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,9 +36,21 @@ pub async fn run(
     // Parse --var KEY=VALUE pairs
     let var_map = commands::parse_vars(&vars)?;
 
+    // A machine's templates live on that machine, so ask its daemon.
+    let remote_template = match &template_name {
+        Some(name) if crate::machine_target::is_remote() => {
+            Some(fetch_template(socket, &project_root, name).await?)
+        }
+        _ => None,
+    };
+    let find_template = |name: &str| match remote_template {
+        Some(template) => Some(template),
+        None => template::find_template(&project_root_path, name),
+    };
+
     // Resolve prompt + agent override + command override from template/file/inline
     let (resolved_prompt, agent_override, command_override) =
-        resolve_prompt(prompt, template_name, file, &var_map, &project_root_path)?;
+        resolve_prompt(prompt, template_name, file, &var_map, find_template)?;
 
     let agent = agent.or(agent_override).unwrap_or_else(|| "claude".into());
 
@@ -83,6 +95,42 @@ pub async fn run(
     Ok(())
 }
 
+async fn fetch_template(
+    socket: &Path,
+    project_root: &str,
+    name: &str,
+) -> Result<template::Template, CliError> {
+    let response = client::send_request(
+        socket,
+        &Request::GetTemplate {
+            project_root: project_root.to_string(),
+            name: name.to_string(),
+        },
+    )
+    .await?;
+    match output::check_response(response, false)? {
+        Response::TemplateDetail {
+            name,
+            description,
+            agent,
+            body,
+            source,
+            command,
+            ..
+        } => Ok(template::Template {
+            name,
+            description,
+            agent,
+            body,
+            source,
+            command,
+        }),
+        other => Err(CliError::Other(format!(
+            "unexpected response to template request: {other:?}"
+        ))),
+    }
+}
+
 /// Resolve the prompt from one of: --template, --file, or inline positional arg.
 /// Returns (optional_prompt, optional_agent_override, optional_command_override).
 #[allow(clippy::type_complexity)]
@@ -91,12 +139,12 @@ fn resolve_prompt(
     template_name: Option<String>,
     file: Option<String>,
     vars: &HashMap<String, String>,
-    project_root: &Path,
+    find_template: impl FnOnce(&str) -> Option<template::Template>,
 ) -> Result<(Option<String>, Option<String>, Option<String>), CliError> {
     match (inline, template_name, file) {
         (Some(prompt), None, None) => Ok((Some(prompt), None, None)),
         (None, Some(name), None) => {
-            let tpl = template::find_template(project_root, &name)
+            let tpl = find_template(&name)
                 .ok_or_else(|| CliError::Other(format!("template not found: {name}")))?;
             let agent_override = Some(tpl.agent.clone());
             let rendered = template::render(&tpl, vars);

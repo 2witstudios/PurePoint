@@ -55,9 +55,9 @@ final class DiffState {
     var error: String? { branchError ?? commitError ?? localError ?? prError }
     var localFileCount: Int { Set((stagedDiff + unstagedDiff + untrackedDiff).map(\.filename)).count }
 
-    private let git: GitService
+    private var git: GitService
     private let observeChanges: Bool
-    private let remoteGit: GitService
+    private var remoteGit: GitService
     private let summariesOnly: Bool
     init(gitService: GitService? = nil, observeChanges: Bool = true, summariesOnly: Bool = true) {
         git = gitService ?? GitService()
@@ -81,6 +81,15 @@ final class DiffState {
     private var hasSelectedPR = false
     private var lastPRRefresh = Date.distantPast
 
+    /// Route git through a project's host. A remote host reaches git over its machine's daemon.
+    func use(host: any ProjectHost) {
+        guard host.identity != git.host.identity else { return }
+        stopWatching()
+        git = GitService(host: host)
+        remoteGit = GitService(host: host)
+        previewGit = GitService(host: host)
+    }
+
     func loadForWorktree(_ worktree: WorktreeModel) {
         load(path: worktree.path, branch: worktree.branch, base: worktree.baseBranch)
     }
@@ -100,12 +109,16 @@ final class DiffState {
         refresh()
         // Explicitly driven callers can own refresh timing without background races.
         guard observeChanges else { return }
-        watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
-            Task { @MainActor in self?.refreshLocal() }
+        // Metadata watching is local-only; remote worktrees rely on the polling below.
+        if git.host.isLocal {
+            watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
+                Task { @MainActor in self?.refreshLocal() }
+            }
         }
+        let pollSeconds = git.host.isLocal ? 2 : 5
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: .seconds(pollSeconds))
                 guard !Task.isCancelled, let self else { return }
                 // Recursive file changes need polling. Hidden/background app work is bounded.
                 guard NSApplication.shared.isActive else { continue }
@@ -172,7 +185,7 @@ final class DiffState {
         untrackedDiff[index] = preview
     }
 
-    private let previewGit = GitService()
+    private var previewGit = GitService()
     func loadPage(_ file: FileDiff, after page: ReviewPageCursor? = nil) async throws -> ReviewPage {
         guard let path else { throw CancellationError() }
         let token = generation

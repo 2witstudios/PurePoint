@@ -7,7 +7,7 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 src="$repo/apps/purepoint-macos/purepoint-macos"
 set --
 for name in ChannelModel ManifestModel WorkspaceModel AgentStatus DiffModel PRModel EditorTab FileNode; do set -- "$@" "$src/Models/$name.swift"; done
-for name in DaemonProtocol DaemonClient DaemonConnection GitService WorktreeWatcher FileIOService FileTreeWatcher; do set -- "$@" "$src/Services/$name.swift"; done
+for name in DaemonProtocol DaemonClient DaemonConnection ProjectHost GitService WorktreeWatcher FileIOService FileTreeWatcher; do set -- "$@" "$src/Services/$name.swift"; done
 for name in ChannelState DiffState FileTreeState EditorState; do set -- "$@" "$src/State/$name.swift"; done
 for path in "$src"/Views/Channel/*.swift "$src"/Views/Editor/*.swift; do set -- "$@" "$path"; done
 for name in ReviewChangesView ProjectDetailView RootCheckoutDetailView WorktreeDetailView DiffListView DiffCardView DiffContentNSView PRRowView; do set -- "$@" "$src/Views/Detail/$name.swift"; done

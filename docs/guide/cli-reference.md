@@ -29,6 +29,7 @@
 | [`pu schedule`](#schedule) | Manage scheduled tasks |
 | [`pu trigger`](#trigger) | Manage event-driven triggers |
 | [`pu gate`](#gate) | Evaluate git hook gates |
+| [`pu machine`](#machine) | Manage machines reachable over SSH (`--machine`) |
 
 ## init
 
@@ -142,7 +143,7 @@ pu read <agent_id> [--limit <records>] [--since <cursor>] [--session <exact-id>]
 
 Default limit: 50 records; range: 1–200. JSON includes source metadata and `next_cursor`; use it with `--since` for incremental reads. On stale cursors, restart without `--since`. Missing identity or unsupported data fails explicitly. `--session` persists an explicitly verified native session binding; never select the newest transcript by timestamp.
 
-Requires CLI and daemon protocol 8 together. Upgrade without restarting active agents. Retained native sources can be read after an agent stops; reaped terminal captures are unavailable.
+Requires CLI and daemon protocol 9 together. Upgrade without restarting active agents. Retained native sources can be read after an agent stops; reaped terminal captures are unavailable.
 
 ## logs
 
@@ -355,3 +356,29 @@ pu gate <event> [--project-root <path>]
 ```
 
 Events: `pre-commit`, `pre-push`.
+
+## machine
+
+Work with PurePoint daemons on other computers you can reach over SSH. Machines are stored in `~/.pu/machines.json`.
+
+```sh
+pu machine list [--json]
+pu machine add <name> <ssh_host> [--json]   # ssh_host: ~/.ssh/config alias or user@host[:port]
+pu machine remove <name> [--json]           # the machine's daemon and agents keep running
+pu machine status [<name>] [--json]         # running, busy, stopped, incompatible or unreachable
+pu machine start <name>                     # runs `pu health` on the machine over ssh
+```
+
+Run any daemon command on a machine with the global `--machine <name>` flag (not combinable with `--socket`):
+
+```sh
+pu --machine studio agents list --global --json
+pu --machine studio --project /Users/me/code/app spawn "fix the build" --name fix
+pu --machine studio attach ag-xxx
+```
+
+- The CLI uses the app's SSH forward if it is live, otherwise opens its own for the command and closes it afterwards.
+- It never starts a daemon automatically, on the machine or locally. If the machine's daemon is stopped, run `pu machine start <name>`.
+- Project commands need `--project` with the project's path on that machine; your current directory is not used. Agent commands find the agent by id on that machine.
+- `init`, `channel` and `gate` work on local files and cannot be used with `--machine`.
+- `PU_SSH` overrides the ssh binary (default `/usr/bin/ssh`).

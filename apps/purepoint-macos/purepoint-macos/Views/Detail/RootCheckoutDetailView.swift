@@ -36,11 +36,13 @@ struct RootCheckoutDetailView: View {
         .overlay(alignment: .top) {
             externalChangeBanner
         }
-        .task(id: project.projectRoot) {
+        .task(id: project.projectId) {
             editorState.stopWatching()
             editorState = EditorState()
+            editorState.host = project.host
+            diffState.use(host: project.host)
             diffState.loadForProject(projectRoot: project.projectRoot)
-            fileTreeState.load(worktreePath: project.projectRoot)
+            fileTreeState.load(worktreePath: project.projectRoot, host: project.host)
         }
         .onDisappear {
             diffState.stopWatching()
@@ -133,7 +135,7 @@ struct RootCheckoutDetailView: View {
                     content: file.content,
                     language: file.language,
                     isBinary: false,
-                    isEditable: true,
+                    isEditable: !file.isReadOnly,
                     onContentChanged: { newContent in
                         editorState.updateContent(content: newContent)
                     },
@@ -189,6 +191,7 @@ struct RootCheckoutDetailView: View {
 
     @ViewBuilder
     private var externalChangeBanner: some View {
+        EditorNoticeBanners(editor: editorState) { saveError = $0 }
         if editorState.externalChangeAlert != nil, let file = editorState.currentFile {
             bannerView(
                 icon: "exclamationmark.triangle.fill",

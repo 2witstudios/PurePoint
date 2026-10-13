@@ -7,7 +7,12 @@ struct MarkdownPreviewView: NSViewRepresentable {
     let markdown: String
     /// Called with a resolved absolute path when a relative link is clicked.
     var baseDirectory: String?
+    /// The document lives on another machine: relative links still resolve against its
+    /// directory, but never as `file://` URLs that would read this Mac's disk.
+    var isRemote = false
     var onOpenFile: ((String) -> Void)?
+
+    static let remoteScheme = "purepoint-remote"
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -25,7 +30,14 @@ struct MarkdownPreviewView: NSViewRepresentable {
         context.coordinator.onOpenFile = onOpenFile
         guard context.coordinator.lastMarkdown != markdown else { return }
         context.coordinator.lastMarkdown = markdown
-        let base = baseDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let base = baseDirectory.flatMap { directory -> URL? in
+            guard isRemote else { return URL(fileURLWithPath: directory, isDirectory: true) }
+            var components = URLComponents()
+            components.scheme = Self.remoteScheme
+            components.host = "files"
+            components.path = directory.hasSuffix("/") ? directory : directory + "/"
+            return components.url
+        }
         view.loadHTMLString(MarkdownHTMLRenderer.page(body: MarkdownHTMLRenderer.render(markdown)), baseURL: base)
     }
 
@@ -45,8 +57,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
             decisionHandler(.cancel)
             if url.scheme == "http" || url.scheme == "https" || url.scheme == "mailto" {
                 NSWorkspace.shared.open(url)
-            } else if url.isFileURL, let base = baseDirectory {
-                let path = url.standardizedFileURL.path
+            } else if url.isFileURL || url.scheme == MarkdownPreviewView.remoteScheme, let base = baseDirectory {
+                let path = url.standardized.path
                 if path.hasPrefix(base) { onOpenFile?(path) }
             }
         }

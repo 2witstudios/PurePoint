@@ -350,6 +350,16 @@ nonisolated enum DaemonRequest: Encodable {
     case updateGlobalAgentSettings(codexYolo: Bool)
     case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: [String]?)
     case shutdown
+    /// The daemon's registered projects; no project root means all of them.
+    case inventory(kind: String, projectRoot: String? = nil)
+    // File and git access confined to registered projects (machines.md, protocol 9).
+    case fsList(path: String, recursive: Bool = false, includeHidden: Bool = true, maxEntries: Int = 20_000)
+    case fsStat(path: String)
+    case fsRead(path: String, maxBytes: Int = 1_048_576)
+    case fsWrite(path: String, data: Data, expectedModifiedMs: Int64? = nil, createDirs: Bool = false)
+    case fsDelete(path: String)
+    case subscribeFs(root: String, recursive: Bool = true)
+    case gitExec(cwd: String, program: String, args: [String], stdin: Data? = nil, timeoutMs: Int = 30_000)
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicCodingKey.self)
@@ -577,6 +587,43 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(launchArgs, forKey: .key("launch_args"))
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
+        case .inventory(let kind, let projectRoot):
+            try container.encode("inventory", forKey: .key("type"))
+            try container.encode(kind, forKey: .key("kind"))
+            try container.encodeIfPresent(projectRoot, forKey: .key("project_root"))
+        case .fsList(let path, let recursive, let includeHidden, let maxEntries):
+            try container.encode("fs_list", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+            try container.encode(recursive, forKey: .key("recursive"))
+            try container.encode(includeHidden, forKey: .key("include_hidden"))
+            try container.encode(maxEntries, forKey: .key("max_entries"))
+        case .fsStat(let path):
+            try container.encode("fs_stat", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+        case .fsRead(let path, let maxBytes):
+            try container.encode("fs_read", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+            try container.encode(maxBytes, forKey: .key("max_bytes"))
+        case .fsWrite(let path, let data, let expectedModifiedMs, let createDirs):
+            try container.encode("fs_write", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+            try container.encode(data.base64EncodedString(), forKey: .key("data_base64"))
+            try container.encodeIfPresent(expectedModifiedMs, forKey: .key("expected_modified_ms"))
+            try container.encode(createDirs, forKey: .key("create_dirs"))
+        case .fsDelete(let path):
+            try container.encode("fs_delete", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+        case .subscribeFs(let root, let recursive):
+            try container.encode("subscribe_fs", forKey: .key("type"))
+            try container.encode(root, forKey: .key("root"))
+            try container.encode(recursive, forKey: .key("recursive"))
+        case .gitExec(let cwd, let program, let args, let stdin, let timeoutMs):
+            try container.encode("git_exec", forKey: .key("type"))
+            try container.encode(cwd, forKey: .key("cwd"))
+            try container.encode(program, forKey: .key("program"))
+            try container.encode(args, forKey: .key("args"))
+            try container.encodeIfPresent(stdin?.base64EncodedString(), forKey: .key("stdin_base64"))
+            try container.encode(timeoutMs, forKey: .key("timeout_ms"))
         }
     }
 }
@@ -614,6 +661,14 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
     case globalAgentSettingsReport(codexYolo: Bool)
+    case inventory(InventoryReportPayload)
+    case fsListResult(path: String, entries: [FsEntryPayload], truncated: Bool)
+    case fsStatResult(FsStatPayload)
+    case fsReadResult(path: String, data: Data, size: UInt64, modifiedMs: Int64, truncated: Bool)
+    case fsWriteResult(path: String, size: UInt64, modifiedMs: Int64)
+    case fsSubscribed
+    case fsEvent(root: String, paths: [String])
+    case gitExecResult(exitCode: Int32, stdout: Data, stderr: Data, truncated: Bool)
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -716,6 +771,33 @@ nonisolated enum DaemonResponse: Decodable {
         case "global_agent_settings_report":
             let p = try GlobalAgentSettingsPayload(from: decoder)
             self = .globalAgentSettingsReport(codexYolo: p.codexYolo)
+        case "inventory":
+            self = .inventory(try InventoryReportPayload(from: decoder))
+        case "fs_list_result":
+            let p = try FsListResultPayload(from: decoder)
+            self = .fsListResult(path: p.path, entries: p.entries, truncated: p.truncated)
+        case "fs_stat_result":
+            self = .fsStatResult(try FsStatPayload(from: decoder))
+        case "fs_read_result":
+            let p = try FsReadResultPayload(from: decoder)
+            guard let data = Data(base64Encoded: p.dataBase64) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid base64 file data"))
+            }
+            self = .fsReadResult(
+                path: p.path, data: data, size: p.size, modifiedMs: p.modifiedMs, truncated: p.truncated)
+        case "fs_write_result":
+            let p = try FsWriteResultPayload(from: decoder)
+            self = .fsWriteResult(path: p.path, size: p.size, modifiedMs: p.modifiedMs)
+        case "fs_subscribed":
+            self = .fsSubscribed
+        case "fs_event":
+            let p = try FsEventPayload(from: decoder)
+            self = .fsEvent(root: p.root, paths: p.paths)
+        case "git_exec_result":
+            let p = try GitExecResultPayload(from: decoder)
+            self = .gitExecResult(
+                exitCode: p.exitCode, stdout: Data(base64Encoded: p.stdoutBase64) ?? Data(),
+                stderr: Data(base64Encoded: p.stderrBase64) ?? Data(), truncated: p.truncated)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -1063,5 +1145,124 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
     static func key(_ name: String) -> DynamicCodingKey {
         DynamicCodingKey(stringValue: name)!
+    }
+}
+
+// MARK: - Machines: inventory, file and git payloads (protocol 9)
+
+nonisolated enum DaemonProtocol {
+    /// The protocol this app speaks. A daemon reporting another version is incompatible.
+    static let version = 9
+}
+
+nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {
+    let projectRoot: String
+    let name: String
+    let available: Bool
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name, available, error
+        case projectRoot = "project_root"
+    }
+}
+
+/// Only the project list is read; agent and worktree detail arrives per project via status.
+nonisolated struct InventoryReportPayload: Decodable, Sendable {
+    let projectRoot: String?
+    let complete: Bool
+    let projects: [InventoryProjectPayload]
+
+    enum CodingKeys: String, CodingKey {
+        case complete, projects
+        case projectRoot = "project_root"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectRoot = try container.decodeIfPresent(String.self, forKey: .projectRoot)
+        complete = try container.decodeIfPresent(Bool.self, forKey: .complete) ?? true
+        projects = try container.decodeIfPresent([InventoryProjectPayload].self, forKey: .projects) ?? []
+    }
+}
+
+nonisolated struct FsEntryPayload: Decodable, Sendable, Equatable {
+    let name: String
+    let path: String
+    let isDir: Bool
+    let isSymlink: Bool
+    let size: UInt64
+    let modifiedMs: Int64
+    let ignored: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name, path, size, ignored
+        case isDir = "is_dir"
+        case isSymlink = "is_symlink"
+        case modifiedMs = "modified_ms"
+    }
+}
+
+nonisolated struct FsStatPayload: Decodable, Sendable, Equatable {
+    let path: String
+    let exists: Bool
+    let isDir: Bool
+    let size: UInt64
+    let modifiedMs: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case path, exists, size
+        case isDir = "is_dir"
+        case modifiedMs = "modified_ms"
+    }
+}
+
+private nonisolated struct FsListResultPayload: Decodable {
+    let path: String
+    let entries: [FsEntryPayload]
+    let truncated: Bool
+}
+
+private nonisolated struct FsReadResultPayload: Decodable {
+    let path: String
+    let dataBase64: String
+    let size: UInt64
+    let modifiedMs: Int64
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path, size, truncated
+        case dataBase64 = "data_base64"
+        case modifiedMs = "modified_ms"
+    }
+}
+
+private nonisolated struct FsWriteResultPayload: Decodable {
+    let path: String
+    let size: UInt64
+    let modifiedMs: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case path, size
+        case modifiedMs = "modified_ms"
+    }
+}
+
+private nonisolated struct FsEventPayload: Decodable {
+    let root: String
+    let paths: [String]
+}
+
+private nonisolated struct GitExecResultPayload: Decodable {
+    let exitCode: Int32
+    let stdoutBase64: String
+    let stderrBase64: String
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case truncated
+        case exitCode = "exit_code"
+        case stdoutBase64 = "stdout_base64"
+        case stderrBase64 = "stderr_base64"
     }
 }

@@ -71,6 +71,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Desktop App | APP | CONVERGING |
 | Point Guard Setup | PGSET | SPECIFIED |
 | Configuration | CFG | SEED |
+| Machines | MACH | SPECIFIED |
 
 ### Reference (Inventory)
 Reference material for existing codebases and PurePoint CLI commands.

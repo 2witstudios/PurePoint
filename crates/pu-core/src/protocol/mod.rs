@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -374,6 +374,50 @@ pub enum Request {
     Pulse {
         project_root: String,
     },
+    // File and git access confined to registered projects (MACH-007).
+    FsList {
+        path: String,
+        #[serde(default)]
+        recursive: bool,
+        #[serde(default = "crate::serde_defaults::default_true")]
+        include_hidden: bool,
+        #[serde(default = "default_fs_list_max_entries")]
+        max_entries: usize,
+    },
+    FsStat {
+        path: String,
+    },
+    FsRead {
+        path: String,
+        #[serde(default = "default_fs_read_max_bytes")]
+        max_bytes: u64,
+    },
+    FsWrite {
+        path: String,
+        data_base64: String,
+        #[serde(default)]
+        expected_modified_ms: Option<i64>,
+        #[serde(default)]
+        create_dirs: bool,
+    },
+    FsDelete {
+        path: String,
+    },
+    SubscribeFs {
+        root: String,
+        #[serde(default = "crate::serde_defaults::default_true")]
+        recursive: bool,
+    },
+    GitExec {
+        cwd: String,
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        stdin_base64: Option<String>,
+        #[serde(default = "default_git_exec_timeout_ms")]
+        timeout_ms: u64,
+    },
 }
 
 pub fn default_channel_limit() -> usize {
@@ -581,6 +625,41 @@ pub enum Response {
     PulseReport {
         worktrees: Vec<WorktreePulseEntry>,
         root_agents: Vec<AgentPulseEntry>,
+    },
+    FsListResult {
+        path: String,
+        entries: Vec<FsEntry>,
+        truncated: bool,
+    },
+    FsStatResult {
+        path: String,
+        exists: bool,
+        is_dir: bool,
+        size: u64,
+        modified_ms: i64,
+    },
+    FsReadResult {
+        path: String,
+        data_base64: String,
+        size: u64,
+        modified_ms: i64,
+        truncated: bool,
+    },
+    FsWriteResult {
+        path: String,
+        size: u64,
+        modified_ms: i64,
+    },
+    FsSubscribed,
+    FsEvent {
+        root: String,
+        paths: Vec<String>,
+    },
+    GitExecResult {
+        exit_code: i32,
+        stdout_base64: String,
+        stderr_base64: String,
+        truncated: bool,
     },
     Ok,
     ShuttingDown,

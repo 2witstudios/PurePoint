@@ -76,7 +76,7 @@ struct ChatInputView: View {
         chatState.inputText = ""
 
         let cwd =
-            appState.activeProjectRoot ?? appState.projects.first?.projectRoot
+            appState.activeLocalProjectRoot
             ?? FileManager.default.currentDirectoryPath
         Task {
             await chatState.send(text, cwd: cwd)
