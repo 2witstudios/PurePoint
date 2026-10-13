@@ -146,6 +146,15 @@ pub struct DiffOutput {
     pub deletions: usize,
 }
 
+/// Diff requests reach worktree paths from `.pu/manifest.json`, which a client
+/// can write: never use a bare repository planted there, or its fsmonitor.
+const GUARD: &[&str] = &[
+    "-c",
+    "safe.bareRepository=explicit",
+    "-c",
+    "core.fsmonitor=",
+];
+
 /// Compute the diff for a worktree against its base branch.
 ///
 /// When `base` is provided, computes the merge-base between HEAD and `base` so
@@ -163,7 +172,9 @@ pub async fn diff_worktree(
     // so we only see the worktree's own changes, not upstream commits.
     let merge_base: Option<String> = match base {
         Some(b) => {
-            let mb = run_git_allow_empty(&["merge-base", "HEAD", b], worktree_path).await?;
+            let mb =
+                run_git_allow_empty(&[GUARD, &["merge-base", "HEAD", b]].concat(), worktree_path)
+                    .await?;
             let mb = mb.trim().to_string();
             if mb.is_empty() { None } else { Some(mb) }
         }
@@ -173,13 +184,17 @@ pub async fn diff_worktree(
     let target = merge_base.as_deref().unwrap_or("HEAD");
 
     // Get the stat summary (always needed for counts)
-    let stat_output = run_git_allow_empty(&["diff", "--stat", target], worktree_path).await?;
+    let stat_output = run_git_allow_empty(
+        &[GUARD, &["diff", "--stat", target]].concat(),
+        worktree_path,
+    )
+    .await?;
     let (files_changed, insertions, deletions) = parse_diff_stat(&stat_output);
 
     let diff = if stat {
         stat_output
     } else {
-        run_git_allow_empty(&["diff", target], worktree_path).await?
+        run_git_allow_empty(&[GUARD, &["diff", target]].concat(), worktree_path).await?
     };
 
     Ok(DiffOutput {

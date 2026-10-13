@@ -659,7 +659,12 @@ fn given_git_should_run_with_hooks_and_user_config_disabled() {
         exec_args("gh", strings(&["auth", "status"])),
         strings(&["auth", "status"])
     );
-    assert!(exec_env("gh").is_empty());
+    assert!(
+        exec_env("gh")
+            .iter()
+            .any(|(k, v)| *k == "GIT_CONFIG_PARAMETERS"
+                && v.contains("safe.bareRepository=explicit"))
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -956,6 +961,15 @@ fn given_escaping_git_args_should_refuse_them() {
         vec!["diff", "-O/dev/zero"],
         vec!["diff", "-O", "/dev/zero"],
         vec!["diff", "--orderfile=/dev/zero"],
+        // Bundled short flags and per-subcommand options outside the app's set.
+        vec!["diff", "-RO/abs/outside", "--name-only"],
+        vec!["diff", "-Ro", "/tmp/x"],
+        vec!["ls-files", "-o", "-i", "-X/abs/secret"],
+        vec!["ls-files", "--exclude-from=/abs/secret"],
+        vec!["ls-files", "--exclude-per-directory=../../outside/file"],
+        vec!["rev-list", "-n", "1; rm"],
+        vec!["log", "--follow", "--", "a"],
+        vec!["status", "--porcelain=v2"],
     ] {
         assert!(
             check_exec_args("git", &strings(&args)).is_err(),
@@ -1105,7 +1119,7 @@ async fn given_git_status_in_project_should_return_output() {
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: vec!["status".into(), "--porcelain".into()],
+            args: vec!["status".into(), "--porcelain=v1".into()],
             stdin_base64: None,
             timeout_ms: 10_000,
         })
@@ -1153,7 +1167,7 @@ async fn given_stdin_and_failing_command_should_pass_input_and_exit_code() {
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: strings(&["rev-list", "--stdin", "--no-walk"]),
+            args: strings(&["rev-list", "--stdin", "-n", "1"]),
             stdin_base64: Some(b64(b"HEAD\n")),
             timeout_ms: 10_000,
         })
@@ -1322,7 +1336,7 @@ async fn given_root_without_repo_git_should_not_find_an_enclosing_one() {
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: strings(&["rev-parse", "--show-toplevel"]),
+            args: strings(&["ls-files", "-z"]),
             stdin_base64: None,
             timeout_ms: 10_000,
         })
@@ -1455,4 +1469,21 @@ async fn given_symlink_operand_pointing_outside_should_be_refused() {
         })
         .await;
     assert_error(resp, "args_not_allowed");
+}
+
+#[test]
+fn given_gh_options_outside_the_apps_should_refuse_them() {
+    for args in [
+        vec!["pr", "list", "-R", "other/repo"],
+        vec!["pr", "list", "--repo=other/repo"],
+        vec!["pr", "diff", "226", "--web"],
+        vec!["pr", "view", "226"],
+        vec!["pr", "list", "--json"],
+        vec!["auth", "status", "--show-token"],
+    ] {
+        assert!(
+            check_exec_args("gh", &strings(&args)).is_err(),
+            "{args:?} should be refused"
+        );
+    }
 }

@@ -61,24 +61,6 @@ const GIT_GLOBAL_FLAGS: [&str; 7] = [
 ];
 /// Config keys `-c` may set (lowercase): display-only settings.
 const GIT_CONFIG_KEYS: [&str; 1] = ["core.quotepath"];
-/// Long options refused before `--` in any position (git also accepts any
-/// unambiguous abbreviation, so prefixes of these are refused too, as are
-/// longer names that extend them such as `--output-directory`): they relocate
-/// the repository, run helper programs, or write arbitrary files.
-const GIT_FORBIDDEN_OPTIONS: [&str; 12] = [
-    "orderfile",
-    "git-dir",
-    "work-tree",
-    "exec-path",
-    "namespace",
-    "config-env",
-    "upload-pack",
-    "receive-pack",
-    "output",
-    "exec",
-    "ext-diff",
-    "textconv",
-];
 /// The read-only subcommands `GitService.swift` runs. A positive allowlist:
 /// aliases, writers (`config`, `worktree`, `init`, `bundle`, `format-patch`,
 /// …) and any subcommand git adds later are refused.
@@ -95,8 +77,9 @@ const GIT_ALLOWED_SUBCOMMANDS: [&str; 10] = [
     "symbolic-ref",
 ];
 /// `gh` commands the app runs; extensions and aliases are refused.
+/// gh commands the app runs (`GitService.swift`), with the options each may take.
 const GH_ALLOWED: [(&str, &[&str]); 3] = [
-    ("pr", &["list", "diff", "view", "status", "checks"]),
+    ("pr", &["list", "diff"]),
     ("auth", &["status"]),
     ("repo", &["view"]),
 ];
@@ -700,13 +683,6 @@ fn fs_delete(path: &str, roots: &FsRoots) -> Response {
     }
 }
 
-/// Long option name of `arg` (`--name` or `--name=value`), if it is one.
-fn long_option_name(arg: &str) -> Option<&str> {
-    let rest = arg.strip_prefix("--")?;
-    let name = rest.split_once('=').map_or(rest, |(name, _)| name);
-    (!name.is_empty()).then_some(name)
-}
-
 /// A relative path made only of plain names (no `..`, no root).
 fn is_plain_relative(path: &str) -> bool {
     let path = Path::new(path);
@@ -756,33 +732,43 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
     }
     let separator = rest.iter().position(|a| a == "--");
     let options = &rest[..separator.unwrap_or(rest.len())];
+    // A positive allowlist per subcommand of exactly the options the app sends:
+    // any other option (bundled short flags such as `-RO<file>`, `ls-files
+    // -X<file>`, `--output`, ...) could read or write outside the roots.
     let mut no_index = false;
-    for arg in options {
-        // `-o <dir>` / `-o<dir>` names an output directory or file; `-O<file>`
-        // reads an order file from anywhere (and blocks on a device).
-        if arg.starts_with("-o") || arg.starts_with("-O") {
-            return Err(format!("git option {arg:?} is not allowed"));
-        }
-        let Some(name) = long_option_name(arg) else {
+    let mut operands_before: Vec<&String> = Vec::new();
+    let mut end_of_options = false;
+    let mut j = 0;
+    while let Some(arg) = options.get(j) {
+        j += 1;
+        if end_of_options || !arg.starts_with('-') {
+            operands_before.push(arg);
             continue;
-        };
-        if name == "no-index" {
+        }
+        if subcommand == "rev-parse" && arg == "--end-of-options" {
+            end_of_options = true;
+            continue;
+        }
+        match git_option_rule(subcommand, arg) {
+            Some(GitOption::Flag) => {}
+            Some(GitOption::Count) => {
+                let value = options.get(j).map(String::as_str).unwrap_or_default();
+                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err(format!("git {subcommand} {arg} needs a number"));
+                }
+                j += 1;
+            }
+            None => return Err(format!("git {subcommand} option {arg:?} is not allowed")),
+        }
+        if arg == "--no-index" {
             no_index = true;
-        } else if GIT_FORBIDDEN_OPTIONS
-            .iter()
-            .any(|f| f.starts_with(name) || name.starts_with(f))
-        {
-            return Err(format!("git option {arg:?} is not allowed"));
         }
     }
     // Paths name files inside the repository. An absolute or `..` path would read
     // outside it (git even switches `diff` to no-index mode on its own for a path
     // outside the work tree), so only `/dev/null` and plain relative paths pass.
     let after_separator = separator.map_or(&rest[rest.len()..], |s| &rest[s + 1..]);
-    let operands = options
-        .iter()
-        .filter(|a| !a.starts_with('-'))
-        .chain(after_separator);
+    let operands = operands_before.into_iter().chain(after_separator);
     for arg in operands {
         if arg != "/dev/null" && (arg.starts_with('/') || arg.split('/').any(|c| c == "..")) {
             return Err(format!("git path {arg:?} is outside the repository"));
@@ -807,6 +793,59 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// How an allowed option is used.
+enum GitOption {
+    Flag,
+    /// Takes a separate numeric value (`-n 1`).
+    Count,
+}
+
+/// Options shared by the app's `diff` and `diff-tree` calls.
+const GIT_DIFF_OPTIONS: [&str; 13] = [
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--find-renames",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--name-status",
+    "-z",
+    "--raw",
+    "--no-abbrev",
+    "--numstat",
+    "--patch",
+    "--no-renames",
+];
+
+/// The options `subcommand` may take — exactly those `GitService.swift` sends.
+fn git_option_rule(subcommand: &str, arg: &str) -> Option<GitOption> {
+    let flags: &[&str] = match subcommand {
+        "status" => &[
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
+        "diff" if ["--cached", "--ours", "--no-index"].contains(&arg) => {
+            return Some(GitOption::Flag);
+        }
+        "diff" => &GIT_DIFF_OPTIONS,
+        "diff-tree" if ["--root", "--no-commit-id", "-r"].contains(&arg) => {
+            return Some(GitOption::Flag);
+        }
+        "diff-tree" => &GIT_DIFF_OPTIONS,
+        // Format placeholders only render commit and ref data.
+        "log" | "for-each-ref" if arg.starts_with("--format=") => return Some(GitOption::Flag),
+        "rev-parse" => &["--abbrev-ref", "--symbolic-full-name", "--verify"],
+        "rev-list" if arg == "-n" => return Some(GitOption::Count),
+        "rev-list" => &["--count", "--parents", "--stdin"],
+        "ls-files" => &["--others", "--exclude-standard", "-z", "--unmerged"],
+        "symbolic-ref" => &["--short", "-q", "--quiet"],
+        _ => &[],
+    };
+    flags.contains(&arg).then_some(GitOption::Flag)
 }
 
 /// Path operands that exist must stay inside the roots once symlinks are
@@ -857,11 +896,27 @@ fn check_gh_args(args: &[String]) -> Result<(), String> {
     let allowed = GH_ALLOWED
         .iter()
         .any(|(c, subs)| *c == command && subs.contains(&subcommand));
-    if allowed {
-        Ok(())
-    } else {
-        Err(format!("gh {command} {subcommand} is not allowed"))
+    if !allowed {
+        return Err(format!("gh {command} {subcommand} is not allowed"));
     }
+    // Options are limited to the ones the app sends: `-R/--repo`, `--web` and
+    // the like would reach other repositories or open a browser on the host.
+    let valued: &[&str] = match (command, subcommand) {
+        ("pr", "list") => &["--json", "--limit", "--head"],
+        _ => &[],
+    };
+    let mut rest = args[2..].iter();
+    while let Some(arg) = rest.next() {
+        if !arg.starts_with('-') {
+            continue;
+        }
+        if !valued.contains(&arg.as_str()) || rest.next().is_none() {
+            return Err(format!(
+                "gh {command} {subcommand} option {arg:?} is not allowed"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The argv `git_exec` runs for already-checked `args`: git also gets
@@ -903,7 +958,12 @@ fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
             ("GIT_CONFIG_NOSYSTEM", "1"),
         ]
     } else {
-        Vec::new()
+        // gh runs git internally; those calls get the same repository guards
+        // (its own auth lives in gh's config, not git's, so that config stays).
+        vec![(
+            "GIT_CONFIG_PARAMETERS",
+            "'safe.bareRepository=explicit' 'core.fsmonitor=' 'core.hooksPath=/dev/null'",
+        )]
     }
 }
 
@@ -1100,9 +1160,7 @@ impl Engine {
         if let Some(path) = login_path {
             command.env("PATH", path);
         }
-        if program == "git"
-            && let Some(ceiling) = ceiling
-        {
+        if let Some(ceiling) = ceiling {
             command.env("GIT_CEILING_DIRECTORIES", ceiling);
         }
         let mut child = match command.spawn() {

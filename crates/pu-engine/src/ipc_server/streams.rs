@@ -275,7 +275,9 @@ where
         error = %native_error,
         "native recursive watch failed; polling instead"
     );
-    let config = notify::Config::default().with_poll_interval(FS_POLL_INTERVAL);
+    let config = notify::Config::default()
+        .with_poll_interval(FS_POLL_INTERVAL)
+        .with_follow_symlinks(false);
     let mut poller = notify::PollWatcher::new(handler(), config)?;
     poller.watch(root, mode)?;
     Ok((Box::new(poller), true))
@@ -328,7 +330,10 @@ pub(super) async fn handle_fs_stream(
             }
         };
         watch_dir(&watch_root, recursive, handler, |h| {
-            notify::recommended_watcher(h).map(|w| Box::new(w) as BoxedWatcher)
+            // Never follow a symlink out of the root (inotify and kqueue would).
+            let config = notify::Config::default().with_follow_symlinks(false);
+            <notify::RecommendedWatcher as notify::Watcher>::new(h, config)
+                .map(|w| Box::new(w) as BoxedWatcher)
         })
     })
     .await;
