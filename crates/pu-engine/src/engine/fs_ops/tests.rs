@@ -642,6 +642,8 @@ fn given_git_should_run_with_hooks_and_user_config_disabled() {
             "-c",
             "core.hooksPath=/dev/null",
             "-c",
+            "safe.bareRepository=explicit",
+            "-c",
             "core.quotePath=true",
             "status"
         ])
@@ -944,6 +946,13 @@ fn given_escaping_git_args_should_refuse_them() {
         vec!["difftool", "-x", "sh"],
         vec!["submodule", "foreach", "sh"],
         vec!["bisect", "run", "sh"],
+        // Paths outside the repository, with or without an explicit --no-index
+        // (git switches diff to no-index mode by itself for an outside path).
+        vec!["diff", "/dev/null", "/etc/hosts"],
+        vec!["diff", "--", "/dev/null", "/etc/hosts"],
+        vec!["log", "-p", "--", "../outside"],
+        vec!["diff", "HEAD", "--", "src/../../outside"],
+        vec!["ls-files", "/etc"],
     ] {
         assert!(
             check_exec_args("git", &strings(&args)).is_err(),
@@ -1213,4 +1222,91 @@ async fn given_git_metadata_path_should_refuse_write_and_delete_but_allow_read()
         })
         .await;
     assert!(matches!(read, Response::FsReadResult { .. }), "{read:?}");
+}
+
+#[test]
+fn given_ranges_and_relative_paths_should_pass_the_path_check() {
+    for args in [
+        vec!["log", "--format=%H", "abc..def", "--"],
+        vec!["diff", "HEAD~1..HEAD", "--", "src/main.rs"],
+        vec!["diff", "--no-index", "--", "/dev/null", "new.txt"],
+        vec![
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    ] {
+        assert_eq!(check_exec_args("git", &strings(&args)), Ok(()), "{args:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_planted_bare_repo_should_not_run_its_config() {
+    let (engine, tmp, root, _outside) = setup().await;
+    let marker = tmp.path().join("bare-ran");
+    let evil = root.join("evil");
+    for dir in ["objects", "refs"] {
+        std::fs::create_dir_all(evil.join(dir)).unwrap();
+    }
+    std::fs::write(evil.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        evil.join("config"),
+        format!("[diff]\n\texternal = touch '{}' ;\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::write(evil.join("f"), "x").unwrap();
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&evil),
+            program: "git".into(),
+            args: strings(&["diff", "--no-index", "--", "/dev/null", "f"]),
+            stdin_base64: None,
+            timeout_ms: 10_000,
+        })
+        .await;
+    assert!(matches!(resp, Response::GitExecResult { .. }), "{resp:?}");
+    assert!(!marker.exists(), "planted bare repository config ran");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_root_without_repo_git_should_not_find_an_enclosing_one() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    // An enclosing repository (like a dotfiles repo at $HOME) above a project
+    // that is not a repository itself.
+    git(&base, &["init", "-q"]);
+    let root = base.join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    let engine = Engine::new();
+    let init = engine
+        .handle_request(Request::Init {
+            project_root: path_string(&root),
+        })
+        .await;
+    assert!(matches!(init, Response::InitResult { .. }), "{init:?}");
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&["rev-parse", "--show-toplevel"]),
+            stdin_base64: None,
+            timeout_ms: 10_000,
+        })
+        .await;
+    let Response::GitExecResult { exit_code, .. } = resp else {
+        panic!("{resp:?}")
+    };
+    assert_ne!(exit_code, 0, "git found the enclosing repository");
+}
+
+#[test]
+fn given_registered_home_should_never_be_an_fs_root() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    let project = home.join("code");
+    std::fs::create_dir_all(&project).unwrap();
+    let roots = allowed_roots(&[path_string(&home), path_string(&project)], Some(&home));
+    assert_eq!(roots.writable, vec![project.clone()]);
+    assert!(!roots.all.contains(&home));
 }

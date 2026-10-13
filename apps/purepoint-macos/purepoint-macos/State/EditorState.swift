@@ -107,8 +107,9 @@ final class EditorState {
                 content: file.content, to: file.id, host: host, expectedModifiedMs: expectedModifiedMs)
             saveConflict = false
             externalChangeAlert = nil
-            loadedModifiedMs = modified
+            // Another file opened while this save was in flight keeps its own stamp.
             guard currentFile?.id == file.id else { return }
+            loadedModifiedMs = modified
             currentFile?.isDirty = false
             currentFile?.lastModified =
                 host.isLocal

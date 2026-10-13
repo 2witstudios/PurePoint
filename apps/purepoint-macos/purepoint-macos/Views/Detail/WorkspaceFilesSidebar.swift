@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Attached to the workspace's content, rather than the elevated global navigation.
@@ -221,8 +222,11 @@ private struct InlineFilePreview: View {
         .task(id: WorkspaceFilesState.identity(rootPath: path, host: host)) {
             var lastModified: Date?
             while !Task.isCancelled {
-                let modified = await FileIOService.fileModificationDate(at: path, host: host)
-                if hunks == nil || modified != lastModified {
+                // A remote check is an SSH round trip: skip it while the app is in the
+                // background, like the other remote pollers (the first read always runs).
+                let checkNow = hunks == nil || host.isLocal || NSApplication.shared.isActive
+                let modified = checkNow ? await FileIOService.fileModificationDate(at: path, host: host) : lastModified
+                if checkNow, hunks == nil || modified != lastModified {
                     do {
                         let file = try await FileIOService.readFile(at: path, limit: 1_000_000, host: host)
                         guard !Task.isCancelled else { return }

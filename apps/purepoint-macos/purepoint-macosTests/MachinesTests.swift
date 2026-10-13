@@ -819,3 +819,13 @@ struct RemoteEditorTests {
         #expect(!host.run(HostCommand(program: "git", executablePath: "/usr/bin/git", args: ["status"], cwd: "/")).success)
     }
 }
+
+struct LocalCopyTests {
+    @Test func givenLocalCopyShouldBeQuarantined() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pp-quarantine-\(UUID().uuidString).command")
+        try Data("echo hi".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        FileIOService.quarantine(url)
+        #expect(getxattr(url.path, "com.apple.quarantine", nil, 0, 0, 0) > 0)
+    }
+}

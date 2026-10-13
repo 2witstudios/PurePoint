@@ -36,7 +36,16 @@ const GIT_EXEC_MAX_TIMEOUT_MS: u64 = 120_000;
 const CHECK_IGNORE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Prepended to every `git_exec` git command (after the client's arguments
 /// are checked): repository config can't run an fsmonitor hook or hooks.
-const GIT_EXEC_PREFIX: [&str; 4] = ["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null"];
+/// `safe.bareRepository=explicit`: a directory a client planted with `HEAD`,
+/// `objects/`, `refs/` and a `config` is never taken for a repository.
+const GIT_EXEC_PREFIX: [&str; 6] = [
+    "-c",
+    "core.fsmonitor=",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "safe.bareRepository=explicit",
+];
 
 /// Global options git may receive before its subcommand. Everything else that
 /// redirects the repository, config or helper programs (`-C`, `--git-dir`,
@@ -163,6 +172,12 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
         let Ok(canonical) = root.canonicalize() else {
             continue;
         };
+        // However it got registered (legacy registry entry, auto-registration of a
+        // directory with a `.pu/manifest.json` such as `$HOME`), a root this broad
+        // would expose the whole home directory: it is never an fs root.
+        if is_too_broad_project_root(&canonical, home) {
+            continue;
+        }
         let worktrees_dir = pu_core::paths::pu_dir(root)
             .join("worktrees")
             .canonicalize()
@@ -716,6 +731,19 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
             return Err(format!("git option {arg:?} is not allowed"));
         }
     }
+    // Paths name files inside the repository. An absolute or `..` path would read
+    // outside it (git even switches `diff` to no-index mode on its own for a path
+    // outside the work tree), so only `/dev/null` and plain relative paths pass.
+    let after_separator = separator.map_or(&rest[rest.len()..], |s| &rest[s + 1..]);
+    let operands = options
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .chain(after_separator);
+    for arg in operands {
+        if arg != "/dev/null" && (arg.starts_with('/') || arg.split('/').any(|c| c == "..")) {
+            return Err(format!("git path {arg:?} is outside the repository"));
+        }
+    }
     if no_index {
         // `diff --no-index` compares arbitrary files; allow only the app's
         // "new file" form: options, `--`, then /dev/null or plain relative paths.
@@ -949,6 +977,17 @@ impl Engine {
             Ok(dir) => dir,
             Err(e) => return e,
         };
+        // git must not walk up out of the confined root into an enclosing
+        // repository (a dotfiles repo at `$HOME`, say): stop discovery at the
+        // innermost root containing `cwd`.
+        let ceiling = self
+            .fs_roots()
+            .await
+            .all
+            .into_iter()
+            .filter(|root| cwd.starts_with(root))
+            .max_by_key(|root| root.components().count())
+            .and_then(|root| root.parent().map(Path::to_path_buf));
         // The daemon may run under launchd with a minimal PATH; agents get the
         // login shell's, and so does gh/git here.
         let login_path = self
@@ -979,6 +1018,11 @@ impl Engine {
             .kill_on_drop(true);
         if let Some(path) = login_path {
             command.env("PATH", path);
+        }
+        if program == "git"
+            && let Some(ceiling) = ceiling
+        {
+            command.env("GIT_CEILING_DIRECTORIES", ceiling);
         }
         let mut child = match command.spawn() {
             Ok(child) => child,

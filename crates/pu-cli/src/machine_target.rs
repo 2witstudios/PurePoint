@@ -217,7 +217,13 @@ pub fn close_open_forwards() {
 /// On SIGTERM, SIGHUP or SIGINT, close open private forwards and exit with
 /// the conventional `128 + signal` status.
 pub fn close_forwards_on_signal() {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::signal::unix::{SignalKind, signal};
+    // Installed once, before the first forward starts waiting to be ready.
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let (Ok(mut term), Ok(mut hup), Ok(mut int)) = (
         signal(SignalKind::terminate()),
         signal(SignalKind::hangup()),
@@ -360,6 +366,8 @@ pub async fn open_forward(machine: &Machine) -> Result<Forward, CliError> {
     }
     let _ = std::fs::remove_file(&socket);
     let home = resolve_remote_home(machine).await?;
+    // A signal while ssh is still coming up must close it too.
+    close_forwards_on_signal();
 
     let program = ssh_program();
     let child = std::process::Command::new(&program)
@@ -386,6 +394,13 @@ pub async fn open_forward(machine: &Machine) -> Result<Forward, CliError> {
     loop {
         // symlink_metadata: the socket exists once bound, whatever it points at.
         if forward.socket.symlink_metadata().is_ok() {
+            // ssh logs a line per failed channel (a stopped remote daemon, say);
+            // an unread pipe would fill and stall the forward.
+            if let Some(mut pipe) = forward.child.as_mut().and_then(|c| c.stderr.take()) {
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+                });
+            }
             return Ok(forward);
         }
         let child = forward.child.as_mut().expect("forward child");

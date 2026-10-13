@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 nonisolated enum FilePreviewError: LocalizedError {
@@ -131,6 +132,7 @@ enum FileIOService {
                 at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let url = directory.appendingPathComponent((path as NSString).lastPathComponent)
             try read.data.write(to: url, options: .atomic)
+            quarantine(url)
             return url
         }
     }
@@ -153,6 +155,17 @@ extension FileIOService {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: temp.path)) ?? []
         for name in names where name.hasPrefix(localCopyPrefix) {
             try? FileManager.default.removeItem(at: temp.appendingPathComponent(name))
+        }
+    }
+}
+
+extension FileIOService {
+    /// Mark a copy fetched from another machine as downloaded, so Gatekeeper checks it before
+    /// anything in it (a `.command`, an app) runs on this Mac.
+    nonisolated static func quarantine(_ url: URL) {
+        let value = "0083;\(String(Int(Date().timeIntervalSince1970), radix: 16));PurePoint;"
+        _ = value.withCString { pointer in
+            setxattr(url.path, "com.apple.quarantine", pointer, strlen(pointer), 0, 0)
         }
     }
 }
