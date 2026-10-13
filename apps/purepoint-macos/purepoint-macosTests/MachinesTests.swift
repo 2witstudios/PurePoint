@@ -464,15 +464,19 @@ struct RemoteRegistryTests {
         AgentModel(id: id, name: id, agentType: "claude", status: .running, prompt: "", startedAt: "")
     }
 
-    @Test func givenRemoteProjectShouldWaitForItsLayoutBeforePublishing() {
+    @Test func givenRemoteProjectShouldShowAgentsButNotSaveBeforeItsLayoutLoads() {
         let registry = WorkspaceRegistry(loadWorkspaces: { _ in
             Issue.record("a remote project must not load its layout from the local disk")
             return []
         })
         registry.reconcile(projectRoot: projectId, rootAgents: [agent("ag-a")], worktrees: [])
-        #expect(registry.workspaces(forProject: projectId).isEmpty)
+        // Agents show in a default layout while the machine's layout is still loading…
+        #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
 
+        // …but nothing is saved until it has been read (no saver yet).
         var saved: [[Workspace]] = []
+        registry.saveAll()
+        #expect(saved.isEmpty)
         registry.registerRemoteProject(projectId, restored: []) { workspaces, _ in saved.append(workspaces) }
         #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
 
