@@ -51,6 +51,7 @@ pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Re
             Ok(())
         }
         DaemonAction::Uninstall => {
+            require_default_socket(custom_socket)?;
             let manager = current_manager()?;
             match service::uninstall(manager)? {
                 Some(file) => println!("removed {} ({})", manager.name(), file.display()),
@@ -169,4 +170,30 @@ fn install(socket: &Path, custom_socket: bool, now: bool) -> Result<(), CliError
         if now { " and started it" } else { "" }
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_custom_socket_should_reject_uninstall() {
+        // given
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket = dir.path().join("custom.sock");
+
+        // when
+        let result = run(&socket, true, DaemonAction::Uninstall).await;
+
+        // then
+        match result {
+            Err(CliError::Other(message)) => {
+                assert!(
+                    message.contains("default socket"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected custom-socket rejection, got {other:?}"),
+        }
+    }
 }
