@@ -98,6 +98,9 @@ final class MachineRegistryWatcher: @unchecked Sendable {
                 self.scheduleDebounce()
             } else if attempt < maxAttempts {
                 self.reopenAfterReplace(attempt: attempt + 1)
+            } else {
+                // Still absent — resume polling until the file appears again.
+                self.startRetryTimer()
             }
         }
     }

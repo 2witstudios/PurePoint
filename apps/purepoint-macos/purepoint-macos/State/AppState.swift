@@ -69,8 +69,6 @@ final class AppState {
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
-    /// Machine IDs being added by this app, so the watcher doesn't create a duplicate.
-    private var pendingMachineIds = Set<UUID>()
 
     private static let openProjectsKey = "PurePointOpenProjects"
 
@@ -191,7 +189,6 @@ final class AppState {
             return
         }
         for machine in registered {
-            if pendingMachineIds.contains(machine.id) { continue }
             if let existing = machines.first(where: { $0.machine.id == machine.id }) {
                 existing.update(from: machine)
             } else {
@@ -201,10 +198,11 @@ final class AppState {
             }
         }
         // Remove machines no longer in the registry (CLI remove or another instance).
+        // KeepUnsaved preserves projects with unsaved tabs as unavailable.
         let registeredIds = Set(registered.map(\.id))
         let removed = machines.filter { !registeredIds.contains($0.machine.id) }
         for state in removed {
-            state.disconnect()
+            state.disconnect(keepUnsaved: true)
             machines.removeAll { $0 === state }
             if let active = activeProjectRoot, ProjectKey(id: active).machineId == state.machine.id {
                 activeProjectRoot = projects.first?.projectRoot
@@ -229,13 +227,16 @@ final class AppState {
                 try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
             }
         }.value
-        // Mark as pending so the watcher doesn't create a duplicate if it fires
-        // between the registry write and the append below.
-        pendingMachineIds.insert(machine.id)
+        // The watcher may have reloaded between the registry write and this resume, adding
+        // this machine already; reuse that state rather than creating a duplicate.
+        if let existing = machines.first(where: { $0.machine.id == machine.id }) {
+            existing.update(from: machine)
+            if !MachineState.isUserDisconnected(machine.id) { existing.connect() }
+            return existing
+        }
         let state = MachineState(machine: machine, appState: self, registry: registry)
         machines.append(state)
         state.connect()
-        pendingMachineIds.remove(machine.id)
         return state
     }
 
