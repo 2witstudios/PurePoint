@@ -24,9 +24,16 @@ jobs:
     steps:
       - name: Extract version from tag
         id: version
+        # The tag reaches the shell only through the environment, and must be a
+        # plain X.Y.Z: later steps interpolate the extracted version.
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          TAG="${TAG#v}"
+          TAG="${RELEASE_TAG#v}"
+          if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release tag must be vX.Y.Z, got: $RELEASE_TAG"
+            exit 1
+          fi
           IFS='.' read -r MAJOR MINOR PATCH <<< "$TAG"
           BUILD_NUMBER=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
           echo "raw=${TAG}" >> "$GITHUB_OUTPUT"
@@ -204,9 +211,13 @@ jobs:
         run: |
           DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
 
-          gh release create "v${{ steps.version.outputs.raw }}" "$DMG_PATH" \
-            --title "PurePoint v${{ steps.version.outputs.raw }}" \
-            --generate-notes
+          TAG="v${{ steps.version.outputs.raw }}"
+
+          # publish-linux may have created the release first; then just attach.
+          gh release create "$TAG" "$DMG_PATH" \
+            --title "PurePoint $TAG" \
+            --generate-notes \
+            || gh release upload "$TAG" "$DMG_PATH" --clobber
 
       - name: Generate and upload appcast
         env:
@@ -278,12 +289,18 @@ jobs:
 
       - name: Package
         id: package
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TARGET: ${{ matrix.target }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
-          NAME="purepoint-${VERSION}-${{ matrix.target }}"
+          VERSION="${RELEASE_TAG#v}"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release tag must be vX.Y.Z, got: $RELEASE_TAG"
+            exit 1
+          fi
+          NAME="purepoint-${VERSION}-${TARGET}"
           mkdir -p "dist/${NAME}"
-          cp target/${{ matrix.target }}/release/pu target/${{ matrix.target }}/release/pu-engine "dist/${NAME}/"
+          cp "target/${TARGET}/release/pu" "target/${TARGET}/release/pu-engine" "dist/${NAME}/"
           cp LICENSE* README.md "dist/${NAME}/" 2>/dev/null || true
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
@@ -298,9 +315,11 @@ jobs:
             dist/${{ steps.package.outputs.name }}.tar.gz.sha256
           if-no-files-found: error
 
-  # The macOS job creates the release; attach the Linux builds once it exists.
+  # Independent of the macOS job: a signing or notarization failure must not
+  # leave the release without Linux builds. Whichever job runs first creates
+  # the release; the other attaches to it.
   publish-linux:
-    needs: [release, linux]
+    needs: [linux]
     runs-on: ubuntu-latest
     steps:
       - name: Download builds
@@ -312,6 +331,11 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          gh release upload "v${TAG#v}" dist/*.tar.gz dist/*.sha256 --clobber --repo "${{ github.repository }}"
+          TAG="v${RELEASE_TAG#v}"
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "PurePoint $TAG" --generate-notes \
+            || gh release view "$TAG" >/dev/null  # lost a create race with the macOS job
+          gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber

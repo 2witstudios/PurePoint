@@ -1,6 +1,6 @@
 # Run PurePoint on a Linux server
 
-The PurePoint daemon (`pu-engine`) can run on any Linux machine you can reach over SSH: a cloud VM, a home server, a build box. It owns that machine's projects, worktrees and agents, and keeps running when you disconnect. Drive it with `pu` in your SSH session, or from the PurePoint app on that machine. (Driving a remote daemon directly from another computer is planned; this guide covers the server side.)
+The PurePoint daemon (`pu-engine`) can run on any Linux machine you can reach over SSH: a cloud VM, a home server, a build box. It owns that machine's projects, worktrees and agents, and keeps running when you disconnect. You drive it from another computer with `pu --machine` or the PurePoint app's Machines section (see [Machines over SSH](../product/machines.md)), or with `pu` in an SSH session on the server.
 
 ## 1. Install
 
@@ -23,7 +23,7 @@ pu daemon install --now
 sudo loginctl enable-linger "$USER"
 ```
 
-`pu daemon install` writes a systemd user unit (`~/.config/systemd/user/pu-engine.service`), enables it and starts it. It also tells you if lingering is off. Without lingering, systemd stops your user services when your last SSH session ends and doesn't start them at boot.
+`pu daemon install` writes a systemd user unit (`~/.config/systemd/user/pu-engine.service`) and enables it. It starts the daemon only with `--now`; without it, run `pu daemon start` or wait for the next boot or login. It also tells you if lingering is off. Without lingering, systemd stops your user services when your last SSH session ends and doesn't start them at boot.
 
 | Command | What it does |
 |---|---|
@@ -40,7 +40,19 @@ You can also skip systemd. Any `pu` command starts the daemon on demand, detache
 cd ~/src/my-repo && pu init
 ```
 
-Each project is registered with the server's daemon, so any client on that machine sees it.
+Each project is registered with the server's daemon, so every client of that daemon sees it.
+
+## 4. Connect from your computer
+
+On your Mac (or any machine with `pu` and SSH access to the server):
+
+```sh
+pu machine add server me@server.example.com   # or an ~/.ssh/config alias
+pu machine status server
+pu --machine server --project ~/src/my-repo status
+```
+
+The client forwards its connection over SSH to `~/.pu/daemon.sock` on the server, using your own `~/.ssh/config`, keys and agent. It never starts the remote daemon on its own; if the daemon is stopped, run `pu machine start server`. In the PurePoint app, add the same machine from the sidebar footer; its projects then appear under MACHINES.
 
 ## Upgrading
 
@@ -50,10 +62,10 @@ Re-run the installer, then restart the daemon so it uses the new binary. Restart
 pu daemon stop && pu daemon start
 ```
 
-Client and daemon must speak the same protocol version. `pu daemon status` shows the daemon's; upgrade the CLI wherever you run it alongside the engine.
+Client and server must speak the same protocol version. `pu daemon status` on the server shows the daemon's, and `pu machine status` on a client reports a mismatch as `incompatible`. Upgrade PurePoint on both sides together.
 
 ## Troubleshooting
 
-- **`pu-engine not found`**: `pu` looks beside itself, then in `~/.pu/bin`, then `~/.cargo/bin`, then on `PATH`. Keep both binaries together.
+- **`pu-engine not found`**: `pu` looks on `PATH`, then beside itself, then in `~/.pu/bin` and `~/.cargo/bin`. Keep both binaries together.
 - **Agents can't find `claude`/`codex`**: the daemon takes agent environments from your login shell (`$SHELL -li`). Make sure your `PATH` is exported from `~/.profile` (or `~/.bash_profile`), not only from `~/.bashrc`.
 - **`systemctl --user` fails with "Failed to connect to bus"**: you're in a session without a user manager (e.g. `su`). Log in over SSH directly as that user.

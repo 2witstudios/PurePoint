@@ -210,6 +210,17 @@ mod reconcile_tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// The PTY spawn returns right after fork, while the child is still closing
+    /// descriptors; until it execs, its command line is this test binary's.
+    /// A real orphan (left by a previous daemon) exec'd long ago.
+    async fn wait_for_exec(pid: u32, marker: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !crate::os::process_command(pid).is_some_and(|c| c.contains(marker)) {
+            assert!(std::time::Instant::now() < deadline, "agent never exec'd");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     fn agent(id: &str, agent_type: &str, session_id: Option<&str>) -> AgentEntry {
         serde_json::from_value(serde_json::json!({
             "id": id,
@@ -329,6 +340,7 @@ mod reconcile_tests {
             })
             .await
             .unwrap();
+        wait_for_exec(orphan.pid, "sid-orphan-xyz").await;
         let mut entry = agent("ag-1", "claude", Some("sid-orphan-xyz"));
         entry.pid = Some(orphan.pid);
         let tmp = project_with(vec![entry]);

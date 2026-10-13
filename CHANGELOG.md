@@ -11,7 +11,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ### Fixed
 - A daemon started by the CLI no longer dies when the terminal or SSH session that started it closes. It now runs in its own session and ignores SIGHUP.
-- `pu` finds `pu-engine` beside itself, in `~/.pu/bin` or in `~/.cargo/bin`, not only on `PATH`. A non-interactive SSH session's minimal `PATH` no longer stops it from starting the daemon.
+- `pu` finds `pu-engine` beside itself, in `~/.pu/bin` or in `~/.cargo/bin` when it is not on `PATH`. A non-interactive SSH session's minimal `PATH` no longer stops it from starting the daemon.
 - On Linux, the daemon reads `/proc` instead of running `ps` and `lsof`, so process cleanup and Codex conversation lookup work on minimal servers. Shells fall back to the account's login shell, then `/bin/sh`, instead of `/bin/zsh`.
 - Agent Rust build caches no longer fill the disk. Agents in a worktree now build into `<worktree>/target` (the daemon sets `CARGO_TARGET_DIR`), which is deleted with the worktree, and the daemon periodically removes abandoned `/tmp/purepoint-*-target` caches, sweeping harder when the disk is low.
 - `pu spawn` and `pu send` to Claude agents now deliver the full text as one submitted turn, or fail with a non-zero exit. Typing starts only once the agent's input box is on screen, Enter is pressed only after the box shows the complete text (retyping if characters were dropped), and success requires the box to clear and the turn to be echoed. Trigger injection uses the same path. Callers no longer need an empty `pu send` "nudge"; remove it, since it can submit a fragment or a duplicate.

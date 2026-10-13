@@ -44,6 +44,10 @@ pub fn parse_proc_stat(stat: &str) -> Option<(i32, i32)> {
 /// Parent→children map of every process, from `/proc/*/stat`.
 #[cfg(target_os = "linux")]
 pub fn proc_process_tree() -> Option<HashMap<i32, Vec<i32>>> {
+    // An empty, unmounted /proc would look like a system with no processes.
+    if !std::path::Path::new("/proc/self/stat").is_file() {
+        return None;
+    }
     let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
     for entry in std::fs::read_dir("/proc").ok()?.flatten() {
         let name = entry.file_name();
@@ -78,10 +82,11 @@ pub fn cmdline_to_command(cmdline: &[u8]) -> String {
 
 /// Full command line of `pid`, or None if it is gone or unreadable.
 pub fn process_command(pid: u32) -> Option<String> {
-    if cfg!(target_os = "linux") {
-        return std::fs::read(format!("/proc/{pid}/cmdline"))
-            .ok()
-            .map(|bytes| cmdline_to_command(&bytes));
+    // Containers may not mount /proc; `ps` (if any) still works there.
+    if cfg!(target_os = "linux")
+        && let Ok(bytes) = std::fs::read(format!("/proc/{pid}/cmdline"))
+    {
+        return Some(cmdline_to_command(&bytes));
     }
     let out = std::process::Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
@@ -97,6 +102,11 @@ pub fn process_command(pid: u32) -> Option<String> {
 /// Unreadable processes (gone, or another user's) contribute nothing.
 #[cfg(target_os = "linux")]
 pub fn proc_open_files(pids: &[i32], limit: usize) -> Option<Vec<PathBuf>> {
+    // Without /proc (some containers) let the caller fall back to `lsof`,
+    // rather than report that nothing is open.
+    if !std::path::Path::new("/proc/self/fd").is_dir() {
+        return None;
+    }
     let mut paths = Vec::new();
     for pid in pids {
         let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
