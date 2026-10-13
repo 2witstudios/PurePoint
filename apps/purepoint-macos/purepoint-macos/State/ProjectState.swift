@@ -224,10 +224,11 @@ final class ProjectState: Identifiable {
                 guard !Task.isCancelled else { return }
                 saver.loaded(modifiedMs: layout.modifiedMs)
                 let target = WeakRegistryRef(registry)
-                saver.onConflict { document in
+                saver.onConflict { [saver] document, modified in
                     Task { @MainActor in
                         target.value?.adoptRemoteLayout(
                             projectId, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectId))
+                        saver.loaded(modifiedMs: modified)
                     }
                 }
                 registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in

@@ -297,6 +297,7 @@ fn git_ignored(
     // or cloned bare repository configures (fsmonitor, hooks, ...).
     let mut command = std::process::Command::new("git");
     command
+        .args(global_excludes_args())
         .args(exec_args(
             "git",
             strings_of(&["check-ignore", "--stdin", "-z"]),
@@ -1038,6 +1039,30 @@ fn exec_args(program: &str, args: Vec<String>) -> Vec<String> {
     out
 }
 
+/// The daemon user's own global ignore file (`core.excludesFile`), read once.
+/// Git runs with the global config disabled, so without this the remote view
+/// would list files the user ignores everywhere (`.DS_Store`, `.idea/`, ...).
+/// Only this one setting is passed through; it names an ignore list, never a
+/// program.
+fn global_excludes_args() -> Vec<String> {
+    static EXCLUDES: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    EXCLUDES
+        .get_or_init(|| {
+            let output = std::process::Command::new("git")
+                .args(["config", "--global", "--path", "--get", "core.excludesFile"])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok()?;
+            let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+            (output.status.success() && !path.is_empty()).then_some(path)
+        })
+        .iter()
+        .flat_map(|path| ["-c".to_string(), format!("core.excludesFile={path}")])
+        .collect()
+}
+
 /// Extra environment for `git_exec`: git ignores the user's global and the
 /// system config, so neither can configure helpers (fsmonitor, pager, ...).
 fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
@@ -1248,6 +1273,9 @@ impl Engine {
             .map(|(_, v)| v.clone());
 
         let mut command = tokio::process::Command::new(program);
+        if is_git {
+            command.args(global_excludes_args());
+        }
         command
             .args(exec_args(program, args))
             .current_dir(&cwd)

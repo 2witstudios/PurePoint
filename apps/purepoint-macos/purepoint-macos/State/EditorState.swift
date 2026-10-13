@@ -37,12 +37,14 @@ final class EditorState {
     }
 
     func openFile(path: String, name: String) {
+        // Set first: re-selecting the open file must also win over a slower read
+        // of another file still in flight.
+        requestedPath = path
         if currentFile?.id == path {
             showChanges = false
             return
         }
 
-        requestedPath = path
         let host = self.host
         Task {
             do {

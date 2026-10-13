@@ -239,8 +239,9 @@ async fn write_fs_event(
         Ok(Ok(()))
     )
 }
-/// Scan interval of the polling fallback for trees too large for native watches.
-const FS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+/// Scan interval of the polling fallback. It only runs on trees too large for
+/// native watches, where every scan walks and stats the whole tree.
+const FS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
 type BoxedWatcher = Box<dyn notify::Watcher + Send>;
 
@@ -250,6 +251,7 @@ type BoxedWatcher = Box<dyn notify::Watcher + Send>;
 fn watch_dir<H, F>(
     root: &std::path::Path,
     recursive: bool,
+    poll_interval: std::time::Duration,
     handler: F,
     native: impl FnOnce(H) -> notify::Result<BoxedWatcher>,
 ) -> notify::Result<(BoxedWatcher, bool)>
@@ -276,7 +278,7 @@ where
         "native recursive watch failed; polling instead"
     );
     let config = notify::Config::default()
-        .with_poll_interval(FS_POLL_INTERVAL)
+        .with_poll_interval(poll_interval)
         .with_follow_symlinks(false);
     let mut poller = notify::PollWatcher::new(handler(), config)?;
     poller.watch(root, mode)?;
@@ -329,7 +331,7 @@ pub(super) async fn handle_fs_stream(
                 }
             }
         };
-        watch_dir(&watch_root, recursive, handler, |h| {
+        watch_dir(&watch_root, recursive, FS_POLL_INTERVAL, handler, |h| {
             // Never follow a symlink out of the root (inotify and kqueue would).
             let config = notify::Config::default().with_follow_symlinks(false);
             <notify::RecommendedWatcher as notify::Watcher>::new(h, config)
@@ -449,11 +451,13 @@ mod watch_tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let (handler, rx) = collector();
-        let (_watcher, polling) = watch_dir(&root, true, handler, failing_native).unwrap();
+        let interval = std::time::Duration::from_millis(200);
+        let (_watcher, polling) =
+            watch_dir(&root, true, interval, handler, failing_native).unwrap();
         assert!(polling);
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/new.txt"), "x").unwrap();
-        let deadline = std::time::Instant::now() + FS_POLL_INTERVAL * 4;
+        let deadline = std::time::Instant::now() + interval * 20;
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             let event = rx
@@ -470,14 +474,14 @@ mod watch_tests {
     fn given_native_non_recursive_watch_fails_should_report_error() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (handler, _rx) = collector();
-        assert!(watch_dir(tmp.path(), false, handler, failing_native).is_err());
+        assert!(watch_dir(tmp.path(), false, FS_POLL_INTERVAL, handler, failing_native).is_err());
     }
 
     #[test]
     fn given_native_watch_works_should_not_poll() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (handler, _rx) = collector();
-        let (_watcher, polling) = watch_dir(tmp.path(), true, handler, |h| {
+        let (_watcher, polling) = watch_dir(tmp.path(), true, FS_POLL_INTERVAL, handler, |h| {
             notify::recommended_watcher(h).map(|w| Box::new(w) as BoxedWatcher)
         })
         .unwrap();

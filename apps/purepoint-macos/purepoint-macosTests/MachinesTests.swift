@@ -610,20 +610,27 @@ struct RemoteLayoutPersistenceTests {
         #expect(recorded.values == [41, 42])
     }
 
-    @Test func givenConflictSaverShouldHandTheDocumentOverAndTrackItsTime() {
+    @Test func givenConflictQueuedWritesShouldNotRevertTheMachinesDocument() {
         let recorded = LockedValues()
         let adopted = LockedValues()
         let saver = RemoteLayoutSaver { _, expected in
             recorded.append(expected)
             return expected == 41 ? .conflict(Data("theirs".utf8), modifiedMs: 77) : .written(modifiedMs: 78)
         }
-        saver.onConflict { document in adopted.append(Int64(document.count)) }
+        saver.onConflict { document, _ in adopted.append(Int64(document.count)) }
         saver.loaded(modifiedMs: 41)
+        // Two writes queued behind each other: the second must not write over the
+        // machine's document before it has been adopted.
         saver.enqueue(Data())
         saver.enqueue(Data())
         #expect(saver.flush(until: .now() + 2))
-        #expect(recorded.values == [41, 77])
-        #expect(adopted.values == [6])
+        #expect(recorded.values == [41, 41])
+        #expect(adopted.values == [6, 6])
+        // Once adopted, the next write is conditional on the machine's version.
+        saver.loaded(modifiedMs: 77)
+        saver.enqueue(Data())
+        #expect(saver.flush(until: .now() + 2))
+        #expect(recorded.values == [41, 41, 77])
     }
 }
 

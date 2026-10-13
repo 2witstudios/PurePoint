@@ -462,7 +462,7 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
     /// Modification time of the document as this app last read or wrote it. Queue-confined.
     private var knownModifiedMs: Int64?
     private let conflictLock = NSLock()
-    nonisolated(unsafe) private var conflictHandler: (@Sendable (Data) -> Void)?
+    nonisolated(unsafe) private var conflictHandler: (@Sendable (Data, Int64) -> Void)?
 
     convenience init(projectRoot: String, host: any ProjectHost) {
         self.init { data, expected in
@@ -474,8 +474,10 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
         self.write = write
     }
 
-    /// Called (off the main thread) with the machine's document when a save found it changed.
-    func onConflict(_ handler: @escaping @Sendable (Data) -> Void) {
+    /// Called (off the main thread) with the machine's document and its modification time
+    /// when a save found it changed. The handler adopts it and then calls `loaded`, so
+    /// writes already queued behind the conflict conflict too instead of reverting it.
+    func onConflict(_ handler: @escaping @Sendable (Data, Int64) -> Void) {
         conflictLock.lock()
         conflictHandler = handler
         conflictLock.unlock()
@@ -499,11 +501,11 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
             case .written(let modified):
                 self.knownModifiedMs = modified
             case .conflict(let document, let modified):
-                self.knownModifiedMs = modified
+                // The stamp advances only once the document is adopted (`loaded`).
                 self.conflictLock.lock()
                 let handler = self.conflictHandler
                 self.conflictLock.unlock()
-                handler?(document)
+                handler?(document, modified)
             case .skipped:
                 break
             }
