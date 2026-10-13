@@ -902,22 +902,36 @@ fn git_option_rule(subcommand: &str, arg: &str) -> Option<GitOption> {
 /// resolved: `diff --no-index` (explicit, or implicit outside a repository)
 /// reads operands straight from the filesystem.
 fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Result<(), String> {
+    // Skip the (already checked) global options and the subcommand name: only
+    // the subcommand's own arguments can name paths.
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if !arg.starts_with('-') {
+            break;
+        }
+        i += if arg == "-c" { 2 } else { 1 };
+    }
+    let rest = args.get(i + 1..).unwrap_or_default();
     // Every argument after the first `--` is a path, whatever it starts with
     // (a file may be named `-dir`); before it, non-option arguments may be.
-    let separator = args.iter().position(|a| a == "--");
-    let before = args[..separator.unwrap_or(args.len())]
+    let separator = rest.iter().position(|a| a == "--");
+    let before = rest[..separator.unwrap_or(rest.len())]
         .iter()
         .filter(|a| !a.starts_with('-'));
-    let after = separator.map_or(&args[args.len()..], |s| &args[s + 1..]);
+    let after = separator.map_or(&rest[rest.len()..], |s| &rest[s + 1..]);
     for arg in before.chain(after).filter(|a| a.as_str() != "/dev/null") {
         let candidate = cwd.join(arg);
         let Ok(meta) = std::fs::symlink_metadata(&candidate) else {
             continue; // a revision, or a path that doesn't exist
         };
-        // git diffs an operand's own final symlink as its link text, so then only
-        // the directories leading to it must stay inside; anything else must
+        // git diffs a final symlink to a file (or a dangling one) as its link
+        // text, so then only the directories leading to it must stay inside.
+        // A symlink to a directory is followed (`diff --no-index` reads
+        // `<link>/<name>`), and anything else is read directly: those must
         // resolve inside entirely. (Operands have plain segments: no trailing `/`.)
-        let resolved = if meta.file_type().is_symlink() {
+        let links_to_dir = meta.file_type().is_symlink()
+            && std::fs::metadata(&candidate).is_ok_and(|target| target.is_dir());
+        let resolved = if meta.file_type().is_symlink() && !links_to_dir {
             candidate.parent().unwrap_or(cwd).canonicalize()
         } else {
             candidate.canonicalize()

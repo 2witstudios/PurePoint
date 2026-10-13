@@ -1667,3 +1667,60 @@ async fn given_dash_named_symlink_operand_should_be_checked_after_separator() {
         assert_error(resp, "args_not_allowed");
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_symlink_to_outside_directory_operand_should_be_refused() {
+    let (engine, _tmp, root, outside) = setup().await;
+    std::fs::create_dir_all(outside.join("d")).unwrap();
+    std::fs::write(outside.join("d/null"), "NULL-SECRET").unwrap();
+    std::fs::write(outside.join("d/x"), "X-SECRET").unwrap();
+    std::fs::write(root.join("x"), "local").unwrap();
+    std::os::unix::fs::symlink(outside.join("d"), root.join("dirlink")).unwrap();
+    for args in [
+        vec![
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--",
+            "/dev/null",
+            "dirlink",
+        ],
+        vec!["diff", "--no-index", "--no-color", "--", "x", "dirlink"],
+        vec!["diff", "--", "x", "dirlink"],
+    ] {
+        let resp = engine
+            .handle_request(Request::GitExec {
+                cwd: p(&root),
+                program: "git".into(),
+                args: strings(&args),
+                stdin_base64: None,
+                timeout_ms: 10_000,
+            })
+            .await;
+        assert_error(resp, "args_not_allowed");
+    }
+}
+
+#[test]
+fn given_subcommand_named_like_an_outside_symlink_should_not_be_checked_as_a_path() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let root = base.join("project");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("diff")).unwrap();
+    let args = strings(&[
+        "--literal-pathspecs",
+        "-c",
+        "core.quotePath=true",
+        "diff",
+        "--numstat",
+        "-z",
+        "--",
+    ]);
+    assert_eq!(
+        check_operand_targets(&root, &args, std::slice::from_ref(&root)),
+        Ok(())
+    );
+}

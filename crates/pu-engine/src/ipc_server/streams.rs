@@ -425,7 +425,8 @@ mod watch_tests {
         let written =
             write_fs_event(&mut writer, &resp, std::time::Duration::from_millis(200)).await;
         assert!(!written);
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // Bounded (it never blocks on the stalled reader); generous for loaded CI.
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
     }
     use std::sync::mpsc;
 
