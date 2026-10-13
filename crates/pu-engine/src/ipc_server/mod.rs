@@ -84,6 +84,10 @@ impl IpcServer {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+        // The terminal or SSH session that started the daemon may hang up; the
+        // daemon must outlive it. A handler (unlike SIG_IGN) resets on exec, so
+        // agents still get SIGHUP when their own PTY closes.
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
 
         loop {
             tokio::select! {
@@ -124,6 +128,9 @@ impl IpcServer {
                 _ = sigint.recv() => {
                     tracing::info!("received SIGINT, shutting down");
                     return Ok(());
+                }
+                _ = sighup.recv() => {
+                    tracing::info!("received SIGHUP, ignoring");
                 }
             }
         }

@@ -703,3 +703,46 @@ async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_
         );
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_standalone_daemon_should_survive_sighup() {
+    // The SSH session or terminal that started the daemon hanging up must not
+    // stop it (or the agents it owns).
+    let tmp = TempDir::new().unwrap();
+    let socket = tmp.path().join("hup.sock");
+    let mut process = tokio::process::Command::new(env!("CARGO_BIN_EXE_pu-engine"))
+        .arg("--socket")
+        .arg(&socket)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while UnixStream::connect(&socket).await.is_err() {
+            assert!(
+                process.try_wait().unwrap().is_none(),
+                "daemon exited before binding"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let pid = nix::unistd::Pid::from_raw(process.id().unwrap() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    assert!(
+        process.try_wait().unwrap().is_none(),
+        "SIGHUP stopped the daemon"
+    );
+    assert!(matches!(
+        send(&socket, &Request::Health).await,
+        Response::HealthReport { .. }
+    ));
+    send(&socket, &Request::Shutdown).await;
+    assert!(process.wait().await.unwrap().success());
+}

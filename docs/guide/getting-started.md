@@ -4,7 +4,7 @@ This guide walks you from install to your first agent.
 
 ## Prerequisites
 
-- **macOS** (PurePoint is macOS-only for now)
+- **macOS** for the app. The daemon and CLI also run on Linux servers; see [Run PurePoint on a Linux server](linux-server.md).
 - **git** with worktree support
 - At least one AI coding CLI: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or [OpenCode](https://github.com/opencode-ai/opencode)
 

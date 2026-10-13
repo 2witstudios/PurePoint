@@ -48,7 +48,7 @@ impl Engine {
         }
         let command = parts.remove(0);
         let command = if command == "shell" {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+            crate::os::login_shell()
         } else {
             command
         };
@@ -136,11 +136,7 @@ impl Engine {
         if !daemon_lifecycle::is_process_alive(pid) {
             return false;
         }
-        std::process::Command::new("ps")
-            .args(["-o", "command=", "-p", &pid.to_string()])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(session_id))
+        crate::os::process_command(pid).is_some_and(|command| command.contains(session_id))
     }
 
     /// SIGTERM the process group led by `pid` (agents are spawned with setsid),

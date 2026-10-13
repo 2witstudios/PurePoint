@@ -5,8 +5,72 @@ use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 
 use crate::error::CliError;
 
+/// Where `pu-engine` is looked for, in order: beside this `pu` (installs ship
+/// both together), the PurePoint and cargo bin dirs, then PATH. Non-interactive
+/// SSH sessions have a minimal PATH, so PATH alone is not enough on servers.
+fn daemon_binary_candidates(exe_dir: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = exe_dir.into_iter().map(Path::to_path_buf).collect();
+    if let Some(home) = home {
+        candidates.push(home.join(".pu/bin"));
+        candidates.push(home.join(".cargo/bin"));
+    }
+    candidates
+        .into_iter()
+        .map(|dir| dir.join("pu-engine"))
+        .collect()
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
 pub fn find_daemon_binary() -> Option<PathBuf> {
-    which::which("pu-engine").ok()
+    let exe = std::env::current_exe().ok();
+    let exe_dir = exe.as_deref().and_then(Path::parent);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    daemon_binary_candidates(exe_dir, home.as_deref())
+        .into_iter()
+        .find(|path| is_executable_file(path))
+        .or_else(|| which::which("pu-engine").ok())
+}
+
+/// A `pu-engine` command that leaves the caller's session: no controlling
+/// terminal and its own process group, so closing the terminal or ending the
+/// SSH session that started it does not send it SIGHUP.
+fn detached_command(binary: &Path) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new(binary);
+    // SAFETY: setsid is async-signal-safe and touches no Rust state.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
+/// Start the installed supervisor's daemon for the default socket. Returns
+/// false (spawn it directly) when no service is installed or the supervisor
+/// cannot be reached, e.g. no systemd user bus in this session.
+fn start_supervised(socket: &Path) -> bool {
+    let is_default = paths::daemon_socket_path().is_ok_and(|default| default == socket);
+    let Some(manager) = is_default.then(crate::service::installed).flatten() else {
+        return false;
+    };
+    match crate::service::start(manager) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "warning: {} is installed but could not be started ({e}); starting pu-engine directly",
+                manager.name()
+            );
+            false
+        }
+    }
 }
 
 /// Longest a single health probe may take. A daemon that accepts but never
@@ -50,8 +114,31 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         }
     }
 
+    if !start_supervised(socket) {
+        spawn_detached_daemon(socket)?;
+    }
+
+    // Poll health with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms.
+    // The 3s budget is wall-clock and includes the probes themselves, which can
+    // each take up to HEALTH_PROBE_TIMEOUT against a daemon that never answers.
+    let poll = async {
+        let mut delay_ms = 10u64;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            if check_daemon_health(socket).await? {
+                return Ok::<(), CliError>(());
+            }
+            delay_ms = (delay_ms * 2).min(640);
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(3), poll)
+        .await
+        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))?
+}
+
+fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
     let binary = find_daemon_binary().ok_or(CliError::Other(
-        "pu-engine not found on PATH — install with `cargo install --path crates/pu-engine`".into(),
+        "pu-engine not found beside pu, in ~/.pu/bin, ~/.cargo/bin or on PATH — install PurePoint (see docs/guide/linux-server.md) or `cargo install --path crates/pu-engine`".into(),
     ))?;
 
     // Redirect daemon stderr to log file so startup errors are diagnosable
@@ -72,8 +159,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         Err(_) => std::process::Stdio::null(),
     };
 
-    // Start daemon
-    std::process::Command::new(&binary)
+    detached_command(&binary)
         .arg("--socket")
         .arg(socket)
         .stdin(std::process::Stdio::null())
@@ -81,28 +167,56 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         .stderr(stderr_target)
         .spawn()
         .map_err(CliError::Io)?;
-
-    // Poll health with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms.
-    // The 3s budget is wall-clock and includes the probes themselves, which can
-    // each take up to HEALTH_PROBE_TIMEOUT against a daemon that never answers.
-    let poll = async {
-        let mut delay_ms = 10u64;
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            if check_daemon_health(socket).await? {
-                return Ok::<(), CliError>(());
-            }
-            delay_ms = (delay_ms * 2).min(640);
-        }
-    };
-    tokio::time::timeout(std::time::Duration::from_secs(3), poll)
-        .await
-        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))?
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_exe_dir_and_home_should_prefer_sibling_then_pu_then_cargo_bin() {
+        let candidates =
+            daemon_binary_candidates(Some(Path::new("/opt/pu")), Some(Path::new("/home/me")));
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/opt/pu/pu-engine"),
+                PathBuf::from("/home/me/.pu/bin/pu-engine"),
+                PathBuf::from("/home/me/.cargo/bin/pu-engine"),
+            ]
+        );
+        assert!(daemon_binary_candidates(None, None).is_empty());
+    }
+
+    #[test]
+    fn given_non_executable_or_dir_should_not_count_as_binary() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("pu-engine");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!is_executable_file(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_executable_file(&file));
+        assert!(!is_executable_file(tmp.path()));
+    }
+
+    #[test]
+    fn given_detached_command_should_run_in_new_session() {
+        let mut child = detached_command(Path::new("/bin/sleep"))
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = child.id() as libc::pid_t;
+        // SAFETY: getsid has no memory-safety preconditions.
+        let (ours, theirs) = unsafe { (libc::getsid(0), libc::getsid(pid)) };
+        child.kill().ok();
+        child.wait().ok();
+        assert_ne!(theirs, -1);
+        assert_ne!(ours, theirs, "daemon must not share the caller's session");
+        assert_eq!(theirs, pid, "daemon must lead its own session");
+    }
 
     #[test]
     fn given_find_daemon_binary_should_return_path_or_none() {

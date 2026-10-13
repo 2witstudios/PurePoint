@@ -240,3 +240,78 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
+
+  # Static pu + pu-engine for Linux servers (installed by scripts/install.sh).
+  # Built natively per arch against musl, so no glibc version floor applies.
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p pu-cli -p pu-engine
+
+      - name: Package
+        id: package
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          NAME="purepoint-${VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/${NAME}"
+          cp target/${{ matrix.target }}/release/pu target/${{ matrix.target }}/release/pu-engine "dist/${NAME}/"
+          cp LICENSE* README.md "dist/${NAME}/" 2>/dev/null || true
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}.tar.gz
+            dist/${{ steps.package.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+
+  # The macOS job creates the release; attach the Linux builds once it exists.
+  publish-linux:
+    needs: [release, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release upload "v${TAG#v}" dist/*.tar.gz dist/*.sha256 --clobber --repo "${{ github.repository }}"

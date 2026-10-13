@@ -53,6 +53,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-targets
 
+  linux-musl:
+    name: Static Linux build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Isolate Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/rust-ci-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: musl
+      # Release ships these as static musl binaries for Linux servers.
+      - run: cargo build --locked --target x86_64-unknown-linux-musl -p pu-cli -p pu-engine
+
   deny:
     name: Dependency Audit
     runs-on: ubuntu-latest

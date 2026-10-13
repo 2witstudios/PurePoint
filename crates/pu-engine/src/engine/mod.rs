@@ -193,7 +193,7 @@ impl Engine {
     }
 
     async fn resolve_login_env() -> Vec<(String, String)> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let shell = crate::os::login_shell();
         // Every spawn and resume waits on this one probe (it fills a OnceCell),
         // so a login shell that hangs on a prompt must not hang them all.
         let probe = tokio::process::Command::new(&shell)

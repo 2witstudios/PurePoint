@@ -10,6 +10,8 @@ PurePoint needs to ship to users as a self-contained product with no external ru
 
 ! [DIST-001] Daemon embedded in app bundle. The `pu-engine` binary is compiled via a Run Script build phase in Xcode and placed at `Contents/MacOS/pu-engine` alongside the main app executable. Debug builds compile for the host architecture only; release builds create a universal binary (ARM64 + x86_64) via `lipo`. Code signed with the app's identity. DaemonLifecycle checks the app bundle first, then PATH, then ~/.cargo/bin (development fallback). No external runtime dependencies — the app is a single drag-and-drop download.
 
+! [DIST-004] Linux servers get static musl builds of `pu` and `pu-engine` (`x86_64-` and `aarch64-unknown-linux-musl`), one `purepoint-<version>-<target>.tar.gz` (plus `.sha256`) per target, attached to the same GitHub release as the DMG. They are built natively per architecture in `release.yml`. `scripts/install.sh` verifies the checksum and installs both binaries side by side in `~/.pu/bin`, replacing each by rename so a running daemon's binary is never overwritten in place. There's no package-manager integration yet.
+
 ## Open Questions
 
 ! [DIST-002] Preserve canonical Pi private auth/session/settings data outside the bundle and use versioned private Application Support managed/trust metadata — avoids duplicate credentials and survives updates. Legacy remote shared-token clients deliberately enroll again; never downgrade remote authorization.
