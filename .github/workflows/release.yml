@@ -43,7 +43,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          # A qualified tag ref makes checkout fail on a nonexistent tag instead
+          # of silently building the default branch.
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.94.0
@@ -215,6 +217,7 @@ jobs:
 
           # publish-linux may have created the release first; then just attach.
           gh release create "$TAG" "$DMG_PATH" \
+            --verify-tag \
             --title "PurePoint $TAG" \
             --generate-notes \
             || gh release upload "$TAG" "$DMG_PATH" --clobber
@@ -269,7 +272,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          # A qualified tag ref makes checkout fail on a nonexistent tag instead
+          # of silently building the default branch.
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.94.0
@@ -336,6 +341,6 @@ jobs:
         run: |
           TAG="v${RELEASE_TAG#v}"
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "PurePoint $TAG" --generate-notes \
+            || gh release create "$TAG" --verify-tag --title "PurePoint $TAG" --generate-notes \
             || gh release view "$TAG" >/dev/null  # lost a create race with the macOS job
           gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber
