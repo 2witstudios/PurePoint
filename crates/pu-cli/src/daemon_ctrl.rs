@@ -195,13 +195,35 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         }
     }
 
-    if !start_supervised(socket) {
+    // A supervisor accepting the start does not establish that its daemon
+    // became healthy: the supervised daemon can exit before answering (e.g. a
+    // directly started daemon still holds the single-instance lock), so fall
+    // back to the direct spawn before giving up.
+    let supervised = start_supervised(socket);
+    if !supervised {
         spawn_detached_daemon(socket)?;
     }
+    if wait_for_healthy(socket).await?.is_some() {
+        return Ok(());
+    }
+    if supervised {
+        spawn_detached_daemon(socket)?;
+        if wait_for_healthy(socket).await?.is_some() {
+            return Ok(());
+        }
+    }
+    Err(CliError::Other(
+        "daemon did not start within 3 seconds".into(),
+    ))
+}
 
-    // Poll health with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms.
-    // The 3s budget is wall-clock and includes the probes themselves, which can
-    // each take up to HEALTH_PROBE_TIMEOUT against a daemon that never answers.
+/// Poll health until the daemon answers or the budget runs out, with
+/// exponential backoff: 10, 20, 40, 80, 160, 320, 640ms. The 3s budget is
+/// wall-clock and includes the probes themselves, which can each take up to
+/// HEALTH_PROBE_TIMEOUT against a daemon that never answers. Returns
+/// `Ok(Some(()))` once healthy, `Ok(None)` if the budget ran out, and
+/// propagates probe errors (incompatible protocol, BUSY) immediately.
+async fn wait_for_healthy(socket: &Path) -> Result<Option<()>, CliError> {
     let poll = async {
         let mut delay_ms = 10u64;
         loop {
@@ -212,9 +234,10 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
             delay_ms = (delay_ms * 2).min(640);
         }
     };
-    tokio::time::timeout(std::time::Duration::from_secs(3), poll)
-        .await
-        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))?
+    match tokio::time::timeout(std::time::Duration::from_secs(3), poll).await {
+        Ok(result) => result.map(Some),
+        Err(_) => Ok(None),
+    }
 }
 
 fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
@@ -515,6 +538,71 @@ mod tests {
             }
         );
         server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_healthy_daemon_wait_for_healthy_should_return_some() {
+        // given
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("healthy.sock");
+        let engine = pu_engine::engine::Engine::new();
+        let server = pu_engine::ipc_server::IpcServer::bind(&sock, engine).unwrap();
+        let handle = tokio::spawn(async move {
+            server.run().await.ok();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // when
+        let result = wait_for_healthy(&sock).await;
+
+        // then
+        assert!(matches!(result, Ok(Some(()))), "{result:?}");
+        crate::client::send_request(&sock, &Request::Shutdown)
+            .await
+            .ok();
+        handle.await.ok();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_incompatible_daemon_wait_for_healthy_should_propagate_the_error() {
+        // given
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("old.sock");
+        let reply = serde_json::to_string(&Response::HealthReport {
+            pid: 1,
+            uptime_seconds: 0,
+            protocol_version: PROTOCOL_VERSION + 1,
+            projects: vec![],
+            agent_count: 0,
+        })
+        .unwrap()
+            + "\n";
+        let server = fake_daemon(&sock, Some(reply));
+
+        // when
+        let started = std::time::Instant::now();
+        let result = wait_for_healthy(&sock).await;
+
+        // then: the probe error surfaces immediately, never masked as a timeout
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("protocol"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_absent_daemon_wait_for_healthy_should_time_out_as_none() {
+        // given: no listener at all, so every probe fails instantly
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("absent.sock");
+
+        // when
+        let started = std::time::Instant::now();
+        let result = wait_for_healthy(&sock).await;
+
+        // then: the full 3s budget is spent before giving up, without an error
+        assert!(matches!(result, Ok(None)), "{result:?}");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(3));
     }
 
     #[tokio::test(flavor = "current_thread")]
