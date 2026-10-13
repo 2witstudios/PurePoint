@@ -4,6 +4,7 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, UNIX_EPOCH};
@@ -27,6 +28,15 @@ const GIT_EXEC_OUTPUT_CAP: usize = 8 * 1024 * 1024;
 const GIT_EXEC_PROGRAMS: [&str; 2] = ["git", "gh"];
 /// Upper bound on `fs_read`'s `max_bytes`, whatever the client asks for.
 const FS_READ_MAX_BYTES: u64 = 8 * 1024 * 1024;
+/// Upper bound on `fs_list`'s `max_entries`.
+const FS_LIST_MAX_ENTRIES: usize = 100_000;
+/// Upper bound on `git_exec`'s `timeout_ms`.
+const GIT_EXEC_MAX_TIMEOUT_MS: u64 = 120_000;
+/// How long `fs_list` waits for `git check-ignore`.
+const CHECK_IGNORE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Prepended to every `git_exec` git command (after the client's arguments
+/// are checked): repository config can't run an fsmonitor hook or hooks.
+const GIT_EXEC_PREFIX: [&str; 4] = ["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null"];
 
 /// Global options git may receive before its subcommand. Everything else that
 /// redirects the repository, config or helper programs (`-C`, `--git-dir`,
@@ -43,9 +53,10 @@ const GIT_GLOBAL_FLAGS: [&str; 7] = [
 /// Config keys `-c` may set (lowercase): display-only settings.
 const GIT_CONFIG_KEYS: [&str; 1] = ["core.quotepath"];
 /// Long options refused before `--` in any position (git also accepts any
-/// unambiguous abbreviation, so prefixes of these are refused too): they
-/// relocate the repository, run helper programs, or write arbitrary files.
-const GIT_FORBIDDEN_OPTIONS: [&str; 9] = [
+/// unambiguous abbreviation, so prefixes of these are refused too, as are
+/// longer names that extend them such as `--output-directory`): they relocate
+/// the repository, run helper programs, or write arbitrary files.
+const GIT_FORBIDDEN_OPTIONS: [&str; 11] = [
     "git-dir",
     "work-tree",
     "exec-path",
@@ -55,17 +66,23 @@ const GIT_FORBIDDEN_OPTIONS: [&str; 9] = [
     "receive-pack",
     "output",
     "exec",
+    "ext-diff",
+    "textconv",
 ];
-/// Subcommands that run helper programs or write outside the working tree.
-const GIT_FORBIDDEN_SUBCOMMANDS: [&str; 8] = [
-    "clone",
-    "archive",
-    "daemon",
-    "instaweb",
-    "shell",
-    "upload-pack",
-    "receive-pack",
-    "upload-archive",
+/// The read-only subcommands `GitService.swift` runs. A positive allowlist:
+/// aliases, writers (`config`, `worktree`, `init`, `bundle`, `format-patch`,
+/// …) and any subcommand git adds later are refused.
+const GIT_ALLOWED_SUBCOMMANDS: [&str; 10] = [
+    "status",
+    "diff",
+    "diff-tree",
+    "log",
+    "rev-parse",
+    "rev-list",
+    "merge-base",
+    "ls-files",
+    "for-each-ref",
+    "symbolic-ref",
 ];
 /// `gh` commands the app runs; extensions and aliases are refused.
 const GH_ALLOWED: [(&str, &[&str]); 3] = [
@@ -129,8 +146,17 @@ fn trusted_worktree(
     (inside && !too_broad).then_some(canonical)
 }
 
-/// Canonical directories fs requests may touch.
-fn allowed_roots(projects: &[String], home: Option<&Path>) -> Vec<PathBuf> {
+/// Canonical directories fs requests may touch. Agent transcript
+/// directories are read-only: `fs_write` and `fs_delete` use `writable`.
+#[derive(Debug, Default)]
+struct FsRoots {
+    /// Project roots and their worktrees.
+    writable: Vec<PathBuf>,
+    /// `writable` plus the agent transcript directories.
+    all: Vec<PathBuf>,
+}
+
+fn allowed_roots(projects: &[String], home: Option<&Path>) -> FsRoots {
     let mut roots = Vec::new();
     for project in projects {
         let root = Path::new(project);
@@ -148,14 +174,34 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> Vec<PathBuf> {
         }
         roots.push(canonical);
     }
+    let mut all = roots.clone();
     if let Some(home) = home {
-        roots.extend(
+        all.extend(
             TRANSCRIPT_DIRS
                 .iter()
                 .filter_map(|dir| home.join(dir).canonicalize().ok()),
         );
     }
-    roots
+    FsRoots {
+        writable: roots,
+        all,
+    }
+}
+
+/// Whether `project_root` is too broad to register: `/`, `$HOME`, or an
+/// ancestor of `$HOME` (registering it would expose the whole home directory
+/// to fs requests).
+pub(crate) fn is_too_broad_project_root(project_root: &Path, home: Option<&Path>) -> bool {
+    let root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    if root.parent().is_none() {
+        return true;
+    }
+    home.is_some_and(|home| {
+        let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+        home.starts_with(&root)
+    })
 }
 
 /// Resolves `path` to a real path inside `roots`.
@@ -223,6 +269,7 @@ fn git_ignored(dir: &Path, candidates: &[String]) -> std::collections::HashSet<S
     if candidates.is_empty() {
         return ignored;
     }
+    use std::os::unix::process::CommandExt as _;
     let child = std::process::Command::new("git")
         .args(["check-ignore", "--stdin", "-z"])
         .current_dir(dir)
@@ -230,6 +277,8 @@ fn git_ignored(dir: &Path, candidates: &[String]) -> std::collections::HashSet<S
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        // Own process group, so a timeout also stops anything git spawned.
+        .process_group(0)
         .spawn();
     let Ok(mut child) = child else {
         return ignored;
@@ -248,12 +297,37 @@ fn git_ignored(dir: &Path, candidates: &[String]) -> std::collections::HashSet<S
     let writer = std::thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });
-    let mut output = Vec::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_end(&mut output);
+    let reader = child.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut output = Vec::new();
+            let _ = stdout.read_to_end(&mut output);
+            output
+        })
+    });
+    let deadline = std::time::Instant::now() + CHECK_IGNORE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                // Timed out (or can't wait): report nothing as ignored.
+                kill_process_group(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = writer.join();
+                if let Some(reader) = reader {
+                    let _ = reader.join();
+                }
+                return ignored;
+            }
+        }
     }
     let _ = writer.join();
-    let _ = child.wait();
+    let output = reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     for path in output.split(|&b| b == 0).filter(|p| !p.is_empty()) {
         ignored.insert(String::from_utf8_lossy(path).into_owned());
     }
@@ -374,7 +448,21 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         Ok(p) => p,
         Err(e) => return e,
     };
-    let file = match std::fs::File::open(&resolved) {
+    // Check before opening: opening a FIFO blocks until a writer appears.
+    match std::fs::metadata(&resolved) {
+        Ok(meta) => {
+            if let Err(response) = check_regular_file(&resolved, &meta) {
+                return response;
+            }
+        }
+        Err(e) => return io_error(&resolved, &e),
+    }
+    // O_NONBLOCK too, in case the path was swapped for a FIFO since.
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&resolved)
+    {
         Ok(f) => f,
         Err(e) => return io_error(&resolved, &e),
     };
@@ -382,11 +470,8 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         Ok(m) => m,
         Err(e) => return io_error(&resolved, &e),
     };
-    if meta.is_dir() {
-        return fs_error(
-            "is_directory",
-            format!("{} is a directory", resolved.display()),
-        );
+    if let Err(response) = check_regular_file(&resolved, &meta) {
+        return response;
     }
     let mut data = Vec::new();
     if let Err(e) = file
@@ -404,6 +489,32 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
     }
 }
 
+/// `fs_read` serves regular files only (not FIFOs, sockets or devices).
+#[allow(clippy::result_large_err)]
+fn check_regular_file(path: &Path, meta: &std::fs::Metadata) -> Result<(), Response> {
+    if meta.is_dir() {
+        Err(fs_error(
+            "is_directory",
+            format!("{} is a directory", path.display()),
+        ))
+    } else if !meta.is_file() {
+        Err(fs_error(
+            "not_a_file",
+            format!("{} is not a regular file", path.display()),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether `path` is inside git metadata (any `.git` component). Writes there
+/// could plant repository config such as `diff.external` that a later
+/// `git_exec` would run, so fs writes and deletes refuse it.
+fn is_git_metadata(path: &Path) -> bool {
+    path.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new(".git"))
+}
+
 fn fs_write(
     path: &str,
     roots: &[PathBuf],
@@ -415,6 +526,9 @@ fn fs_write(
         Ok(p) => p,
         Err(e) => return e,
     };
+    if is_git_metadata(&resolved) {
+        return not_allowed(&resolved);
+    }
     let data = match BASE64_STANDARD.decode(data_base64) {
         Ok(d) => d,
         Err(e) => return fs_error("invalid_base64", format!("data_base64: {e}")),
@@ -480,15 +594,21 @@ fn write_atomically(
         .unwrap_or(0);
     let tmp = parent.join(format!(".{name}.pu-write-{}-{nonce}", std::process::id()));
     let result = (|| {
+        // Created with the existing file's mode (narrowed by the umask), so the
+        // temp file is never more readable than the file it replaces; a new
+        // file gets the usual 0666 & !umask.
+        let mode = existing.map_or(0o666, |meta| meta.permissions().mode() & 0o7777);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
+            .mode(mode)
             .open(&tmp)?;
+        if let Some(meta) = existing {
+            // Restore bits the umask dropped, before any data is written.
+            file.set_permissions(meta.permissions())?;
+        }
         file.write_all(data)?;
         file.sync_all()?;
-        if let Some(meta) = existing {
-            std::fs::set_permissions(&tmp, meta.permissions())?;
-        }
         std::fs::rename(&tmp, target)
     })();
     if result.is_err() {
@@ -497,13 +617,14 @@ fn write_atomically(
     result
 }
 
-fn fs_delete(path: &str, roots: &[PathBuf]) -> Response {
-    let resolved = match resolve_confined(path, roots, false) {
+fn fs_delete(path: &str, roots: &FsRoots) -> Response {
+    let resolved = match resolve_confined(path, &roots.writable, false) {
         Ok(p) => p,
         Err(e) => return e,
     };
-    // A root itself (project, worktree, transcript dir) is never deletable here.
-    if roots.iter().any(|root| root == &resolved) {
+    // A root (project, worktree, transcript dir) or any ancestor of one, such
+    // as `<project>/.pu/worktrees`, is never deletable here.
+    if roots.all.iter().any(|root| root.starts_with(&resolved)) || is_git_metadata(&resolved) {
         return not_allowed(&resolved);
     }
     let meta = match std::fs::symlink_metadata(&resolved) {
@@ -568,20 +689,30 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
     let Some(subcommand) = args.get(i) else {
         return Err("git_exec needs a git subcommand".into());
     };
-    if GIT_FORBIDDEN_SUBCOMMANDS.contains(&subcommand.as_str()) {
+    if !GIT_ALLOWED_SUBCOMMANDS.contains(&subcommand.as_str()) {
         return Err(format!("git {subcommand} is not allowed"));
     }
     let rest = &args[i + 1..];
+    if subcommand == "symbolic-ref" {
+        check_symbolic_ref_read(rest)?;
+    }
     let separator = rest.iter().position(|a| a == "--");
     let options = &rest[..separator.unwrap_or(rest.len())];
     let mut no_index = false;
     for arg in options {
+        // `-o <dir>` / `-o<dir>` names an output directory or file.
+        if arg.starts_with("-o") {
+            return Err(format!("git option {arg:?} is not allowed"));
+        }
         let Some(name) = long_option_name(arg) else {
             continue;
         };
         if name == "no-index" {
             no_index = true;
-        } else if GIT_FORBIDDEN_OPTIONS.iter().any(|f| f.starts_with(name)) {
+        } else if GIT_FORBIDDEN_OPTIONS
+            .iter()
+            .any(|f| f.starts_with(name) || name.starts_with(f))
+        {
             return Err(format!("git option {arg:?} is not allowed"));
         }
     }
@@ -606,6 +737,26 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `symbolic-ref` only in its read form, `[--short] [-q] <name>`: a second
+/// name would repoint the ref and `-d` would delete it.
+fn check_symbolic_ref_read(rest: &[String]) -> Result<(), String> {
+    let mut names = 0;
+    for arg in rest {
+        match arg.as_str() {
+            "--short" | "-q" | "--quiet" => {}
+            a if a.starts_with('-') => {
+                return Err(format!("git symbolic-ref option {a:?} is not allowed"));
+            }
+            _ => names += 1,
+        }
+    }
+    if names == 1 {
+        Ok(())
+    } else {
+        Err("git symbolic-ref is allowed only to read one ref".into())
+    }
+}
+
 fn check_gh_args(args: &[String]) -> Result<(), String> {
     let command = args.first().map(String::as_str).unwrap_or_default();
     let subcommand = args.get(1).map(String::as_str).unwrap_or_default();
@@ -616,6 +767,33 @@ fn check_gh_args(args: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("gh {command} {subcommand} is not allowed"))
+    }
+}
+
+/// The argv `git_exec` runs for already-checked `args`: git also gets
+/// [`GIT_EXEC_PREFIX`].
+fn exec_args(program: &str, args: Vec<String>) -> Vec<String> {
+    if program == "git" {
+        GIT_EXEC_PREFIX
+            .iter()
+            .map(|a| a.to_string())
+            .chain(args)
+            .collect()
+    } else {
+        args
+    }
+}
+
+/// Extra environment for `git_exec`: git ignores the user's global and the
+/// system config, so neither can configure helpers (fsmonitor, pager, ...).
+fn exec_env(program: &str) -> Vec<(&'static str, &'static str)> {
+    if program == "git" {
+        vec![
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ]
+    } else {
+        Vec::new()
     }
 }
 
@@ -654,7 +832,7 @@ async fn read_capped<R: AsyncRead + Unpin>(mut reader: R, cap: usize) -> (Vec<u8
 
 impl Engine {
     /// Directories fs and git requests may touch right now.
-    async fn fs_roots(&self) -> Vec<PathBuf> {
+    async fn fs_roots(&self) -> FsRoots {
         let projects = self.registered_projects();
         tokio::task::spawn_blocking(move || {
             let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -669,7 +847,7 @@ impl Engine {
         let roots = self.fs_roots().await;
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {
-            let dir = resolve_confined(&path, &roots, true)?;
+            let dir = resolve_confined(&path, &roots.all, true)?;
             match std::fs::metadata(&dir) {
                 Ok(meta) if meta.is_dir() => Ok(dir),
                 Ok(_) => Err(fs_error(
@@ -699,7 +877,13 @@ impl Engine {
                 timeout_ms,
             } => {
                 return self
-                    .handle_git_exec(&cwd, &program, args, stdin_base64, timeout_ms)
+                    .handle_git_exec(
+                        &cwd,
+                        &program,
+                        args,
+                        stdin_base64,
+                        timeout_ms.min(GIT_EXEC_MAX_TIMEOUT_MS),
+                    )
                     .await;
             }
             _ => {}
@@ -711,9 +895,15 @@ impl Engine {
                 recursive,
                 include_hidden,
                 max_entries,
-            } => fs_list(&path, &roots, recursive, include_hidden, max_entries),
-            Request::FsStat { path } => fs_stat(&path, &roots),
-            Request::FsRead { path, max_bytes } => fs_read(&path, &roots, max_bytes),
+            } => fs_list(
+                &path,
+                &roots.all,
+                recursive,
+                include_hidden,
+                max_entries.min(FS_LIST_MAX_ENTRIES),
+            ),
+            Request::FsStat { path } => fs_stat(&path, &roots.all),
+            Request::FsRead { path, max_bytes } => fs_read(&path, &roots.all, max_bytes),
             Request::FsWrite {
                 path,
                 data_base64,
@@ -721,7 +911,7 @@ impl Engine {
                 create_dirs,
             } => fs_write(
                 &path,
-                &roots,
+                &roots.writable,
                 &data_base64,
                 expected_modified_ms,
                 create_dirs,
@@ -771,8 +961,9 @@ impl Engine {
 
         let mut command = tokio::process::Command::new(program);
         command
-            .args(&args)
+            .args(exec_args(program, args))
             .current_dir(&cwd)
+            .envs(exec_env(program))
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GH_PROMPT_DISABLED", "1")
             .stdin(if stdin_data.is_some() {

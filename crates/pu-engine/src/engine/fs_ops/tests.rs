@@ -484,7 +484,7 @@ async fn given_directory_outside_any_repo_should_list_without_ignored_flags() {
     std::fs::create_dir_all(&transcripts).unwrap();
     std::fs::write(transcripts.join("t.jsonl"), "{}").unwrap();
     let roots = allowed_roots(&engine.registered_projects(), Some(&home));
-    match fs_list(&p(&transcripts), &roots, false, true, 10) {
+    match fs_list(&p(&transcripts), &roots.all, false, true, 10) {
         Response::FsListResult { entries, .. } => {
             assert_eq!(entries.len(), 1);
             assert!(!entries[0].ignored);
@@ -493,9 +493,109 @@ async fn given_directory_outside_any_repo_should_list_without_ignored_flags() {
     }
     // Other directories under home stay out of reach.
     assert_error(
-        fs_stat(&p(&home.join(".ssh/id_rsa")), &roots),
+        fs_stat(&p(&home.join(".ssh/id_rsa")), &roots.all),
         "path_not_allowed",
     );
+    // Transcript directories are read-only.
+    let transcript = transcripts.join("t.jsonl");
+    assert_error(
+        fs_write(&p(&transcript), &roots.writable, &b64(b"x"), None, false),
+        "path_not_allowed",
+    );
+    assert_error(fs_delete(&p(&transcript), &roots), "path_not_allowed");
+    assert_eq!(std::fs::read_to_string(&transcript).unwrap(), "{}");
+}
+
+#[test]
+fn given_ancestor_of_a_root_should_refuse_delete() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().canonicalize().unwrap().join("p");
+    let worktree = project.join(".pu/worktrees/wt-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(project.join(".pu/manifest.json"), "{}").unwrap();
+    let roots = FsRoots {
+        writable: vec![worktree.clone(), project.clone()],
+        all: vec![worktree.clone(), project.clone()],
+    };
+    for path in [
+        project.join(".pu/worktrees"),
+        project.join(".pu"),
+        worktree.clone(),
+    ] {
+        assert_error(fs_delete(&p(&path), &roots), "path_not_allowed");
+    }
+    assert!(worktree.exists());
+    let resp = fs_delete(&p(&project.join(".pu/manifest.json")), &roots);
+    assert!(matches!(resp, Response::Ok), "{resp:?}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_fifo_should_refuse_read_without_blocking() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let fifo = root.join("pipe");
+    let c_path = std::ffi::CString::new(p(&fifo)).unwrap();
+    // SAFETY: plain mkfifo on a NUL-terminated path.
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.handle_request(Request::FsRead {
+            path: p(&fifo),
+            max_bytes: 10,
+        }),
+    )
+    .await
+    .expect("fs_read on a FIFO blocked");
+    assert_error(resp, "not_a_file");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_rewrite_should_keep_file_mode() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    for mode in [0o600, 0o664, 0o755] {
+        let file = root.join(format!("f-{mode:o}"));
+        std::fs::write(&file, "old").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        let resp = engine
+            .handle_request(Request::FsWrite {
+                path: p(&file),
+                data_base64: b64(b"new"),
+                expected_modified_ms: None,
+                create_dirs: false,
+            })
+            .await;
+        assert!(matches!(resp, Response::FsWriteResult { .. }), "{resp:?}");
+        let meta = std::fs::metadata(&file).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o7777, mode);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new");
+    }
+}
+
+#[test]
+fn given_root_home_or_home_ancestor_should_be_too_broad_to_register() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let home = base.join("users/me");
+    let project = home.join("code/app");
+    std::fs::create_dir_all(&project).unwrap();
+    for broad in [Path::new("/"), &base, &base.join("users"), &home] {
+        assert!(
+            is_too_broad_project_root(broad, Some(&home)),
+            "{broad:?} should be refused"
+        );
+    }
+    assert!(!is_too_broad_project_root(&project, Some(&home)));
+    assert!(!is_too_broad_project_root(&home.join("code"), Some(&home)));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_filesystem_root_should_refuse_init() {
+    let engine = Engine::new();
+    let resp = engine
+        .handle_request(Request::Init {
+            project_root: "/".into(),
+        })
+        .await;
+    assert_error(resp, "project_root_not_allowed");
 }
 
 // --- Delete ---
@@ -530,6 +630,59 @@ async fn given_symlink_delete_should_remove_link_not_target_and_refuse_root() {
 }
 
 // --- git_exec ---
+
+#[test]
+fn given_git_should_run_with_hooks_and_user_config_disabled() {
+    let args = exec_args("git", strings(&["-c", "core.quotePath=true", "status"]));
+    assert_eq!(
+        args,
+        strings(&[
+            "-c",
+            "core.fsmonitor=",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.quotePath=true",
+            "status"
+        ])
+    );
+    assert_eq!(
+        exec_env("git"),
+        vec![
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1")
+        ]
+    );
+    assert_eq!(
+        exec_args("gh", strings(&["auth", "status"])),
+        strings(&["auth", "status"])
+    );
+    assert!(exec_env("gh").is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_repo_fsmonitor_hook_should_not_run_under_git_exec() {
+    let (engine, tmp, root, _outside) = setup().await;
+    let marker = tmp.path().join("fsmonitor-ran");
+    let hook = tmp.path().join("fsmonitor-hook");
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(&root, &["config", "core.fsmonitor", &p(&hook)]);
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&["status", "--porcelain=v1"]),
+            stdin_base64: None,
+            timeout_ms: 10_000,
+        })
+        .await;
+    assert!(
+        matches!(resp, Response::GitExecResult { exit_code: 0, .. }),
+        "{resp:?}"
+    );
+    assert!(!marker.exists(), "repository fsmonitor hook ran");
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_program_other_than_git_or_gh_should_refuse_it() {
@@ -755,6 +908,42 @@ fn given_escaping_git_args_should_refuse_them() {
         vec!["log", "--no-index", "--", "/dev/null", "a"],
         vec!["--literal-pathspecs"],
         vec![],
+        // Writers and aliases: only allowlisted read-only subcommands run.
+        vec!["config", "--file", "/x", "alias.x", "y"],
+        vec!["config", "--global", "alias.x", "!sh"],
+        vec!["x"],
+        vec!["--literal-pathspecs", "x"],
+        vec!["format-patch", "-o", "/tmp/x", "HEAD~1"],
+        vec!["format-patch", "--output-directory", "/tmp/x", "HEAD~1"],
+        vec!["log", "--output-directory=/tmp/x"],
+        vec!["log", "-o", "/tmp/x"],
+        vec!["diff", "-o/tmp/x"],
+        vec!["worktree", "add", "/anywhere"],
+        vec!["init", "/anywhere"],
+        vec!["bundle", "create", "/abs/x.bundle", "HEAD"],
+        vec!["fetch", "origin"],
+        vec!["checkout", "main"],
+        vec!["branch", "-D", "main"],
+        vec!["diff", "--ext-diff"],
+        vec!["log", "-p", "--textconv"],
+        // symbolic-ref only reads.
+        vec!["symbolic-ref", "HEAD", "refs/heads/x"],
+        vec!["symbolic-ref", "-d", "HEAD"],
+        vec!["symbolic-ref", "-m", "msg", "HEAD", "refs/heads/x"],
+        vec!["symbolic-ref", "--", "HEAD", "refs/heads/x"],
+        vec!["symbolic-ref"],
+        // Reproduced reviewer bypasses.
+        vec!["grep", "-O", "touch X; :", "-e", "x"],
+        vec!["grep", "-Otouch X; :", "-e", "x"],
+        vec!["grep", "--open-files-in-pager=touch X", "-e", "x"],
+        vec!["config", "core.fsmonitor", "touch X"],
+        vec!["config", "alias.x", "!touch X"],
+        vec!["hash-object", "-w", "/etc/passwd"],
+        vec!["cat-file", "-p", "HEAD"],
+        vec!["rebase", "-x", "sh", "main"],
+        vec!["difftool", "-x", "sh"],
+        vec!["submodule", "foreach", "sh"],
+        vec!["bisect", "run", "sh"],
     ] {
         assert!(
             check_exec_args("git", &strings(&args)).is_err(),
@@ -806,20 +995,26 @@ async fn given_disallowed_git_args_should_refuse_git_exec() {
 async fn given_git_exec_timeout_should_kill_spawned_helpers() {
     let (engine, tmp, root, _outside) = setup().await;
     let pid_file = tmp.path().join("helper.pid");
-    // A repo-local alias runs through a shell: a grandchild of the daemon.
-    git(
-        &root,
-        &[
-            "config",
-            "alias.slow",
-            &format!("!sh -c 'echo $$ > {}; exec sleep 30'", pid_file.display()),
-        ],
-    );
+    // A repo-local external diff driver runs as a helper process git spawns.
+    let driver = tmp.path().join("ext-diff");
+    std::fs::write(
+        &driver,
+        format!(
+            "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&driver, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    git(&root, &["add", "a.txt"]);
+    std::fs::write(root.join("a.txt"), "two\n").unwrap();
+    git(&root, &["config", "diff.external", &p(&driver)]);
     let resp = engine
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: strings(&["slow"]),
+            args: strings(&["diff"]),
             stdin_base64: None,
             timeout_ms: 1_500,
         })
@@ -892,12 +1087,32 @@ async fn given_git_status_in_project_should_return_output() {
 #[tokio::test(flavor = "current_thread")]
 async fn given_stdin_and_failing_command_should_pass_input_and_exit_code() {
     let (engine, _tmp, root, _outside) = setup().await;
+    git(
+        &root,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ],
+    );
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .unwrap()
+        .stdout;
     let resp = engine
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: vec!["hash-object".into(), "--stdin".into()],
-            stdin_base64: Some(b64(b"hello\n")),
+            args: strings(&["rev-list", "--stdin", "--no-walk"]),
+            stdin_base64: Some(b64(b"HEAD\n")),
             timeout_ms: 10_000,
         })
         .await;
@@ -909,7 +1124,7 @@ async fn given_stdin_and_failing_command_should_pass_input_and_exit_code() {
         } => {
             assert_eq!(exit_code, 0);
             let stdout = BASE64_STANDARD.decode(stdout_base64).unwrap();
-            assert_eq!(stdout, b"ce013625030ba8dba906f756967f9e9ca394464a\n");
+            assert_eq!(stdout, head);
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -918,7 +1133,7 @@ async fn given_stdin_and_failing_command_should_pass_input_and_exit_code() {
         .handle_request(Request::GitExec {
             cwd: p(&root),
             program: "git".into(),
-            args: vec!["definitely-not-a-command".into()],
+            args: strings(&["rev-parse", "--verify", "definitely-not-a-ref"]),
             stdin_base64: None,
             timeout_ms: 10_000,
         })
@@ -965,4 +1180,37 @@ async fn given_subscribe_fs_should_confirm_only_allowed_directories() {
         })
         .await;
     assert_error(resp, "path_not_allowed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_git_metadata_path_should_refuse_write_and_delete_but_allow_read() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let config = root.join(".git/config");
+    let original = std::fs::read(&config).unwrap();
+
+    let write = engine
+        .handle_request(Request::FsWrite {
+            path: p(&config),
+            data_base64: b64(b"[diff]\n\texternal = /bin/sh\n"),
+            expected_modified_ms: None,
+            create_dirs: false,
+        })
+        .await;
+    assert_error(write, "path_not_allowed");
+    let delete = engine
+        .handle_request(Request::FsDelete {
+            path: p(&root.join(".git/HEAD")),
+        })
+        .await;
+    assert_error(delete, "path_not_allowed");
+    assert_eq!(std::fs::read(&config).unwrap(), original);
+    assert!(root.join(".git/HEAD").exists());
+
+    let read = engine
+        .handle_request(Request::FsRead {
+            path: p(&config),
+            max_bytes: 4096,
+        })
+        .await;
+    assert!(matches!(read, Response::FsReadResult { .. }), "{read:?}");
 }

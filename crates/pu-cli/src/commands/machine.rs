@@ -177,15 +177,27 @@ async fn run_status(name: Option<&str>, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Longest `pu machine start` waits for ssh (the app waits as long).
+const START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 async fn run_start(name: &str) -> Result<(), CliError> {
     let machine = machine_target::find_machine(name)?;
     machines::validate_ssh_host(&machine.ssh_host).map_err(core_error)?;
     let program = machine_target::ssh_program();
-    let status = tokio::process::Command::new(&program)
+    let run = tokio::process::Command::new(&program)
         .args(machine_target::start_args(&machine.ssh_host))
         .stdin(std::process::Stdio::null())
-        .status()
+        .kill_on_drop(true)
+        .status();
+    let status = tokio::time::timeout(START_TIMEOUT, run)
         .await
+        .map_err(|_| {
+            CliError::Other(format!(
+                "starting the daemon on {} did not finish within {}s",
+                machine.name,
+                START_TIMEOUT.as_secs()
+            ))
+        })?
         .map_err(|e| {
             CliError::Other(format!(
                 "failed to run {}: {e}",

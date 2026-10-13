@@ -223,6 +223,22 @@ async fn write_output_chunks(
 /// How long file events are gathered before one `FsEvent` goes out.
 const FS_EVENT_COALESCE: std::time::Duration = std::time::Duration::from_millis(200);
 const FS_EVENT_QUEUE: usize = 4096;
+/// A client that hasn't drained an `FsEvent` within this long (e.g. a laptop
+/// asleep at the far end of an ssh forward) is treated as gone.
+const FS_EVENT_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Writes one `FsEvent`; false when the write failed or timed out, which ends
+/// the stream.
+async fn write_fs_event(
+    writer: &mut IpcWriter,
+    resp: &Response,
+    timeout: std::time::Duration,
+) -> bool {
+    matches!(
+        tokio::time::timeout(timeout, write_response(writer, resp)).await,
+        Ok(Ok(()))
+    )
+}
 /// Scan interval of the polling fallback for trees too large for native watches.
 const FS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -372,7 +388,7 @@ pub(super) async fn handle_fs_stream(
                     root: root_str.clone(),
                     paths: std::mem::take(&mut pending).into_iter().collect(),
                 };
-                if write_response(writer, &resp).await.is_err() {
+                if !write_fs_event(writer, &resp, FS_EVENT_WRITE_TIMEOUT).await {
                     break;
                 }
             }
@@ -390,6 +406,22 @@ pub(super) async fn handle_fs_stream(
 #[cfg(test)]
 mod watch_tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_client_not_reading_should_time_out_fs_event_write() {
+        let (ours, _theirs) = tokio::net::UnixStream::pair().unwrap();
+        let (_reader, mut writer) = ours.into_split();
+        // Far more than the socket buffers hold, and nobody reads `_theirs`.
+        let resp = Response::FsEvent {
+            root: "/r".into(),
+            paths: vec!["/r/".to_string() + &"x".repeat(1000); 16_384],
+        };
+        let started = std::time::Instant::now();
+        let written =
+            write_fs_event(&mut writer, &resp, std::time::Duration::from_millis(200)).await;
+        assert!(!written);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
     use std::sync::mpsc;
 
     fn collector() -> (

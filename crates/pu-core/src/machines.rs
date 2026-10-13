@@ -155,7 +155,8 @@ pub fn load(path: &Path) -> Result<MachineRegistry, PuError> {
 }
 
 /// Atomically replace the registry with a file only the user can read.
-pub fn save(path: &Path, registry: &MachineRegistry) -> Result<(), PuError> {
+/// Private: callers go through [`update`], which holds the registry lock.
+fn save(path: &Path, registry: &MachineRegistry) -> Result<(), PuError> {
     registry.validate()?;
     let parent = path
         .parent()

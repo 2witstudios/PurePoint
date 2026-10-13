@@ -126,31 +126,37 @@ pub async fn check_daemon_health(socket: &Path) -> Result<bool, CliError> {
     }
 }
 
-/// A machine's daemon is never auto-started (MACH-003): only check it.
-pub async fn ensure_remote_daemon(socket: &Path, machine: &str) -> Result<(), CliError> {
+/// Probe up to three times, 200 ms apart, so a busy or restarting daemon
+/// that misses one check isn't reported as not answering.
+pub async fn probe_daemon_health_with_retries(socket: &Path) -> HealthProbe {
+    let mut probe = HealthProbe::NotAnswering;
     for attempt in 0..3 {
         if attempt > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        match probe_daemon_health(socket).await {
-            HealthProbe::Healthy => return Ok(()),
-            HealthProbe::NotAnswering => {}
-            HealthProbe::Incompatible { protocol_version } => {
-                return Err(CliError::Other(format!(
-                    "daemon on {machine} speaks protocol v{protocol_version}, but this CLI speaks v{PROTOCOL_VERSION} — update PurePoint on both machines"
-                )));
-            }
-            HealthProbe::Busy { message } => {
-                return Err(CliError::DaemonError {
-                    code: "BUSY".into(),
-                    message: format!("daemon on {machine}: {message}"),
-                });
-            }
+        probe = probe_daemon_health(socket).await;
+        if !matches!(probe, HealthProbe::NotAnswering) {
+            break;
         }
     }
-    Err(CliError::Other(format!(
-        "daemon not running on {machine}; start it with `pu machine start {machine}`"
-    )))
+    probe
+}
+
+/// A machine's daemon is never auto-started (MACH-003): only check it.
+pub async fn ensure_remote_daemon(socket: &Path, machine: &str) -> Result<(), CliError> {
+    match probe_daemon_health_with_retries(socket).await {
+        HealthProbe::Healthy => Ok(()),
+        HealthProbe::NotAnswering => Err(CliError::Other(format!(
+            "daemon not running on {machine}; start it with `pu machine start {machine}`"
+        ))),
+        HealthProbe::Incompatible { protocol_version } => Err(CliError::Other(format!(
+            "daemon on {machine} speaks protocol v{protocol_version}, but this CLI speaks v{PROTOCOL_VERSION} — update PurePoint on both machines"
+        ))),
+        HealthProbe::Busy { message } => Err(CliError::DaemonError {
+            code: "BUSY".into(),
+            message: format!("daemon on {machine}: {message}"),
+        }),
+    }
 }
 
 pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
