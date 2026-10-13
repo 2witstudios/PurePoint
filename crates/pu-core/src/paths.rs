@@ -32,6 +32,26 @@ pub fn daemon_socket_path() -> Result<PathBuf, std::io::Error> {
     Ok(global_pu_dir()?.join("daemon.sock"))
 }
 
+/// Machines registered for SSH access, shared by the app and the CLI.
+pub fn machines_registry_path() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("machines.json"))
+}
+
+/// Parent of every per-machine directory; kept at mode 0700.
+pub fn machines_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(global_pu_dir()?.join("machines"))
+}
+
+/// Per-machine directory holding forwarded sockets; kept at mode 0700.
+pub fn machine_dir(machine_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(machines_dir()?.join(machine_id))
+}
+
+/// The app's live forward to a machine's daemon.
+pub fn machine_socket_path(machine_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(machine_dir(machine_id)?.join("daemon.sock"))
+}
+
 /// Registry belongs to the selected daemon socket, including custom sockets.
 pub fn project_registry_path(socket: &Path) -> PathBuf {
     let mut path = socket.as_os_str().to_os_string();
@@ -204,6 +224,24 @@ mod tests {
             path.to_string_lossy().contains(".pu/daemon.sock"),
             "unexpected path: {path:?}"
         );
+    }
+
+    #[test]
+    fn given_machine_id_should_build_paths_under_home_pu_machines() {
+        set_home_override(Some(PathBuf::from("/home/u")));
+        assert_eq!(
+            machines_registry_path().unwrap(),
+            PathBuf::from("/home/u/.pu/machines.json")
+        );
+        assert_eq!(
+            machine_dir("abc").unwrap(),
+            PathBuf::from("/home/u/.pu/machines/abc")
+        );
+        assert_eq!(
+            machine_socket_path("abc").unwrap(),
+            PathBuf::from("/home/u/.pu/machines/abc/daemon.sock")
+        );
+        set_home_override(None);
     }
 
     #[test]

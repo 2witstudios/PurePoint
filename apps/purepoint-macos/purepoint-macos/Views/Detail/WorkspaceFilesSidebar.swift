@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Attached to the workspace's content, rather than the elevated global navigation.
@@ -193,7 +194,7 @@ private struct InlineFileTreeRow: View {
                         AnyView(InlineFileTreeRow(node: child, state: state, depth: depth + 1))
                     }
                 } else {
-                    InlineFilePreview(path: node.absolutePath, name: node.name)
+                    InlineFilePreview(path: node.absolutePath, name: node.name, host: state.host)
                 }
             }
         }
@@ -203,6 +204,7 @@ private struct InlineFileTreeRow: View {
 private struct InlineFilePreview: View {
     let path: String
     let name: String
+    let host: any ProjectHost
     @State private var hunks: [Hunk]?
     @State private var message: String?
 
@@ -217,13 +219,16 @@ private struct InlineFilePreview: View {
                 ProgressView().controlSize(.mini).padding(10)
             }
         }
-        .task(id: path) {
+        .task(id: WorkspaceFilesState.identity(rootPath: path, host: host)) {
             var lastModified: Date?
             while !Task.isCancelled {
-                let modified = FileIOService.fileModificationDate(at: path)
-                if hunks == nil || modified != lastModified {
+                // A remote check is an SSH round trip: skip it while the app is in the
+                // background, like the other remote pollers (the first read always runs).
+                let checkNow = hunks == nil || host.isLocal || NSApplication.shared.isActive
+                let modified = checkNow ? await FileIOService.fileModificationDate(at: path, host: host) : lastModified
+                if checkNow, hunks == nil || modified != lastModified {
                     do {
-                        let file = try await FileIOService.readFile(at: path, limit: 1_000_000)
+                        let file = try await FileIOService.readFile(at: path, limit: 1_000_000, host: host)
                         guard !Task.isCancelled else { return }
                         message = file.isBinary ? "Binary file" : file.content.isEmpty ? "Empty file" : nil
                         var lines = file.content.components(separatedBy: "\n")
@@ -242,7 +247,9 @@ private struct InlineFilePreview: View {
                         message = error.localizedDescription
                     }
                 }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                // Remote polling is a daemon round trip over SSH; poll less often, as the
+                // changes list does.
+                do { try await Task.sleep(for: .seconds(host.isLocal ? 2 : 5)) } catch { return }
             }
         }
     }

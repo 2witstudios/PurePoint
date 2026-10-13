@@ -80,6 +80,7 @@ nonisolated enum DaemonClientError: Error, LocalizedError {
     case notRunning
     case connectTimeout
     case busy
+    case requestTimeout
 
     var errorDescription: String? {
         switch self {
@@ -88,6 +89,7 @@ nonisolated enum DaemonClientError: Error, LocalizedError {
         case .notRunning: "Daemon is not running"
         case .connectTimeout: "Timed out connecting to daemon"
         case .busy: "Daemon is at its connection limit"
+        case .requestTimeout: "Timed out waiting for the daemon"
         }
     }
 }

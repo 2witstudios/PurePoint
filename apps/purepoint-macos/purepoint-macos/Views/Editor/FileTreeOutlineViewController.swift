@@ -11,6 +11,9 @@ class FileTreeOutlineViewController: NSViewController, NSOutlineViewDataSource, 
     var onFileSelected: ((String, String) -> Void)?  // (absolutePath, name)
     var onNodeExpanded: ((FileTreeNode) -> Void)?
     var onNodeCollapsed: ((FileTreeNode) -> Void)?
+    /// Remote trees cannot be revealed in Finder; their files open as fetched local copies.
+    var isLocal = true
+    var onOpenLocalCopy: ((String) -> Void)?
 
     private var contextClickedNode: FileTreeNode?
 
@@ -191,13 +194,23 @@ extension FileTreeOutlineViewController: NSMenuDelegate {
         guard clickedRow >= 0, let node = outlineView.item(atRow: clickedRow) as? FileTreeNode else { return }
         contextClickedNode = node
 
-        let revealItem = NSMenuItem(
-            title: "Reveal in Finder",
-            action: #selector(contextRevealInFinder(_:)),
-            keyEquivalent: ""
-        )
-        revealItem.target = self
-        menu.addItem(revealItem)
+        if isLocal {
+            let revealItem = NSMenuItem(
+                title: "Reveal in Finder",
+                action: #selector(contextRevealInFinder(_:)),
+                keyEquivalent: ""
+            )
+            revealItem.target = self
+            menu.addItem(revealItem)
+        } else if !node.isDirectory {
+            let openItem = NSMenuItem(
+                title: "Open Local Copy",
+                action: #selector(contextOpenLocalCopy(_:)),
+                keyEquivalent: ""
+            )
+            openItem.target = self
+            menu.addItem(openItem)
+        }
 
         let copyItem = NSMenuItem(
             title: "Copy Path",
@@ -219,6 +232,11 @@ extension FileTreeOutlineViewController: NSMenuDelegate {
     @objc private func contextRevealInFinder(_ sender: NSMenuItem) {
         guard let node = contextClickedNode else { return }
         NSWorkspace.shared.selectFile(node.absolutePath, inFileViewerRootedAtPath: "")
+    }
+
+    @objc private func contextOpenLocalCopy(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode else { return }
+        onOpenLocalCopy?(node.absolutePath)
     }
 
     @objc private func contextCopyPath(_ sender: NSMenuItem) {

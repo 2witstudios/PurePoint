@@ -21,6 +21,10 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.8
+# notify (file watching for `subscribe_fs`) is public-domain dedicated.
+exceptions = [
+  { crate = "notify", allow = ["CC0-1.0"] },
+]
 
 [licenses.private]
 ignore = true

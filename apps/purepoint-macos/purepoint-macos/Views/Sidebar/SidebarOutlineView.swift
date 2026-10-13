@@ -88,6 +88,15 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         vc.onRemoveProject = { [viewCache] project in
             let projectRoot = project.projectRoot
 
+            // A remote project is only hidden here: its files and agents stay on the machine.
+            if project.isRemote {
+                for agent in project.allAgents {
+                    viewCache.remove(agentId: agent.id)
+                }
+                appState.closeProject(project.projectId)
+                return
+            }
+
             // Point Guard can still own this folder after it leaves the project sidebar.
             // Preserve both daemon files and attached terminal views in that case.
             guard appState.closeProject(projectRoot) else { return }
@@ -105,6 +114,13 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
             try? FileManager.default.removeItem(at: agentsDirURL)
         }
 
+        vc.onRemoveMachine = { [viewCache] machine in
+            for project in machine.projects {
+                for agent in project.allAgents { viewCache.remove(agentId: agent.id) }
+            }
+            appState.removeMachine(machine)
+        }
+
         return vc
     }
 
@@ -114,7 +130,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         vc.activeWorkspaceId = registry.activeWorkspaceId
 
         // Rebuild tree when data changes
-        vc.rebuildNodes(projects: appState.projects)
+        vc.rebuildNodes(projects: appState.projects, machines: appState.machines)
 
         // Handle incoming programmatic selection (e.g., pendingSelectAgentId)
         vc.selectNode(for: selection)

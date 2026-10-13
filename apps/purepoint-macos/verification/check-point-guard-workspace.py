@@ -30,7 +30,8 @@ let package = Package(
         "Models/ManifestModel.swift", "Models/ChannelModel.swift", "Views/PaneGrid/PaneSplitNode.swift",
         "State/AppState.swift", "Services/WorkspaceService.swift", "Services/DaemonProtocol.swift",
         "Views/PaneGrid/WorkspacePersistence.swift", "State/WorkspaceRegistry.swift",
-        "Views/Chat/PointGuardView.swift", "Theme/Theme.swift"
+        "Views/Chat/PointGuardView.swift", "Theme/Theme.swift",
+        "Models/ProjectKey.swift", "Models/Machine.swift"
     ]:
         shutil.copyfile(source / name, sources / Path(name).name)
 
@@ -49,6 +50,13 @@ let package = Package(
 @MainActor final class FileTabStore {
     struct Key: Hashable { let workspaceId: String; let surfaceId: Int }
     func retain(only keys: Set<Key>) {}
+    func existingSession(workspaceId: String, surfaceId: Int) -> FileTabSession? { nil }
+}
+@MainActor final class FileTabSession {
+    struct File { let name: String }
+    struct Editor { var currentFile: File? }
+    var editor = Editor()
+    var hasUnsavedChanges: Bool { false }
 }
 ''')
     for name in [

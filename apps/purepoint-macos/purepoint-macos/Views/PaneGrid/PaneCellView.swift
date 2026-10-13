@@ -44,6 +44,7 @@ struct PaneCellView: View {
             if let rootPath = fileRootPath, let surface = activeTab {
                 FilePaneView(
                     rootPath: rootPath,
+                    host: appState.host(forWorkspace: workspaceId, registry: registry),
                     initialPath: path,
                     session: registry.fileTabs.session(
                         workspaceId: workspaceId, surfaceId: surface.id, initialPath: path),
@@ -113,10 +114,11 @@ private struct EmptyTabView: View {
         let sid = surfaceId
         let hub = state.agentsHubState
         let rootPath = state.fileRoot(forWorkspace: wsId, registry: reg)
+        let host = state.host(forWorkspace: wsId, registry: reg)
         let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
             await hub.loadAll(projectRoots: state.paletteProjectRoots(forWorkspace: wsId))
-            let files = await Task.detached { rootPath.map { FileIndex.list(root: $0) } ?? [] }.value
+            let files = await HostIO.value { rootPath.map { FileIndex.list(root: $0, host: host) } ?? [] }
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.allVariants,
                 agents: hub.agents,
@@ -135,8 +137,8 @@ private struct EmptyTabView: View {
         CommandPalettePanel.show(
             relativeTo: window, items: items, usePointGuardNames: settingsState.usePointGuardNames
         ) { result in
-            guard let projectRoot = reg.projectRoot(forWorkspace: wsId),
-                let project = state.projectState(forRoot: projectRoot)
+            guard let projectId = reg.projectRoot(forWorkspace: wsId),
+                let project = state.projectState(forId: projectId)
             else { return }
 
             switch result {

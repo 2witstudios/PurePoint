@@ -27,15 +27,68 @@ nonisolated enum WorkingTreeDiffError: LocalizedError {
 
 actor GitService {
     static let shared = GitService()
+    /// git processes and remote host calls block. Each service runs on its own queue rather
+    /// than Swift's shared concurrency pool, so a slow machine cannot stall the whole app.
+    private nonisolated let executorQueue = DispatchSerialQueue(label: "purepoint.git-service", qos: .userInitiated)
+    nonisolated var unownedExecutor: UnownedSerialExecutor { executorQueue.asUnownedSerialExecutor() }
     private var cachedGhPath: String?
     private var branchSummaryCache: [String: GitBranchReview] = [:]
     private var untrackedCache: [String: (stamp: String, file: FileDiff, bytes: Int)] = [:]
     private var untrackedCacheOrder: [String] = []
     private var untrackedCacheBytes = 0
 
-    init(ghPath: String? = nil) { cachedGhPath = ghPath }
+    /// Where this service's files live and its git/gh run: this Mac, or a machine's daemon.
+    nonisolated let host: any ProjectHost
+
+    init(ghPath: String? = nil, host: any ProjectHost = LocalProjectHost.shared) {
+        cachedGhPath = ghPath
+        self.host = host
+    }
+
+    /// `attributesOfItem`-style stamp, read through the host.
+    private func stamp(_ fullPath: String, includeIdentity: Bool) -> String {
+        Self.stamp((try? host.stat(path: fullPath)) ?? .missing, includeIdentity: includeIdentity)
+    }
+
+    private static func stamp(_ stat: HostFileStat, includeIdentity: Bool) -> String {
+        guard stat.exists else { return "-1/0/" + (includeIdentity ? "0" : "missing") }
+        let seconds = Double(stat.modifiedMs) / 1000
+        return "\(seconds)/\(stat.size)/" + (includeIdentity ? "\(stat.modifiedMs)" : (stat.isDirectory ? "dir" : "file"))
+    }
+
+    /// Stats for many paths with one listing per parent directory instead of a daemon round
+    /// trip per path (the remote review polls every few seconds). A directory that cannot be
+    /// listed falls back to statting its paths one by one.
+    private func batchedStats(_ fullPaths: [String]) -> [String: HostFileStat] {
+        var byDirectory: [String: Set<String>] = [:]
+        for fullPath in fullPaths {
+            byDirectory[(fullPath as NSString).deletingLastPathComponent, default: []].insert(fullPath)
+        }
+        var stats: [String: HostFileStat] = [:]
+        for (directory, wanted) in byDirectory {
+            // A cancelled refresh stops making remote round trips.
+            if Task.isCancelled { break }
+            guard let entries = try? host.list(directory: directory) else {
+                for fullPath in wanted { stats[fullPath] = (try? host.stat(path: fullPath)) ?? .missing }
+                continue
+            }
+            for entry in entries {
+                let fullPath = (directory as NSString).appendingPathComponent(entry.name)
+                guard wanted.contains(fullPath) else { continue }
+                stats[fullPath] = HostFileStat(
+                    exists: true, isDirectory: entry.isDirectory, size: entry.size, modifiedMs: entry.modifiedMs)
+            }
+        }
+        return stats
+    }
+
+    private func exists(_ fullPath: String) -> Bool {
+        (try? host.stat(path: fullPath))?.exists ?? false
+    }
 
     private func checked(_ args: [String], at path: String) throws -> String {
+        // Multi-command sequences (reviews, patches) stop between commands once cancelled.
+        try Task.checkCancellation()
         let result = runGit(args, cwd: path)
         guard result.success else {
             throw GitReviewError(message: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Git command failed (exit \(result.exitCode)); the refs may have no common ancestor.")
@@ -101,21 +154,24 @@ actor GitService {
         do {
             let names = try checked(["ls-files", "--others", "--exclude-standard", "-z"], at: path).split(separator: "\0").map(String.init)
             var remaining = 32
+            let remoteStats = host.isLocal ? [:] : batchedStats(names.map { (path as NSString).appendingPathComponent($0) })
             for name in names {
+                let key = (path as NSString).appendingPathComponent(name)
                 if summariesOnly {
                     var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
-                    file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", name]
-                    file.previewVersion = fileStamp(name, at: path)
+                    // An untracked nested repository is listed as `name/`; it has no patch.
+                    if !name.hasSuffix("/") {
+                        file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", name]
+                    }
+                    file.previewVersion = host.isLocal ? fileStamp(name, at: path) : Self.stamp(remoteStats[key] ?? .missing, includeIdentity: true)
                     review.untracked.append(file)
                     continue
                 }
-                let key = (path as NSString).appendingPathComponent(name)
-                let attributes = try? FileManager.default.attributesOfItem(atPath: key)
-                let stamp = "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.type] ?? "missing")"
+                let stamp = host.isLocal ? Self.localStamp(key) : Self.stamp(remoteStats[key] ?? .missing, includeIdentity: false)
                 if let cached = untrackedCache[key], cached.stamp == stamp { review.untracked.append(cached.file) }
-                else if remaining > 0 {
+                else if remaining > 0, !Task.isCancelled {
                     remaining -= 1
-                    let file = untrackedPreview(name: name, at: path)
+                    let file = untrackedPreview(name: name, at: path, knownStat: remoteStats[key])
                     review.untracked.append(file)
                 } else {
                     var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
@@ -128,14 +184,24 @@ actor GitService {
         return review
     }
 
-    func untrackedPreview(name: String, at path: String) -> FileDiff {
+    /// `knownStat`: a remote stat the caller already has, saving a round trip.
+    func untrackedPreview(name: String, at path: String, knownStat: HostFileStat? = nil) -> FileDiff {
         let key = (path as NSString).appendingPathComponent(name)
-        let attributes = try? FileManager.default.attributesOfItem(atPath: key)
-        let stamp = "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.type] ?? "missing")"
+        let isDirectory: Bool
+        let stamp: String
+        if host.isLocal {
+            let attributes = try? FileManager.default.attributesOfItem(atPath: key)
+            isDirectory = attributes?[.type] as? FileAttributeType == .typeDirectory
+            stamp = Self.localStamp(key)
+        } else {
+            let stat = knownStat ?? (try? host.stat(path: key)) ?? .missing
+            isDirectory = stat.isDirectory
+            stamp = Self.stamp(stat, includeIdentity: false)
+        }
         if let cached = untrackedCache[key], cached.stamp == stamp { return cached.file }
         var file: FileDiff
         do {
-            guard attributes?[.type] as? FileAttributeType != .typeDirectory else { throw FilePreviewError.unsupported }
+            guard !isDirectory else { throw FilePreviewError.unsupported }
             file = try emptyBaselinePatch(name: name, status: "??", at: path, outputLimit: 1_000_000)
         } catch {
             file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
@@ -261,7 +327,7 @@ actor GitService {
                     file.previewVersion += "/stages:" + stages.map(String.init).joined(separator: "\0")
                     let hasOurs = stages.contains { $0.split(separator: "\t", maxSplits: 1).first?.split(separator: " ").last == "2" }
                     file.conflictBaseline = hasOurs ? "ours (index stage 2)" : "empty (ours deleted)"
-                    if !hasOurs && FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(entry.name)) {
+                    if !hasOurs && exists((path as NSString).appendingPathComponent(entry.name)) {
                         file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", entry.name]
                     }
                 }
@@ -299,8 +365,10 @@ actor GitService {
                 // Modify/delete conflicts can have no stage 2. --ours then emits no
                 // patch, though the surviving working file has reviewable content.
                 let fullPath = (path as NSString).appendingPathComponent(name)
-                let exists = FileManager.default.fileExists(atPath: fullPath)
-                    || (try? FileManager.default.destinationOfSymbolicLink(atPath: fullPath)) != nil
+                let exists = host.isLocal
+                    ? FileManager.default.fileExists(atPath: fullPath)
+                        || (try? FileManager.default.destinationOfSymbolicLink(atPath: fullPath)) != nil
+                    : self.exists(fullPath)
                 if !hasOurs && exists {
                     file = try emptyBaselinePatch(name: name, status: "U", at: path)
                     file.conflictBaseline = "empty (ours deleted)"
@@ -312,8 +380,15 @@ actor GitService {
     }
 
     private func fileStamp(_ name: String, at path: String) -> String {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: (path as NSString).appendingPathComponent(name))
+        let fullPath = (path as NSString).appendingPathComponent(name)
+        guard host.isLocal else { return stamp(fullPath, includeIdentity: true) }
+        let attributes = try? FileManager.default.attributesOfItem(atPath: fullPath)
         return "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.systemFileNumber] ?? 0)"
+    }
+
+    private static func localStamp(_ key: String) -> String {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: key)
+        return "\((attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)/\(attributes?[.size] ?? 0)/\(attributes?[.type] ?? "missing")"
     }
 
     /// Generate an on-disk snapshot once; subsequent pages never regenerate Git output.
@@ -324,9 +399,16 @@ actor GitService {
         if let resume { slice = resume.slice }
         else if let stored = file.patchSlice { slice = stored }
         else {
-            guard let arguments = file.patchArguments else { throw GitReviewError(message: "Refresh to load this file's diff.") }
+            guard let arguments = file.patchArguments else {
+                throw GitReviewError(
+                    message: file.filename.hasSuffix("/")
+                        ? "This is an untracked nested repository; it has no diff here."
+                        : "Refresh to load this file's diff.")
+            }
             let snapshot = PatchSnapshot(url: FileManager.default.temporaryDirectory.appendingPathComponent("purepoint-review-\(UUID()).patch"))
-            let result = runProcess("/usr/bin/git", args: ["--literal-pathspecs"] + arguments, cwd: path, timeoutSeconds: 15, outputFile: snapshot.url)
+            let result = host.run(HostCommand(
+                program: "git", executablePath: "/usr/bin/git", args: ["--literal-pathspecs"] + arguments, cwd: path,
+                timeoutSeconds: 15, outputFile: snapshot.url))
             try Task.checkCancellation()
             guard result.success || (arguments.contains("--no-index") && result.exitCode == 1) else {
                 throw GitReviewError(message: result.stderr.nilIfEmpty ?? "Diff loading timed out or failed. Retry to load this file.")
@@ -432,8 +514,7 @@ actor GitService {
             // Before the first commit there is no HEAD content to delete. A staged
             // path subsequently removed/renamed contributes no working-tree file.
             if !hasHead
-                && !FileManager.default.fileExists(
-                    atPath: (worktreePath as NSString).appendingPathComponent(name))
+                && !exists((worktreePath as NSString).appendingPathComponent(name))
             {
                 continue
             }
@@ -455,7 +536,7 @@ actor GitService {
         let hasHead = runGit(["rev-parse", "--verify", "HEAD"], cwd: worktreePath).success
         if file.statusCode == "??" || !hasHead {
             let path = (worktreePath as NSString).appendingPathComponent(file.filename)
-            let preview = try await FileIOService.readFile(at: path, limit: 1_000_000)
+            let preview = try await FileIOService.readFile(at: path, limit: 1_000_000, host: host)
             guard !preview.isBinary else { return file }
             var lines = preview.content.components(separatedBy: "\n")
             if lines.last == "" { lines.removeLast() }
@@ -701,10 +782,17 @@ actor GitService {
     // MARK: - Process Execution
 
     func runGit(_ args: [String], cwd: String, outputLimit: Int? = nil) -> CommandResult {
-        runProcess("/usr/bin/git", args: ["--literal-pathspecs"] + args, cwd: cwd, outputLimit: outputLimit)
+        host.run(HostCommand(
+            program: "git", executablePath: "/usr/bin/git", args: ["--literal-pathspecs"] + args, cwd: cwd,
+            outputLimit: outputLimit))
     }
 
     private func runGh(_ args: [String], cwd: String, outputFile: URL? = nil) -> CommandResult {
+        // A remote machine's daemon runs its own gh with that user's auth.
+        guard host.isLocal else {
+            return host.run(HostCommand(
+                program: "gh", executablePath: "gh", args: args, cwd: cwd, timeoutSeconds: 25, outputFile: outputFile))
+        }
         let ghPath: String
         if let cached = cachedGhPath {
             ghPath = cached
@@ -715,7 +803,8 @@ actor GitService {
             cachedGhPath = resolved
             ghPath = resolved
         }
-        return runProcess(ghPath, args: args, cwd: cwd, timeoutSeconds: 25, outputFile: outputFile)
+        return host.run(HostCommand(
+            program: "gh", executablePath: ghPath, args: args, cwd: cwd, timeoutSeconds: 25, outputFile: outputFile))
     }
 
     private nonisolated func locateGh() -> String? {
@@ -750,101 +839,6 @@ actor GitService {
             }
         }
         return nil
-    }
-
-    private func runProcess(_ path: String, args: [String], cwd: String, outputLimit: Int? = nil, timeoutSeconds: TimeInterval? = nil, outputFile: URL? = nil) -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        var fileHandle: FileHandle?
-        if let outputFile {
-            _ = FileManager.default.createFile(atPath: outputFile.path, contents: nil, attributes: [.posixPermissions: 0o600])
-            do { fileHandle = try FileHandle(forWritingTo: outputFile) }
-            catch { return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1) }
-        }
-        defer { try? fileHandle?.close() }
-        if let fileHandle { process.standardOutput = fileHandle }
-        else { process.standardOutput = stdoutPipe }
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-        } catch {
-            return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1)
-        }
-
-        // Drain on dedicated threads: cooperative tasks may occupy every shared
-        // Dispatch worker while waiting below, starving queued pipe readers.
-        // Both streams must keep draining before waiting for process exit.
-        nonisolated(unsafe) var stdoutData = Data()
-        nonisolated(unsafe) var stderrData = Data()
-        nonisolated(unsafe) var outputExceededLimit = false
-        let group = DispatchGroup()
-
-        if outputFile == nil {
-            group.enter()
-            Thread.detachNewThread {
-                if let outputLimit {
-                    // Fixed-size reads bound capture before decoding. Keep draining
-                    // after termination so a full pipe cannot prevent process exit.
-                    while true {
-                        let chunk = stdoutPipe.fileHandleForReading.readData(ofLength: 16_384)
-                        if chunk.isEmpty { break }
-                        if outputExceededLimit { continue }
-                        if chunk.count > outputLimit - stdoutData.count {
-                            outputExceededLimit = true
-                            stdoutData.removeAll(keepingCapacity: false)
-                            process.terminate()
-                        } else {
-                            stdoutData.append(chunk)
-                        }
-                    }
-                } else {
-                    stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                }
-                group.leave()
-            }
-        }
-        group.enter()
-        Thread.detachNewThread {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-
-        // Remote lookups and explicit overview previews have deadlines; legacy local APIs retain theirs.
-        let timeout = timeoutSeconds.map { seconds in
-            let work = DispatchWorkItem {
-                if process.isRunning {
-                    process.terminate()
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                    }
-                }
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: work)
-            return work
-        }
-        var canceledAt: Date?
-        while process.isRunning {
-            if Task.isCancelled {
-                if canceledAt == nil { canceledAt = Date(); process.terminate() }
-                else if Date().timeIntervalSince(canceledAt!) > 1 { kill(process.processIdentifier, SIGKILL) }
-            }
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        process.waitUntilExit()
-        timeout?.cancel()
-        group.wait()
-
-        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-        return CommandResult(
-            stdout: stdout, stderr: stderr, exitCode: process.terminationStatus,
-            outputExceededLimit: outputExceededLimit)
     }
 }
 

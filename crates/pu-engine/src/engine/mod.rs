@@ -2,6 +2,7 @@ mod agent_lifecycle;
 mod build_cache;
 mod channel;
 mod definitions;
+mod fs_ops;
 mod helpers;
 mod inventory;
 mod pty_operations;
@@ -348,6 +349,18 @@ impl Engine {
             },
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => {
+                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                if fs_ops::is_too_broad_project_root(
+                    std::path::Path::new(&project_root),
+                    home.as_deref(),
+                ) {
+                    return Response::Error {
+                        code: "project_root_not_allowed".into(),
+                        message: format!(
+                            "{project_root} is /, $HOME or an ancestor of $HOME; register a project directory instead"
+                        ),
+                    };
+                }
                 let response = self.handle_init(&project_root).await;
                 if matches!(response, Response::InitResult { .. })
                     && let Err(e) = self.register_project(&project_root).await
@@ -702,6 +715,13 @@ impl Engine {
                     .await
             }
             Request::Pulse { project_root } => self.handle_pulse(&project_root).await,
+            request @ (Request::FsList { .. }
+            | Request::FsStat { .. }
+            | Request::FsRead { .. }
+            | Request::FsWrite { .. }
+            | Request::FsDelete { .. }
+            | Request::SubscribeFs { .. }
+            | Request::GitExec { .. }) => self.handle_fs_request(request).await,
         }
     }
 

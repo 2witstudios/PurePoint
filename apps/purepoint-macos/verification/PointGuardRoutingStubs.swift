@@ -23,7 +23,45 @@ struct DaemonWorkspaceService: WorkspaceService {
     func manifestPath(projectRoot: String) -> String { "/dev/null" }
 }
 struct DaemonClient {
+    init(socketPath: String? = nil) {}
     func send(_ request: DaemonRequest) async throws -> DaemonResponse { .ok }
+}
+// Project hosts: only the local, file-free surface AppState and persistence name.
+struct HostFileData { let data: Data; let modifiedMs: Int64; let truncated: Bool }
+struct HostFileStat { let modifiedMs: Int64 }
+enum HostError: Error { case notFound(String), conflict(String) }
+protocol ProjectHost: Sendable {
+    var isLocal: Bool { get }
+    func read(path: String, maxBytes: Int) throws -> HostFileData
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat
+}
+struct LocalProjectHost: ProjectHost {
+    static let shared = LocalProjectHost()
+    var isLocal: Bool { true }
+    func read(path: String, maxBytes: Int) throws -> HostFileData { throw CocoaError(.fileNoSuchFile) }
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
+        throw CocoaError(.fileWriteUnknown)
+    }
+}
+struct UnavailableProjectHost: ProjectHost {
+    var isLocal: Bool { false }
+    func read(path: String, maxBytes: Int) throws -> HostFileData { throw HostError.notFound(path) }
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
+        throw HostError.notFound(path)
+    }
+}
+enum FileIOService {
+    static func removeLocalCopies() {}
+}
+@MainActor final class MachineState {
+    let machine: Machine
+    var projects: [ProjectState] = []
+    init(machine: Machine, appState: AppState?, registry: WorkspaceRegistry?) { self.machine = machine }
+    func connect() {}
+    func disconnect(remember: Bool = false) {}
+    func disconnectForTermination(deadline: DispatchTime) {}
+    func hideProject(root: String) {}
+    static func isUserDisconnected(_ id: UUID) -> Bool { true }
 }
 enum DaemonLifecycle {
     static func findBinary() -> String? { nil }
@@ -36,6 +74,10 @@ enum DaemonLifecycle {
 }
 @MainActor final class ProjectState {
     let projectRoot: String
+    var projectId: String { projectRoot }
+    var isRemote: Bool { false }
+    let host: any ProjectHost = LocalProjectHost.shared
+    let client = DaemonClient()
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
     weak var appState: AppState?

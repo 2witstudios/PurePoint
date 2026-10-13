@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -13,6 +14,9 @@ final class WorkspaceFilesState {
     }
 
     let rootPath: String
+    /// Where the root lives; a remote root's git and files go through its machine's daemon.
+    let host: any ProjectHost
+    private let git: GitService
     var mode: Mode = .changes
     var files: [FileDiff] = []
     var expandedFiles: Set<String> = []
@@ -26,8 +30,17 @@ final class WorkspaceFilesState {
     let fileTree = FileTreeState()
     private var treeLoaded = false
 
-    init(rootPath: String) {
+    /// Which files this state shows: the host (this Mac or a machine) and the root on it.
+    var identity: String { Self.identity(rootPath: rootPath, host: host) }
+
+    nonisolated static func identity(rootPath: String, host: any ProjectHost) -> String {
+        host.identity + "\u{0}" + rootPath
+    }
+
+    init(rootPath: String, host: any ProjectHost = LocalProjectHost.shared) {
         self.rootPath = rootPath
+        self.host = host
+        git = host.isLocal ? GitService.shared : GitService(host: host)
     }
 
     /// A .git watcher alone misses normal saves (and linked worktrees' .git is a
@@ -35,14 +48,16 @@ final class WorkspaceFilesState {
     func observe() async {
         defer { fileTree.stopWatching() }
         while !Task.isCancelled {
-            await refresh()
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            // Remote polling is a daemon round trip over SSH: skip it while the app is in the
+            // background (like DiffState), and poll less often.
+            if host.isLocal || NSApplication.shared.isActive { await refresh() }
+            do { try await Task.sleep(for: .seconds(host.isLocal ? 2 : 5)) } catch { return }
         }
     }
 
     func refresh() async {
         do {
-            let updated = try await GitService.shared.fetchWorkingTreeChanges(worktreePath: rootPath)
+            let updated = try await git.fetchWorkingTreeChanges(worktreePath: rootPath)
             guard !Task.isCancelled else { return }
             files = updated
             let paths = Set(updated.map(\.filename))
@@ -69,7 +84,7 @@ final class WorkspaceFilesState {
     func loadTreeIfNeeded() {
         guard !treeLoaded else { return }
         treeLoaded = true
-        fileTree.load(worktreePath: rootPath)
+        fileTree.load(worktreePath: rootPath, host: host)
     }
 
     func toggleFile(_ file: FileDiff) {
@@ -101,7 +116,7 @@ final class WorkspaceFilesState {
         loadingFiles.insert(file.filename)
         defer { loadingFiles.remove(file.filename) }
         do {
-            let diff = try await GitService.shared.fetchWorkingTreeFileDiff(worktreePath: rootPath, file: file)
+            let diff = try await git.fetchWorkingTreeFileDiff(worktreePath: rootPath, file: file)
             guard !Task.isCancelled, expandedFiles.contains(file.filename) else { return }
             diffs[file.filename] = diff
             fileErrors[file.filename] = nil

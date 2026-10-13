@@ -8,6 +8,10 @@ import Observation
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
     let channel = ChannelState(projectRoot: "/tmp/project")
+    let host: any ProjectHost = LocalProjectHost.shared
+    let git = GitService.shared
+    var projectId: String { projectRoot }
+    var isRemote: Bool { false }
 }
 enum SidebarSelection: Hashable { case channel(String); case worktree(String) }
 struct GHUnavailableView: View { var body: some View { EmptyView() } }
@@ -17,3 +21,5 @@ nonisolated enum PaneSplitNode { enum Axis { case vertical, horizontal } }
     func setLanguage(_ language: EditorLanguage) {}
     func invalidate() {}
 }
+/// DiffListView aligns its header with the pane tab bar height.
+enum PaneTabBar { static let height: CGFloat = 30 }

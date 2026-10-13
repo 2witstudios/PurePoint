@@ -26,14 +26,18 @@ actor DaemonAttachSession {
     /// Mirrors the terminal's row count so the output filter doesn't need a
     /// main-thread hop per chunk. Updated on every resize.
     private var termRows = 24
+    /// The agent's daemon — a machine's forwarded socket for remote agents.
+    private let client: DaemonClient
 
     init(
         agentId: String,
         terminalView: TerminalView,
         resetBeforeReplay: Bool = false,
         onFirstOutput: (() -> Void)? = nil,
-        onOutput: (@MainActor @Sendable () -> Void)? = nil
+        onOutput: (@MainActor @Sendable () -> Void)? = nil,
+        client: DaemonClient = DaemonClient()
     ) {
+        self.client = client
         self.agentId = agentId
         self.terminalView = terminalView
         self.resetBeforeReplay = resetBeforeReplay
@@ -109,7 +113,6 @@ actor DaemonAttachSession {
         // crossing actor isolation boundary later.
         let tv = self.terminalView
 
-        let client = DaemonClient()
         let (conn, reader) = try await client.connect()
         self.connection?.cancel()
         self.connection = conn

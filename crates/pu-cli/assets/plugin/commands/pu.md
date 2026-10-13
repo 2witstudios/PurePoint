@@ -22,6 +22,20 @@ The three list commands are global by default and ignore cwd and PU_PROJECT_ROOT
 
 Inventory responses contain a compact summary plus projects and the requested flat records. Check `complete` and per-project errors before treating totals as exhaustive. `running` counts daemon-owned live processes; `running_ai_agents` excludes terminals and `running_terminals` counts them separately. Suspended, broken and unknown states are separate. Unknown means persisted state has no matching owned session and has not been reconciled. Agent-state filters only filter records; summary counts cover the entire scope. Standalone shells have null project_root and support status/logs/send/attach/kill. Queries omit full prompts and logs and perform no git diff scans. No manifest discovery is required by callers.
 
+## Machines over SSH
+
+```bash
+pu machine add studio studio-mac                  # name + ~/.ssh/config alias or user@host[:port]
+pu machine list --json
+pu machine status --json                          # running|busy|stopped|incompatible|unreachable; never starts a daemon
+pu machine start studio                           # runs `pu health` on studio over ssh
+pu --machine studio agents list --global --json   # any daemon command, on that machine
+pu --machine studio --project /remote/root spawn "fix bug" --name fix
+pu --machine studio send ag-xxx "continue"        # agent ids resolve on that machine only
+```
+
+`--machine` (conflicts with `--socket`) reuses the app's forward or opens a private `ssh -L` forward for the command. It never auto-starts the remote daemon or a local one. Project commands need `--project <root on that machine>`; cwd and PU_PROJECT_ROOT are ignored. `init`, `channel` and `gate` reject `--machine`. There is no fan-out: agent ids can collide across machines, so always name the machine.
+
 ## Status Model
 
 Agents have two observable states:

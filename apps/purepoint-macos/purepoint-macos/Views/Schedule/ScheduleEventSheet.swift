@@ -70,7 +70,7 @@ struct ScheduleEventSheet: View {
     // MARK: - Prefill
 
     private func prefillFields() {
-        selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+        selectedProjectRoot = appState.activeLocalProjectRoot ?? ""
 
         if let event = editingEvent {
             name = event.name

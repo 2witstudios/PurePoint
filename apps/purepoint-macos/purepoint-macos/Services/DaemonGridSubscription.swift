@@ -5,13 +5,18 @@ import Network
 /// Modeled after DaemonAttachSession — actor isolation serializes writes.
 actor DaemonGridSubscription {
     let projectRoot: String
+    /// The registry's key for this project (its root locally, `machine:…` remotely).
+    let projectId: String
+    private let client: DaemonClient
     private weak var registry: WorkspaceRegistry?
     private var connection: NWConnection?
     private var stopped = false
 
-    init(projectRoot: String, registry: WorkspaceRegistry) {
+    init(projectRoot: String, projectId: String? = nil, registry: WorkspaceRegistry, client: DaemonClient = DaemonClient()) {
         self.projectRoot = projectRoot
+        self.projectId = projectId ?? projectRoot
         self.registry = registry
+        self.client = client
     }
 
     /// Start the subscription loop with reconnection.
@@ -63,7 +68,6 @@ actor DaemonGridSubscription {
     private func runSubscriptionLoop() async throws {
         let reg = self.registry
 
-        let client = DaemonClient()
         let (conn, reader) = try await client.connect()
         self.connection?.cancel()
         self.connection = conn
@@ -88,7 +92,7 @@ actor DaemonGridSubscription {
 
             switch response {
             case .gridEvent(_, let command):
-                let root = self.projectRoot
+                let root = self.projectId
                 await MainActor.run {
                     reg?.handleRemoteCommand(command, from: root)
                 }

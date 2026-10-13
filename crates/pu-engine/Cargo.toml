@@ -18,6 +18,8 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 vt100 = "0.16.2"
 rusqlite = { version = "0.37", features = ["bundled"] }
+base64 = { workspace = true }
+notify = "8"
 
 [[bin]]
 name = "pu-engine"

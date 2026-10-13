@@ -2,6 +2,7 @@ pub mod agent_def;
 pub mod config;
 pub mod error;
 pub mod id;
+pub mod machines;
 pub mod manifest;
 pub mod paths;
 pub mod protocol;

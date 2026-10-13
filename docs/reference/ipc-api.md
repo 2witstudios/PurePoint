@@ -85,7 +85,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 8,
+  "protocol_version": 9,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }

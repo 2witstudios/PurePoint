@@ -23,7 +23,7 @@ struct SwarmCreationSheet: View {
         }
         .frame(width: 420, height: 520)
         .onAppear {
-            selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+            selectedProjectRoot = appState.activeLocalProjectRoot ?? ""
         }
     }
 

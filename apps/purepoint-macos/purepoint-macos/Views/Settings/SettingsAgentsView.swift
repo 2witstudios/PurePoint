@@ -280,7 +280,7 @@ struct SettingsAgentsView: View {
                     Toggle("YOLO for all projects", isOn: Binding(
                         get: { state.codexYolo },
                         set: { enabled in
-                            Task { await state.updateGlobalSettings(codexYolo: enabled, projectRoot: appState.activeProjectRoot) }
+                            Task { await state.updateGlobalSettings(codexYolo: enabled, projectRoot: appState.activeLocalProjectRoot) }
                         }
                     ))
                     .toggleStyle(.switch)
@@ -297,7 +297,7 @@ struct SettingsAgentsView: View {
                 Label("Machine Settings", systemImage: "desktopcomputer")
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
-            if let projectRoot = appState.activeProjectRoot {
+            if let projectRoot = appState.activeLocalProjectRoot {
                 SettingsAgentsContentView(projectRoot: projectRoot)
             } else {
                 ContentUnavailableView(
