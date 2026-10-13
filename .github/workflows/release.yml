@@ -281,6 +281,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # rust-toolchain.toml pins 1.89 for every in-repo cargo call, so the
+      # targets installed above land on 1.94.0 while the build runs on the
+      # pinned toolchain. Add the target there too, as the macOS build phase
+      # does for its Apple targets.
+      - name: Add target to the pinned toolchain
+        run: rustup target add "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
