@@ -4,6 +4,9 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+- **Machines over SSH** in the macOS app. Add a machine (a name plus an `~/.ssh/config` alias or `user@host[:port]`) from the sidebar footer, and its PurePoint daemon's projects appear under a new MACHINES section. Remote projects work like local ones: open terminals, spawn agents, create worktrees, browse, edit and save files, and review git changes, all running on that machine. The app connects with your own `ssh` configuration, never starts a remote daemon on its own (use Start Daemon), and leaves remote agents running when you disconnect or quit. Machines are shared with `pu machine` through `~/.pu/machines.json`.
+
 ### Fixed
 - Agent Rust build caches no longer fill the disk. Agents in a worktree now build into `<worktree>/target` (the daemon sets `CARGO_TARGET_DIR`), which is deleted with the worktree, and the daemon periodically removes abandoned `/tmp/purepoint-*-target` caches, sweeping harder when the disk is low.
 - `pu spawn` and `pu send` to Claude agents now deliver the full text as one submitted turn, or fail with a non-zero exit. Typing starts only once the agent's input box is on screen, Enter is pressed only after the box shows the complete text (retyping if characters were dropped), and success requires the box to clear and the turn to be echoed. Trigger injection uses the same path. Callers no longer need an empty `pu send` "nudge"; remove it, since it can submit a fragment or a duplicate.

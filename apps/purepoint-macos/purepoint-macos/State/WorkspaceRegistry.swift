@@ -7,6 +7,9 @@ import Observation
 /// the daemon writes the manifest, so when the new agent shows up the reconciler places it
 /// in that tab directly. It is never briefly adopted into a workspace of its own, which is
 /// how a freshly split pane used to flash as a second sidebar row.
+/// Thrown while a remote project's layout is still being read through its host.
+private struct RemoteLayoutPending: Error {}
+
 private struct SurfaceReservation {
     let workspaceId: String
     let surfaceId: Int
@@ -19,11 +22,14 @@ private struct SurfaceReservation {
 /// nowhere else. There is no second list of agents to filter, hide, or subtract — the row
 /// set *is* `workspaces(forProject:)`, so a pane and a loose sidebar item for the same agent
 /// cannot coexist. `reconcile` is the only writer of that list.
+///
+/// Projects are keyed by their `ProjectKey.id` — the bare root for local projects (so the
+/// `projectRoot` labels below are exactly the old strings), `machine:<uuid>:<root>` for remote.
 @Observable
 @MainActor
 final class WorkspaceRegistry {
 
-    /// Canonical workspaces per project root, in sidebar order.
+    /// Canonical workspaces per project key, in sidebar order.
     private(set) var workspacesByProject: [String: [Workspace]] = [:] {
         didSet { fileTabs.retain(only: Self.fileTabKeys(in: workspacesByProject)) }
     }
@@ -56,13 +62,36 @@ final class WorkspaceRegistry {
     @ObservationIgnored private var saveWorkItems: [String: DispatchWorkItem] = [:]
     private(set) var layoutErrorsByProject: [String: String] = [:]
     @ObservationIgnored private let loadWorkspaces: (String) throws -> [Workspace]
+    /// Remote projects persist through their machine's daemon rather than the local disk.
+    @ObservationIgnored private var remoteSavers: [String: ([Workspace], String?) -> Void] = [:]
 
     init(loadWorkspaces: @escaping (String) throws -> [Workspace] = { try WorkspacePersistence.loadForRegistry(projectRoot: $0) }) {
         self.loadWorkspaces = loadWorkspaces
     }
 
+    /// A remote project's layout is read asynchronously through its host; until it arrives
+    /// (see `registerRemoteProject`) nothing is published, so no layout is invented and saved.
+    private func isAwaitingRemoteLayout(_ projectRoot: String) -> Bool {
+        ProjectKey(id: projectRoot).isRemote && !loadedProjects.contains(projectRoot)
+    }
+
+    /// Adopt a remote project's restored layout and route its saves through `save`.
+    func registerRemoteProject(
+        _ projectId: String, restored: [Workspace], save: @escaping ([Workspace], String?) -> Void
+    ) {
+        remoteSavers[projectId] = save
+        guard !loadedProjects.contains(projectId) else { return }
+        loadedProjects.insert(projectId)
+        layoutErrorsByProject[projectId] = nil
+        workspacesByProject[projectId] = restored
+        if let live = liveByProject[projectId] {
+            publish(projectRoot: projectId, stored: restored, live: live)
+        }
+    }
+
     private func loadProjectIfNeeded(_ projectRoot: String) throws -> Bool {
         guard !loadedProjects.contains(projectRoot) else { return false }
+        guard !ProjectKey(id: projectRoot).isRemote else { throw RemoteLayoutPending() }
         do {
             let restored = try loadWorkspaces(projectRoot)
             workspacesByProject[projectRoot] = restored
@@ -141,6 +170,7 @@ final class WorkspaceRegistry {
         let live = WorkspaceReconciler.liveAgents(rootAgents: rootAgents, worktrees: worktrees)
         // A failed restore must still retain the current manifest for a later Retry.
         liveByProject[projectRoot] = live
+        guard !isAwaitingRemoteLayout(projectRoot) else { return }
         do { _ = try loadProjectIfNeeded(projectRoot) } catch { return }
         publish(projectRoot: projectRoot, stored: workspacesByProject[projectRoot] ?? [], live: live)
     }
@@ -480,8 +510,14 @@ final class WorkspaceRegistry {
         saveWorkItems[projectRoot]?.cancel()
         let snapshot = workspacesByProject[projectRoot] ?? []
         let active = activeWorkspaceId(inProject: projectRoot)
+        let remoteSave = remoteSavers[projectRoot]
+        if remoteSave == nil, ProjectKey(id: projectRoot).isRemote { return }
         let item = DispatchWorkItem {
-            WorkspacePersistence.save(snapshot, projectRoot: projectRoot, activeWorkspaceId: active)
+            if let remoteSave {
+                remoteSave(snapshot, active)
+            } else {
+                WorkspacePersistence.save(snapshot, projectRoot: projectRoot, activeWorkspaceId: active)
+            }
         }
         saveWorkItems[projectRoot] = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
@@ -491,8 +527,12 @@ final class WorkspaceRegistry {
     func saveAll() {
         for (projectRoot, workspaces) in workspacesByProject {
             saveWorkItems[projectRoot]?.cancel()
-            WorkspacePersistence.save(
-                workspaces, projectRoot: projectRoot, activeWorkspaceId: activeWorkspaceId(inProject: projectRoot))
+            let active = activeWorkspaceId(inProject: projectRoot)
+            if let remoteSave = remoteSavers[projectRoot] {
+                remoteSave(workspaces, active)
+            } else if !ProjectKey(id: projectRoot).isRemote {
+                WorkspacePersistence.save(workspaces, projectRoot: projectRoot, activeWorkspaceId: active)
+            }
         }
     }
 
@@ -520,6 +560,7 @@ final class WorkspaceRegistry {
         liveByProject[projectRoot] = nil
         layoutErrorsByProject[projectRoot] = nil
         loadedProjects.remove(projectRoot)
+        remoteSavers[projectRoot] = nil
         pruneActiveSelection()
     }
 }

@@ -16,3 +16,4 @@ Maps every product domain to its architecture dependencies, API operations, stor
 | Recovery | Daemon Engine | Recover | agents, worktrees | recover | — |
 | Desktop App | Desktop App Integration | Watch Project, Stream Output | dashboard state, layout | ui | All views, CommandPalette, Settings, HotkeySystem |
 | Configuration | — | — | config | — | SettingsView (general, display, hotkeys, about) |
+| Machines | IPC & API, Daemon Engine, Desktop App Integration | Health (version check), FsList, FsStat, FsRead, FsWrite, FsDelete, SubscribeFs, GitExec, plus every project/agent operation over the forwarded socket | `~/.pu/machines.json`, `~/.pu/machines/<id>/daemon.sock` | `--machine <name>`, machine list/add/remove/status/start | Sidebar machine sections, Settings (machines) |

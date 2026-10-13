@@ -246,3 +246,27 @@ pub struct WorktreePulseEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_error: Option<String>,
 }
+
+/// One directory entry in an `FsListResult`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    pub modified_ms: i64,
+    pub ignored: bool,
+}
+
+pub fn default_fs_list_max_entries() -> usize {
+    20_000
+}
+
+pub fn default_fs_read_max_bytes() -> u64 {
+    1_048_576
+}
+
+pub fn default_git_exec_timeout_ms() -> u64 {
+    30_000
+}

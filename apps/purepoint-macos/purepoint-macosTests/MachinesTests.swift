@@ -1,0 +1,370 @@
+import Foundation
+import Testing
+
+@testable import PurePoint
+
+/// Encode a request the way DaemonClient sends it and read it back as a JSON object.
+private func json(_ request: DaemonRequest) throws -> [String: Any] {
+    let data = try JSONEncoder().encode(request)
+    return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+}
+
+private func decode(_ text: String) -> DaemonResponse {
+    DaemonClient.parse(Data(text.utf8))
+}
+
+// MARK: - Project identity
+
+struct ProjectKeyTests {
+    private let machineId = UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556666")!
+
+    @Test func givenLocalKeyShouldSerializeToTheBareRoot() {
+        let key = ProjectKey(root: "/Users/me/code/app")
+        #expect(key.id == "/Users/me/code/app")
+        #expect(!key.isRemote)
+        // Persisted Point Guard ids, channel defaults and registry keys keep their old strings.
+        #expect(Workspace.pointGuardId(projectRoot: key.id) == "ws-point-guard:/Users/me/code/app")
+    }
+
+    @Test func givenRemoteKeyShouldUseTheMachinePrefixWithALowercaseId() {
+        let key = ProjectKey(machineId: machineId, root: "/home/me/app")
+        #expect(key.id == "machine:6f1c2b3a-1111-4222-8333-944455556666:/home/me/app")
+        #expect(key.isRemote)
+    }
+
+    @Test func givenKeyStringsShouldRoundTrip() {
+        let remote = ProjectKey(machineId: machineId, root: "/srv/with:colon/app")
+        #expect(ProjectKey(id: remote.id) == remote)
+        let local = ProjectKey(root: "/tmp/x")
+        #expect(ProjectKey(id: local.id) == local)
+    }
+
+    @Test func givenLegacyOrMalformedStringsShouldParseAsLocalRoots() {
+        #expect(ProjectKey(id: "/Users/me/app") == ProjectKey(root: "/Users/me/app"))
+        #expect(ProjectKey(id: "machine:not-a-uuid:/x") == ProjectKey(root: "machine:not-a-uuid:/x"))
+    }
+
+    @Test func givenSamePathOnTwoMachinesShouldBeDistinctProjects() {
+        let other = UUID()
+        let keys: Set<ProjectKey> = [
+            ProjectKey(root: "/app"), ProjectKey(machineId: machineId, root: "/app"),
+            ProjectKey(machineId: other, root: "/app"),
+        ]
+        #expect(keys.count == 3)
+        #expect(Set(keys.map(\.id)).count == 3)
+    }
+
+    @Test func givenMachineShouldForwardToItsPrivateSocketDirectory() {
+        let endpoint = DaemonEndpoint.machine(machineId)
+        #expect(endpoint.socketPath.hasSuffix("/.pu/machines/6f1c2b3a-1111-4222-8333-944455556666/daemon.sock"))
+        #expect(DaemonEndpoint.local.socketPath.hasSuffix("/.pu/daemon.sock"))
+        #expect(DaemonEndpoint.local.isLocal && !endpoint.isLocal)
+    }
+}
+
+// MARK: - Machine registry
+
+struct MachineRegistryTests {
+    @Test func givenCLIRegistryShouldDecode() throws {
+        let text = """
+            {
+              "version": 1,
+              "machines": [
+                { "id": "6f1c2b3a-1111-4222-8333-944455556666", "name": "studio", "ssh_host": "studio-mac" }
+              ]
+            }
+            """
+        let machines = try MachineRegistryStore.decode(Data(text.utf8))
+        #expect(machines.count == 1)
+        #expect(machines[0].id == UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556666"))
+        #expect(machines[0].name == "studio")
+        #expect(machines[0].sshHost == "studio-mac")
+    }
+
+    @Test func givenMachinesShouldEncodeTheSharedSnakeCaseFormat() throws {
+        let machine = Machine(
+            id: UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556666")!, name: "studio", sshHost: "me@host:2222")
+        let data = try MachineRegistryStore.encode([machine])
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["version"] as? Int == 1)
+        let entry = try #require((object["machines"] as? [[String: Any]])?.first)
+        #expect(entry["id"] as? String == "6f1c2b3a-1111-4222-8333-944455556666")
+        #expect(entry["name"] as? String == "studio")
+        #expect(entry["ssh_host"] as? String == "me@host:2222")
+        #expect(entry["sshHost"] == nil)
+        #expect(try MachineRegistryStore.decode(data) == [machine])
+    }
+
+    @Test func givenUnknownVersionShouldRefuseToLoad() {
+        let text = #"{ "version": 2, "machines": [] }"#
+        #expect(throws: MachineRegistryError.unsupportedVersion(2)) {
+            try MachineRegistryStore.decode(Data(text.utf8))
+        }
+    }
+
+    @Test func givenUpdateShouldWriteAPrivateFileAndRejectDuplicateNamesInAnyCase() throws {
+        let directory = NSTemporaryDirectory() + "pp-machines-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let path = directory + "/machines.json"
+        #expect(try MachineRegistryStore.load(path: path).isEmpty)
+
+        let added = try MachineRegistryStore.update(path: path) { machines in
+            try MachineRegistryStore.add(name: "Studio", sshHost: "studio-mac", to: &machines)
+        }
+        #expect(try MachineRegistryStore.load(path: path) == [added])
+        let mode = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o600)
+
+        #expect(throws: MachineRegistryError.duplicateName("Studio")) {
+            try MachineRegistryStore.update(path: path) { machines in
+                try MachineRegistryStore.add(name: "studio", sshHost: "other", to: &machines)
+            }
+        }
+        #expect(try MachineRegistryStore.load(path: path).count == 1)
+    }
+
+    @Test func givenInvalidNamesOrHostsShouldReject() {
+        for name in ["", "-x", ".hidden", "has space", "slash/name", "colon:x", String(repeating: "a", count: 65)] {
+            #expect(throws: MachineRegistryError.self) { try MachineRegistryStore.validate(name: name) }
+        }
+        for name in ["studio", "Mac-2", "build_box.local", "1"] {
+            #expect(throws: Never.self) { try MachineRegistryStore.validate(name: name) }
+        }
+        for host in ["", "-oProxyCommand=x", "a b", "a\nb"] {
+            #expect(throws: MachineRegistryError.self) { try MachineRegistryStore.validate(sshHost: host) }
+        }
+        for host in ["studio-mac", "me@10.0.0.2", "me@host:2222"] {
+            #expect(throws: Never.self) { try MachineRegistryStore.validate(sshHost: host) }
+        }
+    }
+}
+
+// MARK: - SSH
+
+struct MachineSSHTests {
+    @Test func givenSSHConfigShouldOfferConcreteHostAliasesOnly() {
+        let config = """
+            # comment
+            Host studio studio-alt
+              HostName 10.0.0.2
+            Host *.internal
+            host=build
+            Host !bad gpu? "quoted"
+            Match host foo
+            Host studio
+            """
+        #expect(SSHConfig.hostAliases(from: config) == ["studio", "studio-alt", "build", "quoted"])
+    }
+
+    @Test func givenHostShouldResolveHomeWithBatchMode() {
+        #expect(
+            MachineSSH.resolveHomeArguments(sshHost: "studio")
+                == ["-o", "BatchMode=yes", "studio", "printf %s \"$HOME\""])
+    }
+
+    @Test func givenRemoteHomeWithSpacesShouldForwardAsOneArgument() {
+        let arguments = MachineSSH.forwardArguments(
+            localSocket: "/Users/me/.pu/machines/abc/daemon.sock", remoteHome: "/Users/Jane Doe", sshHost: "studio")
+        #expect(
+            arguments == [
+                "-N", "-T",
+                "-o", "BatchMode=yes",
+                "-o", "ExitOnForwardFailure=yes",
+                "-o", "ServerAliveInterval=15",
+                "-o", "ServerAliveCountMax=3",
+                "-o", "StreamLocalBindUnlink=yes",
+                "-L", "/Users/me/.pu/machines/abc/daemon.sock:/Users/Jane Doe/.pu/daemon.sock",
+                "studio",
+            ])
+    }
+
+    @Test func givenStartDaemonShouldTryInstalledLocationsBeforePath() {
+        #expect(
+            MachineSSH.startDaemonArguments(sshHost: "studio")
+                == ["studio", "\"$HOME/.pu/bin/pu\" health || \"$HOME/.cargo/bin/pu\" health || pu health"])
+    }
+}
+
+// MARK: - Daemon file and git requests (protocol 9)
+
+struct DaemonProjectHostRequestTests {
+    @Test func givenProtocolShouldBeVersionNine() {
+        #expect(DaemonProtocol.version == 9)
+    }
+
+    @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {
+        let object = try json(.inventory(kind: "projects"))
+        #expect(object["type"] as? String == "inventory")
+        #expect(object["kind"] as? String == "projects")
+        #expect(object["project_root"] == nil)
+    }
+
+    @Test func givenListShouldEncodeFsList() throws {
+        let object = try json(DaemonProjectHost.listRequest(directory: "/srv/app/src"))
+        #expect(object["type"] as? String == "fs_list")
+        #expect(object["path"] as? String == "/srv/app/src")
+        #expect(object["recursive"] as? Bool == false)
+        #expect(object["include_hidden"] as? Bool == true)
+        #expect(object["max_entries"] as? Int == 20_000)
+        let recursive = try json(DaemonProjectHost.listRecursiveRequest(root: "/srv/app", limit: 500))
+        #expect(recursive["recursive"] as? Bool == true)
+        #expect(recursive["max_entries"] as? Int == 500)
+    }
+
+    @Test func givenStatReadAndDeleteShouldEncodeTheirPaths() throws {
+        let stat = try json(.fsStat(path: "/srv/app/a.txt"))
+        #expect(stat["type"] as? String == "fs_stat")
+        #expect(stat["path"] as? String == "/srv/app/a.txt")
+        let read = try json(DaemonProjectHost.readRequest(path: "/srv/app/a.txt", maxBytes: 1_048_576))
+        #expect(read["type"] as? String == "fs_read")
+        #expect(read["max_bytes"] as? Int == 1_048_576)
+        let delete = try json(.fsDelete(path: "/srv/app/a.txt"))
+        #expect(delete["type"] as? String == "fs_delete")
+        #expect(delete["path"] as? String == "/srv/app/a.txt")
+    }
+
+    @Test func givenWriteShouldSendBase64AndTheExpectedModificationTime() throws {
+        let object = try json(
+            DaemonProjectHost.writeRequest(
+                path: "/srv/app/a.txt", data: Data("héllo\n".utf8), expectedModifiedMs: 1_700_000_000_123,
+                createDirectories: false))
+        #expect(object["type"] as? String == "fs_write")
+        #expect(object["data_base64"] as? String == Data("héllo\n".utf8).base64EncodedString())
+        #expect((object["expected_modified_ms"] as? NSNumber)?.int64Value == 1_700_000_000_123)
+        #expect(object["create_dirs"] as? Bool == false)
+
+        let unconditional = try json(
+            DaemonProjectHost.writeRequest(path: "/x", data: Data(), expectedModifiedMs: nil, createDirectories: true))
+        #expect(unconditional["expected_modified_ms"] == nil)
+        #expect(unconditional["create_dirs"] as? Bool == true)
+    }
+
+    @Test func givenSubscribeShouldWatchRecursively() throws {
+        let object = try json(.subscribeFs(root: "/srv/app"))
+        #expect(object["type"] as? String == "subscribe_fs")
+        #expect(object["root"] as? String == "/srv/app")
+        #expect(object["recursive"] as? Bool == true)
+    }
+
+    @Test func givenGitCommandShouldRunTheProgramWithoutAShell() throws {
+        let command = HostCommand(
+            program: "git", executablePath: "/usr/bin/git", args: ["--literal-pathspecs", "status", "-z"],
+            cwd: "/srv/app", stdin: Data("a\nb".utf8), timeoutSeconds: 15)
+        let object = try json(DaemonProjectHost.execRequest(command))
+        #expect(object["type"] as? String == "git_exec")
+        #expect(object["cwd"] as? String == "/srv/app")
+        #expect(object["program"] as? String == "git")
+        #expect(object["args"] as? [String] == ["--literal-pathspecs", "status", "-z"])
+        #expect(object["stdin_base64"] as? String == Data("a\nb".utf8).base64EncodedString())
+        #expect(object["timeout_ms"] as? Int == 15_000)
+
+        let gh = HostCommand(program: "gh", executablePath: "gh", args: ["pr", "list"], cwd: "/srv/app")
+        let ghObject = try json(DaemonProjectHost.execRequest(gh))
+        #expect(ghObject["program"] as? String == "gh")
+        #expect(ghObject["stdin_base64"] == nil)
+        #expect(ghObject["timeout_ms"] as? Int == 30_000)
+    }
+
+    @Test func givenFileResponsesShouldDecode() {
+        let list = decode(
+            #"{"type":"fs_list_result","path":"/private/srv/app","truncated":false,"entries":[{"name":"a.txt","path":"/private/srv/app/a.txt","is_dir":false,"is_symlink":false,"size":3,"modified_ms":1700000000000,"ignored":true}]}"#
+        )
+        guard case .fsListResult(let path, let entries, let truncated) = list else {
+            Issue.record("unexpected \(list)")
+            return
+        }
+        #expect(path == "/private/srv/app")
+        #expect(!truncated)
+        #expect(entries.first?.ignored == true)
+        #expect(entries.first?.modifiedMs == 1_700_000_000_000)
+
+        let read = decode(
+            #"{"type":"fs_read_result","path":"/a","data_base64":"aGk=","size":2,"modified_ms":5,"truncated":false}"#)
+        guard case .fsReadResult(_, let data, let size, let modified, _) = read else {
+            Issue.record("unexpected \(read)")
+            return
+        }
+        #expect(String(decoding: data, as: UTF8.self) == "hi")
+        #expect(size == 2 && modified == 5)
+
+        let stat = decode(#"{"type":"fs_stat_result","path":"/a","exists":false,"is_dir":false,"size":0,"modified_ms":0}"#)
+        guard case .fsStatResult(let payload) = stat else {
+            Issue.record("unexpected \(stat)")
+            return
+        }
+        #expect(!payload.exists)
+
+        let exec = decode(
+            #"{"type":"git_exec_result","exit_code":1,"stdout_base64":"b3V0","stderr_base64":"ZXJy","truncated":false}"#)
+        guard case .gitExecResult(let code, let stdout, let stderr, _) = exec else {
+            Issue.record("unexpected \(exec)")
+            return
+        }
+        #expect(code == 1)
+        #expect(String(decoding: stdout, as: UTF8.self) == "out")
+        #expect(String(decoding: stderr, as: UTF8.self) == "err")
+
+        guard case .fsEvent(let root, let paths) = decode(#"{"type":"fs_event","root":"/a","paths":["/a/b"]}"#) else {
+            Issue.record("fs_event did not decode")
+            return
+        }
+        #expect(root == "/a" && paths == ["/a/b"])
+    }
+
+    @Test func givenInventoryShouldDecodeProjects() {
+        let response = decode(
+            #"{"type":"inventory","observed_at":"2026-10-12T00:00:00Z","project_root":null,"complete":true,"summary":{"projects":1,"worktrees":0,"agents":0,"running":0,"suspended":0,"broken":0,"unknown":0,"running_ai_agents":0,"running_terminals":0},"projects":[{"project_root":"/srv/app","name":"app","available":true,"error":null,"counts":{"projects":1,"worktrees":0,"agents":0,"running":0,"suspended":0,"broken":0,"unknown":0,"running_ai_agents":0,"running_terminals":0}}],"agents":[],"worktrees":[]}"#
+        )
+        guard case .inventory(let report) = response else {
+            Issue.record("unexpected \(response)")
+            return
+        }
+        #expect(report.projects.map(\.projectRoot) == ["/srv/app"])
+        #expect(report.projects.first?.available == true)
+    }
+
+    @Test func givenCanonicalListingPathsShouldRebaseOntoTheRequestedRoot() {
+        #expect(
+            DaemonProjectHost.rebase("/private/var/app/src/a.swift", canonicalRoot: "/private/var/app", requestedRoot: "/var/app")
+                == "/var/app/src/a.swift")
+        #expect(DaemonProjectHost.rebase("/private/var/app", canonicalRoot: "/private/var/app", requestedRoot: "/var/app") == "/var/app")
+        #expect(DaemonProjectHost.rebase("/elsewhere/a", canonicalRoot: "/private/var/app", requestedRoot: "/var/app") == "/elsewhere/a")
+    }
+
+    @Test func givenDaemonErrorCodesShouldMapToHostErrors() {
+        #expect(HostError.from(code: "path_not_allowed", message: "no") == .pathNotAllowed("no"))
+        #expect(HostError.from(code: "conflict", message: "changed") == .conflict("changed"))
+        #expect(HostError.from(code: "not_found", message: "gone") == .notFound("gone"))
+        #expect(HostError.from(code: "io_error", message: "x") == .daemon(code: "io_error", message: "x"))
+    }
+}
+
+// MARK: - Remote layouts in the registry
+
+@MainActor
+struct RemoteRegistryTests {
+    private let projectId = ProjectKey(machineId: UUID(), root: "/srv/app").id
+
+    private func agent(_ id: String) -> AgentModel {
+        AgentModel(id: id, name: id, agentType: "claude", status: .running, prompt: "", startedAt: "")
+    }
+
+    @Test func givenRemoteProjectShouldWaitForItsLayoutBeforePublishing() {
+        let registry = WorkspaceRegistry(loadWorkspaces: { _ in
+            Issue.record("a remote project must not load its layout from the local disk")
+            return []
+        })
+        registry.reconcile(projectRoot: projectId, rootAgents: [agent("ag-a")], worktrees: [])
+        #expect(registry.workspaces(forProject: projectId).isEmpty)
+
+        var saved: [[Workspace]] = []
+        registry.registerRemoteProject(projectId, restored: []) { workspaces, _ in saved.append(workspaces) }
+        #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
+
+        registry.saveAll()
+        #expect(saved.last?.map(\.id) == ["ws-ag-a"])
+
+        registry.forgetProject(projectId)
+        #expect(registry.workspaces(forProject: projectId).isEmpty)
+    }
+}

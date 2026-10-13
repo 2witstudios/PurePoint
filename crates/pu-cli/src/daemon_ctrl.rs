@@ -13,31 +13,86 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
 /// answers would otherwise hold each probe for the full request timeout.
 const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Check compatibility before any command; never restart a live daemon because
-/// doing so would terminate its agent sessions.
-pub async fn check_daemon_health(socket: &Path) -> Result<bool, CliError> {
+/// What a single health probe learned about the daemon behind a socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HealthProbe {
+    Healthy,
+    /// Nothing answered (no socket, refused, closed or timed out).
+    NotAnswering,
+    Incompatible {
+        protocol_version: u32,
+    },
+    /// Alive, but at its connection limit; compatibility is unknown.
+    Busy {
+        message: String,
+    },
+}
+
+pub async fn probe_daemon_health(socket: &Path) -> HealthProbe {
     let probe = crate::client::send_request(socket, &Request::Health);
     match tokio::time::timeout(HEALTH_PROBE_TIMEOUT, probe).await {
         Ok(Ok(Response::HealthReport {
             protocol_version, ..
-        })) => {
-            if protocol_version != PROTOCOL_VERSION {
-                return Err(CliError::Other(format!(
-                    "daemon protocol v{protocol_version} is incompatible with CLI protocol v{PROTOCOL_VERSION} at {} — update pu and pu-engine together and restart the daemon after saving active agent work",
-                    socket.display()
-                )));
-            }
-            Ok(true)
-        }
-        // BUSY establishes liveness, but cannot establish protocol compatibility.
+        })) if protocol_version == PROTOCOL_VERSION => HealthProbe::Healthy,
+        Ok(Ok(Response::HealthReport {
+            protocol_version, ..
+        })) => HealthProbe::Incompatible { protocol_version },
         Ok(Ok(Response::Error { code, message })) if code == "BUSY" => {
-            Err(CliError::DaemonError { code, message })
+            HealthProbe::Busy { message }
         }
-        _ => Ok(false),
+        _ => HealthProbe::NotAnswering,
     }
 }
 
+/// Check compatibility before any command; never restart a live daemon because
+/// doing so would terminate its agent sessions.
+pub async fn check_daemon_health(socket: &Path) -> Result<bool, CliError> {
+    match probe_daemon_health(socket).await {
+        HealthProbe::Healthy => Ok(true),
+        HealthProbe::NotAnswering => Ok(false),
+        HealthProbe::Incompatible { protocol_version } => Err(CliError::Other(format!(
+            "daemon protocol v{protocol_version} is incompatible with CLI protocol v{PROTOCOL_VERSION} at {} — update pu and pu-engine together and restart the daemon after saving active agent work",
+            socket.display()
+        ))),
+        // BUSY establishes liveness, but cannot establish protocol compatibility.
+        HealthProbe::Busy { message } => Err(CliError::DaemonError {
+            code: "BUSY".into(),
+            message,
+        }),
+    }
+}
+
+/// A machine's daemon is never auto-started (MACH-003): only check it.
+pub async fn ensure_remote_daemon(socket: &Path, machine: &str) -> Result<(), CliError> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        match probe_daemon_health(socket).await {
+            HealthProbe::Healthy => return Ok(()),
+            HealthProbe::NotAnswering => {}
+            HealthProbe::Incompatible { protocol_version } => {
+                return Err(CliError::Other(format!(
+                    "daemon on {machine} speaks protocol v{protocol_version}, but this CLI speaks v{PROTOCOL_VERSION} — update PurePoint on both machines"
+                )));
+            }
+            HealthProbe::Busy { message } => {
+                return Err(CliError::DaemonError {
+                    code: "BUSY".into(),
+                    message: format!("daemon on {machine}: {message}"),
+                });
+            }
+        }
+    }
+    Err(CliError::Other(format!(
+        "daemon not running on {machine}; start it with `pu machine start {machine}`"
+    )))
+}
+
 pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
+    if let Some(machine) = crate::machine_target::remote_machine() {
+        return ensure_remote_daemon(socket, machine).await;
+    }
     // Retry before concluding there is no daemon: a busy or restarting daemon
     // can miss one check. (A daemon started needlessly exits on its own, since
     // pu-engine holds a single-instance lock, but the retry avoids the churn.)
@@ -241,6 +296,50 @@ mod tests {
         );
         assert!(
             matches!(ensure_daemon(&sock).await, Err(CliError::DaemonError { code, .. }) if code == "BUSY")
+        );
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_remote_endpoint_without_daemon_should_fail_without_starting_one() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("forward.sock");
+        let error = ensure_remote_daemon(&sock, "studio")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("daemon not running on studio"), "{error}");
+        assert!(error.contains("pu machine start studio"), "{error}");
+        assert!(!sock.exists(), "nothing may bind the forwarded socket path");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_remote_daemon_with_other_protocol_should_report_incompatible() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("old.sock");
+        let reply = serde_json::to_string(&Response::HealthReport {
+            pid: 1,
+            uptime_seconds: 0,
+            protocol_version: PROTOCOL_VERSION + 1,
+            projects: vec![],
+            agent_count: 0,
+        })
+        .unwrap()
+            + "\n";
+        let server = fake_daemon(&sock, Some(reply));
+        let error = ensure_remote_daemon(&sock, "studio")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("studio") && error.contains("protocol"),
+            "{error}"
+        );
+        assert_eq!(
+            probe_daemon_health(&sock).await,
+            HealthProbe::Incompatible {
+                protocol_version: PROTOCOL_VERSION + 1
+            }
         );
         server.abort();
     }

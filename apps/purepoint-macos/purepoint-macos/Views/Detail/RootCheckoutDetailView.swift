@@ -36,11 +36,13 @@ struct RootCheckoutDetailView: View {
         .overlay(alignment: .top) {
             externalChangeBanner
         }
-        .task(id: project.projectRoot) {
+        .task(id: project.projectId) {
             editorState.stopWatching()
             editorState = EditorState()
+            editorState.host = project.host
+            diffState.use(host: project.host)
             diffState.loadForProject(projectRoot: project.projectRoot)
-            fileTreeState.load(worktreePath: project.projectRoot)
+            fileTreeState.load(worktreePath: project.projectRoot, host: project.host)
         }
         .onDisappear {
             diffState.stopWatching()

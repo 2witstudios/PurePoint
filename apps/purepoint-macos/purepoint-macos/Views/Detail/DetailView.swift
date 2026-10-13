@@ -37,7 +37,7 @@ struct DetailView: View {
                 PointGuardView(selection: $selection)
             } else if registry.workspace(id: id) != nil {
                 if let rootPath = appState.fileRoot(forWorkspace: id, registry: registry) {
-                    WorkspaceFilesLayout(rootPath: rootPath) {
+                    WorkspaceFilesLayout(rootPath: rootPath, host: appState.host(forWorkspace: id, registry: registry)) {
                         PaneGridView(workspaceId: id)
                     }
                 } else {
@@ -64,14 +64,14 @@ struct DetailView: View {
                 placeholderView(icon: "arrow.triangle.branch", title: "Worktree not found")
             }
 
-        case .channel(let root):
-            if let project = appState.projectState(forRoot: root) {
+        case .channel(let projectId):
+            if let project = appState.projectState(forId: projectId) {
                 ProjectChannelView(project: project)
             } else {
                 placeholderView(icon: "bubble.left.and.bubble.right", title: "Project channel")
             }
-        case .project(let root):
-            if let project = appState.projectState(forRoot: root) {
+        case .project(let projectId):
+            if let project = appState.projectState(forId: projectId) {
                 ProjectDetailView(project: project, selection: $selection)
             } else {
                 placeholderView(icon: "folder.fill", title: "Project")

@@ -1,6 +1,8 @@
 import Foundation
 
 nonisolated struct DaemonWorkspaceService: WorkspaceService {
+    var client = DaemonClient()
+
     func manifestPath(projectRoot: String) -> String {
         (projectRoot as NSString)
             .appendingPathComponent(".pu")
@@ -8,7 +10,6 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
     }
 
     func loadWorkspace(projectRoot: String) async throws -> WorkspaceSnapshot {
-        let client = DaemonClient()
         let response = try await client.send(.status(projectRoot: projectRoot))
 
         switch response {

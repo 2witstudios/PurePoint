@@ -25,7 +25,7 @@ struct TriggerCreationSheet: View {
         .frame(width: 420)
         .frame(minHeight: 480, maxHeight: 700)
         .onAppear {
-            selectedProjectRoot = appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+            selectedProjectRoot = appState.activeLocalProjectRoot ?? ""
         }
     }
 

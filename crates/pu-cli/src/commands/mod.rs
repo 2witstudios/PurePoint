@@ -11,6 +11,7 @@ pub mod init;
 pub mod inventory;
 pub mod kill;
 pub mod logs;
+pub mod machine;
 pub mod prompt;
 pub mod pulse;
 pub mod read;
@@ -46,10 +47,14 @@ pub fn cwd_string() -> Result<String, CliError> {
 
 /// Resolve the project root directory.
 /// Checks --project first, then PU_PROJECT_ROOT (set for worktree agents),
-/// then the current working directory.
+/// then the current working directory. With --machine only --project counts:
+/// local paths mean nothing on another machine.
 pub fn project_root_string() -> Result<String, CliError> {
     if let Some(root) = explicit_project() {
         return Ok(root);
+    }
+    if let Some(machine) = crate::machine_target::remote_machine() {
+        return Err(remote_project_required(machine));
     }
     if let Ok(root) = std::env::var("PU_PROJECT_ROOT")
         && !root.is_empty()
@@ -57,6 +62,12 @@ pub fn project_root_string() -> Result<String, CliError> {
         return Ok(root);
     }
     cwd_string()
+}
+
+pub fn remote_project_required(machine: &str) -> CliError {
+    CliError::Other(format!(
+        "this command needs a project on {machine} — pass --project <project root on {machine}>"
+    ))
 }
 
 /// Parse --var KEY=VALUE pairs into a HashMap.

@@ -193,7 +193,7 @@ private struct InlineFileTreeRow: View {
                         AnyView(InlineFileTreeRow(node: child, state: state, depth: depth + 1))
                     }
                 } else {
-                    InlineFilePreview(path: node.absolutePath, name: node.name)
+                    InlineFilePreview(path: node.absolutePath, name: node.name, host: state.host)
                 }
             }
         }
@@ -203,6 +203,7 @@ private struct InlineFileTreeRow: View {
 private struct InlineFilePreview: View {
     let path: String
     let name: String
+    let host: any ProjectHost
     @State private var hunks: [Hunk]?
     @State private var message: String?
 
@@ -220,10 +221,10 @@ private struct InlineFilePreview: View {
         .task(id: path) {
             var lastModified: Date?
             while !Task.isCancelled {
-                let modified = FileIOService.fileModificationDate(at: path)
+                let modified = await FileIOService.fileModificationDate(at: path, host: host)
                 if hunks == nil || modified != lastModified {
                     do {
-                        let file = try await FileIOService.readFile(at: path, limit: 1_000_000)
+                        let file = try await FileIOService.readFile(at: path, limit: 1_000_000, host: host)
                         guard !Task.isCancelled else { return }
                         message = file.isBinary ? "Binary file" : file.content.isEmpty ? "Empty file" : nil
                         var lines = file.content.components(separatedBy: "\n")

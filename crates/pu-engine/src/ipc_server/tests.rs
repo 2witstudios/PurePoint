@@ -492,3 +492,66 @@ async fn given_connection_limit_reached_should_reject_new_connection_promptly() 
 
     handle.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_subscribe_fs_should_stream_coalesced_file_events() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let engine = Engine::new();
+    let init = engine
+        .handle_request(Request::Init {
+            project_root: project_root.to_string_lossy().into(),
+        })
+        .await;
+    assert!(matches!(init, Response::InitResult { .. }));
+
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let req = serde_json::to_string(&Request::SubscribeFs {
+        root: project_root.to_string_lossy().into(),
+        recursive: true,
+    })
+    .unwrap();
+    writer
+        .write_all(format!("{req}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let resp: Response = serde_json::from_str(&line).unwrap();
+    assert!(matches!(resp, Response::FsSubscribed), "{resp:?}");
+
+    // Give the watcher a moment to arm, then change a file.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let changed = project_root.join("changed.txt");
+    std::fs::write(&changed, "x").unwrap();
+
+    let expected = changed.to_string_lossy().into_owned();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        line.clear();
+        let read = tokio::time::timeout_at(deadline, reader.read_line(&mut line))
+            .await
+            .expect("no fs_event before deadline")
+            .unwrap();
+        assert!(read > 0, "stream closed");
+        match serde_json::from_str::<Response>(&line).unwrap() {
+            Response::FsEvent { root, paths } => {
+                assert_eq!(root, project_root.to_string_lossy());
+                if paths.contains(&expected) {
+                    break;
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    handle.abort();
+}

@@ -134,6 +134,16 @@ nonisolated enum WorkspacePersistence {
     /// a v3 file this way is how tab groupings would be lost), so a newer file is left alone.
     static func save(_ workspaces: [Workspace], projectRoot: String, activeWorkspaceId: String? = nil) {
         guard !isNewerThanSupported(projectRoot: projectRoot) else { return }
+        guard let data = documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else { return }
+
+        let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// The encoded layout document. Shared by local saves and saves through a remote host.
+    static func documentData(_ workspaces: [Workspace], activeWorkspaceId: String?) -> Data? {
         let document = PersistedWorkspaceDocument(
             version: PersistedWorkspaceDocument.currentVersion,
             workspaces: workspaces.map { workspace in
@@ -152,20 +162,45 @@ nonisolated enum WorkspacePersistence {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(document) else { return }
-
-        let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        return try? encoder.encode(document)
     }
 
     static func isNewerThanSupported(projectRoot: String) -> Bool {
         let url = URL(fileURLWithPath: filePath(projectRoot: projectRoot))
-        guard let data = try? Data(contentsOf: url),
-            let probe = try? JSONDecoder().decode(PersistedVersionProbe.self, from: data)
-        else { return false }
+        guard let data = try? Data(contentsOf: url) else { return false }
+        return isNewerThanSupported(data: data)
+    }
+
+    static func isNewerThanSupported(data: Data) -> Bool {
+        guard let probe = try? JSONDecoder().decode(PersistedVersionProbe.self, from: data) else { return false }
         return probe.version > PersistedWorkspaceDocument.currentVersion
+    }
+
+    /// Decode a layout document read through a host. `projectId` keys Point Guard workspaces.
+    static func workspaces(from data: Data, projectId: String) -> [Workspace] {
+        guard let document = try? JSONDecoder().decode(PersistedWorkspaceDocument.self, from: data) else { return [] }
+        return document.workspaces.map { workspace(from: $0, projectRoot: projectId) }
+    }
+
+    // MARK: - Remote hosts
+
+    /// Load a remote project's layout through its host. Blocking: call off the main thread.
+    /// A missing file is an empty layout, as locally.
+    static func loadRemote(projectRoot: String, projectId: String, host: any ProjectHost) -> [Workspace] {
+        guard let read = try? host.read(path: filePath(projectRoot: projectRoot), maxBytes: 4 * 1_048_576),
+            !read.truncated
+        else { return [] }
+        return workspaces(from: read.data, projectId: projectId)
+    }
+
+    /// Save a remote project's layout through its host, never downgrading a newer document.
+    /// Blocking: call off the main thread.
+    static func saveRemote(_ data: Data, projectRoot: String, host: any ProjectHost) {
+        let path = filePath(projectRoot: projectRoot)
+        if let existing = try? host.read(path: path, maxBytes: 4 * 1_048_576), isNewerThanSupported(data: existing.data) {
+            return
+        }
+        _ = try? host.write(path: path, data: data, expectedModifiedMs: nil, createDirectories: true)
     }
 
     // MARK: - Load

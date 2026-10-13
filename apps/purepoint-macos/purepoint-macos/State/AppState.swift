@@ -6,7 +6,10 @@ import Observation
 @Observable
 @MainActor
 final class AppState {
+    /// Local projects, in sidebar order. Remote projects belong to their machine.
     var projects: [ProjectState] = []
+    /// Machines reachable over SSH, each with the projects its daemon has registered.
+    var machines: [MachineState] = []
     /// Folder-backed daemon state for Point Guard, kept out of the project sidebar.
     private var pointGuardProjects: [String: ProjectState] = [:]
     /// Ownership survives project promotion and lazy workspace restoration.
@@ -14,12 +17,30 @@ final class AppState {
     /// Unknown until Pi reports its actual configured folder.
     var pointGuardRoot: String?
 
-    private var managedProjects: [ProjectState] {
+    private var localManagedProjects: [ProjectState] {
         projects + pointGuardProjects.values.filter { hidden in
             !projects.contains { $0.projectRoot == hidden.projectRoot }
         }
     }
+
+    /// Every project the app follows: local, Point Guard folders, and each machine's.
+    private var managedProjects: [ProjectState] {
+        localManagedProjects + remoteProjects
+    }
+
+    var remoteProjects: [ProjectState] { machines.flatMap(\.projects) }
+
+    /// The active project's key (`ProjectKey.id`) — its root for local projects.
     var activeProjectRoot: String?
+
+    /// The active project when it is local. Library screens (agent definitions, schedules,
+    /// triggers, agent settings) talk to the local daemon only.
+    var activeLocalProjectRoot: String? {
+        guard let activeProjectRoot, !ProjectKey(id: activeProjectRoot).isRemote else {
+            return projects.first?.projectRoot
+        }
+        return activeProjectRoot
+    }
     // ContentView starts on Dashboard before its first selection-change callback.
     var activeSidebarSelection: SidebarSelection? = .nav(.dashboard)
     var daemonError: String?
@@ -80,6 +101,14 @@ final class AppState {
     /// Returns true when the root is no longer managed and its local files can be discarded.
     @discardableResult
     func closeProject(_ root: String) -> Bool {
+        let key = ProjectKey(id: root)
+        if key.isRemote {
+            // Removing a remote project only hides it here; nothing on the machine changes.
+            guard let machine = machines.first(where: { $0.machine.id == key.machineId }) else { return false }
+            machine.hideProject(root: key.root)
+            if activeProjectRoot == root { activeProjectRoot = projects.first?.projectRoot }
+            return false
+        }
         guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return false }
         let project = projects.remove(at: index)
         if root == pointGuardRoot || pointGuardFolders.contains(root)
@@ -116,6 +145,41 @@ final class AppState {
         // manifest read for each project.
     }
 
+    // MARK: - Machines
+
+    /// Read `~/.pu/machines.json` and connect every machine the user has not disconnected.
+    func loadMachines() {
+        let registered = (try? MachineRegistryStore.load()) ?? []
+        for machine in registered where !machines.contains(where: { $0.machine.id == machine.id }) {
+            let state = MachineState(machine: machine, appState: self, registry: registry)
+            machines.append(state)
+            if !MachineState.isUserDisconnected(machine.id) { state.connect() }
+        }
+    }
+
+    @discardableResult
+    func addMachine(name: String, sshHost: String) throws -> MachineState {
+        let machine = try MachineRegistryStore.update { machines in
+            try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
+        }
+        let state = MachineState(machine: machine, appState: self, registry: registry)
+        machines.append(state)
+        state.connect()
+        return state
+    }
+
+    /// Forget a machine: close its forward and drop it from the shared registry. Its daemon,
+    /// projects and agents on the machine are untouched.
+    func removeMachine(_ state: MachineState) {
+        state.disconnect()
+        machines.removeAll { $0 === state }
+        let id = state.machine.id
+        try? MachineRegistryStore.update { machines in machines.removeAll { $0.id == id } }
+        if let active = activeProjectRoot, ProjectKey(id: active).machineId == id {
+            activeProjectRoot = projects.first?.projectRoot
+        }
+    }
+
     // MARK: - Active Project Routing
 
     /// Update `activeProjectRoot` and `activeSidebarSelection` based on what the user selected
@@ -131,7 +195,7 @@ final class AppState {
                 activeProjectRoot = root
             }
         case .worktree(let id):
-            if let root = projectState(forWorktreeId: id)?.projectRoot {
+            if let root = projectState(forWorktreeId: id)?.projectId {
                 activeProjectRoot = root
             }
         case .project(let root), .channel(let root):
@@ -193,7 +257,10 @@ final class AppState {
     /// The owning root comes first so a Point Guard-only session still queries global definitions.
     func paletteProjectRoots(forWorkspace workspaceId: String) -> [String] {
         let visibleRoots = projects.map(\.projectRoot)
-        guard let root = registry?.projectRoot(forWorkspace: workspaceId) else { return visibleRoots }
+        // Definitions come from the local daemon, so a remote workspace adds no root of its own.
+        guard let root = registry?.projectRoot(forWorkspace: workspaceId), !ProjectKey(id: root).isRemote else {
+            return visibleRoots
+        }
         return [root] + visibleRoots.filter { $0 != root }
     }
 
@@ -214,8 +281,15 @@ final class AppState {
         managedProjects.first { $0.worktrees.contains { $0.id == worktreeId } }
     }
 
-    func projectState(forRoot root: String) -> ProjectState? {
-        managedProjects.first { $0.projectRoot == root }
+    /// The project with this key (`ProjectKey.id`; a local project's id is its root).
+    func projectState(forId id: String) -> ProjectState? {
+        managedProjects.first { $0.projectId == id }
+    }
+
+    func projectState(forRoot root: String) -> ProjectState? { projectState(forId: root) }
+
+    func projectState(forWorkspace workspaceId: String, registry: WorkspaceRegistry) -> ProjectState? {
+        registry.projectRoot(forWorkspace: workspaceId).flatMap { projectState(forId: $0) }
     }
 
     func agentId(forSessionId sessionId: String) -> String? {
@@ -251,11 +325,15 @@ final class AppState {
         for project in managedProjects {
             project.stopWatching()
         }
+        // Remote daemons own their agents (MACH-004): only the SSH forwards close.
+        for machine in machines {
+            machine.disconnect()
+        }
         binaryWatcher?.stop()
         binaryWatcher = nil
 
         // Block until daemon RPCs complete (macOS terminates shortly after willTerminate)
-        let projectRoots = managedProjects.map(\.projectRoot)
+        let projectRoots = localManagedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
             let client = DaemonClient()
@@ -306,7 +384,8 @@ final class AppState {
             }
             return pendingId
         }
-        if managedProjects.allSatisfy({ registry.workspacesByProject[$0.projectRoot] != nil }) {
+        // An unreachable machine may never load its layouts; it must not hold the selection.
+        if localManagedProjects.allSatisfy({ registry.workspacesByProject[$0.projectId] != nil }) {
             pendingSelectWorkspaceId = nil
         }
         return nil
@@ -333,7 +412,7 @@ final class AppState {
                 try await DaemonLifecycle.restartDaemon()
                 // Re-run the full open sequence, not just a refresh: init marks the
                 // agents the old daemon stopped as suspended, and they get resumed.
-                for project in managedProjects {
+                for project in localManagedProjects {
                     startProject(project)
                 }
             } catch {
@@ -346,12 +425,23 @@ final class AppState {
 extension AppState {
     /// The directory a workspace's file panes are rooted at: its worktree, else the project root.
     func fileRoot(forWorkspace workspaceId: String, registry: WorkspaceRegistry) -> String? {
-        guard let projectRoot = registry.projectRoot(forWorkspace: workspaceId) else { return nil }
+        guard let projectId = registry.projectRoot(forWorkspace: workspaceId) else { return nil }
+        let project = projectState(forId: projectId)
         if let worktreeId = registry.workspace(id: workspaceId)?.container.worktreeId,
-            let path = projectState(forRoot: projectRoot)?.worktrees.first(where: { $0.id == worktreeId })?.path
+            let path = project?.worktrees.first(where: { $0.id == worktreeId })?.path
         {
             return path
         }
-        return projectRoot
+        return project?.projectRoot ?? ProjectKey(id: projectId).root
+    }
+
+    /// Where a workspace's files live: this Mac, or its project's machine.
+    func host(forWorkspace workspaceId: String, registry: WorkspaceRegistry) -> any ProjectHost {
+        projectState(forWorkspace: workspaceId, registry: registry)?.host ?? LocalProjectHost.shared
+    }
+
+    /// The daemon owning an agent, so terminals attach to the right machine.
+    func client(forAgentId agentId: String) -> DaemonClient? {
+        projectState(forAgentId: agentId)?.client
     }
 }

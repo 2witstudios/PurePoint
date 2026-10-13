@@ -2,6 +2,7 @@ mod client;
 mod commands;
 mod daemon_ctrl;
 mod error;
+mod machine_target;
 mod output;
 mod skill;
 
@@ -16,6 +17,9 @@ struct Cli {
     /// Connect to a specific daemon socket
     #[arg(long, global = true, value_name = "PATH")]
     socket: Option<std::path::PathBuf>,
+    /// Run on a registered machine's daemon over SSH (see `pu machine`)
+    #[arg(long, global = true, value_name = "NAME", conflicts_with = "socket")]
+    machine: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -271,6 +275,11 @@ enum Commands {
         /// Refresh interval in milliseconds (default: 800)
         #[arg(long)]
         interval: Option<u64>,
+    },
+    /// Manage machines reachable over SSH (use with --machine)
+    Machine {
+        #[command(subcommand)]
+        action: commands::machine::MachineAction,
     },
     /// Remove worktrees, their agents, and branches
     Clean {
@@ -727,16 +736,32 @@ async fn main() {
     if let Some(root) = &cli.project {
         commands::set_project_override(root.clone());
     }
-    let custom_socket = cli.socket.is_some();
-    let socket = match cli
-        .socket
-        .map(Ok)
-        .unwrap_or_else(pu_core::paths::daemon_socket_path)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
+    let custom_socket = cli.socket.is_some() || cli.machine.is_some();
+    // Held until the command finishes: dropping it closes a private ssh forward.
+    let mut endpoint = None;
+    let socket = if let Some(name) = cli.machine.as_deref() {
+        match connect_machine(name, &cli.command).await {
+            Ok(connected) => {
+                let socket = connected.socket().to_path_buf();
+                endpoint = Some(connected);
+                socket
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match cli
+            .socket
+            .map(Ok)
+            .unwrap_or_else(pu_core::paths::daemon_socket_path)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
         }
     };
 
@@ -992,6 +1017,7 @@ async fn main() {
             json,
         } => commands::diff::run(&socket, worktree, stat, json).await,
         Commands::Watch { interval } => commands::watch::run(&socket, interval).await,
+        Commands::Machine { action } => commands::machine::run(action).await,
         Commands::Clean {
             worktree,
             all,
@@ -1045,10 +1071,37 @@ async fn main() {
         },
     };
 
+    // process::exit skips destructors, so close the forward first.
+    drop(endpoint);
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Commands that read or write files on this computer cannot run on a machine.
+fn local_only_command(command: &Commands) -> Option<&'static str> {
+    match command {
+        Commands::Init { .. } => Some("init"),
+        Commands::Channel { .. } => Some("channel"),
+        Commands::Gate { .. } => Some("gate"),
+        Commands::Machine { .. } => Some("machine"),
+        _ => None,
+    }
+}
+
+async fn connect_machine(
+    name: &str,
+    command: &Commands,
+) -> Result<machine_target::Endpoint, error::CliError> {
+    if let Some(command) = local_only_command(command) {
+        return Err(error::CliError::Other(format!(
+            "`pu {command}` works with files on this computer and cannot be used with --machine"
+        )));
+    }
+    let machine = machine_target::find_machine(name)?;
+    machine_target::set_remote_machine(machine.name.clone());
+    machine_target::connect(&machine).await
 }
 
 #[cfg(test)]
@@ -1143,6 +1196,38 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
+    }
+
+    #[test]
+    fn given_machine_flag_should_parse_globally_and_conflict_with_socket() {
+        let cli = Cli::try_parse_from(["pu", "agents", "list", "--machine", "studio"]).unwrap();
+        assert_eq!(cli.machine.as_deref(), Some("studio"));
+        assert!(Cli::try_parse_from(["pu", "--machine", "a", "--socket", "/s", "health"]).is_err());
+        for args in [
+            vec!["pu", "machine", "list", "--json"],
+            vec!["pu", "machine", "add", "studio", "me@host:2222"],
+            vec!["pu", "machine", "remove", "studio"],
+            vec!["pu", "machine", "status"],
+            vec!["pu", "machine", "status", "studio", "--json"],
+            vec!["pu", "machine", "start", "studio"],
+        ] {
+            assert!(Cli::try_parse_from(&args).is_ok(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn given_local_file_commands_should_be_rejected_for_machines() {
+        for (args, name) in [
+            (vec!["pu", "init"], "init"),
+            (vec!["pu", "gate", "pre-commit"], "gate"),
+            (vec!["pu", "channel", "read"], "channel"),
+            (vec!["pu", "machine", "list"], "machine"),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(local_only_command(&cli.command), Some(name));
+        }
+        let cli = Cli::try_parse_from(["pu", "status"]).unwrap();
+        assert_eq!(local_only_command(&cli.command), None);
     }
 
     fn parse_tab(args: &[&str]) -> Result<TabAction, clap::Error> {

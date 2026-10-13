@@ -485,7 +485,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 8);
+    assert_eq!(PROTOCOL_VERSION, 9);
 }
 
 // --- GridCommand round-trips ---
@@ -2170,5 +2170,223 @@ fn given_input_with_submit_false_should_round_trip() {
     match parsed {
         Request::Input { submit, .. } => assert!(!submit),
         _ => panic!("expected Input"),
+    }
+}
+
+// --- File and git requests (protocol 9) ---
+
+#[test]
+fn given_minimal_fs_requests_should_apply_spec_defaults() {
+    let parsed: Request = serde_json::from_str(r#"{"type":"fs_list","path":"/p"}"#).unwrap();
+    match parsed {
+        Request::FsList {
+            path,
+            recursive,
+            include_hidden,
+            max_entries,
+        } => {
+            assert_eq!(path, "/p");
+            assert!(!recursive);
+            assert!(include_hidden);
+            assert_eq!(max_entries, 20_000);
+        }
+        other => panic!("expected FsList, got {other:?}"),
+    }
+    let parsed: Request = serde_json::from_str(r#"{"type":"fs_read","path":"/p/a"}"#).unwrap();
+    assert!(matches!(
+        parsed,
+        Request::FsRead {
+            max_bytes: 1_048_576,
+            ..
+        }
+    ));
+    let parsed: Request =
+        serde_json::from_str(r#"{"type":"fs_write","path":"/p/a","data_base64":"aGk="}"#).unwrap();
+    assert!(matches!(
+        parsed,
+        Request::FsWrite {
+            expected_modified_ms: None,
+            create_dirs: false,
+            ..
+        }
+    ));
+    let parsed: Request = serde_json::from_str(r#"{"type":"subscribe_fs","root":"/p"}"#).unwrap();
+    assert!(matches!(
+        parsed,
+        Request::SubscribeFs {
+            recursive: true,
+            ..
+        }
+    ));
+    let parsed: Request =
+        serde_json::from_str(r#"{"type":"git_exec","cwd":"/p","program":"git","args":["status"]}"#)
+            .unwrap();
+    match parsed {
+        Request::GitExec {
+            args,
+            stdin_base64,
+            timeout_ms,
+            ..
+        } => {
+            assert_eq!(args, vec!["status".to_string()]);
+            assert!(stdin_base64.is_none());
+            assert_eq!(timeout_ms, 30_000);
+        }
+        other => panic!("expected GitExec, got {other:?}"),
+    }
+}
+
+#[test]
+fn given_fs_and_git_requests_should_round_trip_with_snake_case_tags() {
+    let requests = [
+        (
+            Request::FsList {
+                path: "/p".into(),
+                recursive: true,
+                include_hidden: false,
+                max_entries: 5,
+            },
+            "fs_list",
+        ),
+        (Request::FsStat { path: "/p".into() }, "fs_stat"),
+        (
+            Request::FsRead {
+                path: "/p/a".into(),
+                max_bytes: 10,
+            },
+            "fs_read",
+        ),
+        (
+            Request::FsWrite {
+                path: "/p/a".into(),
+                data_base64: "aGk=".into(),
+                expected_modified_ms: Some(42),
+                create_dirs: true,
+            },
+            "fs_write",
+        ),
+        (
+            Request::FsDelete {
+                path: "/p/a".into(),
+            },
+            "fs_delete",
+        ),
+        (
+            Request::SubscribeFs {
+                root: "/p".into(),
+                recursive: false,
+            },
+            "subscribe_fs",
+        ),
+        (
+            Request::GitExec {
+                cwd: "/p".into(),
+                program: "gh".into(),
+                args: vec!["pr".into(), "list".into()],
+                stdin_base64: Some("eA==".into()),
+                timeout_ms: 5,
+            },
+            "git_exec",
+        ),
+    ];
+    for (request, tag) in requests {
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["type"], tag);
+        let parsed: Request = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    }
+}
+
+#[test]
+fn given_fs_and_git_responses_should_round_trip_with_spec_shapes() {
+    let responses = [
+        (
+            Response::FsListResult {
+                path: "/p".into(),
+                entries: vec![FsEntry {
+                    name: "a".into(),
+                    path: "/p/a".into(),
+                    is_dir: false,
+                    is_symlink: false,
+                    size: 3,
+                    modified_ms: 1_700_000_000_000,
+                    ignored: true,
+                }],
+                truncated: false,
+            },
+            "fs_list_result",
+        ),
+        (
+            Response::FsStatResult {
+                path: "/p".into(),
+                exists: true,
+                is_dir: true,
+                size: 0,
+                modified_ms: 1,
+            },
+            "fs_stat_result",
+        ),
+        (
+            Response::FsReadResult {
+                path: "/p/a".into(),
+                data_base64: "aGk=".into(),
+                size: 2,
+                modified_ms: 1,
+                truncated: false,
+            },
+            "fs_read_result",
+        ),
+        (
+            Response::FsWriteResult {
+                path: "/p/a".into(),
+                size: 2,
+                modified_ms: 1,
+            },
+            "fs_write_result",
+        ),
+        (Response::FsSubscribed, "fs_subscribed"),
+        (
+            Response::FsEvent {
+                root: "/p".into(),
+                paths: vec!["/p/a".into()],
+            },
+            "fs_event",
+        ),
+        (
+            Response::GitExecResult {
+                exit_code: 0,
+                stdout_base64: "b2s=".into(),
+                stderr_base64: String::new(),
+                truncated: false,
+            },
+            "git_exec_result",
+        ),
+    ];
+    for (response, tag) in responses {
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["type"], tag);
+        let parsed: Response = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+    }
+    let entry = serde_json::to_value(FsEntry {
+        name: "a".into(),
+        path: "/p/a".into(),
+        is_dir: false,
+        is_symlink: true,
+        size: 1,
+        modified_ms: 2,
+        ignored: false,
+    })
+    .unwrap();
+    for key in [
+        "name",
+        "path",
+        "is_dir",
+        "is_symlink",
+        "size",
+        "modified_ms",
+        "ignored",
+    ] {
+        assert!(entry.get(key).is_some(), "missing {key}");
     }
 }

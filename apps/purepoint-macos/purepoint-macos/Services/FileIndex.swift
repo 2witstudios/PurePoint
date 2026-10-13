@@ -34,4 +34,19 @@ nonisolated enum FileIndex {
         }
         return entries
     }
+
+    /// Blocking; remote hosts list through the daemon, so call this off the main thread.
+    static func list(root: String, host: any ProjectHost, limit: Int = defaultLimit) -> [PaletteFileEntry] {
+        if host.isLocal { return list(root: root, limit: limit) }
+        // The daemon lists directories too; ask for headroom so the file limit is still reached.
+        guard let listing = try? host.listRecursive(root: root, limit: min(limit * 4, 20_000)) else { return [] }
+        var entries: [PaletteFileEntry] = []
+        for entry in listing.entries where !entry.isDirectory && entry.ignored != true {
+            let relative = entry.path.hasPrefix(root + "/") ? String(entry.path.dropFirst(root.count + 1)) : entry.path
+            if relative.split(separator: "/").contains(where: { skippedNames.contains(String($0)) }) { continue }
+            entries.append(PaletteFileEntry(relativePath: relative, absolutePath: entry.path))
+            if entries.count >= limit { break }
+        }
+        return entries
+    }
 }

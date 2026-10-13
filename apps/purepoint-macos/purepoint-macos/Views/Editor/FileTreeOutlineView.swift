@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct FileTreeOutlineView: NSViewControllerRepresentable {
@@ -19,10 +20,20 @@ struct FileTreeOutlineView: NSViewControllerRepresentable {
             fileTreeState.collapseNode(node)
         }
 
+        // Finder cannot show a remote file; offer a fetched local copy instead.
+        vc.onOpenLocalCopy = { [fileTreeState] path in
+            let host = fileTreeState.host
+            Task {
+                guard let url = try? await FileIOService.localCopy(of: path, host: host) else { return }
+                NSWorkspace.shared.open(url)
+            }
+        }
+
         return vc
     }
 
     func updateNSViewController(_ vc: FileTreeOutlineViewController, context: Context) {
+        vc.isLocal = fileTreeState.isLocal
         vc.updateNodes(fileTreeState.rootNodes)
     }
 }

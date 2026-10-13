@@ -2,6 +2,7 @@ mod agent_lifecycle;
 mod build_cache;
 mod channel;
 mod definitions;
+mod fs_ops;
 mod helpers;
 mod inventory;
 mod pty_operations;
@@ -702,6 +703,13 @@ impl Engine {
                     .await
             }
             Request::Pulse { project_root } => self.handle_pulse(&project_root).await,
+            request @ (Request::FsList { .. }
+            | Request::FsStat { .. }
+            | Request::FsRead { .. }
+            | Request::FsWrite { .. }
+            | Request::FsDelete { .. }
+            | Request::SubscribeFs { .. }
+            | Request::GitExec { .. }) => self.handle_fs_request(request).await,
         }
     }
 

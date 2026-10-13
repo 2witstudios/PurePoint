@@ -34,14 +34,18 @@ struct purepoint_macosApp: App {
                     viewCache.agentStatus = { [weak appState] agentId in
                         appState?.agent(byId: agentId)?.status
                     }
-                    registry.onCloseAgent = { [viewCache] projectRoot, agentId in
+                    viewCache.clientForAgent = { [weak appState] agentId in
+                        appState?.client(forAgentId: agentId)
+                    }
+                    registry.onCloseAgent = { [viewCache] projectId, agentId in
                         viewCache.remove(agentId: agentId)
-                        appState.projectState(forRoot: projectRoot)?.removeAndKillAgent(agentId)
+                        appState.projectState(forId: projectId)?.removeAndKillAgent(agentId)
                     }
                     hotkeyMonitor.keyBindingState = keyBindingState
                     hotkeyMonitor.start()
                     CLIInstaller.installIfNeeded()
                     openProjectFromArguments()
+                    appState.loadMachines()
                     appState.pointGuardService.start(chat: appState.pointGuardChat)
                     applicationDelegate.pointGuardService = appState.pointGuardService
                 }
@@ -313,8 +317,8 @@ struct purepoint_macosApp: App {
             return
         }
         let project: ProjectState?
-        if let root = appState.activeProjectRoot {
-            project = appState.projectState(forRoot: root)
+        if let projectId = appState.activeProjectRoot {
+            project = appState.projectState(forId: projectId)
         } else {
             project = appState.projects.first
         }

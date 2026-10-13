@@ -4,6 +4,7 @@ struct SidebarFooter: View {
     @Environment(SettingsState.self) private var settingsState
     @Environment(AppState.self) private var appState
     let selection: SidebarSelection?
+    @State private var showAddMachine = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +18,16 @@ struct SidebarFooter: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+
+                Button {
+                    showAddMachine = true
+                } label: {
+                    Image(systemName: "desktopcomputer")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Add Machine\u{2026}")
+                .accessibilityLabel("Add Machine")
 
                 Spacer()
 
@@ -52,16 +63,19 @@ struct SidebarFooter: View {
             .padding(.horizontal, PurePointTheme.padding + 4)
             .frame(height: PurePointTheme.footerHeight)
         }
+        .sheet(isPresented: $showAddMachine) {
+            AddMachineSheet()
+        }
     }
 
     private var activeProject: ProjectState? {
         switch selection {
         case .workspace(let id):
-            return appState.registry?.projectRoot(forWorkspace: id).flatMap { appState.projectState(forRoot: $0) }
+            return appState.registry?.projectRoot(forWorkspace: id).flatMap { appState.projectState(forId: $0) }
         case .worktree(let id):
             return appState.projectState(forWorktreeId: id)
-        case .project(let root), .channel(let root):
-            return appState.projectState(forRoot: root)
+        case .project(let projectId), .channel(let projectId):
+            return appState.projectState(forId: projectId)
         default:
             return appState.projects.first
         }

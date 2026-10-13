@@ -10,8 +10,14 @@ use pu_core::template;
 
 /// List templates via daemon. Falls back to local-only read if daemon is unavailable.
 pub async fn run_list(socket: &Path, json: bool) -> Result<(), CliError> {
-    // Try daemon first
-    if daemon_ctrl::check_daemon_health(socket).await? {
+    // Try daemon first. A machine's templates live only on that machine.
+    let daemon_up = if crate::machine_target::is_remote() {
+        daemon_ctrl::ensure_daemon(socket).await?;
+        true
+    } else {
+        daemon_ctrl::check_daemon_health(socket).await?
+    };
+    if daemon_up {
         let project_root = commands::project_root_string()?;
         let resp = client::send_request(socket, &Request::ListTemplates { project_root }).await?;
         let resp = output::check_response(resp, json)?;

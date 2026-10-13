@@ -28,6 +28,7 @@ enum StreamMode {
     Attach(String),
     Grid(String),
     Status(String),
+    Fs { root: String, recursive: bool },
 }
 
 impl StreamMode {
@@ -36,6 +37,10 @@ impl StreamMode {
             Request::Attach { agent_id } => Self::Attach(agent_id.clone()),
             Request::SubscribeGrid { project_root } => Self::Grid(project_root.clone()),
             Request::SubscribeStatus { project_root } => Self::Status(project_root.clone()),
+            Request::SubscribeFs { root, recursive } => Self::Fs {
+                root: root.clone(),
+                recursive: *recursive,
+            },
             _ => Self::None,
         }
     }
@@ -213,6 +218,11 @@ impl IpcServer {
             StreamMode::Status(project_root) => {
                 if matches!(response, Response::StatusSubscribed) {
                     streams::handle_status_stream(reader, writer, engine, &project_root).await;
+                }
+            }
+            StreamMode::Fs { root, recursive } => {
+                if matches!(response, Response::FsSubscribed) {
+                    streams::handle_fs_stream(reader, writer, engine, &root, recursive).await;
                 }
             }
             StreamMode::None => {}

@@ -4,6 +4,8 @@ import Observation
 @Observable @MainActor
 final class ChannelState {
     let projectRoot: String
+    /// Prefix scope for persisted drafts and read marks: the project's key (its root locally).
+    let defaultsScope: String
     var messages: [ChannelMessage] = []
     var replyCounts: [String: UInt64] = [:]
     var selfAuthorId = ""
@@ -43,16 +45,17 @@ final class ChannelState {
     var unreadCount: Int { unreadAuthors.filter { $0.key > readSequence && $0.value != selfAuthorId && !seenSequences.contains($0.key) }.count }
     var topLevelMessages: [ChannelMessage] { messages.filter { $0.parentId == nil } }
 
-    init(projectRoot: String, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonClient().send($0) }) {
+    init(projectRoot: String, defaultsScope: String? = nil, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonClient().send($0) }) {
         self.sendRequest = sendRequest
         self.projectRoot = projectRoot
+        self.defaultsScope = defaultsScope ?? projectRoot
         self.defaults = defaults
-        let prefix = "channel.\(projectRoot)."
+        let prefix = "channel.\(defaultsScope ?? projectRoot)."
         draft = defaults.string(forKey: prefix + "draft") ?? ""
         readSequence = UInt64(defaults.string(forKey: prefix + "read") ?? "0") ?? 0
         seenSequences = Set((defaults.stringArray(forKey: prefix + "seen") ?? []).compactMap(UInt64.init))
     }
-    private func key(_ suffix: String) -> String { "channel.\(projectRoot).\(suffix)" }
+    private func key(_ suffix: String) -> String { "channel.\(defaultsScope).\(suffix)" }
     func start() {
         viewers += 1
         ensurePolling()

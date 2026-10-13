@@ -11,6 +11,8 @@ struct WorktreeDetailView: View {
     @State private var sidebarRatio: CGFloat = 0.22
     @State private var saveError: String?
 
+    private var host: any ProjectHost { project?.host ?? LocalProjectHost.shared }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -47,11 +49,13 @@ struct WorktreeDetailView: View {
         .task(id: worktree.id) {
             editorState.stopWatching()
             editorState = EditorState()
+            editorState.host = host
+            diffState.use(host: host)
             diffState.loadForWorktree(worktree)
-            if showFileTree { fileTreeState.load(worktreePath: worktree.path) }
+            if showFileTree { fileTreeState.load(worktreePath: worktree.path, host: host) }
         }
         .onChange(of: showFileTree) { _, visible in
-            if visible { fileTreeState.load(worktreePath: worktree.path) }
+            if visible { fileTreeState.load(worktreePath: worktree.path, host: host) }
             else { fileTreeState.stopWatching() }
         }
         .onDisappear {

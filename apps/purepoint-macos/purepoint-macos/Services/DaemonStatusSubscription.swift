@@ -15,8 +15,11 @@ actor DaemonStatusSubscription {
     /// answered is treated as gone rather than briefly busy or starting.
     private static let retriesBeforeDaemonLost = 4
 
-    init(projectRoot: String) {
+    private let client: DaemonClient
+
+    init(projectRoot: String, client: DaemonClient = DaemonClient()) {
         self.projectRoot = projectRoot
+        self.client = client
     }
 
     /// Start the subscription loop with reconnection on failure.
@@ -73,7 +76,6 @@ actor DaemonStatusSubscription {
     private func runSubscriptionLoop(
         onEvent: @escaping @MainActor ([WorktreeModel], [AgentModel]) -> Void
     ) async throws {
-        let client = DaemonClient()
         let (conn, reader) = try await client.connect()
         self.connection?.cancel()
         self.connection = conn

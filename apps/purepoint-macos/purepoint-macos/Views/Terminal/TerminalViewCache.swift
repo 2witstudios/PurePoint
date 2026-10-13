@@ -12,6 +12,8 @@ final class TerminalViewCache {
     /// Current status of an agent, or nil if the app no longer knows it.
     /// Set by the app; a view's own `agent` is a stale creation-time snapshot.
     @ObservationIgnored var agentStatus: ((String) -> AgentStatus?)?
+    /// The daemon owning an agent; remote agents attach through their machine's forward.
+    @ObservationIgnored var clientForAgent: ((String) -> DaemonClient?)?
     /// Agents whose terminal printed output while it was off screen (a background tab),
     /// since it was last shown. Drives the tab bar's unseen-output dot.
     private(set) var unseenOutput: Set<String> = []
@@ -41,6 +43,7 @@ final class TerminalViewCache {
 
         let view = TerminalPaneNSView(agent: agent)
         let agentId = agent.id
+        if let client = clientForAgent?(agentId) { view.client = client }
         view.isAgentAlive = { [weak self] in self?.isAlive(agentId) ?? false }
         view.onBackgroundOutput = { [weak self] in self?.markUnseenOutput(agentId) }
         views[agent.id] = view

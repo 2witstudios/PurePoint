@@ -10,7 +10,10 @@ final class FileTreeState {
 
     private var worktreePath: String?
     private var expandedPaths: Set<String> = []
-    private var watcher: FileTreeWatcher?
+    private var watcher: (any HostDirectoryWatcher)?
+    /// Where the tree's files live. Remote trees are listed through the machine's daemon.
+    private(set) var host: any ProjectHost = LocalProjectHost.shared
+    var isLocal: Bool { host.isLocal }
     private var refreshGeneration = 0
 
     private static let hiddenNames: Set<String> = [
@@ -18,15 +21,17 @@ final class FileTreeState {
         "DerivedData", "__pycache__", ".tsbuildinfo", "node_modules",
     ]
 
-    func load(worktreePath: String) {
+    func load(worktreePath: String, host: any ProjectHost = LocalProjectHost.shared) {
         self.worktreePath = worktreePath
+        self.host = host
         expandedPaths.removeAll()
-        rootNodes = scanDirectory(atPath: worktreePath, relativeTo: worktreePath)
+        // A remote listing is a daemon round trip; it arrives with the first refresh.
+        rootNodes = host.isLocal ? scanDirectory(atPath: worktreePath, relativeTo: worktreePath) : []
 
         refresh()
 
         watcher?.stopAll()
-        watcher = FileTreeWatcher { [weak self] in
+        watcher = host.makeWatcher { [weak self] in
             let captured = self
             Task { @MainActor in
                 captured?.refresh()
@@ -38,7 +43,7 @@ final class FileTreeState {
     func expandNode(_ node: FileTreeNode) {
         guard node.isDirectory, let root = worktreePath else { return }
         expandedPaths.insert(node.absolutePath)
-        node.children = scanDirectory(atPath: node.absolutePath, relativeTo: root)
+        if host.isLocal { node.children = scanDirectory(atPath: node.absolutePath, relativeTo: root) }
 
         refresh()
 
@@ -60,7 +65,10 @@ final class FileTreeState {
         Task {
             // Build and filter a replacement before publishing it. Never expose
             // an unfiltered polling scan, even briefly, in the visible tree.
-            let nodes = await filteredTree(directory: root, root: root, expanded: expanded)
+            let nodes =
+                host.isLocal
+                ? await filteredTree(directory: root, root: root, expanded: expanded)
+                : await remoteTree(directory: root, root: root, expanded: expanded)
             guard generation == refreshGeneration, worktreePath == root else { return }
             rootNodes = nodes
         }
@@ -82,6 +90,26 @@ final class FileTreeState {
             node.children = await filteredTree(directory: node.absolutePath, root: root, expanded: expanded)
         }
         return visible
+    }
+
+    /// The daemon reports each entry's `git check-ignore` verdict, so one listing per
+    /// directory replaces the local scan plus check-ignore process.
+    private func remoteTree(directory: String, root: String, expanded: Set<String>) async -> [FileTreeNode] {
+        let host = self.host
+        let entries = await Task.detached(priority: .utility) { (try? host.list(directory: directory)) ?? [] }.value
+        let nodes = FileTreeNode.sorted(
+            entries.compactMap { entry -> FileTreeNode? in
+                guard !Self.hiddenNames.contains(entry.name) else { return nil }
+                if entry.ignored == true && !entry.name.hasPrefix(".") { return nil }
+                let relative =
+                    entry.path.hasPrefix(root + "/") ? String(entry.path.dropFirst(root.count + 1)) : entry.name
+                return FileTreeNode(
+                    name: entry.name, absolutePath: entry.path, relativePath: relative, isDirectory: entry.isDirectory)
+            })
+        for node in nodes where node.isDirectory && expanded.contains(node.absolutePath) {
+            node.children = await remoteTree(directory: node.absolutePath, root: root, expanded: expanded)
+        }
+        return nodes
     }
 
     private func scanDirectory(

@@ -44,7 +44,7 @@ struct AgentsHubView: View {
     }
 
     private var anyProjectRoot: String {
-        appState.activeProjectRoot ?? appState.projects.first?.projectRoot ?? ""
+        appState.activeLocalProjectRoot ?? ""
     }
 
     var body: some View {
