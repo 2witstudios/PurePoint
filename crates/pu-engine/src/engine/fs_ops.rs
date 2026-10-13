@@ -118,13 +118,17 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// A manifest worktree path is trusted only where the daemon creates
-/// worktrees: strictly inside `<root>/.pu/worktrees/` (canonicalized), and
-/// never `/` or an ancestor of the project root or `$HOME`.
 /// Whether a manifest worktree path is one the daemon itself would have made
 /// for `project_root`. `Diff` and `Pulse` run git there, and the manifest is
 /// client-writable through `fs_write`.
-pub(crate) fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool {
+pub(crate) async fn is_trusted_worktree(project_root: &str, path: &Path) -> bool {
+    let (root, path) = (project_root.to_string(), path.to_path_buf());
+    tokio::task::spawn_blocking(move || is_trusted_worktree_path(&root, &path))
+        .await
+        .unwrap_or(false)
+}
+
+fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool {
     let root = Path::new(project_root);
     let (Ok(project), Ok(dir)) = (
         root.canonicalize(),
@@ -138,6 +142,9 @@ pub(crate) fn is_trusted_worktree_path(project_root: &str, path: &Path) -> bool 
     trusted_worktree(path, &dir, &project, home.as_deref()).is_some()
 }
 
+/// A manifest worktree path is trusted only where the daemon creates
+/// worktrees: strictly inside `<root>/.pu/worktrees/` (canonicalized), and
+/// never `/` or an ancestor of the project root or `$HOME`.
 fn trusted_worktree(
     worktree: &Path,
     worktrees_dir: &Path,
@@ -544,9 +551,12 @@ fn is_executable_pu_config(path: &Path) -> bool {
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
         .collect();
-    parts
-        .windows(2)
-        .any(|w| w[0] == ".pu" && DIRS.iter().any(|d| w[1].eq_ignore_ascii_case(d)))
+    // `config.yaml` sets the command each agent type runs.
+    parts.windows(2).any(|w| {
+        w[0] == ".pu"
+            && (DIRS.iter().any(|d| w[1].eq_ignore_ascii_case(d))
+                || w[1].eq_ignore_ascii_case("config.yaml"))
+    })
 }
 
 /// Whether `path` is inside git metadata (any component git would read as
@@ -716,8 +726,17 @@ fn fs_delete(path: &str, roots: &FsRoots) -> Response {
 
 /// A relative path made only of plain names (no `..`, no root).
 fn is_plain_relative(path: &str) -> bool {
-    let path = Path::new(path);
-    !path.as_os_str().is_empty() && path.components().all(|c| matches!(c, Component::Normal(_)))
+    !path.starts_with('/') && has_plain_segments(path)
+}
+
+/// Every `/`-separated segment is a real name: no empty segment (so no
+/// trailing `/`, which makes git follow a final symlink), `.` or `..`.
+/// Judged on the raw text, since `Path` silently drops a trailing `/` or `/.`.
+fn has_plain_segments(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
 /// Refuses `git`/`gh` arguments that could escape the confined working
@@ -801,7 +820,7 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
     let after_separator = separator.map_or(&rest[rest.len()..], |s| &rest[s + 1..]);
     let operands = operands_before.into_iter().chain(after_separator);
     for arg in operands {
-        if arg != "/dev/null" && (arg.starts_with('/') || arg.split('/').any(|c| c == "..")) {
+        if arg != "/dev/null" && (arg.starts_with('/') || !has_plain_segments(arg)) {
             return Err(format!("git path {arg:?} is outside the repository"));
         }
     }
@@ -888,15 +907,18 @@ fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Resu
         .filter(|a| !a.starts_with('-') && a.as_str() != "/dev/null")
     {
         let candidate = cwd.join(arg);
-        if std::fs::symlink_metadata(&candidate).is_err() {
+        let Ok(meta) = std::fs::symlink_metadata(&candidate) else {
             continue; // a revision, or a path that doesn't exist
-        }
-        // git never follows the operand's own final symlink (it diffs the link
-        // text), so only the directories leading to it must stay inside.
-        let parent = candidate.parent().unwrap_or(cwd);
-        let inside = parent
-            .canonicalize()
-            .is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
+        };
+        // git diffs an operand's own final symlink as its link text, so then only
+        // the directories leading to it must stay inside; anything else must
+        // resolve inside entirely. (Operands have plain segments: no trailing `/`.)
+        let resolved = if meta.file_type().is_symlink() {
+            candidate.parent().unwrap_or(cwd).canonicalize()
+        } else {
+            candidate.canonicalize()
+        };
+        let inside = resolved.is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
         if !inside {
             return Err(format!("git path {arg:?} resolves outside the project"));
         }
@@ -904,13 +926,13 @@ fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Resu
     Ok(())
 }
 
-/// `symbolic-ref` only in its read form, `[--short] [-q] <name>`: a second
+/// `symbolic-ref` only in its read form, `[--short] <name>`: a second
 /// name would repoint the ref and `-d` would delete it.
 fn check_symbolic_ref_read(rest: &[String]) -> Result<(), String> {
     let mut names = 0;
     for arg in rest {
         match arg.as_str() {
-            "--short" | "-q" | "--quiet" => {}
+            "--short" => {}
             a if a.starts_with('-') => {
                 return Err(format!("git symbolic-ref option {a:?} is not allowed"));
             }
@@ -1176,17 +1198,25 @@ impl Engine {
             Ok(dir) => dir,
             Err(e) => return e,
         };
-        let roots = FsRoots {
-            writable: Vec::new(),
-            all: all_roots,
-        };
         // git must not walk up out of the confined root into an enclosing
         // repository (a dotfiles repo at `$HOME`, say): stop discovery at the
         // innermost root containing `cwd`.
-        let ceiling = git_ceiling(&cwd, &roots.all);
-        if program == "git"
-            && let Err(message) = check_operand_targets(&cwd, &args, &roots.all)
-        {
+        let is_git = program == "git";
+        let (ceiling, operands) = {
+            let (cwd, args) = (cwd.clone(), args.clone());
+            tokio::task::spawn_blocking(move || {
+                let ceiling = git_ceiling(&cwd, &all_roots);
+                let operands = if is_git {
+                    check_operand_targets(&cwd, &args, &all_roots)
+                } else {
+                    Ok(())
+                };
+                (ceiling, operands)
+            })
+            .await
+            .unwrap_or_else(|e| (None, Err(format!("task join error: {e}"))))
+        };
+        if let Err(message) = operands {
             return fs_error("args_not_allowed", message);
         }
         // The daemon may run under launchd with a minimal PATH; agents get the

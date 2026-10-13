@@ -9,6 +9,9 @@ use crate::pty_manager::AgentHandle;
 
 use super::Engine;
 
+/// Reported for a manifest worktree path the daemon would not have created.
+const UNTRUSTED_WORKTREE: &str = "worktree path is outside the project's .pu/worktrees; not diffed";
+
 impl Engine {
     pub(super) async fn handle_status(
         &self,
@@ -182,9 +185,11 @@ impl Engine {
             // Get git diff stats
             let wt_path = std::path::PathBuf::from(&wt.path);
             // Only a worktree the daemon made: the manifest is client-writable.
-            let trusted = super::fs_ops::is_trusted_worktree_path(project_root, &wt_path);
-            let (files_changed, insertions, deletions, diff_error) = if trusted && wt_path.exists()
-            {
+            let untrusted = wt_path.exists()
+                && !super::fs_ops::is_trusted_worktree(project_root, &wt_path).await;
+            let (files_changed, insertions, deletions, diff_error) = if untrusted {
+                (0, 0, 0, Some(UNTRUSTED_WORKTREE.to_string()))
+            } else if wt_path.exists() {
                 let base = wt.base_branch.as_deref();
                 match git::diff_worktree(&wt_path, base, true).await {
                     Ok(output) => (
@@ -254,10 +259,25 @@ impl Engine {
         let mut diffs = Vec::new();
         for wt in &worktrees {
             let wt_path = std::path::PathBuf::from(&wt.path);
-            // Only a worktree the daemon made (the manifest is client-writable):
-            // anything else is reported like a missing directory.
-            if !wt_path.exists() || !super::fs_ops::is_trusted_worktree_path(project_root, &wt_path)
+            // Only a worktree the daemon made: the manifest is client-writable.
+            if wt_path.exists() && !super::fs_ops::is_trusted_worktree(project_root, &wt_path).await
             {
+                if is_targeted {
+                    diffs.push(pu_core::protocol::WorktreeDiffEntry {
+                        worktree_id: wt.id.clone(),
+                        worktree_name: wt.name.clone(),
+                        branch: wt.branch.clone(),
+                        base_branch: wt.base_branch.clone(),
+                        diff_output: String::new(),
+                        files_changed: 0,
+                        insertions: 0,
+                        deletions: 0,
+                        error: Some(UNTRUSTED_WORKTREE.to_string()),
+                    });
+                }
+                continue;
+            }
+            if !wt_path.exists() {
                 if is_targeted {
                     // Targeted query: report the error so callers can distinguish
                     // a deleted worktree from a clean one.

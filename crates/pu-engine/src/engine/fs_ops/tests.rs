@@ -1561,3 +1561,79 @@ async fn given_operand_symlink_pointing_outside_should_diff_the_link_itself() {
         "the target's contents leaked: {stdout}"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_forged_manifest_worktree_diff_and_pulse_should_not_run_git_there() {
+    let (engine, _tmp, root, outside) = setup().await;
+    // A client rewrote the manifest so a worktree points outside .pu/worktrees.
+    register_worktree(&root, "wt-forged", &outside);
+    let resp = engine
+        .handle_request(Request::Diff {
+            project_root: path_string(&root),
+            worktree_id: Some("wt-forged".into()),
+            stat: false,
+        })
+        .await;
+    let Response::DiffResult { diffs } = resp else {
+        panic!("{resp:?}")
+    };
+    assert_eq!(diffs.len(), 1);
+    assert!(diffs[0].diff_output.is_empty());
+    assert!(
+        diffs[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains(".pu/worktrees")),
+        "{:?}",
+        diffs[0].error
+    );
+
+    let resp = engine
+        .handle_request(Request::Pulse {
+            project_root: path_string(&root),
+        })
+        .await;
+    let Response::PulseReport { worktrees, .. } = resp else {
+        panic!("{resp:?}")
+    };
+    let forged = worktrees
+        .iter()
+        .find(|w| w.worktree_id == "wt-forged")
+        .expect("forged worktree reported");
+    assert!(
+        forged
+            .diff_error
+            .as_deref()
+            .is_some_and(|e| e.contains(".pu/worktrees"))
+    );
+}
+
+#[test]
+fn given_trailing_slash_or_dot_operands_should_be_refused() {
+    for args in [
+        vec!["diff", "--no-index", "--", "dir", "link/"],
+        vec!["diff", "--no-index", "--", "/dev/null", "link/."],
+        vec!["diff", "HEAD", "--", "link/"],
+        vec!["diff", "HEAD", "--", "./link"],
+        vec!["log", "--", "a//b"],
+    ] {
+        assert!(
+            check_exec_args("git", &strings(&args)).is_err(),
+            "{args:?} should be refused"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_dot_pu_config_yaml_should_refuse_fs_write() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let resp = engine
+        .handle_request(Request::FsWrite {
+            path: p(&root.join(".pu/config.yaml")),
+            data_base64: b64(b"agents:\n  claude:\n    command: sh\n"),
+            expected_modified_ms: None,
+            create_dirs: true,
+        })
+        .await;
+    assert_error(resp, "path_not_allowed");
+}
