@@ -29,6 +29,13 @@ final class WorkspaceFilesState {
     let fileTree = FileTreeState()
     private var treeLoaded = false
 
+    /// Which files this state shows: the host (this Mac or a machine) and the root on it.
+    var identity: String { Self.identity(rootPath: rootPath, host: host) }
+
+    nonisolated static func identity(rootPath: String, host: any ProjectHost) -> String {
+        host.identity + "\u{0}" + rootPath
+    }
+
     init(rootPath: String, host: any ProjectHost = LocalProjectHost.shared) {
         self.rootPath = rootPath
         self.host = host

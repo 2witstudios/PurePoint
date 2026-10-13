@@ -185,22 +185,53 @@ nonisolated enum WorkspacePersistence {
     // MARK: - Remote hosts
 
     /// Load a remote project's layout through its host. Blocking: call off the main thread.
-    /// A missing file is an empty layout, as locally.
-    static func loadRemote(projectRoot: String, projectId: String, host: any ProjectHost) -> [Workspace] {
-        guard let read = try? host.read(path: filePath(projectRoot: projectRoot), maxBytes: 4 * 1_048_576),
-            !read.truncated
-        else { return [] }
-        return workspaces(from: read.data, projectId: projectId)
+    /// Only a missing file is an empty layout. Any other failure throws, because an empty
+    /// layout adopted after a failed read would be saved over the real one.
+    static func loadRemote(projectRoot: String, projectId: String, host: any ProjectHost) throws -> RemoteLayout {
+        let read: HostFileData
+        do {
+            read = try host.read(path: filePath(projectRoot: projectRoot), maxBytes: maxRemoteLayoutBytes)
+        } catch HostError.notFound {
+            return RemoteLayout(workspaces: [], modifiedMs: nil)
+        }
+        guard !read.truncated else { throw RemoteLayoutError.tooLarge }
+        return RemoteLayout(workspaces: workspaces(from: read.data, projectId: projectId), modifiedMs: read.modifiedMs)
     }
 
+    static let maxRemoteLayoutBytes = 4 * 1_048_576
+
     /// Save a remote project's layout through its host, never downgrading a newer document.
-    /// Blocking: call off the main thread.
-    static func saveRemote(_ data: Data, projectRoot: String, host: any ProjectHost) {
+    /// The write is conditional on the modification time of the document this app last read
+    /// or wrote (`expectedModifiedMs`), else of the one just read. On a conflict the document
+    /// is re-read and the write retried once against it. Nothing is written when the current
+    /// document cannot be read (anything but a missing file). Returns the new modification
+    /// time, or nil when nothing was written. Blocking: call off the main thread.
+    @discardableResult
+    static func saveRemote(_ data: Data, projectRoot: String, host: any ProjectHost, expectedModifiedMs: Int64?) -> Int64? {
         let path = filePath(projectRoot: projectRoot)
-        if let existing = try? host.read(path: path, maxBytes: 4 * 1_048_576), isNewerThanSupported(data: existing.data) {
-            return
+        /// nil: do not write. `.some(nil)`: no document exists.
+        func current() -> Int64?? {
+            do {
+                let existing = try host.read(path: path, maxBytes: maxRemoteLayoutBytes)
+                if existing.truncated || isNewerThanSupported(data: existing.data) { return nil }
+                return .some(existing.modifiedMs)
+            } catch HostError.notFound {
+                return .some(nil)
+            } catch {
+                return nil
+            }
         }
-        _ = try? host.write(path: path, data: data, expectedModifiedMs: nil, createDirectories: true)
+        guard let onDisk = current() else { return nil }
+        do {
+            return try host.write(
+                path: path, data: data, expectedModifiedMs: expectedModifiedMs ?? onDisk, createDirectories: true
+            ).modifiedMs
+        } catch HostError.conflict {
+            guard let reread = current() else { return nil }
+            return try? host.write(path: path, data: data, expectedModifiedMs: reread, createDirectories: true).modifiedMs
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - Load
@@ -383,5 +414,69 @@ nonisolated enum WorkspacePersistence {
 
     static func clear(projectRoot: String) {
         try? FileManager.default.removeItem(atPath: filePath(projectRoot: projectRoot))
+    }
+}
+
+/// A remote layout as read: its workspaces and the document's modification time (nil when
+/// there is no document yet).
+nonisolated struct RemoteLayout {
+    let workspaces: [Workspace]
+    let modifiedMs: Int64?
+}
+
+nonisolated enum RemoteLayoutError: LocalizedError {
+    case tooLarge
+
+    var errorDescription: String? {
+        switch self {
+        case .tooLarge: "The layout file on the remote machine is larger than 4 MB."
+        }
+    }
+}
+
+/// Writes a remote project's layout through its host on a serial queue. Quit and disconnect
+/// wait (bounded) for the writes already queued, so closing the SSH forward cannot cut off
+/// the last layout change.
+nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "purepoint.remote-layout-save")
+    private let group = DispatchGroup()
+    /// Writes `data` given the document's last known modification time; returns the new one.
+    private let write: @Sendable (Data, Int64?) -> Int64?
+    /// Modification time of the document as this app last read or wrote it. Queue-confined.
+    private var knownModifiedMs: Int64?
+
+    convenience init(projectRoot: String, host: any ProjectHost) {
+        self.init { data, expected in
+            WorkspacePersistence.saveRemote(data, projectRoot: projectRoot, host: host, expectedModifiedMs: expected)
+        }
+    }
+
+    init(write: @escaping @Sendable (Data, Int64?) -> Int64?) {
+        self.write = write
+    }
+
+    /// The document as just loaded, so the next save is conditional on it.
+    func loaded(modifiedMs: Int64?) {
+        queue.async { self.knownModifiedMs = modifiedMs }
+    }
+
+    func save(_ workspaces: [Workspace], activeWorkspaceId: String?) {
+        guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else { return }
+        enqueue(data)
+    }
+
+    func enqueue(_ data: Data) {
+        let group = self.group
+        group.enter()
+        queue.async {
+            if let modified = self.write(data, self.knownModifiedMs) { self.knownModifiedMs = modified }
+            group.leave()
+        }
+    }
+
+    /// Wait until every queued write finished or `deadline` passed; false on timeout.
+    @discardableResult
+    func flush(until deadline: DispatchTime) -> Bool {
+        group.wait(timeout: deadline) == .success
     }
 }

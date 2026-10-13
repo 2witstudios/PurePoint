@@ -89,6 +89,26 @@ final class WorkspaceRegistry {
         }
     }
 
+    /// A remote layout read failed (anything but a missing file). Nothing is published or
+    /// saved for the project until a retry succeeds and `registerRemoteProject` runs.
+    func setRemoteLayoutError(_ projectId: String, _ message: String?) {
+        guard !loadedProjects.contains(projectId) else { return }
+        layoutErrorsByProject[projectId] = message.map { "Could not restore this project's layout: " + $0 }
+    }
+
+    /// Names of file tabs in this project's workspaces holding unsaved edits.
+    func unsavedFileNames(inProject projectRoot: String) -> [String] {
+        (workspacesByProject[projectRoot] ?? []).flatMap { workspace in
+            workspace.surfaces.compactMap { _, surface -> String? in
+                guard case .file = surface.content,
+                    let session = fileTabs.existingSession(workspaceId: workspace.id, surfaceId: surface.id),
+                    session.hasUnsavedChanges
+                else { return nil }
+                return session.editor.currentFile?.name ?? "a file"
+            }
+        }
+    }
+
     private func loadProjectIfNeeded(_ projectRoot: String) throws -> Bool {
         guard !loadedProjects.contains(projectRoot) else { return false }
         guard !ProjectKey(id: projectRoot).isRemote else { throw RemoteLayoutPending() }
@@ -553,6 +573,11 @@ final class WorkspaceRegistry {
     }
 
     func forgetProject(_ projectRoot: String) {
+        if let pending = saveWorkItems[projectRoot], remoteSavers[projectRoot] != nil, !pending.isCancelled {
+            // A remote layout change still waiting out the debounce is written now rather
+            // than dropped; the caller flushes the saver before closing the forward.
+            pending.perform()
+        }
         saveWorkItems[projectRoot]?.cancel()
         saveWorkItems[projectRoot] = nil
         workspacesByProject[projectRoot] = nil

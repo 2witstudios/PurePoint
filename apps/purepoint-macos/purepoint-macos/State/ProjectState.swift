@@ -22,6 +22,11 @@ final class ProjectState: Identifiable {
     /// Where the project's files live and its git runs.
     @ObservationIgnored let host: any ProjectHost
     @ObservationIgnored let git: GitService
+    /// Remote projects write their layout through the host; quit and disconnect flush it.
+    @ObservationIgnored let remoteLayoutSaver: RemoteLayoutSaver?
+    /// A remote project kept in the sidebar while its machine is unreachable, because it has
+    /// file tabs with unsaved edits. Nothing is watched until the daemon is back.
+    var isUnavailable = false
 
     let channel: ChannelState
 
@@ -39,6 +44,9 @@ final class ProjectState: Identifiable {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var gridSubscriptionTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteLayoutTask: Task<Void, Never>?
+    /// The delayed resubscribe after a remote daemon was lost.
+    @ObservationIgnored private var resubscribeTask: Task<Void, Never>?
 
     /// Agents killed locally whose removal the daemon has not written to the manifest yet.
     /// Without this, a refresh landing in that window would re-adopt the dead agent into a
@@ -60,6 +68,7 @@ final class ProjectState: Identifiable {
         self.client = client
         self.host = host
         self.git = host.isLocal ? GitService.shared : GitService(host: host)
+        self.remoteLayoutSaver = endpoint.isLocal ? nil : RemoteLayoutSaver(projectRoot: projectRoot, host: host)
         self.channel =
             channel
             ?? (endpoint.isLocal
@@ -152,22 +161,23 @@ final class ProjectState: Identifiable {
         let root = projectRoot
         let projectId = self.projectId
         let svc = service
-        let host = self.host
         openTask?.cancel()
         refreshTask?.cancel()
+        resubscribeTask?.cancel()
         manifestWatcher?.stop()
         manifestWatcher = nil
 
-        openTask = Task { [weak self] in
-            let restored = await Task.detached(priority: .userInitiated) {
-                WorkspacePersistence.loadRemote(projectRoot: root, projectId: projectId, host: host)
-            }.value
-            guard let self, !Task.isCancelled else { return }
-            let saveQueue = DispatchQueue(label: "purepoint.remote-layout-save")
-            self.registry?.registerRemoteProject(projectId, restored: restored) { workspaces, active in
-                guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: active) else { return }
-                saveQueue.async { WorkspacePersistence.saveRemote(data, projectRoot: root, host: host) }
+        remoteLayoutTask?.cancel()
+        if let registry, let saver = remoteLayoutSaver {
+            let host = self.host
+            remoteLayoutTask = Task {
+                await Self.restoreRemoteLayout(
+                    projectRoot: root, projectId: projectId, host: host, registry: registry, saver: saver)
             }
+        }
+
+        openTask = Task { [weak self] in
+            guard let self, !Task.isCancelled else { return }
             self.channel.startBackground()
             self.startGridSubscription()
             self.startStatusSubscription()
@@ -184,9 +194,42 @@ final class ProjectState: Identifiable {
         }
     }
 
+    /// Read a remote layout through its host until it arrives, then adopt it and route the
+    /// project's saves to `saver`. A failed read (anything but a missing file) surfaces as a
+    /// layout error and is retried with backoff; the saver is not registered meanwhile, so no
+    /// empty layout can be saved over the real one.
+    static func restoreRemoteLayout(
+        projectRoot: String, projectId: String, host: any ProjectHost, registry: WorkspaceRegistry,
+        saver: RemoteLayoutSaver, retryDelay: @escaping (Int) -> Duration = { .seconds(min(2 * $0, 30)) }
+    ) async {
+        var attempt = 0
+        while !Task.isCancelled {
+            do {
+                let layout = try await Task.detached(priority: .userInitiated) {
+                    try WorkspacePersistence.loadRemote(projectRoot: projectRoot, projectId: projectId, host: host)
+                }.value
+                guard !Task.isCancelled else { return }
+                saver.loaded(modifiedMs: layout.modifiedMs)
+                registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in
+                    saver.save(workspaces, activeWorkspaceId: active)
+                }
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                attempt += 1
+                registry.setRemoteLayoutError(projectId, error.localizedDescription)
+                do { try await Task.sleep(for: retryDelay(attempt)) } catch { return }
+            }
+        }
+    }
+
     func stopWatching() {
         channel.shutdown()
         openTask?.cancel()
+        remoteLayoutTask?.cancel()
+        remoteLayoutTask = nil
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
         refreshTask?.cancel()
         gridSubscriptionTask?.cancel()
         statusSubscriptionTask?.cancel()
@@ -498,8 +541,9 @@ final class ProjectState: Identifiable {
                     guard let self else { return }
                     if self.isRemote {
                         // Never start a remote daemon; resubscribe once it answers again.
-                        Task { [weak self] in
-                            try? await Task.sleep(for: .seconds(5))
+                        self.resubscribeTask?.cancel()
+                        self.resubscribeTask = Task { [weak self] in
+                            do { try await Task.sleep(for: .seconds(5)) } catch { return }
                             self?.startWatching()
                         }
                     } else {

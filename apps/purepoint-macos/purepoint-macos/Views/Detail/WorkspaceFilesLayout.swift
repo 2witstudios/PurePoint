@@ -22,12 +22,13 @@ struct WorkspaceFilesLayout<Content: View>: View {
                 .layoutPriority(1)
             if showSidebar {
                 WorkspaceFilesSidebar(state: filesState)
-                    .id(filesState.rootPath)
+                    .id(filesState.identity)
                     .frame(minWidth: 240, idealWidth: 360, maxWidth: 640, maxHeight: .infinity)
             }
         }
-        .onChange(of: rootPath) { _, path in
-            filesState = WorkspaceFilesState(rootPath: path, host: host)
+        // Keyed on host and path: a local and a remote root can share a path.
+        .onChange(of: WorkspaceFilesState.identity(rootPath: rootPath, host: host)) { _, _ in
+            filesState = WorkspaceFilesState(rootPath: rootPath, host: host)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

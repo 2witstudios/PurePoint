@@ -43,10 +43,37 @@ actor GitService {
 
     /// `attributesOfItem`-style stamp, read through the host.
     private func stamp(_ fullPath: String, includeIdentity: Bool) -> String {
-        let stat = (try? host.stat(path: fullPath)) ?? .missing
+        Self.stamp((try? host.stat(path: fullPath)) ?? .missing, includeIdentity: includeIdentity)
+    }
+
+    private static func stamp(_ stat: HostFileStat, includeIdentity: Bool) -> String {
         guard stat.exists else { return "-1/0/" + (includeIdentity ? "0" : "missing") }
         let seconds = Double(stat.modifiedMs) / 1000
         return "\(seconds)/\(stat.size)/" + (includeIdentity ? "\(stat.modifiedMs)" : (stat.isDirectory ? "dir" : "file"))
+    }
+
+    /// Stats for many paths with one listing per parent directory instead of a daemon round
+    /// trip per path (the remote review polls every few seconds). A directory that cannot be
+    /// listed falls back to statting its paths one by one.
+    private func batchedStats(_ fullPaths: [String]) -> [String: HostFileStat] {
+        var byDirectory: [String: Set<String>] = [:]
+        for fullPath in fullPaths {
+            byDirectory[(fullPath as NSString).deletingLastPathComponent, default: []].insert(fullPath)
+        }
+        var stats: [String: HostFileStat] = [:]
+        for (directory, wanted) in byDirectory {
+            guard let entries = try? host.list(directory: directory) else {
+                for fullPath in wanted { stats[fullPath] = (try? host.stat(path: fullPath)) ?? .missing }
+                continue
+            }
+            for entry in entries {
+                let fullPath = (directory as NSString).appendingPathComponent(entry.name)
+                guard wanted.contains(fullPath) else { continue }
+                stats[fullPath] = HostFileStat(
+                    exists: true, isDirectory: entry.isDirectory, size: entry.size, modifiedMs: entry.modifiedMs)
+            }
+        }
+        return stats
     }
 
     private func exists(_ fullPath: String) -> Bool {
@@ -119,20 +146,21 @@ actor GitService {
         do {
             let names = try checked(["ls-files", "--others", "--exclude-standard", "-z"], at: path).split(separator: "\0").map(String.init)
             var remaining = 32
+            let remoteStats = host.isLocal ? [:] : batchedStats(names.map { (path as NSString).appendingPathComponent($0) })
             for name in names {
+                let key = (path as NSString).appendingPathComponent(name)
                 if summariesOnly {
                     var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
                     file.patchArguments = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", name]
-                    file.previewVersion = fileStamp(name, at: path)
+                    file.previewVersion = host.isLocal ? fileStamp(name, at: path) : Self.stamp(remoteStats[key] ?? .missing, includeIdentity: true)
                     review.untracked.append(file)
                     continue
                 }
-                let key = (path as NSString).appendingPathComponent(name)
-                let stamp = host.isLocal ? Self.localStamp(key) : self.stamp(key, includeIdentity: false)
+                let stamp = host.isLocal ? Self.localStamp(key) : Self.stamp(remoteStats[key] ?? .missing, includeIdentity: false)
                 if let cached = untrackedCache[key], cached.stamp == stamp { review.untracked.append(cached.file) }
                 else if remaining > 0 {
                     remaining -= 1
-                    let file = untrackedPreview(name: name, at: path)
+                    let file = untrackedPreview(name: name, at: path, knownStat: remoteStats[key])
                     review.untracked.append(file)
                 } else {
                     var file = FileDiff(filename: name, statusCode: "??", added: 0, removed: 0, hunks: [])
@@ -145,7 +173,8 @@ actor GitService {
         return review
     }
 
-    func untrackedPreview(name: String, at path: String) -> FileDiff {
+    /// `knownStat`: a remote stat the caller already has, saving a round trip.
+    func untrackedPreview(name: String, at path: String, knownStat: HostFileStat? = nil) -> FileDiff {
         let key = (path as NSString).appendingPathComponent(name)
         let isDirectory: Bool
         let stamp: String
@@ -154,8 +183,9 @@ actor GitService {
             isDirectory = attributes?[.type] as? FileAttributeType == .typeDirectory
             stamp = Self.localStamp(key)
         } else {
-            isDirectory = (try? host.stat(path: key))?.isDirectory ?? false
-            stamp = self.stamp(key, includeIdentity: false)
+            let stat = knownStat ?? (try? host.stat(path: key)) ?? .missing
+            isDirectory = stat.isDirectory
+            stamp = Self.stamp(stat, includeIdentity: false)
         }
         if let cached = untrackedCache[key], cached.stamp == stamp { return cached.file }
         var file: FileDiff

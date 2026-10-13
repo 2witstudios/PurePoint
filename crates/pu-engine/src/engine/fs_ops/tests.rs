@@ -131,20 +131,15 @@ async fn given_unregistered_or_relative_path_should_refuse_it() {
     assert_error(resp, "path_not_allowed");
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn given_worktree_outside_project_dir_should_allow_it() {
-    let (engine, tmp, root, _outside) = setup().await;
-    let wt_dir = tmp.path().canonicalize().unwrap().join("elsewhere-wt");
-    std::fs::create_dir_all(&wt_dir).unwrap();
-    std::fs::write(wt_dir.join("a.txt"), "wt").unwrap();
-    let mut m = manifest::read_manifest(&root).unwrap();
+fn register_worktree(root: &Path, id: &str, path: &Path) {
+    let mut m = manifest::read_manifest(root).unwrap();
     m.worktrees.insert(
-        "wt-x".into(),
+        id.into(),
         pu_core::types::WorktreeEntry {
-            id: "wt-x".into(),
-            name: "x".into(),
-            path: p(&wt_dir),
-            branch: "pu/x".into(),
+            id: id.into(),
+            name: id.into(),
+            path: p(path),
+            branch: format!("pu/{id}"),
             base_branch: None,
             status: pu_core::types::WorktreeStatus::Active,
             agents: Default::default(),
@@ -154,10 +149,67 @@ async fn given_worktree_outside_project_dir_should_allow_it() {
         },
     );
     std::fs::write(
-        pu_core::paths::manifest_path(&root),
+        pu_core::paths::manifest_path(root),
         serde_json::to_string(&m).unwrap(),
     )
     .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_manifest_worktree_outside_worktrees_dir_should_refuse_it() {
+    let (engine, tmp, root, outside) = setup().await;
+    let wt_dir = tmp.path().canonicalize().unwrap().join("elsewhere-wt");
+    std::fs::create_dir_all(&wt_dir).unwrap();
+    std::fs::write(wt_dir.join("a.txt"), "wt").unwrap();
+    register_worktree(&root, "wt-x", &wt_dir);
+    // A tampered manifest must not widen confinement to `/` or the home dir.
+    register_worktree(&root, "wt-root", Path::new("/"));
+    register_worktree(&root, "wt-parent", tmp.path());
+    for path in [wt_dir.join("a.txt"), outside.join("secret.txt")] {
+        let resp = engine
+            .handle_request(Request::FsRead {
+                path: p(&path),
+                max_bytes: 100,
+            })
+            .await;
+        assert_error(resp, "path_not_allowed");
+    }
+}
+
+#[test]
+fn given_worktree_candidates_should_trust_only_children_of_worktrees_dir() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let project = base.join("project");
+    let worktrees = project.join(".pu/worktrees");
+    let wt = worktrees.join("wt-a");
+    let home = base.join("home");
+    for dir in [&wt, &home] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    let trust = |path: &Path| trusted_worktree(path, &worktrees, &project, Some(&home));
+    assert_eq!(trust(&wt), Some(wt.clone()));
+    assert_eq!(trust(&worktrees), None);
+    assert_eq!(trust(&project), None);
+    assert_eq!(trust(&home), None);
+    assert_eq!(trust(Path::new("/")), None);
+    assert_eq!(trust(&base), None);
+    // `..` inside the recorded path resolves before the check.
+    assert_eq!(trust(&wt.join("../../..")), None);
+    // A worktrees dir that is itself `/` (symlinked) cannot vouch for ancestors.
+    assert_eq!(
+        trusted_worktree(&base, Path::new("/"), &project, Some(&home)),
+        None
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_worktree_inside_worktrees_dir_should_allow_it() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let wt_dir = pu_core::paths::worktree_path(&root, "wt-y");
+    std::fs::create_dir_all(&wt_dir).unwrap();
+    std::fs::write(wt_dir.join("a.txt"), "wt").unwrap();
+    register_worktree(&root, "wt-y", &wt_dir);
     let resp = engine
         .handle_request(Request::FsRead {
             path: p(&wt_dir.join("a.txt")),
@@ -228,6 +280,33 @@ async fn given_file_over_max_bytes_should_return_truncated_prefix() {
 }
 
 // --- Write ---
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_huge_max_bytes_should_clamp_read_to_cap() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let file = root.join("big.bin");
+    std::fs::write(&file, vec![b'x'; FS_READ_MAX_BYTES as usize + 1]).unwrap();
+    let resp = engine
+        .handle_request(Request::FsRead {
+            path: p(&file),
+            max_bytes: u64::MAX,
+        })
+        .await;
+    match resp {
+        Response::FsReadResult {
+            data_base64,
+            size,
+            truncated,
+            ..
+        } => {
+            assert_eq!(size, FS_READ_MAX_BYTES + 1);
+            assert!(truncated);
+            let data = BASE64_STANDARD.decode(data_base64).unwrap();
+            assert_eq!(data.len() as u64, FS_READ_MAX_BYTES);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_stale_expected_modified_ms_should_reject_write_with_conflict() {
@@ -466,6 +545,303 @@ async fn given_program_other_than_git_or_gh_should_refuse_it() {
             })
             .await;
         assert_error(resp, "program_not_allowed");
+    }
+}
+
+fn strings(args: &[&str]) -> Vec<String> {
+    args.iter().map(|a| a.to_string()).collect()
+}
+
+/// Every git/gh argument vector `GitService.swift` sends (after `runGit`
+/// prepends `--literal-pathspecs`), with representative revisions and paths.
+#[test]
+fn given_app_git_and_gh_invocations_should_pass_arg_filter() {
+    let lp = "--literal-pathspecs";
+    let diff_common = [
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+    ];
+    let mut git: Vec<Vec<&str>> = vec![
+        vec![
+            lp,
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+        vec![
+            lp,
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+        vec![lp, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        vec![lp, "rev-parse", "--verify", "HEAD^{commit}"],
+        vec![
+            lp,
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            "main^{commit}",
+        ],
+        vec![lp, "merge-base", "abc", "def"],
+        vec![
+            lp,
+            "log",
+            "--format=%H%x00%s%x00%an%x00%aI%x00",
+            "abc..def",
+            "--",
+        ],
+        vec![lp, "ls-files", "--others", "--exclude-standard", "-z"],
+        vec![lp, "rev-list", "--count", "abc..def"],
+        vec![
+            lp,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+        vec![lp, "rev-list", "--parents", "-n", "1", "abc"],
+        vec![lp, "rev-parse", "--verify", "HEAD"],
+        vec![lp, "ls-files", "--unmerged", "-z", "--", "src/a.rs"],
+        vec![
+            lp,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
+        vec![
+            lp,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            "-z",
+            "--no-renames",
+            "HEAD",
+            "--",
+        ],
+        vec![
+            lp,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            "-z",
+            "--no-renames",
+            "--cached",
+            "--",
+        ],
+        vec![
+            lp,
+            lp,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "HEAD",
+            "--",
+            "src/a.rs",
+        ],
+        vec![
+            lp,
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--",
+            "/dev/null",
+            "new dir/file.txt",
+        ],
+        vec![
+            lp,
+            "-c",
+            "core.quotePath=true",
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--",
+            "/dev/null",
+            "new.txt",
+        ],
+    ];
+    for (command, revisions) in [
+        (vec!["diff-tree", "--root", "--no-commit-id", "-r"], vec![]),
+        (vec!["diff"], vec!["--ours"]),
+        (vec!["diff"], vec!["--cached"]),
+        (vec!["diff"], vec!["abc", "def"]),
+    ] {
+        for options in [
+            vec!["--name-status", "-z"],
+            vec!["--raw", "--no-abbrev", "--numstat", "-z"],
+            vec!["--numstat", "-z"],
+        ] {
+            let mut args = vec![lp];
+            args.extend(&command);
+            args.extend(diff_common);
+            args.extend(&options);
+            args.extend(&revisions);
+            args.push("--");
+            git.push(args);
+        }
+        let mut patch = vec![lp];
+        patch.extend(&command);
+        patch.extend(diff_common);
+        patch.push("--patch");
+        patch.extend(&revisions);
+        patch.extend(["--", "src/a.rs", "src/b.rs"]);
+        git.push(patch);
+        let mut quoted = vec![lp, "-c", "core.quotePath=true"];
+        quoted.extend(&command);
+        quoted.extend(diff_common);
+        quoted.push("--patch");
+        quoted.extend(&revisions);
+        quoted.push("--");
+        git.push(quoted);
+    }
+    for args in git {
+        assert_eq!(check_exec_args("git", &strings(&args)), Ok(()), "{args:?}");
+    }
+    let fields = "number,title,url,state,headRefName,baseRefName,author,labels";
+    for args in [
+        vec!["pr", "list", "--json", fields, "--limit", "50"],
+        vec![
+            "pr", "list", "--json", fields, "--limit", "50", "--head", "pu/x",
+        ],
+        vec!["pr", "diff", "226"],
+        vec!["auth", "status"],
+    ] {
+        assert_eq!(check_exec_args("gh", &strings(&args)), Ok(()), "{args:?}");
+    }
+}
+
+#[test]
+fn given_escaping_git_args_should_refuse_them() {
+    for args in [
+        vec!["-C", "/", "status"],
+        vec!["--literal-pathspecs", "-c", "core.sshCommand=sh", "fetch"],
+        vec!["-c", "alias.x=!sh", "x"],
+        vec!["-c", "core.fsmonitor=/tmp/x", "status"],
+        vec!["--git-dir=/etc", "log"],
+        vec!["--git-dir", "/etc", "log"],
+        vec!["--work-tree=/", "status"],
+        vec!["--exec-path=/tmp", "status"],
+        vec!["--namespace=x", "log"],
+        vec!["--config-env=core.pager=X", "log"],
+        vec!["log", "--output=/tmp/out"],
+        vec!["log", "--outp=/tmp/out"],
+        vec!["fetch", "--upload-pack=sh -c id", "origin"],
+        vec!["fetch", "--upload-p", "sh", "origin"],
+        vec!["push", "--receive-pack=sh", "origin"],
+        vec!["status", "--git-dir=/etc"],
+        vec!["clone", "/x", "/tmp/y"],
+        vec!["archive", "-o", "/tmp/x.tar", "HEAD"],
+        vec!["diff", "--no-index", "/etc/passwd", "/dev/null"],
+        vec!["diff", "--no-index", "--", "/dev/null", "/etc/passwd"],
+        vec!["diff", "--no-index", "--", "/dev/null", "../outside"],
+        vec!["log", "--no-index", "--", "/dev/null", "a"],
+        vec!["--literal-pathspecs"],
+        vec![],
+    ] {
+        assert!(
+            check_exec_args("git", &strings(&args)).is_err(),
+            "{args:?} should be refused"
+        );
+    }
+    // After `--` everything is a path, so option-like names are fine there.
+    assert_eq!(
+        check_exec_args("git", &strings(&["log", "--", "--output"])),
+        Ok(())
+    );
+}
+
+#[test]
+fn given_gh_outside_app_commands_should_refuse_them() {
+    for args in [
+        vec!["extension", "exec", "x"],
+        vec!["my-alias"],
+        vec!["alias", "set", "x", "!sh"],
+        vec!["api", "/user"],
+        vec!["pr", "checkout", "1"],
+        vec!["repo", "clone", "a/b"],
+        vec!["--repo", "a/b", "pr", "list"],
+        vec![],
+    ] {
+        assert!(
+            check_exec_args("gh", &strings(&args)).is_err(),
+            "{args:?} should be refused"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_disallowed_git_args_should_refuse_git_exec() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&["-C", "/", "status"]),
+            stdin_base64: None,
+            timeout_ms: 5_000,
+        })
+        .await;
+    assert_error(resp, "args_not_allowed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_git_exec_timeout_should_kill_spawned_helpers() {
+    let (engine, tmp, root, _outside) = setup().await;
+    let pid_file = tmp.path().join("helper.pid");
+    // A repo-local alias runs through a shell: a grandchild of the daemon.
+    git(
+        &root,
+        &[
+            "config",
+            "alias.slow",
+            &format!("!sh -c 'echo $$ > {}; exec sleep 30'", pid_file.display()),
+        ],
+    );
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&["slow"]),
+            stdin_base64: None,
+            timeout_ms: 1_500,
+        })
+        .await;
+    assert_error(resp, "timeout");
+    let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 only checks for existence.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if !alive {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "helper {pid} survived the git_exec timeout"
+        );
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

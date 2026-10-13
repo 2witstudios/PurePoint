@@ -411,11 +411,23 @@ nonisolated struct DaemonProjectHost: ProjectHost {
         } catch {
             return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1)
         }
+        return Self.commandResult(response, for: command)
+    }
+
+    /// A `git_exec` reply as a local run would report it. Output the daemon truncated is never
+    /// passed off as complete: callers with an output limit see it exceeded, every other
+    /// caller (status, snapshots, refs) gets a failure rather than a partial parse.
+    static func commandResult(_ response: DaemonResponse, for command: HostCommand) -> CommandResult {
         switch response {
         case .gitExecResult(let exitCode, let stdout, let stderr, let truncated):
             let stderrText = String(data: stderr, encoding: .utf8) ?? ""
             if let outputLimit = command.outputLimit, stdout.count > outputLimit || truncated {
                 return CommandResult(stdout: "", stderr: stderrText, exitCode: exitCode, outputExceededLimit: true)
+            }
+            if truncated {
+                return CommandResult(
+                    stdout: "", stderr: "Output of \(command.program) exceeded the remote daemon's limit",
+                    exitCode: -1, outputExceededLimit: true)
             }
             if let outputFile = command.outputFile {
                 guard
@@ -495,6 +507,17 @@ nonisolated final class DaemonDirectoryWatcher: HostDirectoryWatcher, @unchecked
         subscriptions[path] = subscription
         Task { [weak self] in
             await subscription.start { [weak self] in self?.scheduleChange() }
+            // Ended for good (stopped, or the path is not allowed): drop the entry so a later
+            // watchDirectory can subscribe again.
+            self?.remove(subscription)
+        }
+    }
+
+    private func remove(_ subscription: DaemonFsSubscription) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let key = subscriptions.first(where: { $0.value === subscription })?.key {
+            subscriptions.removeValue(forKey: key)
         }
     }
 
@@ -532,12 +555,36 @@ nonisolated final class DaemonDirectoryWatcher: HostDirectoryWatcher, @unchecked
     }
 }
 
+/// Reconnect delays for a stream: 1 s doubling to a 15 s cap, back to 1 s once subscribed.
+nonisolated struct SubscriptionBackoff: Sendable {
+    static let initial: Duration = .seconds(1)
+    static let maximum: Duration = .seconds(15)
+
+    private(set) var current = initial
+
+    /// The delay before the next attempt.
+    mutating func next() -> Duration {
+        let delay = current
+        current = min(current * 2, Self.maximum)
+        return delay
+    }
+
+    mutating func reset() {
+        current = Self.initial
+    }
+}
+
 /// One `subscribe_fs` stream with reconnection, modeled after DaemonStatusSubscription.
+/// Retries until stopped (the machine may be offline for hours), backing off to 15 s; a
+/// successful subscribe resets the backoff.
 actor DaemonFsSubscription {
     let root: String
     private let client: DaemonClient
     private var connection: NWConnection?
     private var stopped = false
+    private var backoff = SubscriptionBackoff()
+    private var subscribedAt: ContinuousClock.Instant?
+    private static let healthyStream: Duration = .seconds(10)
 
     init(client: DaemonClient, root: String) {
         self.client = client
@@ -545,8 +592,6 @@ actor DaemonFsSubscription {
     }
 
     func start(onEvent: @escaping @Sendable () -> Void) async {
-        var backoff: UInt64 = 1_000_000_000
-        var retries = 0
         while !stopped {
             do {
                 try await runLoop(onEvent: onEvent)
@@ -556,10 +601,11 @@ actor DaemonFsSubscription {
             } catch HostError.pathNotAllowed {
                 break
             } catch {
-                retries += 1
-                guard !stopped, retries <= 30 else { break }
-                do { try await Task.sleep(nanoseconds: backoff) } catch { break }
-                backoff = min(backoff * 2, 15_000_000_000)
+                guard !stopped else { break }
+                // A stream that lived a while was healthy: start over from the short delay.
+                if let subscribedAt, ContinuousClock.now - subscribedAt >= Self.healthyStream { backoff.reset() }
+                subscribedAt = nil
+                do { try await Task.sleep(for: backoff.next()) } catch { break }
             }
         }
     }
@@ -582,14 +628,25 @@ actor DaemonFsSubscription {
         let first = DaemonClient.parse(try await reader.readLine())
         switch first {
         case .fsSubscribed:
-            break
+            // Backoff resets once the stream proves healthy (an event, or ten quiet
+            // seconds): the daemon can follow `fs_subscribed` with `watch_failed`.
+            subscribedAt = .now
         case .error(let code, let message):
             throw HostError.from(code: code, message: message)
         default:
             throw HostError.unexpectedResponse("\(first)")
         }
         while !stopped {
-            if case .fsEvent = DaemonClient.parse(try await reader.readLine()) { onEvent() }
+            switch DaemonClient.parse(try await reader.readLine()) {
+            case .fsEvent:
+                backoff.reset()
+                onEvent()
+            case .error(let code, let message):
+                // `watch_failed` (or any error) ends this subscription; retry with backoff.
+                throw HostError.daemon(code: code, message: message)
+            default:
+                break
+            }
         }
     }
 }

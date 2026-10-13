@@ -74,30 +74,36 @@ Machine = SSH destination. Endpoint = forwarded socket. Identity = (machine, roo
 ```
 /usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StreamLocalBindUnlink=yes \
+  -o ControlMaster=no -o ControlPath=none \
   -L <local sock>:<remote home>/.pu/daemon.sock <ssh_host>
 ```
 
-Remote home is resolved once per connection with `ssh -o BatchMode=yes <ssh_host> 'printf %s "$HOME"'`. Start daemon runs `ssh <ssh_host> '"$HOME/.pu/bin/pu" health || "$HOME/.cargo/bin/pu" health || pu health'` (non-interactive SSH has a minimal `PATH`).
+Remote home is resolved once per connection with `ssh -o BatchMode=yes <ssh_host> 'printf %s "$HOME"'`. Start daemon runs `ssh <ssh_host> 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; pu health'` (non-interactive SSH has a minimal `PATH`; the prefix lets both `pu` and the `pu-engine` it spawns resolve). The spawned daemon detaches into its own session with null stdio, so the SSH command returns and the daemon outlives it. `ControlMaster=no -o ControlPath=none` keeps a user's multiplexing config from parking the forward on a shared master that outlives it.
 
 ### Daemon file and git requests (protocol version 9)
 
-All paths are absolute paths on the daemon host. Each is canonicalized and must lie inside a registered project root, one of its worktrees, or an allowlisted agent transcript directory (`~/.claude/projects`, `~/.codex/sessions`, `~/.local/share/opencode`). Otherwise the daemon answers `Error { code: "path_not_allowed" }`. Binary data is standard base64.
+All paths are absolute paths on the daemon host. Each is canonicalized and must lie inside a registered project root, one of its worktrees (a manifest worktree path counts only if it canonicalizes strictly inside `<root>/.pu/worktrees/`, and never `/` or an ancestor of the root or `$HOME`), or an allowlisted agent transcript directory (`~/.claude/projects`, `~/.codex/sessions`, `~/.local/share/opencode`). Otherwise the daemon answers `Error { code: "path_not_allowed" }`. Binary data is standard base64.
 
 | Request (`type`) | Fields | Response (`type`) |
 |---|---|---|
 | `fs_list` | `path`, `recursive` (default false), `include_hidden` (default true), `max_entries` (default 20000) | `fs_list_result { path, entries: [{ name, path, is_dir, is_symlink, size, modified_ms, ignored }], truncated }` |
 | `fs_stat` | `path` | `fs_stat_result { path, exists, is_dir, size, modified_ms }` |
-| `fs_read` | `path`, `max_bytes` (default 1048576) | `fs_read_result { path, data_base64, size, modified_ms, truncated }` |
+| `fs_read` | `path`, `max_bytes` (default 1048576, clamped to 8 MiB) | `fs_read_result { path, data_base64, size, modified_ms, truncated }` |
 | `fs_write` | `path`, `data_base64`, `expected_modified_ms` (optional), `create_dirs` (default false) | `fs_write_result { path, size, modified_ms }` or `Error { code: "conflict" }` |
 | `fs_delete` | `path` | `ok` |
-| `subscribe_fs` | `root`, `recursive` (default true) | `fs_subscribed`, then stream of `fs_event { root, paths: [String] }` (coalesced, ~200 ms) |
+| `subscribe_fs` | `root`, `recursive` (default true) | `fs_subscribed`, then stream of `fs_event { root, paths: [String] }` (coalesced, ~200 ms). If a native recursive watch cannot be set up (e.g. the Linux inotify watch limit), the daemon polls the tree every 2 s instead |
 | `git_exec` | `cwd`, `program` (`git` or `gh`), `args: [String]`, `stdin_base64` (optional), `timeout_ms` (default 30000) | `git_exec_result { exit_code, stdout_base64, stderr_base64, truncated }` (each stream capped at 8 MiB) |
 
-`ignored` comes from `git check-ignore` relative to the repository containing `path`. `git_exec` runs the program directly (no shell) with `cwd` confined like any other path; `gh` uses the remote user's own auth.
+`ignored` comes from `git check-ignore` relative to the repository containing `path`. `git_exec` runs the program directly (no shell) with `cwd` confined like any other path, in its own process group (a timeout kills the whole group); `gh` uses the remote user's own auth. Arguments that could escape confinement are refused with `Error { code: "args_not_allowed" }`:
+
+- git global options before the subcommand are limited to `--literal-pathspecs`, `--glob-pathspecs`, `--noglob-pathspecs`, `--icase-pathspecs`, `--no-pager`, `--no-optional-locks`, `--no-replace-objects` and `-c core.quotePath=<value>` (so `-C`, other `-c` keys, `--git-dir`, `--work-tree`, `--exec-path`, `--namespace`, `--config-env` are refused).
+- Before `--`, any long option (or abbreviation) of `--git-dir`, `--work-tree`, `--exec-path`, `--namespace`, `--config-env`, `--upload-pack`, `--receive-pack`, `--output`, `--exec` is refused, as are the subcommands `clone`, `archive`, `daemon`, `instaweb`, `shell`, `upload-pack`, `receive-pack`, `upload-archive`.
+- `--no-index` is allowed only as `diff [options] --no-index [options] -- <a> <b>` where each of `<a>`, `<b>` is `/dev/null` or a relative path of plain names.
+- `gh` runs only `pr list|diff|view|status|checks`, `auth status` and `repo view` (no extensions or aliases).
 
 ### CLI
 
-- `pu --machine <name> <command…>` — conflicts with `--socket`. Uses the app's live forward when its socket answers; otherwise opens a private `ssh -N -L` forward for the invocation and closes it on exit. Never calls `ensure_daemon`. Project-scoped commands require `--project <remote root>`; agent-targeted commands resolve by id on that machine.
+- `pu --machine <name> <command…>` — conflicts with `--socket`. Uses the app's live forward when its socket answers; otherwise opens a private `ssh -N -L` forward on `cli-<pid>.sock` for the invocation, records the ssh pid in `cli-<pid>.sock.pid`, and closes both on exit. Before opening one it sweeps files whose CLI pid is dead, sending SIGTERM to a recorded pid only if it is still an `ssh` process. Never calls `ensure_daemon`. Project-scoped commands require `--project <remote root>`; agent-targeted commands resolve by id on that machine.
 - `pu machine list|add <name> <ssh_host>|remove <name>|status [<name>]|start <name>`.
 
 ## Edge Cases

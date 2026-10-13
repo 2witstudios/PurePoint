@@ -76,6 +76,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     private struct ProjectRenderState: Equatable {
         let channelUnread: Int
+        let isUnavailable: Bool
         let projectRoot: String
         let rootWorkspaces: [WorkspaceRenderState]
         let worktrees: [WorktreeRenderState]
@@ -236,6 +237,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         return ProjectRenderState(
             channelUnread: project.channel.unreadCount,
+            isUnavailable: project.isUnavailable,
             projectRoot: project.projectId,
             rootWorkspaces: rootWorkspaces,
             worktrees: worktrees
@@ -386,6 +388,16 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.addArrangedSubview(icon)
         stack.addArrangedSubview(name)
         stack.addArrangedSubview(spacerView())
+        if project.isUnavailable {
+            // Kept only for its unsaved file tabs while the machine's daemon is unreachable.
+            name.textColor = .secondaryLabelColor
+            let status = NSTextField(labelWithString: "Unavailable")
+            status.font = .systemFont(ofSize: 10)
+            status.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(status)
+            cell.toolTip = "The machine's daemon is unreachable. Unsaved file tabs are kept until it is back."
+            cell.setAccessibilityLabel("\(project.projectName), unavailable")
+        }
         if project.channel.unreadCount > 0 {
             let badge = makeBadge(count: project.channel.unreadCount)
             badge.identifier = NSUserInterfaceItemIdentifier("channelUnreadCount")
@@ -730,7 +742,24 @@ extension SidebarOutlineViewController: NSMenuDelegate {
     }
 
     @objc private func contextDisconnectMachine(_ sender: NSMenuItem) {
-        contextMachine?.disconnect(remember: true)
+        guard let machine = contextMachine else { return }
+        let unsaved = machine.unsavedFileNames
+        guard !unsaved.isEmpty else {
+            machine.disconnect(remember: true)
+            return
+        }
+        showConfirmation(
+            title: "Disconnect \(machine.machine.name)?",
+            message: "Its projects close in PurePoint until you connect again." + Self.unsavedWarning(unsaved),
+            confirmTitle: "Disconnect"
+        ) {
+            machine.disconnect(remember: true)
+        }
+    }
+
+    /// Closing a remote project drops its file tabs, edits included.
+    private static func unsavedWarning(_ names: [String]) -> String {
+        names.isEmpty ? "" : " Unsaved changes to \(names.joined(separator: ", ")) will be lost."
     }
 
     @objc private func contextStartDaemon(_ sender: NSMenuItem) {
@@ -743,7 +772,8 @@ extension SidebarOutlineViewController: NSMenuDelegate {
             title: "Remove \(machine.machine.name)?",
             message:
                 "PurePoint will close its connection and forget it. The daemon, projects and agents on "
-                + "\(machine.machine.name) keep running and are not changed.",
+                + "\(machine.machine.name) keep running and are not changed."
+                + Self.unsavedWarning(machine.unsavedFileNames),
             confirmTitle: "Remove"
         ) {
             self.onRemoveMachine?(machine)
@@ -850,10 +880,12 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     @objc private func contextRemoveProject(_ sender: NSMenuItem) {
         guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
+        let unsaved = project.isRemote ? project.registry?.unsavedFileNames(inProject: project.projectId) ?? [] : []
         showConfirmation(
             title: "Remove \(project.projectName)?",
             message: project.isRemote
                 ? "This hides the project in PurePoint on this Mac. Nothing on the remote machine is changed."
+                    + Self.unsavedWarning(unsaved)
                 : "This will close the project in PurePoint and delete .pu/manifest.json and .pu/agents/. "
                     + "The project folder will not be deleted.",
             confirmTitle: "Remove"

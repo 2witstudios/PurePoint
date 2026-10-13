@@ -218,7 +218,7 @@ private struct InlineFilePreview: View {
                 ProgressView().controlSize(.mini).padding(10)
             }
         }
-        .task(id: path) {
+        .task(id: WorkspaceFilesState.identity(rootPath: path, host: host)) {
             var lastModified: Date?
             while !Task.isCancelled {
                 let modified = await FileIOService.fileModificationDate(at: path, host: host)
@@ -243,7 +243,9 @@ private struct InlineFilePreview: View {
                         message = error.localizedDescription
                     }
                 }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                // Remote polling is a daemon round trip over SSH; poll less often, as the
+                // changes list does.
+                do { try await Task.sleep(for: .seconds(host.isLocal ? 2 : 5)) } catch { return }
             }
         }
     }

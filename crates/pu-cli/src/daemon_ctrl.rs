@@ -5,8 +5,72 @@ use pu_core::protocol::{PROTOCOL_VERSION, Request, Response};
 
 use crate::error::CliError;
 
+const DAEMON_BINARY: &str = "pu-engine";
+
+/// `pu-engine` on `PATH`, else next to this `pu`, else in the install
+/// locations (`~/.pu/bin`, `~/.cargo/bin`). Non-interactive SSH sessions have a
+/// minimal `PATH` that usually contains none of them.
 pub fn find_daemon_binary() -> Option<PathBuf> {
-    which::which("pu-engine").ok()
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    which::which(DAEMON_BINARY)
+        .ok()
+        .or_else(|| find_daemon_binary_in(exe_dir.as_deref(), home.as_deref()))
+}
+
+/// Fallback search order once `PATH` has no `pu-engine`.
+fn daemon_binary_candidates(exe_dir: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe_dir {
+        candidates.push(dir.join(DAEMON_BINARY));
+    }
+    if let Some(home) = home {
+        candidates.push(home.join(".pu/bin").join(DAEMON_BINARY));
+        candidates.push(home.join(".cargo/bin").join(DAEMON_BINARY));
+    }
+    candidates
+}
+
+fn find_daemon_binary_in(exe_dir: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    daemon_binary_candidates(exe_dir, home)
+        .into_iter()
+        .find(|path| {
+            std::fs::metadata(path)
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        })
+}
+
+/// Spawn the daemon detached from the caller's session: its own session (so
+/// an SSH hangup or the caller's process group dying does not reach it) and no
+/// inherited stdio (so `ssh host 'pu health'` returns instead of waiting on
+/// the daemon's open descriptors).
+fn daemon_command(
+    binary: &Path,
+    socket: &Path,
+    stderr: std::process::Stdio,
+) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new(binary);
+    command
+        .arg("--socket")
+        .arg(socket)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr);
+    // SAFETY: setsid is async-signal-safe and touches no parent state.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
 }
 
 /// Longest a single health probe may take. A daemon that accepts but never
@@ -106,7 +170,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
     }
 
     let binary = find_daemon_binary().ok_or(CliError::Other(
-        "pu-engine not found on PATH — install with `cargo install --path crates/pu-engine`".into(),
+        "pu-engine not found on PATH, next to pu, or in ~/.pu/bin or ~/.cargo/bin — install with `cargo install --path crates/pu-engine`".into(),
     ))?;
 
     // Redirect daemon stderr to log file so startup errors are diagnosable
@@ -128,12 +192,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
     };
 
     // Start daemon
-    std::process::Command::new(&binary)
-        .arg("--socket")
-        .arg(socket)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(stderr_target)
+    daemon_command(&binary, socket, stderr_target)
         .spawn()
         .map_err(CliError::Io)?;
 
@@ -171,6 +230,87 @@ mod tests {
             );
         }
         // If not found, that's fine — just verify no panic
+    }
+
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn given_daemon_beside_pu_should_prefer_it_over_install_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let exe_dir = tmp.path().join("bin");
+        let home = tmp.path().join("home");
+        make_executable(&exe_dir.join("pu-engine"));
+        make_executable(&home.join(".cargo/bin/pu-engine"));
+        assert_eq!(
+            find_daemon_binary_in(Some(&exe_dir), Some(&home)),
+            Some(exe_dir.join("pu-engine"))
+        );
+    }
+
+    #[test]
+    fn given_daemon_only_in_install_dirs_should_find_pu_bin_then_cargo_bin() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let exe_dir = tmp.path().join("empty");
+        let home = tmp.path().join("home");
+        make_executable(&home.join(".cargo/bin/pu-engine"));
+        assert_eq!(
+            find_daemon_binary_in(Some(&exe_dir), Some(&home)),
+            Some(home.join(".cargo/bin/pu-engine"))
+        );
+        make_executable(&home.join(".pu/bin/pu-engine"));
+        assert_eq!(
+            find_daemon_binary_in(Some(&exe_dir), Some(&home)),
+            Some(home.join(".pu/bin/pu-engine"))
+        );
+    }
+
+    #[test]
+    fn given_non_executable_candidate_should_skip_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let path = home.join(".pu/bin/pu-engine");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(find_daemon_binary_in(None, Some(&home)), None);
+    }
+
+    #[test]
+    fn given_daemon_spawn_should_detach_into_its_own_session() {
+        // A stand-in daemon records its pid and process group; setsid makes it
+        // the leader of a new session and process group (pgid == pid).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let script = tmp.path().join("fake-engine");
+        let out = tmp.path().join("out");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho $$ $(ps -o pgid= -p $$) > {}\n",
+                out.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut child = daemon_command(
+            &script,
+            Path::new("/nonexistent.sock"),
+            std::process::Stdio::null(),
+        )
+        .spawn()
+        .unwrap();
+        child.wait().unwrap();
+        let report = std::fs::read_to_string(&out).unwrap();
+        let ids: Vec<&str> = report.split_whitespace().collect();
+        assert_eq!(ids.len(), 2, "{report:?}");
+        assert_eq!(ids[0], ids[1], "daemon must lead its own process group");
+        // SAFETY: getpgrp only reads process state.
+        let own_pgid = unsafe { libc::getpgrp() };
+        assert_ne!(ids[1], own_pgid.to_string());
     }
 
     #[tokio::test(flavor = "current_thread")]

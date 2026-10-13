@@ -325,9 +325,11 @@ final class AppState {
         for project in managedProjects {
             project.stopWatching()
         }
-        // Remote daemons own their agents (MACH-004): only the SSH forwards close.
+        // Remote daemons own their agents (MACH-004): only the SSH forwards close — after
+        // the layout saves saveAll just queued have gone through them (2 s at most overall).
+        let remoteSaveDeadline = DispatchTime.now() + 2.0
         for machine in machines {
-            machine.disconnect()
+            machine.disconnectForTermination(deadline: remoteSaveDeadline)
         }
         binaryWatcher?.stop()
         binaryWatcher = nil

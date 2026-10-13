@@ -27,8 +27,9 @@ struct DaemonClient {
     func send(_ request: DaemonRequest) async throws -> DaemonResponse { .ok }
 }
 // Project hosts: only the local, file-free surface AppState and persistence name.
-struct HostFileData { let data: Data; let truncated: Bool }
-struct HostFileStat {}
+struct HostFileData { let data: Data; let modifiedMs: Int64; let truncated: Bool }
+struct HostFileStat { let modifiedMs: Int64 }
+enum HostError: Error { case notFound(String), conflict(String) }
 protocol ProjectHost: Sendable {
     var isLocal: Bool { get }
     func read(path: String, maxBytes: Int) throws -> HostFileData
@@ -48,6 +49,7 @@ struct LocalProjectHost: ProjectHost {
     init(machine: Machine, appState: AppState?, registry: WorkspaceRegistry?) { self.machine = machine }
     func connect() {}
     func disconnect(remember: Bool = false) {}
+    func disconnectForTermination(deadline: DispatchTime) {}
     func hideProject(root: String) {}
     static func isUserDisconnected(_ id: UUID) -> Bool { true }
 }

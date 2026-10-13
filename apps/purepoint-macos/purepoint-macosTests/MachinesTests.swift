@@ -173,15 +173,92 @@ struct MachineSSHTests {
                 "-o", "ServerAliveInterval=15",
                 "-o", "ServerAliveCountMax=3",
                 "-o", "StreamLocalBindUnlink=yes",
+                "-o", "ControlMaster=no",
+                "-o", "ControlPath=none",
                 "-L", "/Users/me/.pu/machines/abc/daemon.sock:/Users/Jane Doe/.pu/daemon.sock",
                 "studio",
             ])
     }
 
-    @Test func givenStartDaemonShouldTryInstalledLocationsBeforePath() {
+    @Test func givenStartDaemonShouldPutInstalledLocationsOnPath() {
         #expect(
             MachineSSH.startDaemonArguments(sshHost: "studio")
-                == ["studio", "\"$HOME/.pu/bin/pu\" health || \"$HOME/.cargo/bin/pu\" health || pu health"])
+                == ["studio", #"PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; pu health"#])
+    }
+
+    @Test func givenHostWithPortShouldUseTheSSHURIForm() {
+        #expect(MachineSSH.destination("jane@studio:2222") == "ssh://jane@studio:2222")
+        #expect(MachineSSH.destination("studio:22") == "ssh://studio:22")
+        #expect(MachineSSH.destination("studio") == "studio")
+        #expect(MachineSSH.destination("jane@studio") == "jane@studio")
+        #expect(MachineSSH.destination("ssh://jane@studio:2222") == "ssh://jane@studio:2222")
+        #expect(MachineSSH.destination("studio:") == "studio:")
+        #expect(MachineSSH.destination(":22") == ":22")
+        #expect(MachineSSH.destination("studio:ssh") == "studio:ssh")
+        #expect(MachineSSH.destination("fe80::1:22") == "fe80::1:22")
+    }
+
+    @Test func givenHostWithPortEveryCommandShouldUseTheDestination() {
+        let host = "jane@studio:2222"
+        #expect(MachineSSH.resolveHomeArguments(sshHost: host)[2] == "ssh://jane@studio:2222")
+        #expect(MachineSSH.forwardArguments(localSocket: "/l", remoteHome: "/h", sshHost: host).last == "ssh://jane@studio:2222")
+        #expect(MachineSSH.startDaemonArguments(sshHost: host).first == "ssh://jane@studio:2222")
+    }
+
+    @Test func givenRecordedPidShouldOnlyMatchThisMachinesSSHForward() {
+        let socket = "/Users/me/.pu/machines/abc/daemon.sock"
+        let forward = MachineSSH.forwardArguments(localSocket: socket, remoteHome: "/home/me", sshHost: "studio")
+        #expect(ForwardPidFile.isForward(executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward, localSocket: socket))
+        // Reused by the user's own ssh session, another machine's forward, or another program.
+        #expect(!ForwardPidFile.isForward(executablePath: "/usr/bin/ssh", arguments: ["ssh", "studio"], localSocket: socket))
+        #expect(
+            !ForwardPidFile.isForward(
+                executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward, localSocket: "/Users/me/.pu/machines/xyz/daemon.sock"))
+        #expect(!ForwardPidFile.isForward(executablePath: "/bin/zsh", arguments: ["zsh"] + forward, localSocket: socket))
+        #expect(!ForwardPidFile.isForward(executablePath: nil, arguments: nil, localSocket: socket))
+    }
+
+    @Test func givenThisProcessShouldReadItsExecutableAndArguments() {
+        let pid = getpid()
+        #expect(ForwardPidFile.executablePath(of: pid) != nil)
+        #expect(ForwardPidFile.arguments(of: pid)?.isEmpty == false)
+    }
+}
+
+// MARK: - Daemon health
+
+struct HealthProbeTests {
+    @Test func givenOneOrTwoFailedProbesShouldKeepTheLastState() {
+        var tracker = HealthProbeTracker()
+        #expect(tracker.record(.running) == .running)
+        #expect(tracker.record(.failed) == nil)
+        #expect(tracker.record(.failed) == nil)
+        #expect(tracker.record(.running) == .running)
+        #expect(tracker.record(.failed) == nil)
+        #expect(tracker.record(.failed) == nil)
+        #expect(tracker.record(.failed) == .stopped)
+    }
+
+    @Test func givenBusyShouldNeitherReportRunningNorCountAsFailure() {
+        var tracker = HealthProbeTracker()
+        #expect(tracker.record(.busy) == nil)
+        #expect(tracker.record(.failed) == nil)
+        #expect(tracker.record(.busy) == nil)
+        #expect(tracker.record(.failed) == nil)
+        #expect(tracker.consecutiveFailures == 2)
+        #expect(tracker.record(.incompatible(7)) == .incompatible(7))
+    }
+
+    @Test func givenHealthRepliesShouldClassify() {
+        #expect(MachineConnection.classify(.error(code: "BUSY", message: "full")) == .busy)
+        #expect(MachineConnection.classify(.error(code: "IO", message: "x")) == .failed)
+        #expect(MachineConnection.classify(nil) == .failed)
+        #expect(
+            MachineConnection.classify(
+                .healthReport(pid: 1, uptimeSeconds: 1, protocolVersion: DaemonProtocol.version, agentCount: 0)) == .running)
+        #expect(
+            MachineConnection.classify(.healthReport(pid: 1, uptimeSeconds: 1, protocolVersion: 2, agentCount: 0))
+                == .incompatible(2))
     }
 }
 
@@ -366,5 +443,213 @@ struct RemoteRegistryTests {
 
         registry.forgetProject(projectId)
         #expect(registry.workspaces(forProject: projectId).isEmpty)
+    }
+}
+
+// MARK: - Remote layout persistence
+
+/// A scriptable host: reads and writes answer from queues of results, writes are recorded.
+private final class FakeHost: ProjectHost, @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads: [Result<HostFileData, HostError>]
+    private var writeResults: [Result<HostFileStat, HostError>]
+    private(set) var writes: [(data: Data, expectedModifiedMs: Int64?)] = []
+
+    init(reads: [Result<HostFileData, HostError>], writes: [Result<HostFileStat, HostError>] = []) {
+        self.reads = reads
+        self.writeResults = writes
+    }
+
+    var isLocal: Bool { false }
+    var identity: String { "machine:fake" }
+
+    var writeCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return writes.count
+    }
+
+    func read(path: String, maxBytes: Int) throws -> HostFileData {
+        lock.lock()
+        defer { lock.unlock() }
+        let next = reads.count > 1 ? reads.removeFirst() : reads.first ?? .failure(.notFound(path))
+        return try next.get()
+    }
+
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
+        lock.lock()
+        defer { lock.unlock() }
+        writes.append((data, expectedModifiedMs))
+        let next = writeResults.isEmpty ? .success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 99)) : writeResults.removeFirst()
+        return try next.get()
+    }
+
+    func list(directory: String) throws -> [HostFileEntry] { [] }
+    func listRecursive(root: String, limit: Int) throws -> (entries: [HostFileEntry], truncated: Bool) { ([], false) }
+    func stat(path: String) throws -> HostFileStat { .missing }
+    func delete(path: String) throws {}
+    func run(_ command: HostCommand) -> CommandResult { CommandResult(stdout: "", stderr: "", exitCode: 0) }
+    func makeWatcher(onChange: @escaping @Sendable () -> Void) -> any HostDirectoryWatcher {
+        DaemonDirectoryWatcher(client: DaemonClient(), onChange: onChange)
+    }
+}
+
+private func file(_ text: String, modifiedMs: Int64 = 10, truncated: Bool = false) -> Result<HostFileData, HostError> {
+    .success(HostFileData(data: Data(text.utf8), size: UInt64(text.utf8.count), modifiedMs: modifiedMs, truncated: truncated))
+}
+
+private let emptyLayoutDocument = #"{"version":3,"workspaces":[]}"#
+
+struct RemoteLayoutPersistenceTests {
+    @Test func givenNoLayoutFileShouldLoadAnEmptyLayout() throws {
+        let host = FakeHost(reads: [.failure(.notFound("gone"))])
+        let layout = try WorkspacePersistence.loadRemote(projectRoot: "/srv/app", projectId: "machine:x:/srv/app", host: host)
+        #expect(layout.workspaces.isEmpty)
+        #expect(layout.modifiedMs == nil)
+    }
+
+    @Test func givenFailedReadShouldThrowRatherThanLoadAnEmptyLayout() {
+        let host = FakeHost(reads: [.failure(.daemon(code: "io_error", message: "connection reset"))])
+        #expect(throws: HostError.self) {
+            try WorkspacePersistence.loadRemote(projectRoot: "/srv/app", projectId: "p", host: host)
+        }
+        let large = FakeHost(reads: [file("{", truncated: true)])
+        #expect(throws: RemoteLayoutError.self) {
+            try WorkspacePersistence.loadRemote(projectRoot: "/srv/app", projectId: "p", host: large)
+        }
+    }
+
+    @Test func givenUnreadableDocumentSaveShouldNotWrite() {
+        let host = FakeHost(reads: [.failure(.daemon(code: "io_error", message: "x"))])
+        let written = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 10)
+        #expect(written == nil)
+        #expect(host.writeCount == 0)
+    }
+
+    @Test func givenNewerDocumentSaveShouldNotDowngradeIt() {
+        let host = FakeHost(reads: [file(#"{"version":99,"workspaces":[]}"#)])
+        WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: nil)
+        #expect(host.writeCount == 0)
+    }
+
+    @Test func givenKnownModificationTimeSaveShouldBeConditionalAndRetryOnceOnConflict() {
+        let host = FakeHost(
+            reads: [file(emptyLayoutDocument, modifiedMs: 10), file(emptyLayoutDocument, modifiedMs: 20)],
+            writes: [.failure(.conflict("changed")), .success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
+        let written = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(host.writes.map(\.expectedModifiedMs) == [5, 20])
+        #expect(written == 30)
+    }
+
+    @Test func givenSaverShouldWriteAgainstTheLastKnownModificationTimeAndFlush() {
+        let recorded = LockedValues()
+        let saver = RemoteLayoutSaver { _, expected in
+            recorded.append(expected)
+            return (expected ?? 0) + 1
+        }
+        saver.loaded(modifiedMs: 41)
+        saver.enqueue(Data())
+        saver.enqueue(Data())
+        #expect(saver.flush(until: .now() + 2))
+        #expect(recorded.values == [41, 42])
+    }
+}
+
+private final class LockedValues: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Int64?] = []
+    func append(_ value: Int64?) { lock.lock(); stored.append(value); lock.unlock() }
+    var values: [Int64?] { lock.lock(); defer { lock.unlock() }; return stored }
+}
+
+@MainActor
+struct RemoteLayoutRestoreTests {
+    private let projectId = ProjectKey(machineId: UUID(), root: "/srv/app").id
+
+    @Test func givenFailedReadShouldSurfaceAnErrorAndNeverSave() async {
+        let registry = WorkspaceRegistry(loadWorkspaces: { _ in [] })
+        let host = FakeHost(reads: [.failure(.daemon(code: "io_error", message: "reset"))])
+        let saver = RemoteLayoutSaver(projectRoot: "/srv/app", host: host)
+        let task = Task {
+            await ProjectState.restoreRemoteLayout(
+                projectRoot: "/srv/app", projectId: projectId, host: host, registry: registry, saver: saver,
+                retryDelay: { _ in .milliseconds(20) })
+        }
+        for _ in 0..<100 where registry.layoutErrorsByProject[projectId] == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(registry.layoutErrorsByProject[projectId]?.contains("reset") == true)
+
+        registry.reconcile(
+            projectRoot: projectId,
+            rootAgents: [AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")],
+            worktrees: [])
+        registry.saveAll()
+        registry.forgetProject(projectId)
+        #expect(saver.flush(until: .now() + 1))
+        #expect(host.writeCount == 0)
+        #expect(registry.workspaces(forProject: projectId).isEmpty)
+        task.cancel()
+        await task.value
+    }
+
+    @Test func givenReadRecoversShouldRegisterTheLayout() async {
+        let registry = WorkspaceRegistry(loadWorkspaces: { _ in [] })
+        let host = FakeHost(reads: [.failure(.daemon(code: "io_error", message: "reset")), .failure(.notFound("none"))])
+        let saver = RemoteLayoutSaver(projectRoot: "/srv/app", host: host)
+        await ProjectState.restoreRemoteLayout(
+            projectRoot: "/srv/app", projectId: projectId, host: host, registry: registry, saver: saver,
+            retryDelay: { _ in .milliseconds(10) })
+        #expect(registry.layoutErrorsByProject[projectId] == nil)
+        registry.reconcile(
+            projectRoot: projectId,
+            rootAgents: [AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")],
+            worktrees: [])
+        #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
+        registry.saveAll()
+        #expect(saver.flush(until: .now() + 1))
+        #expect(host.writeCount == 1)
+        registry.forgetProject(projectId)
+    }
+}
+
+// MARK: - Remote git and watching
+
+struct RemoteExecTests {
+    private func exec(truncated: Bool) -> DaemonResponse {
+        .gitExecResult(exitCode: 0, stdout: Data("partial".utf8), stderr: Data(), truncated: truncated)
+    }
+
+    @Test func givenTruncatedOutputWithoutLimitShouldFail() {
+        let command = HostCommand(program: "git", executablePath: "/usr/bin/git", args: ["status"], cwd: "/srv/app")
+        let result = DaemonProjectHost.commandResult(exec(truncated: true), for: command)
+        #expect(!result.success)
+        #expect(result.stdout.isEmpty)
+        #expect(DaemonProjectHost.commandResult(exec(truncated: false), for: command).stdout == "partial")
+    }
+
+    @Test func givenTruncatedOutputWithLimitShouldReportItExceeded() {
+        let command = HostCommand(
+            program: "git", executablePath: "/usr/bin/git", args: ["diff"], cwd: "/srv/app", outputLimit: 1_000)
+        #expect(DaemonProjectHost.commandResult(exec(truncated: true), for: command).outputExceededLimit)
+    }
+
+    @Test func givenRepeatedFailuresBackoffShouldCapAtFifteenSecondsAndReset() {
+        var backoff = SubscriptionBackoff()
+        let delays = (0..<8).map { _ in backoff.next() }
+        #expect(delays.prefix(5) == [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(15)])
+        #expect(delays.last == .seconds(15))
+        backoff.reset()
+        #expect(backoff.next() == .seconds(1))
+    }
+}
+
+@MainActor
+struct WorkspaceFilesIdentityTests {
+    @Test func givenSamePathOnAnotherHostShouldBeADifferentFilesState() {
+        let remote = FakeHost(reads: [])
+        let local = WorkspaceFilesState.identity(rootPath: "/srv/app", host: LocalProjectHost.shared)
+        #expect(local != WorkspaceFilesState.identity(rootPath: "/srv/app", host: remote))
+        #expect(local == WorkspaceFilesState(rootPath: "/srv/app").identity)
     }
 }

@@ -222,7 +222,11 @@ impl IpcServer {
             }
             StreamMode::Fs { root, recursive } => {
                 if matches!(response, Response::FsSubscribed) {
+                    // A watch stream never returns to request mode: if the
+                    // watcher fails after `FsSubscribed`, closing the
+                    // connection is the client's unambiguous resubscribe signal.
                     streams::handle_fs_stream(reader, writer, engine, &root, recursive).await;
+                    return false;
                 }
             }
             StreamMode::None => {}

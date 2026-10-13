@@ -224,7 +224,10 @@ async fn given_registered_machine_should_reach_its_daemon_over_ssh_and_never_sta
         log.contains("-o BatchMode=yes fakehost printf %s \"$HOME\""),
         "{log}"
     );
-    assert!(log.contains("-o StreamLocalBindUnlink=yes -L "), "{log}");
+    assert!(
+        log.contains("-o StreamLocalBindUnlink=yes -o ControlMaster=no -o ControlPath=none -L "),
+        "{log}"
+    );
     assert!(
         log.contains(&format!(
             ":{}/r/.pu/daemon.sock fakehost",
@@ -285,7 +288,7 @@ async fn given_registered_machine_should_reach_its_daemon_over_ssh_and_never_sta
     let log = std::fs::read_to_string(env.root.join("ssh.log")).unwrap();
     assert!(
         log.contains(
-            r#"fakehost "$HOME/.pu/bin/pu" health || "$HOME/.cargo/bin/pu" health || pu health"#
+            r#"fakehost PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; pu health"#
         ),
         "{log}"
     );

@@ -223,6 +223,47 @@ async fn write_output_chunks(
 /// How long file events are gathered before one `FsEvent` goes out.
 const FS_EVENT_COALESCE: std::time::Duration = std::time::Duration::from_millis(200);
 const FS_EVENT_QUEUE: usize = 4096;
+/// Scan interval of the polling fallback for trees too large for native watches.
+const FS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+type BoxedWatcher = Box<dyn notify::Watcher + Send>;
+
+/// Watch `root` with the native backend; if a recursive watch cannot be set up
+/// (e.g. Linux inotify watch limit on a huge tree), fall back to polling.
+/// Returns the watcher and whether it polls.
+fn watch_dir<H, F>(
+    root: &std::path::Path,
+    recursive: bool,
+    handler: F,
+    native: impl FnOnce(H) -> notify::Result<BoxedWatcher>,
+) -> notify::Result<(BoxedWatcher, bool)>
+where
+    H: notify::EventHandler,
+    F: Fn() -> H,
+{
+    use notify::{RecursiveMode, Watcher};
+    let mode = if recursive {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    let native_error = match native(handler()).and_then(|mut w| w.watch(root, mode).map(|()| w)) {
+        Ok(watcher) => return Ok((watcher, false)),
+        Err(e) => e,
+    };
+    if !recursive {
+        return Err(native_error);
+    }
+    tracing::warn!(
+        root = %root.display(),
+        error = %native_error,
+        "native recursive watch failed; polling instead"
+    );
+    let config = notify::Config::default().with_poll_interval(FS_POLL_INTERVAL);
+    let mut poller = notify::PollWatcher::new(handler(), config)?;
+    poller.watch(root, mode)?;
+    Ok((Box::new(poller), true))
+}
 
 /// Streaming file-watch subscription: pushes coalesced `FsEvent`s for changes
 /// under `root` until the client disconnects (or sends anything).
@@ -233,7 +274,7 @@ pub(super) async fn handle_fs_stream(
     root: &str,
     recursive: bool,
 ) {
-    use notify::{EventKind, RecursiveMode, Watcher};
+    use notify::EventKind;
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -253,8 +294,10 @@ pub(super) async fn handle_fs_stream(
     let overflow_flag = overflowed.clone();
     let watch_root = root.clone();
     let watcher = tokio::task::spawn_blocking(move || {
-        let mut watcher =
-            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let handler = move || {
+            let tx = tx.clone();
+            let overflow_flag = overflow_flag.clone();
+            move |res: notify::Result<notify::Event>| {
                 let paths = match res {
                     Ok(event) if matches!(event.kind, EventKind::Access(_)) => return,
                     Ok(event) => event.paths,
@@ -266,18 +309,15 @@ pub(super) async fn handle_fs_stream(
                 if tx.try_send(paths).is_err() {
                     overflow_flag.store(true, Ordering::Relaxed);
                 }
-            })?;
-        let mode = if recursive {
-            RecursiveMode::Recursive
-        } else {
-            RecursiveMode::NonRecursive
+            }
         };
-        watcher.watch(&watch_root, mode)?;
-        Ok::<_, notify::Error>(watcher)
+        watch_dir(&watch_root, recursive, handler, |h| {
+            notify::recommended_watcher(h).map(|w| Box::new(w) as BoxedWatcher)
+        })
     })
     .await;
     let _watcher = match watcher {
-        Ok(Ok(watcher)) => watcher,
+        Ok(Ok((watcher, _polling))) => watcher,
         Ok(Err(e)) => {
             let resp = Response::Error {
                 code: "watch_failed".into(),
@@ -345,4 +385,64 @@ pub(super) async fn handle_fs_stream(
         }
     }
     tracing::debug!(root = root_str, "fs stream ended");
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn collector() -> (
+        impl Fn() -> mpsc::Sender<notify::Result<notify::Event>>,
+        mpsc::Receiver<notify::Result<notify::Event>>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        (move || tx.clone(), rx)
+    }
+
+    fn failing_native(
+        _: mpsc::Sender<notify::Result<notify::Event>>,
+    ) -> notify::Result<BoxedWatcher> {
+        Err(notify::Error::new(notify::ErrorKind::MaxFilesWatch))
+    }
+
+    #[test]
+    fn given_native_recursive_watch_fails_should_poll_and_still_report_changes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let (handler, rx) = collector();
+        let (_watcher, polling) = watch_dir(&root, true, handler, failing_native).unwrap();
+        assert!(polling);
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/new.txt"), "x").unwrap();
+        let deadline = std::time::Instant::now() + FS_POLL_INTERVAL * 4;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let event = rx
+                .recv_timeout(remaining)
+                .expect("polling watcher reported no change")
+                .unwrap();
+            if event.paths.iter().any(|p| p.ends_with("sub/new.txt")) {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn given_native_non_recursive_watch_fails_should_report_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (handler, _rx) = collector();
+        assert!(watch_dir(tmp.path(), false, handler, failing_native).is_err());
+    }
+
+    #[test]
+    fn given_native_watch_works_should_not_poll() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (handler, _rx) = collector();
+        let (_watcher, polling) = watch_dir(tmp.path(), true, handler, |h| {
+            notify::recommended_watcher(h).map(|w| Box::new(w) as BoxedWatcher)
+        })
+        .unwrap();
+        assert!(!polling);
+    }
 }

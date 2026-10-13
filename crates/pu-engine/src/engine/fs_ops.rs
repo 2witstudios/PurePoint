@@ -25,6 +25,54 @@ const TRANSCRIPT_DIRS: [&str; 3] = [
 /// Per-stream cap for `git_exec` stdout and stderr.
 const GIT_EXEC_OUTPUT_CAP: usize = 8 * 1024 * 1024;
 const GIT_EXEC_PROGRAMS: [&str; 2] = ["git", "gh"];
+/// Upper bound on `fs_read`'s `max_bytes`, whatever the client asks for.
+const FS_READ_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Global options git may receive before its subcommand. Everything else that
+/// redirects the repository, config or helper programs (`-C`, `--git-dir`,
+/// `--work-tree`, `--exec-path`, `--namespace`, `--config-env`, …) is refused.
+const GIT_GLOBAL_FLAGS: [&str; 7] = [
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-pager",
+    "--no-optional-locks",
+    "--no-replace-objects",
+];
+/// Config keys `-c` may set (lowercase): display-only settings.
+const GIT_CONFIG_KEYS: [&str; 1] = ["core.quotepath"];
+/// Long options refused before `--` in any position (git also accepts any
+/// unambiguous abbreviation, so prefixes of these are refused too): they
+/// relocate the repository, run helper programs, or write arbitrary files.
+const GIT_FORBIDDEN_OPTIONS: [&str; 9] = [
+    "git-dir",
+    "work-tree",
+    "exec-path",
+    "namespace",
+    "config-env",
+    "upload-pack",
+    "receive-pack",
+    "output",
+    "exec",
+];
+/// Subcommands that run helper programs or write outside the working tree.
+const GIT_FORBIDDEN_SUBCOMMANDS: [&str; 8] = [
+    "clone",
+    "archive",
+    "daemon",
+    "instaweb",
+    "shell",
+    "upload-pack",
+    "receive-pack",
+    "upload-archive",
+];
+/// `gh` commands the app runs; extensions and aliases are refused.
+const GH_ALLOWED: [(&str, &[&str]); 3] = [
+    ("pr", &["list", "diff", "view", "status", "checks"]),
+    ("auth", &["status"]),
+    ("repo", &["view"]),
+];
 
 fn fs_error(code: &str, message: impl Into<String>) -> Response {
     Response::Error {
@@ -64,6 +112,23 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// A manifest worktree path is trusted only where the daemon creates
+/// worktrees: strictly inside `<root>/.pu/worktrees/` (canonicalized), and
+/// never `/` or an ancestor of the project root or `$HOME`.
+fn trusted_worktree(
+    worktree: &Path,
+    worktrees_dir: &Path,
+    project: &Path,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    let canonical = worktree.canonicalize().ok()?;
+    let inside = canonical.starts_with(worktrees_dir) && canonical != worktrees_dir;
+    let too_broad = canonical.parent().is_none()
+        || project.starts_with(&canonical)
+        || home.is_some_and(|home| home.starts_with(&canonical));
+    (inside && !too_broad).then_some(canonical)
+}
+
 /// Canonical directories fs requests may touch.
 fn allowed_roots(projects: &[String], home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
@@ -72,14 +137,16 @@ fn allowed_roots(projects: &[String], home: Option<&Path>) -> Vec<PathBuf> {
         let Ok(canonical) = root.canonicalize() else {
             continue;
         };
-        roots.push(canonical);
-        if let Ok(m) = manifest::read_manifest(root) {
-            roots.extend(
-                m.worktrees
-                    .values()
-                    .filter_map(|wt| Path::new(&wt.path).canonicalize().ok()),
-            );
+        let worktrees_dir = pu_core::paths::pu_dir(root)
+            .join("worktrees")
+            .canonicalize()
+            .ok();
+        if let (Some(worktrees_dir), Ok(m)) = (worktrees_dir, manifest::read_manifest(root)) {
+            roots.extend(m.worktrees.values().filter_map(|wt| {
+                trusted_worktree(Path::new(&wt.path), &worktrees_dir, &canonical, home)
+            }));
         }
+        roots.push(canonical);
     }
     if let Some(home) = home {
         roots.extend(
@@ -322,7 +389,10 @@ fn fs_read(path: &str, roots: &[PathBuf], max_bytes: u64) -> Response {
         );
     }
     let mut data = Vec::new();
-    if let Err(e) = file.take(max_bytes).read_to_end(&mut data) {
+    if let Err(e) = file
+        .take(max_bytes.min(FS_READ_MAX_BYTES))
+        .read_to_end(&mut data)
+    {
         return io_error(&resolved, &e);
     }
     Response::FsReadResult {
@@ -451,6 +521,117 @@ fn fs_delete(path: &str, roots: &[PathBuf]) -> Response {
     }
 }
 
+/// Long option name of `arg` (`--name` or `--name=value`), if it is one.
+fn long_option_name(arg: &str) -> Option<&str> {
+    let rest = arg.strip_prefix("--")?;
+    let name = rest.split_once('=').map_or(rest, |(name, _)| name);
+    (!name.is_empty()).then_some(name)
+}
+
+/// A relative path made only of plain names (no `..`, no root).
+fn is_plain_relative(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.as_os_str().is_empty() && path.components().all(|c| matches!(c, Component::Normal(_)))
+}
+
+/// Refuses `git`/`gh` arguments that could escape the confined working
+/// directory or run arbitrary programs. The app's own invocations
+/// (`GitService.swift`) all pass.
+fn check_exec_args(program: &str, args: &[String]) -> Result<(), String> {
+    match program {
+        "git" => check_git_args(args),
+        "gh" => check_gh_args(args),
+        _ => Err(format!("git_exec runs only git or gh, not {program:?}")),
+    }
+}
+
+fn check_git_args(args: &[String]) -> Result<(), String> {
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if !arg.starts_with('-') {
+            break;
+        }
+        if arg == "-c" {
+            let setting = args.get(i + 1).map(String::as_str).unwrap_or_default();
+            let key = setting.split_once('=').map_or(setting, |(k, _)| k);
+            if !GIT_CONFIG_KEYS.contains(&key.to_ascii_lowercase().as_str()) {
+                return Err(format!("git -c {setting:?} is not allowed"));
+            }
+            i += 2;
+            continue;
+        }
+        if !GIT_GLOBAL_FLAGS.contains(&arg.as_str()) {
+            return Err(format!("git global option {arg:?} is not allowed"));
+        }
+        i += 1;
+    }
+    let Some(subcommand) = args.get(i) else {
+        return Err("git_exec needs a git subcommand".into());
+    };
+    if GIT_FORBIDDEN_SUBCOMMANDS.contains(&subcommand.as_str()) {
+        return Err(format!("git {subcommand} is not allowed"));
+    }
+    let rest = &args[i + 1..];
+    let separator = rest.iter().position(|a| a == "--");
+    let options = &rest[..separator.unwrap_or(rest.len())];
+    let mut no_index = false;
+    for arg in options {
+        let Some(name) = long_option_name(arg) else {
+            continue;
+        };
+        if name == "no-index" {
+            no_index = true;
+        } else if GIT_FORBIDDEN_OPTIONS.iter().any(|f| f.starts_with(name)) {
+            return Err(format!("git option {arg:?} is not allowed"));
+        }
+    }
+    if no_index {
+        // `diff --no-index` compares arbitrary files; allow only the app's
+        // "new file" form: options, `--`, then /dev/null or plain relative paths.
+        let paths = separator.map(|s| &rest[s + 1..]);
+        let ok = subcommand == "diff"
+            && options.iter().all(|a| a.starts_with('-'))
+            && paths.is_some_and(|paths| {
+                paths.len() == 2
+                    && paths
+                        .iter()
+                        .all(|p| p == "/dev/null" || is_plain_relative(p))
+            });
+        if !ok {
+            return Err(
+                "git diff --no-index is allowed only as `-- /dev/null <relative path>`".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn check_gh_args(args: &[String]) -> Result<(), String> {
+    let command = args.first().map(String::as_str).unwrap_or_default();
+    let subcommand = args.get(1).map(String::as_str).unwrap_or_default();
+    let allowed = GH_ALLOWED
+        .iter()
+        .any(|(c, subs)| *c == command && subs.contains(&subcommand));
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!("gh {command} {subcommand} is not allowed"))
+    }
+}
+
+/// SIGKILL the process group led by `pid` (git_exec children lead their own).
+fn kill_process_group(pid: u32) {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    if pid > 0 {
+        // SAFETY: plain signal delivery to a group this daemon created.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+}
+
 /// Reads a stream to the end, keeping at most `cap` bytes.
 async fn read_capped<R: AsyncRead + Unpin>(mut reader: R, cap: usize) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
@@ -566,6 +747,9 @@ impl Engine {
                 format!("git_exec runs only git or gh, not {program:?}"),
             );
         }
+        if let Err(message) = check_exec_args(program, &args) {
+            return fs_error("args_not_allowed", message);
+        }
         let stdin_data = match stdin_base64.as_deref().map(|s| BASE64_STANDARD.decode(s)) {
             Some(Ok(data)) => Some(data),
             Some(Err(e)) => return fs_error("invalid_base64", format!("stdin_base64: {e}")),
@@ -598,6 +782,9 @@ impl Engine {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Own process group, so a timeout also stops helpers git or gh
+            // spawned (pagers, credential helpers, hooks).
+            .process_group(0)
             .kill_on_drop(true);
         if let Some(path) = login_path {
             command.env("PATH", path);
@@ -606,6 +793,7 @@ impl Engine {
             Ok(child) => child,
             Err(e) => return fs_error("io_error", format!("failed to run {program}: {e}")),
         };
+        let pgid = child.id();
         if let (Some(data), Some(mut stdin)) = (stdin_data, child.stdin.take()) {
             tokio::spawn(async move {
                 let _ = stdin.write_all(&data).await;
@@ -631,6 +819,9 @@ impl Engine {
             },
             Ok((_, _, _, Err(e))) => fs_error("io_error", format!("{program} failed: {e}")),
             Err(_) => {
+                if let Some(pgid) = pgid {
+                    kill_process_group(pgid);
+                }
                 let _ = child.start_kill();
                 fs_error(
                     "timeout",

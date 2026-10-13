@@ -25,10 +25,10 @@ const HOME_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 /// `sun_path` holds 104 bytes on macOS, including the terminating NUL.
 const MAX_SOCKET_PATH_LEN: usize = 103;
 
-/// Remote `PATH` is minimal for non-interactive SSH, so try the install
-/// locations before falling back to `PATH`.
+/// Remote `PATH` is minimal for non-interactive SSH, so put the install
+/// locations on it; that covers both `pu` and the `pu-engine` it spawns.
 pub const START_COMMAND: &str =
-    r#""$HOME/.pu/bin/pu" health || "$HOME/.cargo/bin/pu" health || pu health"#;
+    r#"PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; pu health"#;
 
 static REMOTE_MACHINE: OnceLock<String> = OnceLock::new();
 
@@ -91,6 +91,10 @@ pub fn forward_args(local_socket: &Path, remote_home: &str, host: &str) -> Vec<O
         "ServerAliveInterval=15",
         "ServerAliveCountMax=3",
         "StreamLocalBindUnlink=yes",
+        // A user's ControlMaster config would otherwise hand the forward to a
+        // shared master that outlives this ssh process.
+        "ControlMaster=no",
+        "ControlPath=none",
     ] {
         args.push("-o".into());
         args.push(option.into());
@@ -190,7 +194,16 @@ impl Drop for Forward {
             let _ = child.wait();
         }
         let _ = std::fs::remove_file(&self.socket);
+        let _ = std::fs::remove_file(pid_file_path(&self.socket));
     }
+}
+
+/// `<sock>.pid`: the ssh pid behind a private forward, so a sweep can stop an
+/// ssh orphaned by a CLI that died without cleaning up.
+fn pid_file_path(socket: &Path) -> PathBuf {
+    let mut path = socket.as_os_str().to_os_string();
+    path.push(".pid");
+    PathBuf::from(path)
 }
 
 /// Where a command reaches a machine's daemon.
@@ -215,25 +228,62 @@ fn pid_is_alive(pid: libc::pid_t) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-/// Remove per-invocation sockets left by CLI processes that died without
-/// cleaning up (e.g. killed by a signal).
+/// Whether `pid` is running an executable named `ssh` (`ps` reports a path on
+/// macOS and a bare name on Linux). Guards against signalling a recycled pid.
+fn pid_is_ssh(pid: libc::pid_t) -> bool {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    let comm = String::from_utf8_lossy(&output.stdout);
+    let comm = comm.trim();
+    output.status.success() && Path::new(comm).file_name().is_some_and(|n| n == "ssh")
+}
+
+/// The owning CLI pid of `cli-<pid>.sock` or `cli-<pid>.sock.pid`.
+fn cli_owner_pid(name: &str) -> Option<libc::pid_t> {
+    let rest = name.strip_prefix("cli-")?;
+    let rest = rest
+        .strip_suffix(".sock.pid")
+        .or_else(|| rest.strip_suffix(".sock"))?;
+    rest.parse::<libc::pid_t>().ok().filter(|pid| *pid > 0)
+}
+
+/// Clean up after CLI processes that died without doing so (e.g. killed by a
+/// signal): stop their recorded ssh forward, then remove its socket and pid file.
 pub fn sweep_stale_sockets(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid) = name
-            .to_str()
-            .and_then(|n| n.strip_prefix("cli-"))
-            .and_then(|n| n.strip_suffix(".sock"))
-            .and_then(|n| n.parse::<libc::pid_t>().ok())
-        else {
+        let Some(owner) = name.to_str().and_then(cli_owner_pid) else {
             continue;
         };
-        if pid > 0 && !pid_is_alive(pid) {
-            let _ = std::fs::remove_file(entry.path());
+        if pid_is_alive(owner) {
+            continue;
         }
+        let path = entry.path();
+        if name.to_str().is_some_and(|n| n.ends_with(".pid")) {
+            let ssh_pid = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| s.trim().parse::<libc::pid_t>().ok())
+                .filter(|pid| *pid > 0);
+            if let Some(ssh_pid) = ssh_pid
+                && pid_is_alive(ssh_pid)
+                && pid_is_ssh(ssh_pid)
+            {
+                // SAFETY: plain signal delivery to a verified ssh process.
+                unsafe {
+                    libc::kill(ssh_pid, libc::SIGTERM);
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&path);
     }
 }
 
@@ -264,6 +314,8 @@ pub async fn open_forward(machine: &Machine) -> Result<Forward, CliError> {
                 Path::new(&program).display()
             ))
         })?;
+    // Best effort: without it a crash leaves ssh running, as before.
+    let _ = std::fs::write(pid_file_path(&socket), child.id().to_string());
     let mut forward = Forward {
         child: Some(child),
         socket,
@@ -403,6 +455,10 @@ mod tests {
                 "ServerAliveCountMax=3",
                 "-o",
                 "StreamLocalBindUnlink=yes",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
                 "-L",
                 "/Users/me/.pu/machines/id/cli-1.sock:/home/My User/.pu/daemon.sock",
                 "studio",
@@ -419,12 +475,12 @@ mod tests {
     }
 
     #[test]
-    fn given_start_should_try_install_locations_in_one_remote_command() {
+    fn given_start_should_put_install_locations_on_remote_path() {
         assert_eq!(
             strings(start_args("studio")),
             vec![
                 "studio",
-                r#""$HOME/.pu/bin/pu" health || "$HOME/.cargo/bin/pu" health || pu health"#
+                r#"PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; pu health"#
             ]
         );
     }
@@ -456,6 +512,105 @@ mod tests {
         assert!(mine.exists());
         assert!(app.exists());
         assert!(!dead.exists());
+    }
+
+    #[test]
+    fn given_cli_file_names_should_parse_owner_pid() {
+        assert_eq!(cli_owner_pid("cli-42.sock"), Some(42));
+        assert_eq!(cli_owner_pid("cli-42.sock.pid"), Some(42));
+        assert_eq!(cli_owner_pid("daemon.sock"), None);
+        assert_eq!(cli_owner_pid("cli-0.sock"), None);
+        assert_eq!(cli_owner_pid("cli-x.sock.pid"), None);
+    }
+
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    /// A long-running process whose executable is named `ssh` (a copy of sleep).
+    fn spawn_fake_ssh(dir: &Path) -> std::process::Child {
+        let fake = dir.join("ssh");
+        let sleep = which::which("sleep").unwrap();
+        std::fs::copy(sleep, &fake).unwrap();
+        std::process::Command::new(&fake).arg("30").spawn().unwrap()
+    }
+
+    fn wait_exit(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(status) = child.try_wait().unwrap() {
+                return Some(status);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    }
+
+    #[test]
+    fn given_dead_cli_with_recorded_ssh_should_stop_ssh_and_remove_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let mut ssh = spawn_fake_ssh(&bin);
+        let owner = dead_pid();
+        let sock = tmp.path().join(format!("cli-{owner}.sock"));
+        let pid_file = pid_file_path(&sock);
+        std::fs::write(&sock, "").unwrap();
+        std::fs::write(&pid_file, ssh.id().to_string()).unwrap();
+
+        sweep_stale_sockets(tmp.path());
+
+        let status = wait_exit(&mut ssh);
+        if status.is_none() {
+            let _ = ssh.kill();
+        }
+        assert!(status.is_some(), "orphaned ssh forward should be stopped");
+        assert!(!sock.exists());
+        assert!(!pid_file.exists());
+    }
+
+    #[test]
+    fn given_recorded_pid_that_is_not_ssh_should_not_signal_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut other = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let owner = dead_pid();
+        let pid_file = tmp.path().join(format!("cli-{owner}.sock.pid"));
+        std::fs::write(&pid_file, other.id().to_string()).unwrap();
+
+        sweep_stale_sockets(tmp.path());
+
+        assert!(
+            other.try_wait().unwrap().is_none(),
+            "non-ssh pid was signalled"
+        );
+        assert!(!pid_file.exists());
+        other.kill().unwrap();
+        other.wait().unwrap();
+    }
+
+    #[test]
+    fn given_live_cli_should_keep_its_ssh_and_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let mut ssh = spawn_fake_ssh(&bin);
+        let sock = tmp.path().join(format!("cli-{}.sock", std::process::id()));
+        let pid_file = pid_file_path(&sock);
+        std::fs::write(&sock, "").unwrap();
+        std::fs::write(&pid_file, ssh.id().to_string()).unwrap();
+
+        sweep_stale_sockets(tmp.path());
+
+        assert!(ssh.try_wait().unwrap().is_none());
+        assert!(sock.exists() && pid_file.exists());
+        ssh.kill().unwrap();
+        ssh.wait().unwrap();
     }
 
     #[test]

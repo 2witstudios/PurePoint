@@ -19,6 +19,9 @@ final class MachineState: Identifiable {
     @ObservationIgnored private var connection: MachineConnection!
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var hiddenRoots: Set<String>
+    /// Closing the forward after pending layout saves were flushed; a reconnect waits for it.
+    @ObservationIgnored private var disconnectTask: Task<Void, Never>?
+    @ObservationIgnored private var isUserDisconnecting = false
 
     /// How often the project list is re-read while the daemon is up.
     private static let refreshInterval: Duration = .seconds(30)
@@ -31,6 +34,8 @@ final class MachineState: Identifiable {
         self.appState = appState
         self.registry = registry
         hiddenRoots = Set(UserDefaults.standard.stringArray(forKey: Self.hiddenKey(machine.id)) ?? [])
+        // A forward left running by a crash or force-quit of an earlier run.
+        ForwardPidFile.killStale(machineId: machine.id, localSocket: MachinePaths.socketPath(machineId: machine.id))
         let owner = WeakMachineState()
         connection = MachineConnection(machine: machine) { state in
             Task { @MainActor in owner.value?.apply(state) }
@@ -53,20 +58,63 @@ final class MachineState: Identifiable {
 
     func connect() {
         Self.setUserDisconnected(machine.id, false)
+        isUserDisconnecting = false
         let connection = self.connection!
-        Task { await connection.connect() }
+        let pending = disconnectTask
+        Task {
+            await pending?.value
+            await connection.connect()
+        }
     }
 
     /// Close the SSH forward. The remote daemon and its agents keep running (MACH-004).
+    /// Layout changes still pending are written through the forward first (bounded), so
+    /// closing it cannot cut off the last save. Callers confirm discarding unsaved file tabs
+    /// (`unsavedFileNames`) before an explicit disconnect.
     func disconnect(remember: Bool = false) {
         if remember { Self.setUserDisconnected(machine.id, true) }
-        connection.forward.terminate()
-        let connection = self.connection!
-        Task { await connection.disconnect() }
+        isUserDisconnecting = true
         refreshTask?.cancel()
         refreshTask = nil
-        removeAllProjects()
+        let savers = removeAllProjects(keepingUnsaved: false)
         state = .disconnected
+        let connection = self.connection!
+        let previous = disconnectTask
+        disconnectTask = Task {
+            await previous?.value
+            // No more probes or reports, but the forward stays up for the flush.
+            await connection.stopSupervising()
+            await Self.flush(savers, timeout: .seconds(2))
+            connection.forward.terminate()
+            await connection.disconnect()
+        }
+    }
+
+    /// Quit: write pending layout saves synchronously (bounded), then close the forward.
+    func disconnectForTermination(deadline: DispatchTime) {
+        isUserDisconnecting = true
+        refreshTask?.cancel()
+        refreshTask = nil
+        for saver in removeAllProjects(keepingUnsaved: false) { saver.flush(until: deadline) }
+        state = .disconnected
+        let connection = self.connection!
+        connection.forward.terminate()
+        Task { await connection.disconnect() }
+    }
+
+    /// Names of unsaved file tabs in this machine's projects, which disconnecting would drop.
+    var unsavedFileNames: [String] {
+        guard let registry else { return [] }
+        return projects.flatMap { registry.unsavedFileNames(inProject: $0.projectId) }
+    }
+
+    private static func flush(_ savers: [RemoteLayoutSaver], timeout: Duration) async {
+        guard !savers.isEmpty else { return }
+        let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
+        await Task.detached {
+            let deadline = DispatchTime.now() + seconds
+            for saver in savers { saver.flush(until: deadline) }
+        }.value
     }
 
     /// Explicit user action: start the daemon on the machine over ssh (MACH-003).
@@ -83,6 +131,8 @@ final class MachineState: Identifiable {
     }
 
     private func apply(_ newState: MachineConnectionState) {
+        // Reports still in flight from a connection the user closed must not reopen it.
+        if isUserDisconnecting, newState != .disconnected { return }
         let wasRunning = state.isDaemonRunning
         state = newState
         if newState.isDaemonRunning {
@@ -90,10 +140,12 @@ final class MachineState: Identifiable {
         } else {
             refreshTask?.cancel()
             refreshTask = nil
-            // An incompatible daemon gets no further requests; a stopped or unreachable one
-            // has nothing to stream. Projects come back with the daemon.
-            if case .connected = newState { removeAllProjects() }
-            if newState == .disconnected { removeAllProjects() }
+            // An incompatible daemon gets no further requests; a stopped one (after several
+            // failed probes) has nothing to stream. Projects come back with the daemon. While
+            // only the SSH link is down (connecting/offline) they stay, as do projects with
+            // unsaved file tabs, which are shown as unavailable instead.
+            if case .connected = newState { removeAllProjects(keepingUnsaved: true) }
+            if newState == .disconnected { removeAllProjects(keepingUnsaved: true) }
         }
     }
 
@@ -133,8 +185,15 @@ final class MachineState: Identifiable {
     private func setProjects(roots: [String]) {
         let visible = roots.filter { !hiddenRoots.contains($0) }
         let wanted = Set(visible)
+        var kept: [ProjectState] = []
         for project in projects where !wanted.contains(project.projectRoot) {
-            forget(project)
+            if hasUnsavedTabs(project) {
+                // Gone from the daemon, but its unsaved edits are still open here.
+                markUnavailable(project)
+                kept.append(project)
+            } else {
+                forget(project)
+            }
         }
         var next: [ProjectState] = []
         for root in visible {
@@ -144,9 +203,15 @@ final class MachineState: Identifiable {
                 next.append(makeProject(root: root))
             }
         }
+        next += kept
         let added = next.filter { candidate in !projects.contains { $0 === candidate } }
+        let restored = next.filter { $0.isUnavailable && wanted.contains($0.projectRoot) }
         if next.map(\.projectRoot) != projects.map(\.projectRoot) { projects = next }
         for project in added { project.startWatching() }
+        for project in restored {
+            project.isUnavailable = false
+            project.startWatching()
+        }
     }
 
     private func makeProject(root: String) -> ProjectState {
@@ -160,6 +225,8 @@ final class MachineState: Identifiable {
     }
 
     /// Remove a project from this app only. Nothing on the machine is deleted or stopped.
+    /// Pending layout saves are written, not dropped. Callers confirm discarding unsaved file
+    /// tabs first.
     func hideProject(root: String) {
         hiddenRoots.insert(root)
         UserDefaults.standard.set(Array(hiddenRoots), forKey: Self.hiddenKey(machine.id))
@@ -169,14 +236,40 @@ final class MachineState: Identifiable {
         }
     }
 
-    func removeAllProjects() {
-        for project in projects { forget(project) }
-        if !projects.isEmpty { projects = [] }
+    /// Drop every project, returning the savers whose queued layout writes should be flushed
+    /// before the forward closes. With `keepingUnsaved`, a project holding unsaved file tabs
+    /// stays (unwatched, shown as unavailable) so its edits are not lost.
+    @discardableResult
+    func removeAllProjects(keepingUnsaved: Bool) -> [RemoteLayoutSaver] {
+        var savers: [RemoteLayoutSaver] = []
+        var kept: [ProjectState] = []
+        for project in projects {
+            if keepingUnsaved, hasUnsavedTabs(project) {
+                markUnavailable(project)
+                kept.append(project)
+            } else if let saver = forget(project) {
+                savers.append(saver)
+            }
+        }
+        if projects.map(\.projectRoot) != kept.map(\.projectRoot) { projects = kept }
+        return savers
     }
 
-    private func forget(_ project: ProjectState) {
+    private func hasUnsavedTabs(_ project: ProjectState) -> Bool {
+        !(registry?.unsavedFileNames(inProject: project.projectId).isEmpty ?? true)
+    }
+
+    private func markUnavailable(_ project: ProjectState) {
+        guard !project.isUnavailable else { return }
+        project.stopWatching()
+        project.isUnavailable = true
+    }
+
+    @discardableResult
+    private func forget(_ project: ProjectState) -> RemoteLayoutSaver? {
         project.stopWatching()
         registry?.forgetProject(project.projectId)
+        return project.remoteLayoutSaver
     }
 
     // MARK: - Persisted preferences

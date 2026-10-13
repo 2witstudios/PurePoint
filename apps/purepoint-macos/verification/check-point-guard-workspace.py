@@ -50,6 +50,13 @@ let package = Package(
 @MainActor final class FileTabStore {
     struct Key: Hashable { let workspaceId: String; let surfaceId: Int }
     func retain(only keys: Set<Key>) {}
+    func existingSession(workspaceId: String, surfaceId: Int) -> FileTabSession? { nil }
+}
+@MainActor final class FileTabSession {
+    struct File { let name: String }
+    struct Editor { var currentFile: File? }
+    var editor = Editor()
+    var hasUnsavedChanges: Bool { false }
 }
 ''')
     for name in [
