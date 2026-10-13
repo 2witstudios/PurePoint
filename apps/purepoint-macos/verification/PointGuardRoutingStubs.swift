@@ -60,6 +60,7 @@ enum FileIOService {
     func connect() {}
     func disconnect(remember: Bool = false) {}
     func disconnectForTermination(deadline: DispatchTime) {}
+    func update(from machine: Machine) {}
     func hideProject(root: String) {}
     static func isUserDisconnected(_ id: UUID) -> Bool { true }
 }
@@ -70,6 +71,12 @@ enum DaemonLifecycle {
 }
 @MainActor final class ManifestWatcher {
     init(path: String, onChange: @escaping () -> Void) {}
+    func stop() {}
+}
+@MainActor final class MachineRegistryWatcher {
+    init(path: String = MachinePaths.registryPath, onChange: @escaping @MainActor () -> Void) {}
+    func retry() {}
+    var isWatching: Bool { false }
     func stop() {}
 }
 @MainActor final class ProjectState {

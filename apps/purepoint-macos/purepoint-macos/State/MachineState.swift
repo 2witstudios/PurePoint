@@ -6,8 +6,9 @@ import Observation
 @Observable
 @MainActor
 final class MachineState: Identifiable {
-    let machine: Machine
-    nonisolated var id: UUID { machine.id }
+    var machine: Machine
+    private let machineId: UUID
+    nonisolated var id: UUID { machineId }
     private(set) var state: MachineConnectionState = .disconnected
     private(set) var projects: [ProjectState] = []
     /// The latest failure of an explicit action (start daemon, project discovery).
@@ -19,6 +20,7 @@ final class MachineState: Identifiable {
     @ObservationIgnored weak var appState: AppState?
     @ObservationIgnored weak var registry: WorkspaceRegistry?
     @ObservationIgnored private var connection: MachineConnection!
+    @ObservationIgnored private var connectionGeneration = 0
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var hiddenRoots: Set<String>
     /// Closing the forward after pending layout saves were flushed; a reconnect waits for it.
@@ -33,14 +35,40 @@ final class MachineState: Identifiable {
 
     init(machine: Machine, appState: AppState?, registry: WorkspaceRegistry?) {
         self.machine = machine
+        self.machineId = machine.id
         self.appState = appState
         self.registry = registry
         hiddenRoots = Set(UserDefaults.standard.stringArray(forKey: Self.hiddenKey(machine.id)) ?? [])
+        connection = Self.makeConnection(for: self, generation: connectionGeneration)
+    }
+
+    /// Update from a fresh registry read: refresh the name, and when the SSH host changed,
+    /// recreate the connection on the new host. Called by `AppState.reloadMachines()`.
+    func update(from machine: Machine) {
+        guard machine.id == self.machine.id else { return }
+        let hostChanged = machine.sshHost != self.machine.sshHost
+        self.machine = machine
+        guard hostChanged else { return }
+        let wasActive = state != .disconnected
+        // Preserve unsaved projects across the host change — the user didn't initiate this.
+        disconnect(keepUnsaved: true)
+        connectionGeneration += 1
+        connection = Self.makeConnection(for: self, generation: connectionGeneration)
+        if wasActive && !Self.isUserDisconnected(machine.id) { connect() }
+    }
+
+    @MainActor
+    private static func makeConnection(for state: MachineState, generation: Int) -> MachineConnection {
         let owner = WeakMachineState()
-        connection = MachineConnection(machine: machine) { state in
-            Task { @MainActor in owner.value?.apply(state) }
+        let connection = MachineConnection(machine: state.machine) { newState in
+            Task { @MainActor in
+                // Ignore callbacks from a superseded connection.
+                guard owner.value?.connectionGeneration == generation else { return }
+                owner.value?.apply(newState)
+            }
         }
-        owner.value = self
+        owner.value = state
+        return connection
     }
 
     var statusText: String {
@@ -70,13 +98,14 @@ final class MachineState: Identifiable {
     /// Close the SSH forward. The remote daemon and its agents keep running (MACH-004).
     /// Layout changes still pending are written through the forward first (bounded), so
     /// closing it cannot cut off the last save. Callers confirm discarding unsaved file tabs
-    /// (`unsavedFileNames`) before an explicit disconnect.
-    func disconnect(remember: Bool = false) {
+    /// (`unsavedFileNames`) before an explicit disconnect. With `keepUnsaved`, projects with
+    /// open edits are retained as unavailable instead of dropped.
+    func disconnect(remember: Bool = false, keepUnsaved: Bool = false) {
         if remember { Self.setUserDisconnected(machine.id, true) }
         isUserDisconnecting = true
         refreshTask?.cancel()
         refreshTask = nil
-        let savers = removeAllProjects(keepingUnsaved: false)
+        let savers = removeAllProjects(keepingUnsaved: keepUnsaved)
         state = .disconnected
         let connection = self.connection!
         let previous = disconnectTask
