@@ -65,7 +65,8 @@ const GIT_CONFIG_KEYS: [&str; 1] = ["core.quotepath"];
 /// unambiguous abbreviation, so prefixes of these are refused too, as are
 /// longer names that extend them such as `--output-directory`): they relocate
 /// the repository, run helper programs, or write arbitrary files.
-const GIT_FORBIDDEN_OPTIONS: [&str; 11] = [
+const GIT_FORBIDDEN_OPTIONS: [&str; 12] = [
+    "orderfile",
     "git-dir",
     "work-tree",
     "exec-path",
@@ -279,14 +280,29 @@ fn resolve_existing_prefix(input: &Path) -> Result<PathBuf, Response> {
 
 /// Paths (of `candidates`) that git ignores in the repository containing `dir`.
 /// Non-repositories and git failures report nothing as ignored.
-fn git_ignored(dir: &Path, candidates: &[String]) -> std::collections::HashSet<String> {
+fn git_ignored(
+    dir: &Path,
+    roots: &[PathBuf],
+    candidates: &[String],
+) -> std::collections::HashSet<String> {
     let mut ignored = std::collections::HashSet::new();
     if candidates.is_empty() {
         return ignored;
     }
     use std::os::unix::process::CommandExt as _;
-    let child = std::process::Command::new("git")
-        .args(["check-ignore", "--stdin", "-z"])
+    // The same hardening as `git_exec`: a listing must not run what a planted
+    // or cloned bare repository configures (fsmonitor, hooks, ...).
+    let mut command = std::process::Command::new("git");
+    command
+        .args(exec_args(
+            "git",
+            strings_of(&["check-ignore", "--stdin", "-z"]),
+        ))
+        .envs(exec_env("git"));
+    if let Some(ceiling) = git_ceiling(dir, roots) {
+        command.env("GIT_CEILING_DIRECTORIES", ceiling);
+    }
+    let child = command
         .current_dir(dir)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::piped())
@@ -421,7 +437,7 @@ fn fs_list(
     }
 
     let candidates: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
-    let ignored = git_ignored(&dir, &candidates);
+    let ignored = git_ignored(&dir, roots, &candidates);
     if !ignored.is_empty() {
         for entry in &mut entries {
             entry.ignored = ignored.contains(&entry.path);
@@ -522,12 +538,39 @@ fn check_regular_file(path: &Path, meta: &std::fs::Metadata) -> Result<(), Respo
     }
 }
 
-/// Whether `path` is inside git metadata (any `.git` component). Writes there
-/// could plant repository config such as `diff.external` that a later
-/// `git_exec` would run, so fs writes and deletes refuse it.
+/// Whether `path` is inside git metadata (any component git would read as
+/// `.git`). Writes there could plant repository config such as
+/// `diff.external` that a later `git_exec` would run, so fs writes and
+/// deletes refuse it.
 fn is_git_metadata(path: &Path) -> bool {
     path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new(".git"))
+        .any(|c| is_dot_git(&c.as_os_str().to_string_lossy()))
+}
+
+/// `.git` as macOS (case-insensitive APFS/HFS+, which also ignores some
+/// zero-width code points) and git itself (`is_hfs_dotgit`) see it.
+fn is_dot_git(name: &str) -> bool {
+    const IGNORABLE: [char; 16] = [
+        '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}',
+        '\u{202D}', '\u{202E}', '\u{206A}', '\u{206B}', '\u{206C}', '\u{206D}', '\u{206E}',
+        '\u{206F}', '\u{FEFF}',
+    ];
+    let visible: String = name.chars().filter(|c| !IGNORABLE.contains(c)).collect();
+    visible.eq_ignore_ascii_case(".git")
+}
+
+fn strings_of(args: &[&str]) -> Vec<String> {
+    args.iter().map(|a| a.to_string()).collect()
+}
+
+/// git discovery stops above the innermost root containing `cwd`, so git never
+/// uses an enclosing repository (a dotfiles repo at `$HOME`, say).
+fn git_ceiling(cwd: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    roots
+        .iter()
+        .filter(|root| cwd.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .and_then(|root| root.parent().map(Path::to_path_buf))
 }
 
 fn fs_write(
@@ -715,8 +758,9 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
     let options = &rest[..separator.unwrap_or(rest.len())];
     let mut no_index = false;
     for arg in options {
-        // `-o <dir>` / `-o<dir>` names an output directory or file.
-        if arg.starts_with("-o") {
+        // `-o <dir>` / `-o<dir>` names an output directory or file; `-O<file>`
+        // reads an order file from anywhere (and blocks on a device).
+        if arg.starts_with("-o") || arg.starts_with("-O") {
             return Err(format!("git option {arg:?} is not allowed"));
         }
         let Some(name) = long_option_name(arg) else {
@@ -765,6 +809,28 @@ fn check_git_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Path operands that exist must stay inside the roots once symlinks are
+/// resolved: `diff --no-index` (explicit, or implicit outside a repository)
+/// reads operands straight from the filesystem.
+fn check_operand_targets(cwd: &Path, args: &[String], roots: &[PathBuf]) -> Result<(), String> {
+    for arg in args
+        .iter()
+        .filter(|a| !a.starts_with('-') && a.as_str() != "/dev/null")
+    {
+        let candidate = cwd.join(arg);
+        if std::fs::symlink_metadata(&candidate).is_err() {
+            continue; // a revision, or a path that doesn't exist
+        }
+        let inside = candidate
+            .canonicalize()
+            .is_ok_and(|real| roots.iter().any(|root| real.starts_with(root)));
+        if !inside {
+            return Err(format!("git path {arg:?} resolves outside the project"));
+        }
+    }
+    Ok(())
+}
+
 /// `symbolic-ref` only in its read form, `[--short] [-q] <name>`: a second
 /// name would repoint the ref and `-d` would delete it.
 fn check_symbolic_ref_read(rest: &[String]) -> Result<(), String> {
@@ -801,15 +867,31 @@ fn check_gh_args(args: &[String]) -> Result<(), String> {
 /// The argv `git_exec` runs for already-checked `args`: git also gets
 /// [`GIT_EXEC_PREFIX`].
 fn exec_args(program: &str, args: Vec<String>) -> Vec<String> {
-    if program == "git" {
-        GIT_EXEC_PREFIX
-            .iter()
-            .map(|a| a.to_string())
-            .chain(args)
-            .collect()
-    } else {
-        args
+    if program != "git" {
+        return args;
     }
+    let mut out: Vec<String> = GIT_EXEC_PREFIX.iter().map(|a| a.to_string()).collect();
+    let mut args = args.into_iter().peekable();
+    // Global options (already checked) come before the subcommand.
+    while let Some(arg) = args.next_if(|a| a.starts_with('-')) {
+        let takes_value = arg == "-c";
+        out.push(arg);
+        if takes_value && let Some(value) = args.next() {
+            out.push(value);
+        }
+    }
+    if let Some(subcommand) = args.next() {
+        // Never run an external diff or textconv driver a repository's own
+        // config or attributes name.
+        let no_drivers = matches!(subcommand.as_str(), "diff" | "diff-tree" | "log");
+        out.push(subcommand);
+        if no_drivers {
+            out.push("--no-ext-diff".into());
+            out.push("--no-textconv".into());
+        }
+    }
+    out.extend(args);
+    out
 }
 
 /// Extra environment for `git_exec`: git ignores the user's global and the
@@ -980,14 +1062,13 @@ impl Engine {
         // git must not walk up out of the confined root into an enclosing
         // repository (a dotfiles repo at `$HOME`, say): stop discovery at the
         // innermost root containing `cwd`.
-        let ceiling = self
-            .fs_roots()
-            .await
-            .all
-            .into_iter()
-            .filter(|root| cwd.starts_with(root))
-            .max_by_key(|root| root.components().count())
-            .and_then(|root| root.parent().map(Path::to_path_buf));
+        let roots = self.fs_roots().await;
+        let ceiling = git_ceiling(&cwd, &roots.all);
+        if program == "git"
+            && let Err(message) = check_operand_targets(&cwd, &args, &roots.all)
+        {
+            return fs_error("args_not_allowed", message);
+        }
         // The daemon may run under launchd with a minimal PATH; agents get the
         // login shell's, and so does gh/git here.
         let login_path = self

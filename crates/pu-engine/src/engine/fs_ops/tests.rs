@@ -953,6 +953,9 @@ fn given_escaping_git_args_should_refuse_them() {
         vec!["log", "-p", "--", "../outside"],
         vec!["diff", "HEAD", "--", "src/../../outside"],
         vec!["ls-files", "/etc"],
+        vec!["diff", "-O/dev/zero"],
+        vec!["diff", "-O", "/dev/zero"],
+        vec!["diff", "--orderfile=/dev/zero"],
     ] {
         assert!(
             check_exec_args("git", &strings(&args)).is_err(),
@@ -1002,23 +1005,53 @@ async fn given_disallowed_git_args_should_refuse_git_exec() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_git_exec_timeout_should_kill_spawned_helpers() {
-    let (engine, tmp, root, _outside) = setup().await;
-    let pid_file = tmp.path().join("helper.pid");
-    // A repo-local external diff driver runs as a helper process git spawns.
-    let driver = tmp.path().join("ext-diff");
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let root = base.join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    let pid_file = base.join("helper.pid");
+    // git_exec runs `git` from the login PATH: a wrapper that, for `diff`,
+    // starts a helper process and waits on it, like a slow credential helper
+    // or pager would (repository drivers can no longer be configured).
+    let real_git = String::from_utf8(
+        std::process::Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
     std::fs::write(
-        &driver,
+        bin.join("git"),
         format!(
-            "#!/bin/sh\necho $$ > '{}'\nexec sleep 30\n",
-            pid_file.display()
+            "#!/bin/sh\ncase \" $* \" in *\" diff \"*) sleep 30 & echo $! > '{}'; wait; exit 0;; esac\nexec '{}' \"$@\"\n",
+            pid_file.display(),
+            real_git.trim()
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&driver, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(root.join("a.txt"), "one\n").unwrap();
-    git(&root, &["add", "a.txt"]);
-    std::fs::write(root.join("a.txt"), "two\n").unwrap();
-    git(&root, &["config", "diff.external", &p(&driver)]);
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let engine = Engine::new();
+    engine
+        .login_env
+        .set(vec![(
+            "PATH".into(),
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into())
+            ),
+        )])
+        .unwrap();
+    let init = engine
+        .handle_request(Request::Init {
+            project_root: path_string(&root),
+        })
+        .await;
+    assert!(matches!(init, Response::InitResult { .. }), "{init:?}");
     let resp = engine
         .handle_request(Request::GitExec {
             cwd: p(&root),
@@ -1309,4 +1342,117 @@ fn given_registered_home_should_never_be_an_fs_root() {
     let roots = allowed_roots(&[path_string(&home), path_string(&project)], Some(&home));
     assert_eq!(roots.writable, vec![project.clone()]);
     assert!(!roots.all.contains(&home));
+}
+
+#[test]
+fn given_diff_or_log_git_should_never_run_external_drivers() {
+    assert_eq!(
+        exec_args(
+            "git",
+            strings(&[
+                "--literal-pathspecs",
+                "-c",
+                "core.quotePath=true",
+                "diff",
+                "HEAD"
+            ])
+        ),
+        strings(&[
+            "-c",
+            "core.fsmonitor=",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "safe.bareRepository=explicit",
+            "--literal-pathspecs",
+            "-c",
+            "core.quotePath=true",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "HEAD"
+        ])
+    );
+    let status = exec_args("git", strings(&["status"]));
+    assert_eq!(status.last().map(String::as_str), Some("status"));
+}
+
+#[test]
+fn given_case_or_ignorable_variants_of_dot_git_should_be_metadata() {
+    for name in [".git", ".GIT", ".Git", ".g\u{200C}it", "\u{FEFF}.git"] {
+        assert!(is_dot_git(name), "{name:?}");
+    }
+    for name in [".github", "git", ".gitignore", ".git2"] {
+        assert!(!is_dot_git(name), "{name:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_uppercase_git_dir_write_should_be_refused() {
+    let (engine, _tmp, root, _outside) = setup().await;
+    let resp = engine
+        .handle_request(Request::FsWrite {
+            path: p(&root.join("sub/.GIT/config")),
+            data_base64: b64(b"[diff]\n\texternal = /bin/sh\n"),
+            expected_modified_ms: None,
+            create_dirs: true,
+        })
+        .await;
+    assert_error(resp, "path_not_allowed");
+    assert!(!root.join("sub/.GIT").exists());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_planted_bare_repo_listing_should_not_run_its_fsmonitor() {
+    let (engine, tmp, root, _outside) = setup().await;
+    let marker = tmp.path().join("bare-fsmonitor-ran");
+    let evil = root.join("evil");
+    for dir in ["objects", "refs"] {
+        std::fs::create_dir_all(evil.join(dir)).unwrap();
+    }
+    std::fs::write(evil.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        evil.join("config"),
+        format!(
+            "[core]\n\tbare = false\n\tworktree = {}\n\tfsmonitor = touch '{}' ;\n",
+            evil.display(),
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let resp = engine
+        .handle_request(Request::FsList {
+            path: p(&evil),
+            recursive: false,
+            include_hidden: true,
+            max_entries: 100,
+        })
+        .await;
+    assert!(matches!(resp, Response::FsListResult { .. }), "{resp:?}");
+    assert!(
+        !marker.exists(),
+        "planted bare repository fsmonitor ran on fs_list"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_symlink_operand_pointing_outside_should_be_refused() {
+    let (engine, _tmp, root, outside) = setup().await;
+    std::os::unix::fs::symlink(&outside, root.join("outlink")).unwrap();
+    let resp = engine
+        .handle_request(Request::GitExec {
+            cwd: p(&root),
+            program: "git".into(),
+            args: strings(&[
+                "diff",
+                "--no-index",
+                "--",
+                "/dev/null",
+                "outlink/secret.txt",
+            ]),
+            stdin_base64: None,
+            timeout_ms: 10_000,
+        })
+        .await;
+    assert_error(resp, "args_not_allowed");
 }
