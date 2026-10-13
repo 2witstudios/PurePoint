@@ -132,12 +132,13 @@ final class AppState {
     /// app doesn't attempt to open roots the daemon will reject.
     private func isTooBroadProjectRoot(_ path: String) -> Bool {
         let url = URL(fileURLWithPath: path)
-        let canonical = url.standardizedFileURL.path
+        let canonical = url.resolvingSymlinksInPath().standardizedFileURL.path
         // Filesystem root
         if canonical == "/" { return true }
         // $HOME or an ancestor of $HOME
         if let home = ProcessInfo.processInfo.environment["HOME"] {
-            let homeCanonical = URL(fileURLWithPath: home).standardizedFileURL.path
+            let homeCanonical = URL(fileURLWithPath: home)
+                .resolvingSymlinksInPath().standardizedFileURL.path
             if homeCanonical.hasPrefix(canonical + "/") || homeCanonical == canonical {
                 return true
             }
@@ -259,13 +260,14 @@ final class AppState {
     }
 
     private func ensurePointGuardProject(root: String) {
-        guard !isTooBroadProjectRoot(root) else { return }
         pointGuardFolders.insert(root)
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
         guard projectState(forRoot: root) == nil else { return }
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
         pointGuardProjects[root] = project
+        // Broad roots have no ProjectState owner for routing; skip daemon registration.
+        guard !isTooBroadProjectRoot(root) else { return }
         startProject(project)
         startBinaryWatcherIfNeeded()
     }
@@ -274,6 +276,10 @@ final class AppState {
     func activatePointGuardWorkspace() -> String? {
         guard let registry else { return nil }
         guard let root = pointGuardRoot else {
+            registry.activeWorkspaceId = nil
+            return nil
+        }
+        guard !isTooBroadProjectRoot(root) else {
             registry.activeWorkspaceId = nil
             return nil
         }
