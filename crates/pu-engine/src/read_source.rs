@@ -321,6 +321,13 @@ pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError>
     if pids.len() > 128 {
         return Err(pu_core::read::ReadError::TooLarge.into());
     }
+    // Linux: /proc/<pid>/fd, since minimal servers often lack `lsof`.
+    let fd_pids = pids.clone();
+    if let Ok(Some(paths)) =
+        tokio::task::spawn_blocking(move || crate::os::proc_open_files(&fd_pids, 100_000)).await
+    {
+        return select_codex_source(&filter_codex_rollouts(paths), cwd);
+    }
     let pids = pids
         .iter()
         .map(ToString::to_string)
@@ -344,17 +351,23 @@ pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError>
         return Err(pu_core::read::ReadError::TooLarge.into());
     }
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait()).await;
-    let paths: Vec<_> = String::from_utf8_lossy(&bytes)
+    let paths = String::from_utf8_lossy(&bytes)
         .lines()
         .filter_map(|line| line.strip_prefix('n'))
         .map(PathBuf::from)
+        .collect();
+    select_codex_source(&filter_codex_rollouts(paths), cwd)
+}
+
+fn filter_codex_rollouts(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
         .filter(|p| {
             p.file_name()
                 .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
                 && p.extension().is_some_and(|x| x == "jsonl")
         })
-        .collect();
-    select_codex_source(&paths, cwd)
+        .collect()
 }
 
 fn first_record(path: &Path) -> Result<Value, SourceError> {

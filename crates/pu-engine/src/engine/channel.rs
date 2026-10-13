@@ -32,15 +32,7 @@ fn identity(root: &Path, agent_id: Option<&str>) -> Result<ChannelAuthor, Channe
     // OS account identity, never a client-supplied name or environment username.
     // SAFETY: geteuid has no pointer arguments or preconditions.
     let uid = unsafe { libc::geteuid() };
-    let name = std::process::Command::new("/usr/bin/id")
-        .args(["-un", &uid.to_string()])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("Developer {uid}"));
+    let name = crate::os::user_name(uid).unwrap_or_else(|| format!("Developer {uid}"));
     Ok(ChannelAuthor {
         id: format!("human:{uid}"),
         name,

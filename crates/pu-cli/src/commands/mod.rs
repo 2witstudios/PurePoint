@@ -3,6 +3,7 @@ pub mod attach;
 pub mod bench;
 pub mod channel;
 pub mod clean;
+pub mod daemon;
 pub mod diff;
 pub mod gate;
 pub mod grid;

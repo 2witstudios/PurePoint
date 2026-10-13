@@ -73,6 +73,26 @@ fn daemon_command(
     command
 }
 
+/// Start the installed supervisor's daemon for the default socket. Returns
+/// false (spawn it directly) when no service is installed or the supervisor
+/// cannot be reached, e.g. no systemd user bus in this session.
+fn start_supervised(socket: &Path) -> bool {
+    let is_default = paths::daemon_socket_path().is_ok_and(|default| default == socket);
+    let Some(manager) = is_default.then(crate::service::installed).flatten() else {
+        return false;
+    };
+    match crate::service::start(manager) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "warning: {} is installed but could not be started ({e}); starting pu-engine directly",
+                manager.name()
+            );
+            false
+        }
+    }
+}
+
 /// Longest a single health probe may take. A daemon that accepts but never
 /// answers would otherwise hold each probe for the full request timeout.
 const HEALTH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -175,8 +195,54 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
         }
     }
 
+    // A supervisor accepting the start does not establish that its daemon
+    // became healthy: the supervised daemon can exit before answering (e.g. a
+    // directly started daemon still holds the single-instance lock), so fall
+    // back to the direct spawn before giving up.
+    let supervised = start_supervised(socket);
+    if !supervised {
+        spawn_detached_daemon(socket)?;
+    }
+    if wait_for_healthy(socket).await?.is_some() {
+        return Ok(());
+    }
+    if supervised {
+        spawn_detached_daemon(socket)?;
+        if wait_for_healthy(socket).await?.is_some() {
+            return Ok(());
+        }
+    }
+    Err(CliError::Other(
+        "daemon did not start within 3 seconds".into(),
+    ))
+}
+
+/// Poll health until the daemon answers or the budget runs out, with
+/// exponential backoff: 10, 20, 40, 80, 160, 320, 640ms. The 3s budget is
+/// wall-clock and includes the probes themselves, which can each take up to
+/// HEALTH_PROBE_TIMEOUT against a daemon that never answers. Returns
+/// `Ok(Some(()))` once healthy, `Ok(None)` if the budget ran out, and
+/// propagates probe errors (incompatible protocol, BUSY) immediately.
+async fn wait_for_healthy(socket: &Path) -> Result<Option<()>, CliError> {
+    let poll = async {
+        let mut delay_ms = 10u64;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            if check_daemon_health(socket).await? {
+                return Ok::<(), CliError>(());
+            }
+            delay_ms = (delay_ms * 2).min(640);
+        }
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(3), poll).await {
+        Ok(result) => result.map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
+fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
     let binary = find_daemon_binary().ok_or(CliError::Other(
-        "pu-engine not found on PATH, next to pu, or in ~/.pu/bin or ~/.cargo/bin — install with `cargo install --path crates/pu-engine`".into(),
+        "pu-engine not found on PATH, next to pu, or in ~/.pu/bin or ~/.cargo/bin — install PurePoint (see docs/guide/linux-server.md) or `cargo install --path crates/pu-engine`".into(),
     ))?;
 
     // Redirect daemon stderr to log file so startup errors are diagnosable
@@ -201,23 +267,7 @@ pub async fn ensure_daemon(socket: &Path) -> Result<(), CliError> {
     daemon_command(&binary, socket, stderr_target)
         .spawn()
         .map_err(CliError::Io)?;
-
-    // Poll health with exponential backoff: 10, 20, 40, 80, 160, 320, 640ms.
-    // The 3s budget is wall-clock and includes the probes themselves, which can
-    // each take up to HEALTH_PROBE_TIMEOUT against a daemon that never answers.
-    let poll = async {
-        let mut delay_ms = 10u64;
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            if check_daemon_health(socket).await? {
-                return Ok::<(), CliError>(());
-            }
-            delay_ms = (delay_ms * 2).min(640);
-        }
-    };
-    tokio::time::timeout(std::time::Duration::from_secs(3), poll)
-        .await
-        .map_err(|_| CliError::Other("daemon did not start within 3 seconds".into()))?
+    Ok(())
 }
 
 #[cfg(test)]
@@ -488,6 +538,71 @@ mod tests {
             }
         );
         server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_healthy_daemon_wait_for_healthy_should_return_some() {
+        // given
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("healthy.sock");
+        let engine = pu_engine::engine::Engine::new();
+        let server = pu_engine::ipc_server::IpcServer::bind(&sock, engine).unwrap();
+        let handle = tokio::spawn(async move {
+            server.run().await.ok();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // when
+        let result = wait_for_healthy(&sock).await;
+
+        // then
+        assert!(matches!(result, Ok(Some(()))), "{result:?}");
+        crate::client::send_request(&sock, &Request::Shutdown)
+            .await
+            .ok();
+        handle.await.ok();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_incompatible_daemon_wait_for_healthy_should_propagate_the_error() {
+        // given
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("old.sock");
+        let reply = serde_json::to_string(&Response::HealthReport {
+            pid: 1,
+            uptime_seconds: 0,
+            protocol_version: PROTOCOL_VERSION + 1,
+            projects: vec![],
+            agent_count: 0,
+        })
+        .unwrap()
+            + "\n";
+        let server = fake_daemon(&sock, Some(reply));
+
+        // when
+        let started = std::time::Instant::now();
+        let result = wait_for_healthy(&sock).await;
+
+        // then: the probe error surfaces immediately, never masked as a timeout
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("protocol"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn given_absent_daemon_wait_for_healthy_should_time_out_as_none() {
+        // given: no listener at all, so every probe fails instantly
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sock = tmp.path().join("absent.sock");
+
+        // when
+        let started = std::time::Instant::now();
+        let result = wait_for_healthy(&sock).await;
+
+        // then: the full 3s budget is spent before giving up, without an error
+        assert!(matches!(result, Ok(None)), "{result:?}");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(3));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -18,7 +18,7 @@ use super::Engine;
 
 impl Engine {
     pub(super) async fn handle_spawn_shell(&self, cwd: &str) -> Response {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let shell = crate::os::login_shell();
         let agent_id = pu_core::id::agent_id();
 
         let env = self.agent_env().await;
@@ -181,13 +181,13 @@ impl Engine {
                 || cmd.contains('$');
 
             let (cmd_bin, cmd_args) = if has_metacharacters {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+                let shell = crate::os::login_shell();
                 (shell, vec!["-c".to_string(), cmd.clone()])
             } else {
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if parts.is_empty() {
                     // Shouldn't happen after filter, but handle gracefully
-                    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+                    let shell = crate::os::login_shell();
                     (shell, vec![])
                 } else {
                     (

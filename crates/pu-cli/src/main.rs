@@ -4,6 +4,7 @@ mod daemon_ctrl;
 mod error;
 mod machine_target;
 mod output;
+mod service;
 mod skill;
 
 use clap::{Parser, Subcommand};
@@ -187,6 +188,11 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Start, stop or supervise the daemon (systemd/launchd user service)
+    Daemon {
+        #[command(subcommand)]
+        action: commands::daemon::DaemonAction,
     },
     /// Check daemon health
     Health {
@@ -865,6 +871,7 @@ async fn main() {
             json,
         } => commands::logs::run(&socket, &agent_id, tail, json).await,
         Commands::Health { json } => commands::health::run(&socket, json).await,
+        Commands::Daemon { action } => commands::daemon::run(&socket, custom_socket, action).await,
         Commands::Prompt { action } => match action {
             PromptAction::List { json } => commands::prompt::run_list(&socket, json).await,
             PromptAction::Show { name, json } => {

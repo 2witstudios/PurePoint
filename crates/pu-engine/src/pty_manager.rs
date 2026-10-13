@@ -19,6 +19,10 @@ use crate::output_buffer::OutputBuffer;
 /// Separating the snapshot from the walk allows multiple callers (e.g.
 /// kill_all_sessions with N handles) to share a single `ps` invocation.
 pub(crate) async fn snapshot_process_tree() -> HashMap<i32, Vec<i32>> {
+    // Linux: read /proc directly; busybox and minimal images lack BSD `ps -ax`.
+    if let Ok(Some(tree)) = tokio::task::spawn_blocking(crate::os::proc_process_tree).await {
+        return tree;
+    }
     let output = tokio::process::Command::new("ps")
         .args(["-ax", "-o", "pid,ppid"])
         .output()

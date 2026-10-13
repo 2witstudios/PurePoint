@@ -133,12 +133,13 @@ Run `pu --help` for full usage.
 | [Concepts](https://purepoint.dev/docs/guide/concepts) | Mental model: worktrees, agents, swarms, scope |
 | [Templates & Definitions](https://purepoint.dev/docs/guide/workflows/templates-and-definitions) | Prompts, agent defs, swarm defs |
 | [Scheduling & Triggers](https://purepoint.dev/docs/guide/workflows/scheduling-and-triggers) | Schedules, triggers, git hooks |
+| [Linux Server](https://purepoint.dev/docs/guide/linux-server) | Run the daemon on a headless Linux server |
 | [Troubleshooting](https://purepoint.dev/docs/guide/troubleshooting) | Common issues and solutions |
 | [Contributing](https://purepoint.dev/docs/contributing/overview) | Build, test, code style, architecture |
 
 ## Current Status
 
-macOS only. Linux TUI is planned.
+The app is macOS only. The daemon and CLI also run on Linux servers; see [Run PurePoint on a Linux server](docs/guide/linux-server.md).
 
 PurePoint is early and under active development — the core works, but some features are still in design. See [`docs/`](docs/) for specs and architecture.
 

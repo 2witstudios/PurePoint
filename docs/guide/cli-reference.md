@@ -17,6 +17,7 @@
 | [`pu logs`](#logs) | Deprecated raw terminal diagnostics |
 | [`pu send`](#send) | Send text or keys to an agent |
 | [`pu health`](#health) | Check daemon health |
+| [`pu daemon`](#daemon) | Start, stop or supervise the daemon |
 | [`pu pulse`](#pulse) | Workspace overview at a glance |
 | [`pu diff`](#diff) | Show git diffs across worktrees |
 | [`pu watch`](#watch) | Live dashboard |
@@ -177,6 +178,20 @@ Check daemon health.
 ```sh
 pu health [--json]
 ```
+
+## daemon
+
+Start, stop or supervise the daemon. Other commands start it automatically when needed. Started that way, it runs detached in its own session and outlives the terminal or SSH session that started it.
+
+```sh
+pu daemon start          # start if not running (through the service when installed)
+pu daemon stop           # stop; running agents are suspended and resume on next start
+pu daemon status         # health and service state
+pu daemon install [--now]  # run as a user service (systemd on Linux, launchd on macOS); --now also starts it
+pu daemon uninstall      # remove that service
+```
+
+`install` supervises the default socket (`~/.pu/daemon.sock`) only, so it can't be combined with `--socket`. The service restarts the daemon after a crash, but not after `pu daemon stop`. On Linux, also run `sudo loginctl enable-linger $USER` so it runs without a login session. See [Run PurePoint on a Linux server](linux-server.md).
 
 ## pulse
 

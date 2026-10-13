@@ -48,7 +48,7 @@ impl Engine {
         }
         let command = parts.remove(0);
         let command = if command == "shell" {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+            crate::os::login_shell()
         } else {
             command
         };
@@ -136,11 +136,7 @@ impl Engine {
         if !daemon_lifecycle::is_process_alive(pid) {
             return false;
         }
-        std::process::Command::new("ps")
-            .args(["-o", "command=", "-p", &pid.to_string()])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(session_id))
+        crate::os::process_command(pid).is_some_and(|command| command.contains(session_id))
     }
 
     /// SIGTERM the process group led by `pid` (agents are spawned with setsid),
@@ -213,6 +209,17 @@ impl Engine {
 mod reconcile_tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// The PTY spawn returns right after fork, while the child is still closing
+    /// descriptors; until it execs, its command line is this test binary's.
+    /// A real orphan (left by a previous daemon) exec'd long ago.
+    async fn wait_for_exec(pid: u32, marker: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !crate::os::process_command(pid).is_some_and(|c| c.contains(marker)) {
+            assert!(std::time::Instant::now() < deadline, "agent never exec'd");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
 
     fn agent(id: &str, agent_type: &str, session_id: Option<&str>) -> AgentEntry {
         serde_json::from_value(serde_json::json!({
@@ -333,6 +340,7 @@ mod reconcile_tests {
             })
             .await
             .unwrap();
+        wait_for_exec(orphan.pid, "sid-orphan-xyz").await;
         let mut entry = agent("ag-1", "claude", Some("sid-orphan-xyz"));
         entry.pid = Some(orphan.pid);
         let tmp = project_with(vec![entry]);

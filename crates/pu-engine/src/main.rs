@@ -23,6 +23,13 @@ async fn main() {
     });
     let pid_path = daemon_lifecycle::pid_path_for(&socket);
 
+    // Survive the hangup of whatever session started us (an SSH login, a closed
+    // terminal) from the very start; IpcServer::run keeps handling it. Tokio
+    // never unregisters a handler, so dropping the stream here is fine.
+    if let Err(e) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
+        eprintln!("failed to install SIGHUP handler: {e}");
+    }
+
     // Setup tracing
     tracing_subscriber::fmt()
         .with_target(false)
