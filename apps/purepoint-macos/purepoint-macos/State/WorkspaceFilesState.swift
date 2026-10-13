@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -47,8 +48,9 @@ final class WorkspaceFilesState {
     func observe() async {
         defer { fileTree.stopWatching() }
         while !Task.isCancelled {
-            await refresh()
-            // Remote polling is a daemon round trip over SSH; poll less often.
+            // Remote polling is a daemon round trip over SSH: skip it while the app is in the
+            // background (like DiffState), and poll less often.
+            if host.isLocal || NSApplication.shared.isActive { await refresh() }
             do { try await Task.sleep(for: .seconds(host.isLocal ? 2 : 5)) } catch { return }
         }
     }

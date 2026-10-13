@@ -96,7 +96,7 @@ final class FileTreeState {
     /// directory replaces the local scan plus check-ignore process.
     private func remoteTree(directory: String, root: String, expanded: Set<String>) async -> [FileTreeNode] {
         let host = self.host
-        let entries = await Task.detached(priority: .utility) { (try? host.list(directory: directory)) ?? [] }.value
+        let entries = await HostIO.value { (try? host.list(directory: directory)) ?? [] }
         let nodes = FileTreeNode.sorted(
             entries.compactMap { entry -> FileTreeNode? in
                 guard !Self.hiddenNames.contains(entry.name) else { return nil }

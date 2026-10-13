@@ -202,35 +202,42 @@ nonisolated enum WorkspacePersistence {
 
     /// Save a remote project's layout through its host, never downgrading a newer document.
     /// The write is conditional on the modification time of the document this app last read
-    /// or wrote (`expectedModifiedMs`), else of the one just read. On a conflict the document
-    /// is re-read and the write retried once against it. Nothing is written when the current
-    /// document cannot be read (anything but a missing file). Returns the new modification
-    /// time, or nil when nothing was written. Blocking: call off the main thread.
+    /// or wrote (`expectedModifiedMs`), else of the one just read. When the document changed
+    /// meanwhile (another Mac, or `pu grid` on the machine) nothing is written: the outcome
+    /// carries that document so the caller adopts it instead of reverting it. Nothing is
+    /// written either when the current document cannot be read (anything but a missing file).
+    /// Blocking: call off the main thread.
     @discardableResult
-    static func saveRemote(_ data: Data, projectRoot: String, host: any ProjectHost, expectedModifiedMs: Int64?) -> Int64? {
+    static func saveRemote(
+        _ data: Data, projectRoot: String, host: any ProjectHost, expectedModifiedMs: Int64?
+    ) -> RemoteSaveOutcome {
         let path = filePath(projectRoot: projectRoot)
-        /// nil: do not write. `.some(nil)`: no document exists.
-        func current() -> Int64?? {
-            do {
-                let existing = try host.read(path: path, maxBytes: maxRemoteLayoutBytes)
-                if existing.truncated || isNewerThanSupported(data: existing.data) { return nil }
-                return .some(existing.modifiedMs)
-            } catch HostError.notFound {
-                return .some(nil)
-            } catch {
-                return nil
-            }
-        }
-        guard let onDisk = current() else { return nil }
+        let onDisk: Int64?
         do {
-            return try host.write(
-                path: path, data: data, expectedModifiedMs: expectedModifiedMs ?? onDisk, createDirectories: true
-            ).modifiedMs
-        } catch HostError.conflict {
-            guard let reread = current() else { return nil }
-            return try? host.write(path: path, data: data, expectedModifiedMs: reread, createDirectories: true).modifiedMs
+            let existing = try host.read(path: path, maxBytes: maxRemoteLayoutBytes)
+            if existing.truncated || isNewerThanSupported(data: existing.data) { return .skipped }
+            if let expectedModifiedMs, existing.modifiedMs != expectedModifiedMs {
+                return .conflict(existing.data, modifiedMs: existing.modifiedMs)
+            }
+            onDisk = existing.modifiedMs
+        } catch HostError.notFound {
+            onDisk = nil
         } catch {
-            return nil
+            return .skipped
+        }
+        do {
+            return .written(
+                modifiedMs: try host.write(
+                    path: path, data: data, expectedModifiedMs: expectedModifiedMs ?? onDisk, createDirectories: true
+                ).modifiedMs)
+        } catch HostError.conflict {
+            // Changed between the read and the write: adopt what is there now.
+            guard let current = try? host.read(path: path, maxBytes: maxRemoteLayoutBytes), !current.truncated,
+                !isNewerThanSupported(data: current.data)
+            else { return .skipped }
+            return .conflict(current.data, modifiedMs: current.modifiedMs)
+        } catch {
+            return .skipped
         }
     }
 
@@ -434,16 +441,28 @@ nonisolated enum RemoteLayoutError: LocalizedError {
     }
 }
 
+/// What a remote layout save did.
+nonisolated enum RemoteSaveOutcome: Equatable, Sendable {
+    case written(modifiedMs: Int64)
+    /// The machine's document changed since this app last read or wrote it; it was not
+    /// overwritten. Carries that document for the caller to adopt.
+    case conflict(Data, modifiedMs: Int64)
+    /// Nothing written: the document could not be read safely, or is a newer version.
+    case skipped
+}
+
 /// Writes a remote project's layout through its host on a serial queue. Quit and disconnect
 /// wait (bounded) for the writes already queued, so closing the SSH forward cannot cut off
 /// the last layout change.
 nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
     private let queue = DispatchQueue(label: "purepoint.remote-layout-save")
     private let group = DispatchGroup()
-    /// Writes `data` given the document's last known modification time; returns the new one.
-    private let write: @Sendable (Data, Int64?) -> Int64?
+    /// Writes `data` given the document's last known modification time.
+    private let write: @Sendable (Data, Int64?) -> RemoteSaveOutcome
     /// Modification time of the document as this app last read or wrote it. Queue-confined.
     private var knownModifiedMs: Int64?
+    private let conflictLock = NSLock()
+    nonisolated(unsafe) private var conflictHandler: (@Sendable (Data) -> Void)?
 
     convenience init(projectRoot: String, host: any ProjectHost) {
         self.init { data, expected in
@@ -451,8 +470,15 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
         }
     }
 
-    init(write: @escaping @Sendable (Data, Int64?) -> Int64?) {
+    init(write: @escaping @Sendable (Data, Int64?) -> RemoteSaveOutcome) {
         self.write = write
+    }
+
+    /// Called (off the main thread) with the machine's document when a save found it changed.
+    func onConflict(_ handler: @escaping @Sendable (Data) -> Void) {
+        conflictLock.lock()
+        conflictHandler = handler
+        conflictLock.unlock()
     }
 
     /// The document as just loaded, so the next save is conditional on it.
@@ -469,7 +495,18 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
         let group = self.group
         group.enter()
         queue.async {
-            if let modified = self.write(data, self.knownModifiedMs) { self.knownModifiedMs = modified }
+            switch self.write(data, self.knownModifiedMs) {
+            case .written(let modified):
+                self.knownModifiedMs = modified
+            case .conflict(let document, let modified):
+                self.knownModifiedMs = modified
+                self.conflictLock.lock()
+                let handler = self.conflictHandler
+                self.conflictLock.unlock()
+                handler?(document)
+            case .skipped:
+                break
+            }
             group.leave()
         }
     }

@@ -73,13 +73,13 @@ enum FileIOService {
             return HostTextFile(content: result.content, isBinary: result.isBinary, modifiedMs: modified)
         }
         let maxBytes = limit ?? remoteReadLimit
-        return try await Task.detached {
+        return try await HostIO.run {
             let read = try host.read(path: path, maxBytes: maxBytes)
             // Like local files over the preview limit, an over-long remote file is not shown.
             guard !read.truncated else { throw FilePreviewError.tooLarge }
             let decoded = decode(read.data)
             return HostTextFile(content: decoded.content, isBinary: decoded.isBinary, modifiedMs: read.modifiedMs)
-        }.value
+        }
     }
 
     static func writeFile(content: String, to path: String) async throws {
@@ -99,11 +99,11 @@ enum FileIOService {
             try await writeFile(content: content, to: path)
             return LocalProjectHost.milliseconds(fileModificationDate(at: path))
         }
-        return try await Task.detached {
+        return try await HostIO.run {
             try host.write(
                 path: path, data: Data(content.utf8), expectedModifiedMs: expectedModifiedMs, createDirectories: false
             ).modifiedMs
-        }.value
+        }
     }
 
     static func fileModificationDate(at path: String) -> Date? {
@@ -112,22 +112,47 @@ enum FileIOService {
 
     static func fileModificationDate(at path: String, host: any ProjectHost) async -> Date? {
         if host.isLocal { return fileModificationDate(at: path) }
-        return await Task.detached { (try? host.stat(path: path))?.modificationDate }.value
+        return await HostIO.value { (try? host.stat(path: path))?.modificationDate }
     }
 
-    /// Opening a remote file in another app needs a local copy: fetch it to a private temp file.
+    /// The most the daemon returns from one read (it clamps larger requests).
+    nonisolated static let maxLocalCopyBytes = 8 * 1_048_576
+
+    /// Opening a remote file in another app needs a local copy: fetch it to a private temp
+    /// file. Copies are removed when the app quits (and leftovers at the next launch).
     static func localCopy(of path: String, host: any ProjectHost) async throws -> URL {
         if host.isLocal { return URL(fileURLWithPath: path) }
-        return try await Task.detached {
-            let read = try host.read(path: path, maxBytes: 64 * 1_048_576)
-            guard !read.truncated else { throw FilePreviewError.tooLarge }
+        return try await HostIO.run {
+            let read = try host.read(path: path, maxBytes: maxLocalCopyBytes)
+            guard !read.truncated else { throw LocalCopyError.tooLarge }
             let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("purepoint-remote-\(UUID().uuidString)", isDirectory: true)
+                .appendingPathComponent(localCopyPrefix + UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let url = directory.appendingPathComponent((path as NSString).lastPathComponent)
             try read.data.write(to: url, options: .atomic)
             return url
-        }.value
+        }
+    }
+}
+
+nonisolated enum LocalCopyError: LocalizedError {
+    case tooLarge
+
+    var errorDescription: String? {
+        "Remote files over 8 MB cannot be copied to this Mac from PurePoint."
+    }
+}
+
+extension FileIOService {
+    nonisolated static let localCopyPrefix = "purepoint-remote-"
+
+    /// Remove every local copy of a remote file (quit, and leftovers of an earlier run).
+    nonisolated static func removeLocalCopies() {
+        let temp = FileManager.default.temporaryDirectory
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: temp.path)) ?? []
+        for name in names where name.hasPrefix(localCopyPrefix) {
+            try? FileManager.default.removeItem(at: temp.appendingPathComponent(name))
+        }
     }
 }

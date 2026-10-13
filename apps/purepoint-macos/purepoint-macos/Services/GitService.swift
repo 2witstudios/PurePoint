@@ -27,6 +27,10 @@ nonisolated enum WorkingTreeDiffError: LocalizedError {
 
 actor GitService {
     static let shared = GitService()
+    /// git processes and remote host calls block. Each service runs on its own queue rather
+    /// than Swift's shared concurrency pool, so a slow machine cannot stall the whole app.
+    private nonisolated let executorQueue = DispatchSerialQueue(label: "purepoint.git-service", qos: .userInitiated)
+    nonisolated var unownedExecutor: UnownedSerialExecutor { executorQueue.asUnownedSerialExecutor() }
     private var cachedGhPath: String?
     private var branchSummaryCache: [String: GitBranchReview] = [:]
     private var untrackedCache: [String: (stamp: String, file: FileDiff, bytes: Int)] = [:]
@@ -62,6 +66,8 @@ actor GitService {
         }
         var stats: [String: HostFileStat] = [:]
         for (directory, wanted) in byDirectory {
+            // A cancelled refresh stops making remote round trips.
+            if Task.isCancelled { break }
             guard let entries = try? host.list(directory: directory) else {
                 for fullPath in wanted { stats[fullPath] = (try? host.stat(path: fullPath)) ?? .missing }
                 continue
@@ -81,6 +87,8 @@ actor GitService {
     }
 
     private func checked(_ args: [String], at path: String) throws -> String {
+        // Multi-command sequences (reviews, patches) stop between commands once cancelled.
+        try Task.checkCancellation()
         let result = runGit(args, cwd: path)
         guard result.success else {
             throw GitReviewError(message: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Git command failed (exit \(result.exitCode)); the refs may have no common ancestor.")
@@ -158,7 +166,7 @@ actor GitService {
                 }
                 let stamp = host.isLocal ? Self.localStamp(key) : Self.stamp(remoteStats[key] ?? .missing, includeIdentity: false)
                 if let cached = untrackedCache[key], cached.stamp == stamp { review.untracked.append(cached.file) }
-                else if remaining > 0 {
+                else if remaining > 0, !Task.isCancelled {
                     remaining -= 1
                     let file = untrackedPreview(name: name, at: path, knownStat: remoteStats[key])
                     review.untracked.append(file)

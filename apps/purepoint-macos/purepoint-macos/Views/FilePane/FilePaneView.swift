@@ -102,6 +102,7 @@ struct FilePaneView: View {
             if let saveError {
                 banner(saveError, color: .red) { self.saveError = nil }
             }
+            EditorNoticeBanners(editor: editor) { saveError = $0 }
             if editor.externalChangeAlert != nil {
                 HStack {
                     Text("File changed on disk.").font(.caption)
@@ -119,6 +120,7 @@ struct FilePaneView: View {
                     MarkdownPreviewView(
                         markdown: file.content,
                         baseDirectory: (file.id as NSString).deletingLastPathComponent,
+                        isRemote: !editor.host.isLocal,
                         onOpenFile: { path in editor.openFile(path: path, name: (path as NSString).lastPathComponent) }
                     )
                 } else {
@@ -126,7 +128,7 @@ struct FilePaneView: View {
                         content: file.content,
                         language: file.language,
                         isBinary: false,
-                        isEditable: true,
+                        isEditable: !file.isReadOnly,
                         onContentChanged: { editor.updateContent(content: $0) },
                         onSave: save
                     )

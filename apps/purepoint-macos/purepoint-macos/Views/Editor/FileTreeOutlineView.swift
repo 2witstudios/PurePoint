@@ -24,8 +24,15 @@ struct FileTreeOutlineView: NSViewControllerRepresentable {
         vc.onOpenLocalCopy = { [fileTreeState] path in
             let host = fileTreeState.host
             Task {
-                guard let url = try? await FileIOService.localCopy(of: path, host: host) else { return }
-                NSWorkspace.shared.open(url)
+                do {
+                    NSWorkspace.shared.open(try await FileIOService.localCopy(of: path, host: host))
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Could not open a local copy of \((path as NSString).lastPathComponent)"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
             }
         }
 

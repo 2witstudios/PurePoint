@@ -8,6 +8,8 @@ struct EditorTab: Identifiable {
     var lastModified: Date?
     let isBinary: Bool
     let language: EditorLanguage
+    /// Shown but not editable: a remote file too large to save back (over 750 KB).
+    var isReadOnly: Bool = false
 }
 
 enum EditorLanguage: String, CaseIterable {

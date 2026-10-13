@@ -6,7 +6,7 @@ import AppKit
 class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate {
 
     let scrollView = NSScrollView()
-    let outlineView = NSOutlineView()
+    let outlineView = SidebarKeyOutlineView()
 
     var projectNodes: [SidebarNode] = []
     private var lastRenderState: SidebarRenderState?
@@ -71,12 +71,16 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let name: String
         let state: MachineConnectionState
         let statusText: String
+        let actionError: String?
+        let isStartingDaemon: Bool
+        let hiddenRevision: Int
         let projects: [ProjectRenderState]
     }
 
     private struct ProjectRenderState: Equatable {
         let channelUnread: Int
         let isUnavailable: Bool
+        let layoutError: String?
         let projectRoot: String
         let rootWorkspaces: [WorkspaceRenderState]
         let worktrees: [WorktreeRenderState]
@@ -105,6 +109,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        outlineView.onReturn = { [weak self] in self?.toggleSelectedMachineConnection() ?? false }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.title = ""
@@ -210,7 +215,9 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let machineStates = machines.map { machine in
             MachineRenderState(
                 id: machine.machine.id, name: machine.machine.name, state: machine.state,
-                statusText: machine.statusText, projects: machine.projects.map(projectRenderState))
+                statusText: machine.statusText, actionError: machine.actionError,
+                isStartingDaemon: machine.isStartingDaemon, hiddenRevision: machine.hiddenCountRevision,
+                projects: machine.projects.map(projectRenderState))
         }
         return SidebarRenderState(
             activeWorkspaceId: activeWorkspaceId, projects: projects.map(projectRenderState), machines: machineStates)
@@ -238,6 +245,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         return ProjectRenderState(
             channelUnread: project.channel.unreadCount,
             isUnavailable: project.isUnavailable,
+            layoutError: project.isRemote ? project.registry?.layoutErrorsByProject[project.projectId] : nil,
             projectRoot: project.projectId,
             rootWorkspaces: rootWorkspaces,
             worktrees: worktrees
@@ -331,8 +339,10 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
         guard let node = item as? SidebarNode else { return false }
         switch node.kind {
-        case .sectionHeader, .machine: return false
-        case .project, .worktree, .workspace: return true
+        case .sectionHeader: return false
+        // Selectable so keyboard and VoiceOver users can reach its actions (Return toggles
+        // the connection; the context menu and accessibility actions hold the rest).
+        case .project, .worktree, .workspace, .machine: return true
         }
     }
 
@@ -397,6 +407,12 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             stack.addArrangedSubview(status)
             cell.toolTip = "The machine's daemon is unreachable. Unsaved file tabs are kept until it is back."
             cell.setAccessibilityLabel("\(project.projectName), unavailable")
+        } else if project.isRemote, let error = project.registry?.layoutErrorsByProject[project.projectId] {
+            let warning = makeSymbolIcon("exclamationmark.triangle.fill", description: "Layout error", pointSize: 10)
+            warning.contentTintColor = .systemOrange
+            stack.addArrangedSubview(warning)
+            cell.toolTip = error + " Retrying; choose Retry Layout to try now."
+            cell.setAccessibilityLabel("\(project.projectName), \(error)")
         }
         if project.channel.unreadCount > 0 {
             let badge = makeBadge(count: project.channel.unreadCount)
@@ -440,9 +456,63 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         stack.addArrangedSubview(status)
         var tooltip = "\(machine.machine.name) (\(machine.machine.sshHost)): \(machine.statusText)"
         if case .offline(let reason) = machine.state { tooltip += " — " + reason }
+        if let error = machine.actionError {
+            let warning = makeSymbolIcon("exclamationmark.triangle.fill", description: "Error", pointSize: 10)
+            warning.contentTintColor = .systemOrange
+            stack.addArrangedSubview(warning)
+            tooltip += "\n" + error
+        }
         cell.toolTip = tooltip
         cell.setAccessibilityLabel(tooltip)
+        cell.setAccessibilityCustomActions(machineAccessibilityActions(machine))
         return cell
+    }
+
+    /// The machine's menu actions, reachable from VoiceOver's actions rotor.
+    private func machineAccessibilityActions(_ machine: MachineState) -> [NSAccessibilityCustomAction] {
+        var actions: [NSAccessibilityCustomAction] = []
+        if machine.isConnectedOrConnecting {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Disconnect") { [weak self, weak machine] in
+                    guard let self, let machine else { return false }
+                    self.confirmDisconnect(machine)
+                    return true
+                })
+        } else {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Connect") { [weak machine] in
+                    machine?.connect()
+                    return machine != nil
+                })
+        }
+        if machine.state == .connected(.stopped), !machine.isStartingDaemon {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Start Daemon") { [weak machine] in
+                    machine?.startDaemon()
+                    return machine != nil
+                })
+        }
+        if machine.hiddenProjectCount > 0 {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Show Hidden Projects") { [weak machine] in
+                    machine?.showHiddenProjects()
+                    return machine != nil
+                })
+        }
+        if machine.actionError != nil {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Dismiss Error") { [weak machine] in
+                    machine?.actionError = nil
+                    return machine != nil
+                })
+        }
+        actions.append(
+            NSAccessibilityCustomAction(name: "Remove Machine") { [weak self, weak machine] in
+                guard let self, let machine else { return false }
+                self.confirmRemove(machine)
+                return true
+            })
+        return actions
     }
 
     private static func statusColor(_ state: MachineConnectionState) -> NSColor {
@@ -703,7 +773,8 @@ extension SidebarOutlineViewController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        let clickedRow = outlineView.clickedRow
+        // A menu opened from the keyboard (or VoiceOver) has no clicked row: use the selection.
+        let clickedRow = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
         guard clickedRow >= 0, let node = outlineView.item(atRow: clickedRow) as? SidebarNode else { return }
         contextClickedNode = node
 
@@ -728,8 +799,40 @@ extension SidebarOutlineViewController: NSMenuDelegate {
             item.isEnabled = !machine.isStartingDaemon
             menu.addItem(item)
         }
+        if machine.hiddenProjectCount > 0 {
+            menu.addItem(
+                makeMenuItem(
+                    title: "Show Hidden Projects (\(machine.hiddenProjectCount))",
+                    action: #selector(contextShowHiddenProjects(_:))))
+        }
+        if machine.actionError != nil {
+            menu.addItem(makeMenuItem(title: "Dismiss Error", action: #selector(contextDismissMachineError(_:))))
+        }
         menu.addItem(.separator())
         menu.addItem(makeMenuItem(title: "Remove Machine\u{2026}", action: #selector(contextRemoveMachine(_:))))
+    }
+
+    @objc private func contextShowHiddenProjects(_ sender: NSMenuItem) {
+        contextMachine?.showHiddenProjects()
+    }
+
+    @objc private func contextDismissMachineError(_ sender: NSMenuItem) {
+        contextMachine?.actionError = nil
+    }
+
+    @objc private func contextRetryLayout(_ sender: NSMenuItem) {
+        guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
+        project.retryRemoteLayout()
+    }
+
+    /// Return on a selected machine row connects or disconnects it.
+    func toggleSelectedMachineConnection() -> Bool {
+        let row = outlineView.selectedRow
+        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode,
+            case .machine(let machine) = node.kind
+        else { return false }
+        if machine.isConnectedOrConnecting { confirmDisconnect(machine) } else { machine.connect() }
+        return true
     }
 
     private var contextMachine: MachineState? {
@@ -743,6 +846,10 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     @objc private func contextDisconnectMachine(_ sender: NSMenuItem) {
         guard let machine = contextMachine else { return }
+        confirmDisconnect(machine)
+    }
+
+    private func confirmDisconnect(_ machine: MachineState) {
         let unsaved = machine.unsavedFileNames
         guard !unsaved.isEmpty else {
             machine.disconnect(remember: true)
@@ -768,6 +875,10 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     @objc private func contextRemoveMachine(_ sender: NSMenuItem) {
         guard let machine = contextMachine else { return }
+        confirmRemove(machine)
+    }
+
+    private func confirmRemove(_ machine: MachineState) {
         showConfirmation(
             title: "Remove \(machine.machine.name)?",
             message:
@@ -816,6 +927,9 @@ extension SidebarOutlineViewController: NSMenuDelegate {
                     action: #selector(contextKillAllProjectAgents(_:))
                 ))
             menu.addItem(.separator())
+        }
+        if project.isRemote, project.registry?.layoutErrorsByProject[project.projectId] != nil {
+            menu.addItem(makeMenuItem(title: "Retry Layout", action: #selector(contextRetryLayout(_:))))
         }
         menu.addItem(makeMenuItem(title: "Remove Project\u{2026}", action: #selector(contextRemoveProject(_:))))
     }
@@ -880,7 +994,10 @@ extension SidebarOutlineViewController: NSMenuDelegate {
 
     @objc private func contextRemoveProject(_ sender: NSMenuItem) {
         guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
-        let unsaved = project.isRemote ? project.registry?.unsavedFileNames(inProject: project.projectId) ?? [] : []
+        let unsaved =
+            project.isRemote
+            ? project.appState?.machines.first { $0.machine.id == project.key.machineId }?.unsavedFileNames(in: project) ?? []
+            : []
         showConfirmation(
             title: "Remove \(project.projectName)?",
             message: project.isRemote
@@ -1033,5 +1150,16 @@ private class WorktreeMenuContext: NSObject {
     init(project: ProjectState, worktreeId: String) {
         self.project = project
         self.worktreeId = worktreeId
+    }
+}
+
+/// The sidebar outline, with Return acting on a selected machine row.
+final class SidebarKeyOutlineView: NSOutlineView {
+    /// Return pressed; true if handled.
+    var onReturn: (() -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76, onReturn?() == true { return }
+        super.keyDown(with: event)
     }
 }

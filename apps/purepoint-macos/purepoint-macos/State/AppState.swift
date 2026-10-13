@@ -149,7 +149,14 @@ final class AppState {
 
     /// Read `~/.pu/machines.json` and connect every machine the user has not disconnected.
     func loadMachines() {
-        let registered = (try? MachineRegistryStore.load()) ?? []
+        FileIOService.removeLocalCopies()
+        let registered: [Machine]
+        do {
+            registered = try MachineRegistryStore.load()
+        } catch {
+            daemonError = "Could not read machines from ~/.pu/machines.json: \(error.localizedDescription)"
+            return
+        }
         for machine in registered where !machines.contains(where: { $0.machine.id == machine.id }) {
             let state = MachineState(machine: machine, appState: self, registry: registry)
             machines.append(state)
@@ -157,11 +164,15 @@ final class AppState {
         }
     }
 
+    /// The registry update takes a file lock shared with `pu machine`, so it runs off the
+    /// main thread.
     @discardableResult
-    func addMachine(name: String, sshHost: String) throws -> MachineState {
-        let machine = try MachineRegistryStore.update { machines in
-            try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
-        }
+    func addMachine(name: String, sshHost: String) async throws -> MachineState {
+        let machine = try await Task.detached {
+            try MachineRegistryStore.update { machines in
+                try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
+            }
+        }.value
         let state = MachineState(machine: machine, appState: self, registry: registry)
         machines.append(state)
         state.connect()
@@ -174,7 +185,16 @@ final class AppState {
         state.disconnect()
         machines.removeAll { $0 === state }
         let id = state.machine.id
-        try? MachineRegistryStore.update { machines in machines.removeAll { $0.id == id } }
+        let name = state.machine.name
+        Task {
+            do {
+                try await Task.detached {
+                    try MachineRegistryStore.update { machines in machines.removeAll { $0.id == id } }
+                }.value
+            } catch {
+                daemonError = "Could not remove \(name) from ~/.pu/machines.json: \(error.localizedDescription)"
+            }
+        }
         if let active = activeProjectRoot, ProjectKey(id: active).machineId == id {
             activeProjectRoot = projects.first?.projectRoot
         }
@@ -333,6 +353,7 @@ final class AppState {
         }
         binaryWatcher?.stop()
         binaryWatcher = nil
+        FileIOService.removeLocalCopies()
 
         // Block until daemon RPCs complete (macOS terminates shortly after willTerminate)
         let projectRoots = localManagedProjects.map(\.projectRoot)
@@ -439,7 +460,13 @@ extension AppState {
 
     /// Where a workspace's files live: this Mac, or its project's machine.
     func host(forWorkspace workspaceId: String, registry: WorkspaceRegistry) -> any ProjectHost {
-        projectState(forWorkspace: workspaceId, registry: registry)?.host ?? LocalProjectHost.shared
+        if let project = projectState(forWorkspace: workspaceId, registry: registry) { return project.host }
+        // A remote workspace whose project is not available must never fall back to this
+        // Mac's disk with the remote path.
+        if let projectId = registry.projectRoot(forWorkspace: workspaceId), ProjectKey(id: projectId).isRemote {
+            return UnavailableProjectHost()
+        }
+        return LocalProjectHost.shared
     }
 
     /// The daemon owning an agent, so terminals attach to the right machine.

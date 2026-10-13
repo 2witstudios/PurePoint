@@ -159,7 +159,10 @@ struct MachineSSHTests {
     @Test func givenHostShouldResolveHomeWithBatchMode() {
         #expect(
             MachineSSH.resolveHomeArguments(sshHost: "studio")
-                == ["-o", "BatchMode=yes", "studio", "printf %s \"$HOME\""])
+                == [
+                    "-o", "BatchMode=yes", "-o", "ControlMaster=no", "-o", "ControlPath=none", "studio",
+                    "printf %s \"$HOME\"",
+                ])
     }
 
     @Test func givenRemoteHomeWithSpacesShouldForwardAsOneArgument() {
@@ -183,7 +186,10 @@ struct MachineSSHTests {
     @Test func givenStartDaemonShouldPutInstalledLocationsOnPath() {
         #expect(
             MachineSSH.startDaemonArguments(sshHost: "studio")
-                == ["studio", #"PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; pu health"#])
+                == [
+                    "-o", "ControlMaster=no", "-o", "ControlPath=none", "studio",
+                    #"/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu health'"#,
+                ])
     }
 
     @Test func givenHostWithPortShouldUseTheSSHURIForm() {
@@ -200,9 +206,9 @@ struct MachineSSHTests {
 
     @Test func givenHostWithPortEveryCommandShouldUseTheDestination() {
         let host = "jane@studio:2222"
-        #expect(MachineSSH.resolveHomeArguments(sshHost: host)[2] == "ssh://jane@studio:2222")
+        #expect(MachineSSH.resolveHomeArguments(sshHost: host).dropLast().last == "ssh://jane@studio:2222")
         #expect(MachineSSH.forwardArguments(localSocket: "/l", remoteHome: "/h", sshHost: host).last == "ssh://jane@studio:2222")
-        #expect(MachineSSH.startDaemonArguments(sshHost: host).first == "ssh://jane@studio:2222")
+        #expect(MachineSSH.startDaemonArguments(sshHost: host).dropLast().last == "ssh://jane@studio:2222")
     }
 
     @Test func givenRecordedPidShouldOnlyMatchThisMachinesSSHForward() {
@@ -216,6 +222,38 @@ struct MachineSSHTests {
                 executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward, localSocket: "/Users/me/.pu/machines/xyz/daemon.sock"))
         #expect(!ForwardPidFile.isForward(executablePath: "/bin/zsh", arguments: ["zsh"] + forward, localSocket: socket))
         #expect(!ForwardPidFile.isForward(executablePath: nil, arguments: nil, localSocket: socket))
+    }
+
+    @Test func givenForwardLockShouldBeExclusiveAcrossHolders() throws {
+        let id = UUID()
+        _ = try MachinePaths.ensureDirectory(machineId: id)
+        defer { try? FileManager.default.removeItem(atPath: MachinePaths.directory(machineId: id)) }
+        let first = ForwardLock(machineId: id)
+        let second = ForwardLock(machineId: id)
+        #expect(first.tryAcquire())
+        #expect(first.tryAcquire())
+        // flock locks belong to the open file description, so a second holder in this
+        // process stands in for another app instance.
+        #expect(!second.tryAcquire())
+        first.release()
+        #expect(second.tryAcquire())
+        second.release()
+    }
+
+    @Test func givenSSHExitShouldReturnWithoutWaitingForLingeringPipes() async {
+        // A child that outlives the command keeps stdout open, as a ControlPersist master can.
+        let started = Date()
+        let output = await MachineSSH.run(["-c", "(sleep 30 &) ; echo done"], timeout: 20, executable: "/bin/sh")
+        #expect(output.status == 0)
+        #expect(output.stdout.contains("done"))
+        #expect(Date().timeIntervalSince(started) < 10)
+    }
+
+    @Test func givenTimeoutShouldEndTheCommand() async {
+        let started = Date()
+        let output = await MachineSSH.run(["30"], timeout: 1, executable: "/bin/sleep")
+        #expect(output.status != 0)
+        #expect(Date().timeIntervalSince(started) < 10)
     }
 
     @Test func givenThisProcessShouldReadItsExecutableAndArguments() {
@@ -521,8 +559,8 @@ struct RemoteLayoutPersistenceTests {
 
     @Test func givenUnreadableDocumentSaveShouldNotWrite() {
         let host = FakeHost(reads: [.failure(.daemon(code: "io_error", message: "x"))])
-        let written = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 10)
-        #expect(written == nil)
+        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 10)
+        #expect(outcome == .skipped)
         #expect(host.writeCount == 0)
     }
 
@@ -532,26 +570,60 @@ struct RemoteLayoutPersistenceTests {
         #expect(host.writeCount == 0)
     }
 
-    @Test func givenKnownModificationTimeSaveShouldBeConditionalAndRetryOnceOnConflict() {
+    @Test func givenUnchangedDocumentSaveShouldWriteConditionally() {
         let host = FakeHost(
-            reads: [file(emptyLayoutDocument, modifiedMs: 10), file(emptyLayoutDocument, modifiedMs: 20)],
-            writes: [.failure(.conflict("changed")), .success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
-        let written = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
-        #expect(host.writes.map(\.expectedModifiedMs) == [5, 20])
-        #expect(written == 30)
+            reads: [file(emptyLayoutDocument, modifiedMs: 5)],
+            writes: [.success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
+        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(host.writes.map(\.expectedModifiedMs) == [5])
+        #expect(outcome == .written(modifiedMs: 30))
+    }
+
+    @Test func givenDocumentChangedElsewhereSaveShouldAdoptItNotOverwrite() {
+        // Another Mac wrote the layout after this app last read it (5 → 20).
+        let theirs = #"{"version":3,"workspaces":[]}"#
+        let host = FakeHost(reads: [file(theirs, modifiedMs: 20)])
+        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(outcome == .conflict(Data(theirs.utf8), modifiedMs: 20))
+        #expect(host.writeCount == 0)
+    }
+
+    @Test func givenRaceBetweenReadAndWriteSaveShouldAdoptTheNewDocument() {
+        let host = FakeHost(
+            reads: [file(emptyLayoutDocument, modifiedMs: 5), file(emptyLayoutDocument, modifiedMs: 20)],
+            writes: [.failure(.conflict("changed"))])
+        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(host.writeCount == 1)
+        #expect(outcome == .conflict(Data(emptyLayoutDocument.utf8), modifiedMs: 20))
     }
 
     @Test func givenSaverShouldWriteAgainstTheLastKnownModificationTimeAndFlush() {
         let recorded = LockedValues()
         let saver = RemoteLayoutSaver { _, expected in
             recorded.append(expected)
-            return (expected ?? 0) + 1
+            return .written(modifiedMs: (expected ?? 0) + 1)
         }
         saver.loaded(modifiedMs: 41)
         saver.enqueue(Data())
         saver.enqueue(Data())
         #expect(saver.flush(until: .now() + 2))
         #expect(recorded.values == [41, 42])
+    }
+
+    @Test func givenConflictSaverShouldHandTheDocumentOverAndTrackItsTime() {
+        let recorded = LockedValues()
+        let adopted = LockedValues()
+        let saver = RemoteLayoutSaver { _, expected in
+            recorded.append(expected)
+            return expected == 41 ? .conflict(Data("theirs".utf8), modifiedMs: 77) : .written(modifiedMs: 78)
+        }
+        saver.onConflict { document in adopted.append(Int64(document.count)) }
+        saver.loaded(modifiedMs: 41)
+        saver.enqueue(Data())
+        saver.enqueue(Data())
+        #expect(saver.flush(until: .now() + 2))
+        #expect(recorded.values == [41, 77])
+        #expect(adopted.values == [6])
     }
 }
 
@@ -584,6 +656,8 @@ struct RemoteLayoutRestoreTests {
             projectRoot: projectId,
             rootAgents: [AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")],
             worktrees: [])
+        // The agents show while the layout is unreadable; nothing is saved meanwhile.
+        #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
         registry.saveAll()
         registry.forgetProject(projectId)
         #expect(saver.flush(until: .now() + 1))
@@ -651,5 +725,97 @@ struct WorkspaceFilesIdentityTests {
         let local = WorkspaceFilesState.identity(rootPath: "/srv/app", host: LocalProjectHost.shared)
         #expect(local != WorkspaceFilesState.identity(rootPath: "/srv/app", host: remote))
         #expect(local == WorkspaceFilesState(rootPath: "/srv/app").identity)
+    }
+}
+
+// MARK: - Remote layout conflicts and quit
+
+@MainActor
+struct RemoteLayoutConflictTests {
+    private let projectId = ProjectKey(machineId: UUID(), root: "/srv/app").id
+    private let agent = AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")
+
+    @Test func givenUnchangedRemoteLayoutQuitShouldNotRewriteIt() async {
+        let registry = WorkspaceRegistry(loadWorkspaces: { _ in [] })
+        var saves = 0
+        registry.registerRemoteProject(projectId, restored: []) { _, _ in saves += 1 }
+        registry.reconcile(projectRoot: projectId, rootAgents: [agent], worktrees: [])
+        registry.saveAll()
+        #expect(saves == 1)
+        // Nothing changed since: a second quit-time flush must not rewrite the machine's
+        // layout (another Mac may have changed it).
+        registry.saveAll()
+        #expect(saves == 1)
+        registry.forgetProject(projectId)
+    }
+
+    @Test func givenConflictShouldAdoptTheMachinesLayout() {
+        let registry = WorkspaceRegistry(loadWorkspaces: { _ in [] })
+        registry.registerRemoteProject(projectId, restored: []) { _, _ in }
+        registry.reconcile(projectRoot: projectId, rootAgents: [agent], worktrees: [])
+        // The machine's copy differs (another Mac advanced its surface counter).
+        let theirs = registry.workspaces(forProject: projectId).map { workspace -> Workspace in
+            var changed = workspace
+            changed.nextSurfaceId += 50
+            return changed
+        }
+        registry.adoptRemoteLayout(projectId, workspaces: theirs)
+        #expect(registry.workspaces(forProject: projectId) == theirs)
+        registry.forgetProject(projectId)
+    }
+}
+
+// MARK: - Editors on remote machines
+
+@MainActor
+struct RemoteEditorTests {
+    private let machine = UUID()
+
+    private func editor(host: any ProjectHost, path: String, dirty: Bool) -> EditorState {
+        let editor = EditorState()
+        editor.host = host
+        editor.currentFile = EditorTab(
+            id: path, name: (path as NSString).lastPathComponent, content: "x", isDirty: dirty, lastModified: nil,
+            isBinary: false, language: .plaintext)
+        return editor
+    }
+
+    @Test func givenDirtyRemoteEditorShouldBeReportedForItsProjectOnly() {
+        let host = DaemonProjectHost(client: DaemonClient(), machineId: machine)
+        let dirty = editor(host: host, path: "/srv/app/.pu/worktrees/wt-1/main.rs", dirty: true)
+        let clean = editor(host: host, path: "/srv/app/lib.rs", dirty: false)
+        let local = editor(host: LocalProjectHost.shared, path: "/srv/app/local.rs", dirty: true)
+        let elsewhere = editor(host: host, path: "/srv/other/x.rs", dirty: true)
+        #expect(OpenEditors.unsavedFileNames(hostIdentity: host.identity, root: "/srv/app") == ["main.rs"])
+        withExtendedLifetime([dirty, clean, local, elsewhere]) {}
+    }
+
+    @Test func givenLargeRemoteContentShouldOpenReadOnly() {
+        let remote = DaemonProjectHost(client: DaemonClient(), machineId: machine)
+        let large = String(repeating: "a", count: HostError.maxRemoteSaveBytes + 1)
+        #expect(EditorState.isTooLargeToSave(large, host: remote))
+        #expect(!EditorState.isTooLargeToSave("small", host: remote))
+        #expect(!EditorState.isTooLargeToSave(large, host: LocalProjectHost.shared))
+    }
+
+    @Test func givenReadOnlyFileEditsShouldBeIgnored() {
+        let editor = EditorState()
+        editor.currentFile = EditorTab(
+            id: "/srv/app/big.log", name: "big.log", content: "original", isDirty: false, lastModified: nil,
+            isBinary: false, language: .plaintext, isReadOnly: true)
+        editor.updateContent(content: "changed")
+        #expect(editor.currentFile?.content == "original")
+        #expect(editor.currentFile?.isDirty == false)
+        #expect(editor.readOnlyReason != nil)
+    }
+
+    @Test func givenUnavailableHostEveryOperationShouldFail() {
+        let host = UnavailableProjectHost()
+        #expect(!host.isLocal)
+        #expect(throws: HostError.self) { try host.read(path: "/etc/hosts", maxBytes: 10) }
+        #expect(throws: HostError.self) {
+            try host.write(path: "/tmp/x", data: Data(), expectedModifiedMs: nil, createDirectories: false)
+        }
+        #expect(!host.run(HostCommand(program: "git", executablePath: "/usr/bin/git", args: ["status"], cwd: "/")).success)
     }
 }

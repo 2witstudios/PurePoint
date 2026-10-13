@@ -167,14 +167,7 @@ final class ProjectState: Identifiable {
         manifestWatcher?.stop()
         manifestWatcher = nil
 
-        remoteLayoutTask?.cancel()
-        if let registry, let saver = remoteLayoutSaver {
-            let host = self.host
-            remoteLayoutTask = Task {
-                await Self.restoreRemoteLayout(
-                    projectRoot: root, projectId: projectId, host: host, registry: registry, saver: saver)
-            }
-        }
+        startRemoteLayoutRestore()
 
         openTask = Task { [weak self] in
             guard let self, !Task.isCancelled else { return }
@@ -194,6 +187,26 @@ final class ProjectState: Identifiable {
         }
     }
 
+    /// (Re)start reading the remote layout. Retry Layout calls it to try now instead of
+    /// waiting out the backoff.
+    func retryRemoteLayout() {
+        guard isRemote, !isUnavailable else { return }
+        startRemoteLayoutRestore()
+    }
+
+    private func startRemoteLayoutRestore() {
+        remoteLayoutTask?.cancel()
+        remoteLayoutTask = nil
+        guard let registry, let saver = remoteLayoutSaver else { return }
+        let root = projectRoot
+        let projectId = self.projectId
+        let host = self.host
+        remoteLayoutTask = Task {
+            await Self.restoreRemoteLayout(
+                projectRoot: root, projectId: projectId, host: host, registry: registry, saver: saver)
+        }
+    }
+
     /// Read a remote layout through its host until it arrives, then adopt it and route the
     /// project's saves to `saver`. A failed read (anything but a missing file) surfaces as a
     /// layout error and is retried with backoff; the saver is not registered meanwhile, so no
@@ -205,11 +218,18 @@ final class ProjectState: Identifiable {
         var attempt = 0
         while !Task.isCancelled {
             do {
-                let layout = try await Task.detached(priority: .userInitiated) {
+                let layout = try await HostIO.run {
                     try WorkspacePersistence.loadRemote(projectRoot: projectRoot, projectId: projectId, host: host)
-                }.value
+                }
                 guard !Task.isCancelled else { return }
                 saver.loaded(modifiedMs: layout.modifiedMs)
+                let target = WeakRegistryRef(registry)
+                saver.onConflict { document in
+                    Task { @MainActor in
+                        target.value?.adoptRemoteLayout(
+                            projectId, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectId))
+                    }
+                }
                 registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in
                     saver.save(workspaces, activeWorkspaceId: active)
                 }
@@ -565,5 +585,14 @@ final class ProjectState: Identifiable {
         let sub = DaemonGridSubscription(projectRoot: projectRoot, projectId: projectId, registry: registry, client: client)
         gridSubscription = sub
         gridSubscriptionTask = Task { await sub.start() }
+    }
+}
+
+/// Lets a save callback running off the main thread reach the registry without retaining it.
+nonisolated final class WeakRegistryRef: @unchecked Sendable {
+    @MainActor weak var value: WorkspaceRegistry?
+
+    @MainActor init(_ value: WorkspaceRegistry) {
+        self.value = value
     }
 }

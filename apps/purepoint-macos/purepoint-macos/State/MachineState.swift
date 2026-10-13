@@ -13,6 +13,8 @@ final class MachineState: Identifiable {
     /// The latest failure of an explicit action (start daemon, project discovery).
     var actionError: String?
     private(set) var isStartingDaemon = false
+    /// Bumped when the hidden set changes so the sidebar menu re-reads the count.
+    private(set) var hiddenCountRevision = 0
 
     @ObservationIgnored weak var appState: AppState?
     @ObservationIgnored weak var registry: WorkspaceRegistry?
@@ -34,8 +36,6 @@ final class MachineState: Identifiable {
         self.appState = appState
         self.registry = registry
         hiddenRoots = Set(UserDefaults.standard.stringArray(forKey: Self.hiddenKey(machine.id)) ?? [])
-        // A forward left running by a crash or force-quit of an earlier run.
-        ForwardPidFile.killStale(machineId: machine.id, localSocket: MachinePaths.socketPath(machineId: machine.id))
         let owner = WeakMachineState()
         connection = MachineConnection(machine: machine) { state in
             Task { @MainActor in owner.value?.apply(state) }
@@ -98,23 +98,45 @@ final class MachineState: Identifiable {
         for saver in removeAllProjects(keepingUnsaved: false) { saver.flush(until: deadline) }
         state = .disconnected
         let connection = self.connection!
-        connection.forward.terminate()
+        connection.terminateForQuit()
         Task { await connection.disconnect() }
     }
 
-    /// Names of unsaved file tabs in this machine's projects, which disconnecting would drop.
+    /// Names of files with unsaved edits in this machine's projects — file-pane tabs and the
+    /// editors of worktree and checkout views — which disconnecting would drop.
     var unsavedFileNames: [String] {
-        guard let registry else { return [] }
-        return projects.flatMap { registry.unsavedFileNames(inProject: $0.projectId) }
+        var names: [String] = []
+        for project in projects {
+            for name in unsavedFileNames(in: project) where !names.contains(name) { names.append(name) }
+        }
+        return names
+    }
+
+    func unsavedFileNames(in project: ProjectState) -> [String] {
+        let tabs = registry?.unsavedFileNames(inProject: project.projectId) ?? []
+        let editors = OpenEditors.unsavedFileNames(hostIdentity: project.host.identity, root: project.projectRoot)
+        return tabs + editors.filter { !tabs.contains($0) }
+    }
+
+    /// Projects hidden from the sidebar; their daemon still has them registered.
+    var hiddenProjectCount: Int { hiddenRoots.count }
+
+    /// Bring back every hidden project (they reappear with the next project refresh).
+    func showHiddenProjects() {
+        hiddenRoots.removeAll()
+        UserDefaults.standard.removeObject(forKey: Self.hiddenKey(machine.id))
+        hiddenCountRevision += 1
+        guard state.isDaemonRunning else { return }
+        Task { await refreshProjects() }
     }
 
     private static func flush(_ savers: [RemoteLayoutSaver], timeout: Duration) async {
         guard !savers.isEmpty else { return }
         let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
-        await Task.detached {
+        await HostIO.value {
             let deadline = DispatchTime.now() + seconds
             for saver in savers { saver.flush(until: deadline) }
-        }.value
+        }
     }
 
     /// Explicit user action: start the daemon on the machine over ssh (MACH-003).
@@ -168,6 +190,7 @@ final class MachineState: Identifiable {
         do {
             response = try await client.send(.inventory(kind: "projects"))
         } catch {
+            if state.isDaemonRunning { actionError = "Could not list projects on \(machine.name): \(error.localizedDescription)" }
             return
         }
         guard state.isDaemonRunning else { return }
@@ -176,7 +199,7 @@ final class MachineState: Identifiable {
             actionError = nil
             setProjects(roots: report.projects.map(\.projectRoot))
         case .error(_, let message):
-            actionError = message
+            actionError = "Could not list projects on \(machine.name): \(message)"
         default:
             break
         }
@@ -229,6 +252,7 @@ final class MachineState: Identifiable {
     /// tabs first.
     func hideProject(root: String) {
         hiddenRoots.insert(root)
+        hiddenCountRevision += 1
         UserDefaults.standard.set(Array(hiddenRoots), forKey: Self.hiddenKey(machine.id))
         if let project = projects.first(where: { $0.projectRoot == root }) {
             forget(project)
@@ -256,7 +280,7 @@ final class MachineState: Identifiable {
     }
 
     private func hasUnsavedTabs(_ project: ProjectState) -> Bool {
-        !(registry?.unsavedFileNames(inProject: project.projectId).isEmpty ?? true)
+        !unsavedFileNames(in: project).isEmpty
     }
 
     private func markUnavailable(_ project: ProjectState) {

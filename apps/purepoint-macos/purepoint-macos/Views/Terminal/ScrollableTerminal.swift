@@ -153,8 +153,12 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     // MARK: - Drag & Drop
 
+    /// Dropping a file types its path. A remote agent's machine cannot see this Mac's
+    /// files, so its terminal refuses drops instead of pasting a meaningless local path.
+    var acceptsFileDrops = true
+
     private func canAcceptDrop(_ sender: NSDraggingInfo) -> Bool {
-        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        acceptsFileDrops && sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

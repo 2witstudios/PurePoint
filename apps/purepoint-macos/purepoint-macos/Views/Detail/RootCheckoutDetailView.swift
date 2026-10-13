@@ -135,7 +135,7 @@ struct RootCheckoutDetailView: View {
                     content: file.content,
                     language: file.language,
                     isBinary: false,
-                    isEditable: true,
+                    isEditable: !file.isReadOnly,
                     onContentChanged: { newContent in
                         editorState.updateContent(content: newContent)
                     },
@@ -191,6 +191,7 @@ struct RootCheckoutDetailView: View {
 
     @ViewBuilder
     private var externalChangeBanner: some View {
+        EditorNoticeBanners(editor: editorState) { saveError = $0 }
         if editorState.externalChangeAlert != nil, let file = editorState.currentFile {
             bannerView(
                 icon: "exclamationmark.triangle.fill",

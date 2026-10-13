@@ -32,7 +32,11 @@ class TerminalPaneNSView: NSView {
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; remote agents attach over their machine.
-    var client = DaemonClient()
+    var client = DaemonClient() {
+        didSet { terminal?.acceptsFileDrops = isLocalClient }
+    }
+    /// Local file paths only mean something to this Mac's daemon.
+    private var isLocalClient: Bool { client.socketPath == DaemonEndpoint.localSocketPath }
     /// A resize sends SIGWINCH, and full-screen programs answer by redrawing everything.
     /// That redraw is not new activity, so output until this moment does not count.
     private var resizeRedrawSettlesAt = Date.distantPast
@@ -64,6 +68,7 @@ class TerminalPaneNSView: NSView {
         tv.layer?.masksToBounds = true
         tv.pinToEdges(of: self)
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
+        tv.acceptsFileDrops = isLocalClient
         terminal = tv
 
         // Show a small spinner while waiting for first output

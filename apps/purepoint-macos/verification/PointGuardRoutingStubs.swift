@@ -43,6 +43,16 @@ struct LocalProjectHost: ProjectHost {
         throw CocoaError(.fileWriteUnknown)
     }
 }
+struct UnavailableProjectHost: ProjectHost {
+    var isLocal: Bool { false }
+    func read(path: String, maxBytes: Int) throws -> HostFileData { throw HostError.notFound(path) }
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
+        throw HostError.notFound(path)
+    }
+}
+enum FileIOService {
+    static func removeLocalCopies() {}
+}
 @MainActor final class MachineState {
     let machine: Machine
     var projects: [ProjectState] = []

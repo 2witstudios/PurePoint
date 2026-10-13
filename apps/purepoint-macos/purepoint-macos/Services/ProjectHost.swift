@@ -81,6 +81,28 @@ nonisolated enum HostError: LocalizedError, Equatable {
     }
 }
 
+// MARK: - Blocking I/O
+
+/// Runs a host's blocking calls on a dedicated queue. A remote call can wait tens of seconds
+/// on a degraded SSH link; on Swift's shared concurrency pool, a few of those would stall
+/// every task in the app, local projects included.
+nonisolated enum HostIO {
+    private static let queue = DispatchQueue(
+        label: "purepoint.host-io", qos: .userInitiated, attributes: .concurrent)
+
+    static func run<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result { try work() }) }
+        }
+    }
+
+    static func value<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: work()) }
+        }
+    }
+}
+
 // MARK: - Host
 
 /// Where a project's files live and its git runs (MACH-007). Local projects use the
@@ -649,4 +671,36 @@ actor DaemonFsSubscription {
             }
         }
     }
+}
+
+// MARK: - Unavailable
+
+/// The host of a remote project that is not currently available (its machine is offline or
+/// the project is gone). Every operation fails; nothing ever touches this Mac's disk.
+nonisolated struct UnavailableProjectHost: ProjectHost {
+    var isLocal: Bool { false }
+    var identity: String { "unavailable" }
+
+    private var failure: HostError {
+        .daemon(code: "unavailable", message: "This project's machine is not available.")
+    }
+
+    func list(directory: String) throws -> [HostFileEntry] { throw failure }
+    func listRecursive(root: String, limit: Int) throws -> (entries: [HostFileEntry], truncated: Bool) { throw failure }
+    func stat(path: String) throws -> HostFileStat { throw failure }
+    func read(path: String, maxBytes: Int) throws -> HostFileData { throw failure }
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
+        throw failure
+    }
+    func delete(path: String) throws { throw failure }
+    func run(_ command: HostCommand) -> CommandResult {
+        CommandResult(stdout: "", stderr: failure.localizedDescription, exitCode: -1)
+    }
+    func makeWatcher(onChange: @escaping @Sendable () -> Void) -> any HostDirectoryWatcher { InertDirectoryWatcher() }
+}
+
+nonisolated final class InertDirectoryWatcher: HostDirectoryWatcher {
+    func watchDirectory(path: String) {}
+    func unwatchDirectory(path: String) {}
+    func stopAll() {}
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Register a machine reachable over SSH. PurePoint stores only its name and SSH destination
@@ -93,17 +94,30 @@ struct AddMachineSheet: View {
                 testResult = error.localizedDescription
             }
             isTesting = false
+            if let testResult { Self.announce(testResult) }
         }
     }
 
     private func add() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let trimmedHost = sshHost.trimmingCharacters(in: .whitespaces)
-        do {
-            try appState.addMachine(name: trimmedName, sshHost: trimmedHost)
-            dismiss()
-        } catch {
-            self.error = error.localizedDescription
+        Task {
+            do {
+                try await appState.addMachine(name: trimmedName, sshHost: trimmedHost)
+                Self.announce("Added \(trimmedName)")
+                dismiss()
+            } catch {
+                self.error = error.localizedDescription
+                Self.announce(error.localizedDescription)
+            }
         }
+    }
+
+    /// Results appear in the sheet; VoiceOver users hear them too.
+    private static func announce(_ message: String) {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        NSAccessibility.post(
+            element: window, notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 }

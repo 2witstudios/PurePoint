@@ -74,17 +74,18 @@ nonisolated enum MachineSSH {
         return "ssh://" + host
     }
 
-    /// `ssh -o BatchMode=yes <ssh_host> 'printf %s "$HOME"'`
+    /// Every ssh call opts out of connection sharing: a user's `ControlMaster` config would
+    /// otherwise park the call on a shared master that outlives it.
+    static let noMultiplexing = ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+
+    /// `ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none <ssh_host> 'printf %s "$HOME"'`
     static func resolveHomeArguments(sshHost: String) -> [String] {
-        ["-o", "BatchMode=yes", destination(sshHost), "printf %s \"$HOME\""]
+        ["-o", "BatchMode=yes"] + noMultiplexing + [destination(sshHost), "printf %s \"$HOME\""]
     }
 
     /// `ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15
     ///  -o ServerAliveCountMax=3 -o StreamLocalBindUnlink=yes -o ControlMaster=no
     ///  -o ControlPath=none -L <local>:<home>/.pu/daemon.sock <ssh_host>`
-    ///
-    /// No multiplexing: a user's `ControlMaster` config would otherwise park the forward on a
-    /// shared master that outlives it.
     static func forwardArguments(localSocket: String, remoteHome: String, sshHost: String) -> [String] {
         [
             "-N", "-T",
@@ -93,19 +94,21 @@ nonisolated enum MachineSSH {
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "StreamLocalBindUnlink=yes",
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
+        ] + noMultiplexing + [
             "-L", localSocket + ":" + remoteHome + remoteSocket,
             destination(sshHost),
         ]
     }
 
     /// Non-interactive SSH has a minimal PATH; the prefix lets both `pu` and the `pu-engine`
-    /// it spawns resolve from the installed locations.
-    static let startDaemonCommand = "PATH=\"$HOME/.pu/bin:$HOME/.cargo/bin:$PATH\"; export PATH; pu health"
+    /// it spawns resolve from the installed locations. Wrapped in `/bin/sh -c` so a fish or
+    /// csh login shell runs it too.
+    static let startDaemonCommand =
+        "/bin/sh -c 'PATH=\"$HOME/.pu/bin:$HOME/.cargo/bin:$PATH\"; export PATH; exec pu health'"
 
+    /// `ssh -o ControlMaster=no -o ControlPath=none <ssh_host> '<startDaemonCommand>'`
     static func startDaemonArguments(sshHost: String) -> [String] {
-        [destination(sshHost), startDaemonCommand]
+        noMultiplexing + [destination(sshHost), startDaemonCommand]
     }
 
     struct Output: Sendable {
@@ -115,36 +118,50 @@ nonisolated enum MachineSSH {
     }
 
     /// Run ssh to completion with a deadline. stdin is closed so ssh never waits on a prompt.
-    static func run(_ arguments: [String], timeout: TimeInterval) async -> Output {
+    /// Output is bounded, and the result never waits on pipes a lingering child (a
+    /// `ControlPersist` master, say) keeps open: it is delivered at most a moment after ssh
+    /// exits, and a kill follows the deadline. `processes` lets a disconnect end it early.
+    static func run(
+        _ arguments: [String], timeout: TimeInterval, processes: OneShotProcesses? = nil, executable: String = sshPath
+    ) async -> Output {
         await withCheckedContinuation { (continuation: CheckedContinuation<Output, Never>) in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: sshPath)
+            process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
             process.standardInput = FileHandle.nullDevice
             let stdout = Pipe()
             let stderr = Pipe()
             process.standardOutput = stdout
             process.standardError = stderr
-            nonisolated(unsafe) var outData = Data()
-            nonisolated(unsafe) var errData = Data()
-            let group = DispatchGroup()
-            group.enter()
-            Thread.detachNewThread {
-                outData = stdout.fileHandleForReading.readDataToEndOfFile()
-                group.leave()
+            let out = OutputCollector()
+            let err = OutputCollector()
+            let readers = DispatchGroup()
+            for (pipe, collector) in [(stdout, out), (stderr, err)] {
+                readers.enter()
+                let handle = pipe.fileHandleForReading
+                Thread.detachNewThread {
+                    while true {
+                        let chunk = handle.availableData
+                        if chunk.isEmpty { break }
+                        collector.append(chunk)
+                    }
+                    readers.leave()
+                }
             }
-            group.enter()
-            Thread.detachNewThread {
-                errData = stderr.fileHandleForReading.readDataToEndOfFile()
-                group.leave()
+            let once = ResumeOnce()
+            let finish: @Sendable (Int32, String?) -> Void = { status, failure in
+                once.run {
+                    processes?.remove(process)
+                    continuation.resume(
+                        returning: Output(status: status, stdout: out.text, stderr: failure ?? err.text))
+                }
             }
             process.terminationHandler = { finished in
-                group.notify(queue: .global()) {
-                    continuation.resume(
-                        returning: Output(
-                            status: finished.terminationStatus,
-                            stdout: String(data: outData, encoding: .utf8) ?? "",
-                            stderr: String(data: errData, encoding: .utf8) ?? ""))
+                let status = finished.terminationStatus
+                // Give the readers a moment to drain what ssh wrote, but no longer.
+                DispatchQueue.global().async {
+                    _ = readers.wait(timeout: .now() + 1)
+                    finish(status, nil)
                 }
             }
             do {
@@ -153,20 +170,24 @@ nonisolated enum MachineSSH {
                 try? stdout.fileHandleForWriting.close()
                 try? stderr.fileHandleForWriting.close()
                 process.terminationHandler = nil
-                group.notify(queue: .global()) {
-                    continuation.resume(returning: Output(status: -1, stdout: "", stderr: error.localizedDescription))
-                }
+                finish(-1, error.localizedDescription)
                 return
             }
+            processes?.insert(process)
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if process.isRunning { process.terminate() }
+                guard process.isRunning else { return }
+                process.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    finish(-1, "ssh timed out after \(Int(timeout)) s")
+                }
             }
         }
     }
 
     /// The remote user's home, resolved once per connection.
-    static func resolveHome(sshHost: String) async throws -> String {
-        let output = await run(resolveHomeArguments(sshHost: sshHost), timeout: 20)
+    static func resolveHome(sshHost: String, processes: OneShotProcesses? = nil) async throws -> String {
+        let output = await run(resolveHomeArguments(sshHost: sshHost), timeout: 20, processes: processes)
         let home = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard output.status == 0, home.hasPrefix("/") else {
             throw MachineConnectionError.ssh(sshErrorMessage(output))
@@ -207,6 +228,90 @@ nonisolated final class OutputCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Resumes a continuation exactly once, whichever of exit, deadline or launch failure is first.
+nonisolated final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func run(_ body: () -> Void) {
+        lock.lock()
+        let first = !done
+        done = true
+        lock.unlock()
+        if first { body() }
+    }
+}
+
+/// The one-shot ssh calls (home lookup, Start daemon) a machine has in flight, so a
+/// disconnect or quit ends them instead of leaving them running.
+nonisolated final class OneShotProcesses: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running: [ObjectIdentifier: Process] = [:]
+
+    func insert(_ process: Process) {
+        lock.lock()
+        running[ObjectIdentifier(process)] = process
+        lock.unlock()
+    }
+
+    func remove(_ process: Process) {
+        lock.lock()
+        running[ObjectIdentifier(process)] = nil
+        lock.unlock()
+    }
+
+    func terminateAll() {
+        lock.lock()
+        let processes = Array(running.values)
+        running.removeAll()
+        lock.unlock()
+        for process in processes where process.isRunning { process.terminate() }
+    }
+}
+
+/// `~/.pu/machines/<id>/forward.lock`, held (flock) by the one app instance that owns the
+/// machine's forward for as long as it does. Another instance follows that forward instead of
+/// launching its own, and never ends it.
+nonisolated final class ForwardLock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var descriptor: Int32 = -1
+    private let path: String
+
+    init(machineId: UUID) {
+        path = MachinePaths.directory(machineId: machineId) + "/forward.lock"
+    }
+
+    var isHeld: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return descriptor >= 0
+    }
+
+    /// Take the lock without waiting; true if this instance holds it (already or now).
+    func tryAcquire() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if descriptor >= 0 { return true }
+        let fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return false }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            return false
+        }
+        descriptor = fd
+        return true
+    }
+
+    func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard descriptor >= 0 else { return }
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
+        descriptor = -1
     }
 }
 
@@ -322,6 +427,8 @@ actor MachineConnection {
     let machine: Machine
     let endpoint: DaemonEndpoint
     nonisolated let forward: ForwardProcessHandle
+    nonisolated let oneShots = OneShotProcesses()
+    nonisolated let forwardLock: ForwardLock
     private let onState: @Sendable (MachineConnectionState) -> Void
     private var supervisor: Task<Void, Never>?
     private var process: Process?
@@ -333,6 +440,7 @@ actor MachineConnection {
         self.machine = machine
         self.endpoint = .machine(machine.id)
         self.forward = ForwardProcessHandle(machineId: machine.id)
+        self.forwardLock = ForwardLock(machineId: machine.id)
         self.onState = onState
     }
 
@@ -355,19 +463,29 @@ actor MachineConnection {
         generation += 1
         supervisor?.cancel()
         supervisor = nil
+        oneShots.terminateAll()
         stopForward()
+        forwardLock.release()
         report(.disconnected)
+    }
+
+    /// Quit: end the forward and any one-shot ssh calls synchronously, without the actor.
+    nonisolated func terminateForQuit() {
+        oneShots.terminateAll()
+        forward.terminate()
+        forwardLock.release()
     }
 
     /// Probe now rather than at the next interval — after Start daemon, for instance.
     func refreshNow() async {
-        guard process?.isRunning == true else { return }
+        guard supervisor != nil, FileManager.default.fileExists(atPath: endpoint.socketPath) else { return }
         if let availability = tracker.record(await probe()) { report(.connected(availability)) }
     }
 
     /// Start the remote daemon over ssh (an explicit user action).
     func startDaemon() async -> String? {
-        let output = await MachineSSH.run(MachineSSH.startDaemonArguments(sshHost: machine.sshHost), timeout: 60)
+        let output = await MachineSSH.run(
+            MachineSSH.startDaemonArguments(sshHost: machine.sshHost), timeout: 60, processes: oneShots)
         await refreshNow()
         return output.status == 0 ? nil : MachineSSH.sshErrorMessage(output)
     }
@@ -383,11 +501,16 @@ actor MachineConnection {
     private func supervise(generation: Int) async {
         var backoff: UInt64 = 2
         while isCurrent(generation) {
+            _ = try? MachinePaths.ensureDirectory(machineId: machine.id)
+            if !forwardLock.tryAcquire() {
+                // Another PurePoint instance owns this machine's forward: use it, never end it.
+                await followSharedForward(generation: generation)
+                continue
+            }
             report(.connecting)
             do {
-                let home = try await MachineSSH.resolveHome(sshHost: machine.sshHost)
+                let home = try await MachineSSH.resolveHome(sshHost: machine.sshHost, processes: oneShots)
                 guard isCurrent(generation) else { return }
-                _ = try MachinePaths.ensureDirectory(machineId: machine.id)
                 let stderr = try launchForward(remoteHome: home)
                 guard await waitForSocket() else {
                     guard isCurrent(generation) else { return }
@@ -420,6 +543,25 @@ actor MachineConnection {
             guard isCurrent(generation) else { return }
             try? await Task.sleep(for: .seconds(Double(backoff)))
             backoff = min(backoff * 2, 60)
+        }
+    }
+
+    /// Probe the forward another instance owns until this one can take the lock (that
+    /// instance quit or disconnected) or the user disconnects.
+    private func followSharedForward(generation: Int) async {
+        tracker = HealthProbeTracker()
+        while isCurrent(generation) {
+            if forwardLock.tryAcquire() { return }
+            if FileManager.default.fileExists(atPath: endpoint.socketPath) {
+                let availability = tracker.record(await probe())
+                guard isCurrent(generation) else { return }
+                if let availability { report(.connected(availability)) }
+            } else {
+                report(.connecting)
+            }
+            for _ in 0..<5 where isCurrent(generation) {
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 
