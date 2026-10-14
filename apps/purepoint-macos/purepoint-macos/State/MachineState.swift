@@ -248,7 +248,10 @@ final class MachineState: Identifiable {
             }
         }
         var next: [ProjectState] = []
-        for root in visible {
+        var seen = Set<String>()
+        // One row per root: a repeated root would otherwise build two sidebar nodes with
+        // the same identity, so an expansion, a lookup or a click could land on either.
+        for root in visible where seen.insert(root).inserted {
             if let existing = projects.first(where: { $0.projectRoot == root }) {
                 next.append(existing)
             } else {

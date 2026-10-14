@@ -4,6 +4,9 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+- The macOS sidebar's project and worktree rows keep their open/closed state across refreshes instead of snapping everything open again. The tree rebuilds on every data change (an unread count, an agent status, the 30 s machine inventory), and a rebuild forgot every row, so closing one row could reopen others. Closed rows now persist across launches, and a selection inside a closed section opens that section instead of going nowhere.
+
 ## [0.5.0] — 2026-10-13
 
 ### Added

@@ -54,11 +54,28 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// Node for context-menu tracking.
     private var contextClickedNode: SidebarNode?
 
+    /// Which rows the user closed. AppKit forgets expansion whenever it reloads, and every
+    /// rebuild reloads, so the answer is kept here and replayed after each one.
+    private let expansionStore: SidebarExpansionStore
+
+    /// Set while the recorded state is replayed, so the notifications a real expand or
+    /// collapse posts are not taken for the user's.
+    private var isRestoringExpansion = false
+
     /// Inline rename state.
     private var editingTextField: NSTextField?
     private var isStartingRename = false
     private var editingOriginalName: String?
     private var editingWorkspaceId: String?
+
+    init(expansionStore: SidebarExpansionStore) {
+        self.expansionStore = expansionStore
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported: the sidebar is built in code")
+    }
 
     private struct SidebarRenderState: Equatable {
         let activeWorkspaceId: String?
@@ -155,17 +172,28 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let oldSelectedId = selectedNodeId()
         let scrollOrigin = scrollView.contentView.bounds.origin
 
-        projectNodes = projects.map { buildProjectNode(from: $0) }
+        projectNodes = projects.map { SidebarNode.projectNode($0, workspaces: workspacesByProject[$0.projectId] ?? []) }
         if !machines.isEmpty {
-            projectNodes.append(SidebarNode(kind: .sectionHeader("MACHINES")))
+            projectNodes.append(SidebarNode.sectionHeaderNode("MACHINES"))
             for machine in machines {
+                let machineKey = SidebarNode.machineKey(machine.machine.id)
                 projectNodes.append(
-                    SidebarNode(kind: .machine(machine), children: machine.projects.map { buildProjectNode(from: $0) }))
+                    SidebarNode(
+                        kind: .machine(machine),
+                        rowKey: machineKey,
+                        children: machine.projects.map {
+                            SidebarNode.projectNode(
+                                $0, workspaces: workspacesByProject[$0.projectId] ?? [], parentKey: machineKey)
+                        }))
             }
         }
         lastRenderState = nextRenderState
+        // Reloading drops every expansion AppKit knows about, and it may announce that as it
+        // does. Neither that nor the replay below is the user opening or closing a row.
+        isRestoringExpansion = true
         outlineView.reloadData()
         restoreExpansionState()
+        isRestoringExpansion = false
 
         if let oldSelectedId {
             selectNode(withId: oldSelectedId)
@@ -173,25 +201,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         scrollView.contentView.scroll(to: scrollOrigin)
         scrollView.reflectScrolledClipView(scrollView.contentView)
-    }
-
-    private func buildProjectNode(from project: ProjectState) -> SidebarNode {
-        let workspaces = workspacesByProject[project.projectId] ?? []
-
-        var projectChildren: [SidebarNode] =
-            workspaces
-            .filter { $0.container == .projectRoot && !$0.isPointGuard }
-            .map { SidebarNode(kind: .workspace($0)) }
-
-        for worktree in project.worktrees {
-            let children =
-                workspaces
-                .filter { $0.container == .worktree(worktree.id) }
-                .map { SidebarNode(kind: .workspace($0)) }
-            projectChildren.append(SidebarNode(kind: .worktree(worktree), children: children))
-        }
-
-        return SidebarNode(kind: .project(project), children: projectChildren)
     }
 
     /// How a workspace presents itself as one row: named after its first pane's agent,
@@ -252,17 +261,33 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         )
     }
 
+    /// Close the rows the user closed and leave the rest open. `reloadData()` above leaves
+    /// every row collapsed, so the recorded rows stay collapsed and everything else is
+    /// expanded. Rows that no longer exist are dropped, so a removed row cannot resurrect
+    /// itself when it comes back.
     private func restoreExpansionState() {
-        func expand(_ node: SidebarNode) {
-            switch node.kind {
-            case .project, .worktree, .machine:
+        expansionStore.record(applyExpansionState(projectNodes, parentOpen: true))
+    }
+
+    /// Expands the rows that are not recorded closed and reports the ones in the tree that
+    /// are, parents before children.
+    ///
+    /// `parentOpen` carries whether this row is on screen yet: a row inside a closed row has
+    /// no row of its own, so it cannot be expanded, but it is still closed — that is what
+    /// lets it come back as it was when its parent opens again.
+    private func applyExpansionState(_ nodes: [SidebarNode], parentOpen: Bool) -> Set<String> {
+        var liveClosed: Set<String> = []
+        for node in nodes where node.isExpandable {
+            let isClosed = expansionStore.closedRowKeys.contains(node.rowKey)
+            if isClosed {
+                liveClosed.insert(node.rowKey)
+            } else if parentOpen {
                 outlineView.expandItem(node)
-                for child in node.children { expand(child) }
-            case .workspace, .sectionHeader:
-                break
             }
+            liveClosed.formUnion(
+                applyExpansionState(node.children, parentOpen: parentOpen && !isClosed))
         }
-        projectNodes.forEach(expand)
+        return liveClosed
     }
 
     private func selectedNodeId() -> String? {
@@ -304,6 +329,13 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             return
         }
 
+        // A row inside a closed row has no row of its own yet, so its ancestors are opened
+        // first — otherwise selecting a workspace inside a collapsed project would silently
+        // find nothing.
+        for ancestor in ancestors(ofRowId: targetId) {
+            outlineView.expandItem(ancestor)
+        }
+
         for row in 0..<outlineView.numberOfRows {
             if let node = outlineView.item(atRow: row) as? SidebarNode, node.id == targetId {
                 suppressSelectionCallback = true
@@ -311,6 +343,56 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
                 suppressSelectionCallback = false
                 return
             }
+        }
+    }
+
+    /// The rows above the one with this id, outermost first. Empty when the row is at the
+    /// top level or is not in the tree.
+    private func ancestors(ofRowId targetId: String) -> [SidebarNode] {
+        func find(in nodes: [SidebarNode], chain: [SidebarNode]) -> [SidebarNode]? {
+            for node in nodes {
+                if node.id == targetId {
+                    return chain
+                }
+                if let found = find(in: node.children, chain: chain + [node]) {
+                    return found
+                }
+            }
+            return nil
+        }
+        return find(in: projectNodes, chain: []) ?? []
+    }
+
+    // MARK: - Row Expansion
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        // While the recorded state is replayed the walk opens what it needs itself; the
+        // cascade below would only open the same rows twice.
+        guard !isRestoringExpansion,
+            let node = notification.userInfo?["NSObject"] as? SidebarNode
+        else { return }
+
+        openRows(under: node)
+    }
+
+    func outlineViewItemWillCollapse(_ notification: Notification) {
+        // The whole tree is reloaded on every rebuild, and AppKit drops every expansion
+        // with it; that is not the user closing anything.
+        guard !isRestoringExpansion,
+            let node = notification.userInfo?["NSObject"] as? SidebarNode
+        else { return }
+
+        expansionStore.setExpanded(node.rowKey, isExpanded: false)
+    }
+
+    /// Opens a row the user just opened and the rows under it with it. AppKit expands only
+    /// the row itself, so without this every row beneath a reopened row would come back
+    /// closed until it is opened again.
+    private func openRows(under parent: SidebarNode) {
+        expansionStore.setExpanded(parent.rowKey, isExpanded: true)
+        for child in parent.children where child.isExpandable {
+            guard !expansionStore.closedRowKeys.contains(child.rowKey) else { continue }
+            outlineView.expandItem(child)
         }
     }
 
@@ -330,10 +412,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
         guard let node = item as? SidebarNode else { return false }
-        switch node.kind {
-        case .project, .worktree, .machine: return true
-        case .workspace, .sectionHeader: return false
-        }
+        return node.isExpandable
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
@@ -996,7 +1075,8 @@ extension SidebarOutlineViewController: NSMenuDelegate {
         guard let node = contextClickedNode, case .project(let project) = node.kind else { return }
         let unsaved =
             project.isRemote
-            ? project.appState?.machines.first { $0.machine.id == project.key.machineId }?.unsavedFileNames(in: project) ?? []
+            ? project.appState?.machines.first { $0.machine.id == project.key.machineId }?.unsavedFileNames(in: project)
+                ?? []
             : []
         showConfirmation(
             title: "Remove \(project.projectName)?",

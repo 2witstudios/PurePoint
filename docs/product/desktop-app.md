@@ -13,6 +13,7 @@ Desktop App
   App lifecycle (CLIInstaller, DaemonLifecycle, agent restoration)
   Sidebar (NSOutlineView: projects → worktrees → agents)
     Live updates via manifest watcher + daemon status
+    Which rows are open is remembered across refreshes and launches (APP-017)
     Context menus (rename, delete worktree, kill all)
     MACHINES section (machine → its daemon's projects → worktrees → agents, over SSH)
   Content area
@@ -33,6 +34,8 @@ Desktop App
 ```
 
 ## Decisions
+
+! [APP-017] Sidebar row expansion. The sidebar keeps which rows the user closed and replays it after every refresh instead of reopening the whole tree. The outline view (APP-006) allocates new node objects on every data change and AppKit tracks expansion by node identity, so a rebuild forgets every row — and a global "everything open" restore then lets any unrelated refresh (an unread count, an agent status, the 30 s machine inventory) discard what the user closed. Closed rows are recorded outside the tree under an identity that carries every ancestor's scope, so a row is never confused with a same-id row under another project or on another machine. Every row that is not recorded closed is open, so a row appearing for the first time opens as before; closing a row keeps its own rows' state, and opening one brings them back. The closed rows persist in UserDefaults as `PurePointSidebarExpansion` across launches, and a row that no longer exists is dropped so it cannot return in an old state. A row inside a closed section has no row of its own, so a selection for one first opens that section's ancestors.
 
 ! [APP-016] Machines over SSH ([machines.md](machines.md)). Below the local projects the sidebar shows a "MACHINES" section header and one row per machine registered in `~/.pu/machines.json` (shared with `pu machine`): a status dot, the machine name and its state — Connecting, project count when connected, Daemon stopped, Incompatible (protocol N), Offline or Disconnected. Each machine row nests the projects its daemon has registered (`inventory`, refreshed on connect and every 30 s), rendered with the same project/worktree/workspace rows as local projects. The machine context menu offers Connect/Disconnect, Start Daemon (only when connected with the daemon stopped; never automatic) and Remove Machine (closes the forward and forgets it; nothing on the machine changes). The footer's machine button opens Add Machine: name, SSH host (with `Host` aliases from `~/.ssh/config`, wildcards skipped) and Test Connection. Remote projects have full parity through their daemon endpoint and a project host: status, attach, spawn, worktrees, grid commands, channel, files (browse, preview, edit, save with conflict rejection), git/gh review and workspace layouts (`.pu/workspaces.json` on the machine). Identity is `(machine, root)`: local keys keep their bare-root form for persisted state, remote keys are `machine:<uuid>:<root>`. Local-only actions adapt: Reveal in Finder becomes Open Local Copy (fetched to a private temp file), and Remove Project only hides a remote project in this app. Agents Hub, Schedule, Triggers and agent settings stay scoped to the local daemon. Disconnecting or quitting closes the SSH forward and leaves remote agents running.
 

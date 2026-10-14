@@ -11,7 +11,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
     var onOutlineViewReady: ((NSOutlineView) -> Void)?
 
     func makeNSViewController(context: Context) -> SidebarOutlineViewController {
-        let vc = SidebarOutlineViewController()
+        let vc = SidebarOutlineViewController(expansionStore: SidebarExpansionStore())
         onOutlineViewReady?(vc.outlineView)
 
         vc.onSelectionChanged = { newSelection in

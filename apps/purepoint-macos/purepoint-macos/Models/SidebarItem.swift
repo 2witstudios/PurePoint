@@ -48,11 +48,19 @@ class SidebarNode {
     let kind: Kind
     var children: [SidebarNode] = []
 
-    init(kind: Kind, children: [SidebarNode] = []) {
+    /// Row identity: every ancestor's scope, then this row's own kind and id. `id` alone is
+    /// not enough — a worktree id under two projects, or the same project root under two
+    /// machines, would otherwise be one row as far as expansion is concerned.
+    let rowKey: String
+
+    init(kind: Kind, rowKey: String, children: [SidebarNode] = []) {
         self.kind = kind
+        self.rowKey = rowKey
         self.children = children
     }
 
+    /// What a selection addresses: the project key, worktree id or workspace id the rest of
+    /// the app knows the row by.
     var id: String {
         switch kind {
         case .project(let p): return p.projectId
@@ -61,5 +69,57 @@ class SidebarNode {
         case .sectionHeader(let title): return "section:" + title
         case .machine(let m): return "machine-node:" + m.machine.id.uuidString.lowercased()
         }
+    }
+
+    var isExpandable: Bool {
+        switch kind {
+        case .project, .worktree, .machine: return true
+        case .workspace, .sectionHeader: return false
+        }
+    }
+}
+
+// MARK: - Tree building
+
+extension SidebarNode {
+    /// A project row with its subtree: the project root's workspaces first, then one row
+    /// per worktree holding that worktree's workspaces.
+    static func projectNode(_ project: ProjectState, workspaces: [Workspace], parentKey: String? = nil) -> SidebarNode {
+        let projectKey = rowKey("project", project.projectId, under: parentKey)
+        let rootWorkspaces =
+            workspaces
+            .filter { $0.container == .projectRoot && !$0.isPointGuard }
+            .map { workspace in
+                SidebarNode(kind: .workspace(workspace), rowKey: rowKey("workspace", workspace.id, under: projectKey))
+            }
+        var children = rootWorkspaces
+        for worktree in project.worktrees {
+            let worktreeKey = rowKey("worktree", worktree.id, under: projectKey)
+            let worktreeWorkspaces =
+                workspaces
+                .filter { $0.container == .worktree(worktree.id) }
+                .map { workspace in
+                    SidebarNode(
+                        kind: .workspace(workspace), rowKey: rowKey("workspace", workspace.id, under: worktreeKey))
+                }
+            children.append(SidebarNode(kind: .worktree(worktree), rowKey: worktreeKey, children: worktreeWorkspaces))
+        }
+        return SidebarNode(kind: .project(project), rowKey: projectKey, children: children)
+    }
+
+    /// A machine row's key. Projects on it are keyed under this, so the same root on two
+    /// machines is two different rows.
+    static func machineKey(_ machineId: UUID) -> String {
+        rowKey("machine", machineId.uuidString.lowercased())
+    }
+
+    /// The MACHINES section title.
+    static func sectionHeaderNode(_ title: String) -> SidebarNode {
+        SidebarNode(kind: .sectionHeader(title), rowKey: rowKey("section", title))
+    }
+
+    static func rowKey(_ kind: String, _ id: String, under parent: String? = nil) -> String {
+        guard let parent else { return "\(kind):\(id)" }
+        return "\(parent)/\(kind):\(id)"
     }
 }
