@@ -243,11 +243,11 @@ struct SidebarOutlineViewControllerTests {
         #expect(controller.outlineView.selectedRow == workspaceRow)
     }
 
-    @Test func givenAProjectThatHasNotPublishedItsRowsShouldKeepWhatItRecorded() throws {
+    @Test func givenAProjectThatHasNotReadItsSnapshotShouldKeepWhatItRecorded() throws {
         let suite = "pp-sidebar-expansion-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let root = "/tmp/sidebar-unpublished-\(UUID().uuidString)"
+        let root = "/tmp/sidebar-unread-\(UUID().uuidString)"
         let worktreeKey = SidebarNode.rowKey("worktree", "wt-0", under: SidebarNode.rowKey("project", root))
         // A previous launch closed a worktree row under this project.
         let store = SidebarExpansionStore(defaults: defaults)
@@ -255,16 +255,39 @@ struct SidebarOutlineViewControllerTests {
         let controller = SidebarOutlineViewController(expansionStore: store)
         controller.loadViewIfNeeded()
 
-        // The relaunch order: the project row is here, its snapshot has not been read, so no
-        // rows have been published for it and its worktrees are not in the tree yet.
+        // The relaunch order: the project row is here, but its snapshot has not been read,
+        // so its worktrees are not in the tree yet.
         controller.rebuildNodes(projects: [makeSidebarProject(root: root, worktreeCount: 0)])
 
-        // The snapshot lands. The row the user closed arrives, and must still be closed —
-        // the rebuild above must not have taken the tree as complete.
-        controller.workspacesByProject = [root: [makeSidebarWorkspace(agentId: "ag-1", in: .worktree("wt-0"))]]
-        controller.rebuildNodes(projects: [makeSidebarProject(root: root, worktreeCount: 1)])
+        // The snapshot lands, and the row the user closed arrives with it. It must still be
+        // closed: the rebuild above must not have taken the tree as complete, which is what
+        // erased saved rows while a project's rows loaded after the project itself.
+        let loaded = makeSidebarProject(root: root, worktreeCount: 1)
+        loaded.markWorktreesLoadedForTesting()
+        controller.rebuildNodes(projects: [loaded])
 
         #expect(store.closedRowKeys == [worktreeKey])
+        #expect(!controller.outlineView.isItemExpanded(controller.projectNodes[0].children[0]))
+    }
+
+    @Test func givenASettledTreeShouldDropRowsThatAreGone() throws {
+        let suite = "pp-sidebar-expansion-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = "/tmp/sidebar-read-\(UUID().uuidString)"
+        let goneKey = SidebarNode.rowKey("worktree", "wt-gone", under: SidebarNode.rowKey("project", root))
+        let store = SidebarExpansionStore(defaults: defaults)
+        store.setExpanded(goneKey, isExpanded: false)
+        let controller = SidebarOutlineViewController(expansionStore: store)
+        controller.loadViewIfNeeded()
+
+        // Settled, and the row it recorded is not in the tree: it is a row that no longer
+        // exists, so it must not come back closed if that id is ever reused.
+        let loaded = makeSidebarProject(root: root, worktreeCount: 1)
+        loaded.markWorktreesLoadedForTesting()
+        controller.rebuildNodes(projects: [loaded])
+
+        #expect(store.closedRowKeys.isEmpty)
     }
 
     @Test func givenARowClosedBeforeALaunchShouldStayClosedOnTheFirstBuild() throws {

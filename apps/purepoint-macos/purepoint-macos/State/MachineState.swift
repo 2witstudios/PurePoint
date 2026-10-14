@@ -306,8 +306,10 @@ final class MachineState: Identifiable {
     /// stays (unwatched, shown as unavailable) so its edits are not lost.
     @discardableResult
     func removeAllProjects(keepingUnsaved: Bool) -> [RemoteLayoutSaver] {
-        // Nothing is reported any more, so the list is unknown rather than empty.
-        hasLoadedProjects = false
+        // Dropping everything means the machine no longer answers for this list. Keeping the
+        // projects with unsaved tabs leaves the list intact, so the answer still stands and
+        // the rows still under them keep being reportable.
+        hasLoadedProjects = hasLoadedProjects && keepingUnsaved
         var savers: [RemoteLayoutSaver] = []
         var kept: [ProjectState] = []
         for project in projects {

@@ -263,30 +263,31 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// Close the rows the user closed and leave the rest open. `reloadData()` above leaves
     /// every row collapsed, so the recorded rows stay collapsed and everything else is
-    /// expanded. Rows that no longer exist are dropped, so a removed row cannot resurrect
-    /// itself when it comes back.
+    /// expanded.
     private func restoreExpansionState() {
         let liveClosed = applyExpansionState(projectNodes, parentOpen: true)
-        // Until every project has reported its worktrees and every machine its projects, a
-        // rebuild sees parents with nothing under them. Recording that as the whole tree
-        // would erase the saved state of rows that simply have not arrived yet — worktrees
-        // and remote projects load after the project row, not with it.
+        // Rows that no longer exist are dropped here, so a removed row cannot resurrect
+        // itself when it comes back. Until the tree is settled, though, a row with nothing
+        // under it has simply not loaded yet, and recording that as the whole tree would
+        // erase the saved state of rows that have not arrived — a project's worktrees load
+        // after its row, a machine's projects after its inventory answers.
         guard isTreeSettled else { return }
         expansionStore.record(liveClosed)
     }
 
-    /// Whether every row in the tree holds all the rows it will ever hold. `false` while
-    /// worktrees and remote project inventories are still loading, which is how the sidebar
-    /// looks for the first moments after a relaunch or a machine connection.
+    /// Whether every row in the tree holds all the rows it will ever hold. `false` while a
+    /// project has yet to read its snapshot and a machine has yet to answer its inventory,
+    /// which is how the sidebar looks for the first moments after a relaunch or a machine
+    /// connection.
     ///
-    /// A project publishes its rows once its snapshot has been read, and a machine reports its
-    /// projects once its inventory has answered. Until then an empty row is not evidence that
-    /// nothing is under it, so nothing may be pruned on that basis.
+    /// An empty row in that window is not evidence that nothing is under it, so nothing may
+    /// be pruned on that basis. A remote project is registered with the registry before its
+    /// snapshot has been read, which is why the registry cannot answer this on its own.
     private var isTreeSettled: Bool {
         func settled(_ nodes: [SidebarNode]) -> Bool {
             nodes.allSatisfy { node in
                 switch node.kind {
-                case .project(let project) where workspacesByProject[project.projectId] == nil:
+                case .project(let project) where !project.hasLoadedWorktrees:
                     return false
                 case .machine(let machine) where !machine.hasLoadedProjects:
                     return false
@@ -424,9 +425,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         expansionStore.setExpanded(node.rowKey, isExpanded: false)
     }
 
-    /// Whether some row above this one is already closed. AppKit marks the row being closed
-    /// before announcing the rows inside it, which is what tells the two announcements apart.
+    /// Whether some row above this one is already closed.
+    ///
+    /// AppKit announces a row's open descendants *after* it has collapsed the row itself, so
+    /// an ancestor that already reads collapsed means this announcement is part of that
+    /// cascade rather than the user's own. (The row being closed still reads expanded in its
+    /// own notification, which is why only the ancestors are inspected.)
     private func isInsideClosedRow(_ node: SidebarNode) -> Bool {
+        // Identity, not id: the notification carries the very node instance the outline view
+        // holds, and two rows can share an id.
         ancestors { $0 === node }.contains { !outlineView.isItemExpanded($0) }
     }
 
