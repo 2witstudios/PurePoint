@@ -40,5 +40,6 @@ final class SidebarExpansionStore {
         defaults.set(closedRowKeys.sorted(), forKey: key)
     }
 
-    nonisolated private static let storageKey = "PurePointSidebarExpansion"
+    /// Where the closed rows are persisted. The tests read it back from their own suite.
+    nonisolated static let storageKey = "PurePointSidebarExpansion"
 }

@@ -119,7 +119,18 @@ extension SidebarNode {
     }
 
     static func rowKey(_ kind: String, _ id: String, under parent: String? = nil) -> String {
-        guard let parent else { return "\(kind):\(id)" }
-        return "\(parent)/\(kind):\(id)"
+        let component = "\(kind):\(Self.escape(id))"
+        guard let parent else { return component }
+        return "\(parent)/\(component)"
+    }
+
+    /// Reserved by the key grammar: the tier separator `:`, the parent separator `/`, and the
+    /// escape itself. A project root is an arbitrary path, so these must not pass through raw
+    /// — a root ending in `/worktree:wt-abc12345` would otherwise build the same key as that
+    /// worktree row under a different project, and closing one would close both.
+    private static func escape(_ id: String) -> String {
+        id.replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: ":", with: "%3A")
+            .replacingOccurrences(of: "/", with: "%2F")
     }
 }

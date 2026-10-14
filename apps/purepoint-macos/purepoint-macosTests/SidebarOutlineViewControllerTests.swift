@@ -243,6 +243,30 @@ struct SidebarOutlineViewControllerTests {
         #expect(controller.outlineView.selectedRow == workspaceRow)
     }
 
+    @Test func givenAProjectThatHasNotPublishedItsRowsShouldKeepWhatItRecorded() throws {
+        let suite = "pp-sidebar-expansion-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = "/tmp/sidebar-unpublished-\(UUID().uuidString)"
+        let worktreeKey = SidebarNode.rowKey("worktree", "wt-0", under: SidebarNode.rowKey("project", root))
+        // A previous launch closed a worktree row under this project.
+        let store = SidebarExpansionStore(defaults: defaults)
+        store.setExpanded(worktreeKey, isExpanded: false)
+        let controller = SidebarOutlineViewController(expansionStore: store)
+        controller.loadViewIfNeeded()
+
+        // The relaunch order: the project row is here, its snapshot has not been read, so no
+        // rows have been published for it and its worktrees are not in the tree yet.
+        controller.rebuildNodes(projects: [makeSidebarProject(root: root, worktreeCount: 0)])
+
+        // The snapshot lands. The row the user closed arrives, and must still be closed —
+        // the rebuild above must not have taken the tree as complete.
+        controller.workspacesByProject = [root: [makeSidebarWorkspace(agentId: "ag-1", in: .worktree("wt-0"))]]
+        controller.rebuildNodes(projects: [makeSidebarProject(root: root, worktreeCount: 1)])
+
+        #expect(store.closedRowKeys == [worktreeKey])
+    }
+
     @Test func givenARowClosedBeforeALaunchShouldStayClosedOnTheFirstBuild() throws {
         let (controller, suite) = try makeSidebarController()
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
@@ -259,6 +283,16 @@ struct SidebarOutlineViewControllerTests {
         relaunched.outlineView.layoutSubtreeIfNeeded()
 
         #expect(!relaunched.outlineView.isItemExpanded(relaunched.projectNodes[0]))
+    }
+
+    @Test func givenAProjectRootThatSpellsOutAnotherRowsKeyShouldNotShareIt() {
+        // A folder literally named after a worktree row under another project: without an
+        // escape both rows would answer to the same key, so closing one would close both.
+        let worktreeRow = SidebarNode.rowKey("worktree", "wt-abc12345", under: SidebarNode.rowKey("project", "/repo"))
+        let lookalike = SidebarNode.projectNode(
+            makeSidebarProject(root: "/repo/worktree:wt-abc12345", worktreeCount: 0), workspaces: []
+        ).rowKey
+        #expect(lookalike != worktreeRow)
     }
 
     @Test func givenTheSameRootOnTwoMachinesShouldGiveEveryRowItsOwnKey() {

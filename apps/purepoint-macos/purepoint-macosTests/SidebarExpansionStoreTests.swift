@@ -25,19 +25,19 @@ struct SidebarExpansionStoreTests {
     @Test func givenARowTheUserClosedShouldStayClosedAcrossALaunch() throws {
         let (store, suite) = try makeStore()
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
-        store.setExpanded("project:/a", isExpanded: true)
-        store.setExpanded("project:/a", isExpanded: false)
-        store.setExpanded("project:/b", isExpanded: false)
+        store.setExpanded("project:%2Fa", isExpanded: true)
+        store.setExpanded("project:%2Fa", isExpanded: false)
+        store.setExpanded("project:%2Fb", isExpanded: false)
 
         let relaunched = SidebarExpansionStore(defaults: UserDefaults(suiteName: suite)!)
-        #expect(relaunched.closedRowKeys == ["project:/a", "project:/b"])
+        #expect(relaunched.closedRowKeys == ["project:%2Fa", "project:%2Fb"])
     }
 
     @Test func givenARowTheUserReopenedShouldNotStayClosed() throws {
         let (store, suite) = try makeStore()
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
-        store.setExpanded("project:/a", isExpanded: false)
-        store.setExpanded("project:/a", isExpanded: true)
+        store.setExpanded("project:%2Fa", isExpanded: false)
+        store.setExpanded("project:%2Fa", isExpanded: true)
 
         #expect(store.closedRowKeys.isEmpty)
         let relaunched = SidebarExpansionStore(defaults: UserDefaults(suiteName: suite)!)
@@ -47,24 +47,24 @@ struct SidebarExpansionStoreTests {
     @Test func givenARowThatNoLongerExistsShouldDropItWhenTheTreeIsRecorded() throws {
         let (store, suite) = try makeStore()
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
-        store.record(["project:/gone", "project:/kept"])
+        store.record(["project:%2Fgone", "project:%2Fkept"])
 
         // The tree as it stands now: only the kept row still exists.
-        store.record(["project:/kept"])
+        store.record(["project:%2Fkept"])
 
-        #expect(store.closedRowKeys == ["project:/kept"])
+        #expect(store.closedRowKeys == ["project:%2Fkept"])
         let relaunched = SidebarExpansionStore(defaults: UserDefaults(suiteName: suite)!)
-        #expect(relaunched.closedRowKeys == ["project:/kept"])
+        #expect(relaunched.closedRowKeys == ["project:%2Fkept"])
     }
 
     @Test func givenTheSameRowsRecordedAgainShouldNotRewriteThem() throws {
         let (store, suite) = try makeStore()
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
-        store.record(["project:/a"])
+        store.record(["project:%2Fa"])
         let defaults = UserDefaults(suiteName: suite)!
 
-        store.record(["project:/a"])
+        store.record(["project:%2Fa"])
 
-        #expect(defaults.stringArray(forKey: "PurePointSidebarExpansion") == ["project:/a"])
+        #expect(defaults.stringArray(forKey: SidebarExpansionStore.storageKey) == ["project:%2Fa"])
     }
 }

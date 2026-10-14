@@ -266,7 +266,38 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     /// expanded. Rows that no longer exist are dropped, so a removed row cannot resurrect
     /// itself when it comes back.
     private func restoreExpansionState() {
-        expansionStore.record(applyExpansionState(projectNodes, parentOpen: true))
+        let liveClosed = applyExpansionState(projectNodes, parentOpen: true)
+        // Until every project has reported its worktrees and every machine its projects, a
+        // rebuild sees parents with nothing under them. Recording that as the whole tree
+        // would erase the saved state of rows that simply have not arrived yet — worktrees
+        // and remote projects load after the project row, not with it.
+        guard isTreeSettled else { return }
+        expansionStore.record(liveClosed)
+    }
+
+    /// Whether every row in the tree holds all the rows it will ever hold. `false` while
+    /// worktrees and remote project inventories are still loading, which is how the sidebar
+    /// looks for the first moments after a relaunch or a machine connection.
+    ///
+    /// A project publishes its rows once its snapshot has been read, and a machine reports its
+    /// projects once its inventory has answered. Until then an empty row is not evidence that
+    /// nothing is under it, so nothing may be pruned on that basis.
+    private var isTreeSettled: Bool {
+        func settled(_ nodes: [SidebarNode]) -> Bool {
+            nodes.allSatisfy { node in
+                switch node.kind {
+                case .project(let project) where workspacesByProject[project.projectId] == nil:
+                    return false
+                case .machine(let machine) where !machine.hasLoadedProjects:
+                    return false
+                case .project, .machine:
+                    return settled(node.children)
+                case .worktree, .workspace, .sectionHeader:
+                    return true
+                }
+            }
+        }
+        return settled(projectNodes)
     }
 
     /// Expands the rows that are not recorded closed and reports the ones in the tree that
@@ -332,7 +363,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         // A row inside a closed row has no row of its own yet, so its ancestors are opened
         // first — otherwise selecting a workspace inside a collapsed project would silently
         // find nothing.
-        for ancestor in ancestors(ofRowId: targetId) {
+        for ancestor in ancestors(where: { $0.id == targetId }) {
             outlineView.expandItem(ancestor)
         }
 
@@ -346,12 +377,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         }
     }
 
-    /// The rows above the one with this id, outermost first. Empty when the row is at the
-    /// top level or is not in the tree.
-    private func ancestors(ofRowId targetId: String) -> [SidebarNode] {
+    /// The rows above a matching row, outermost first. Empty when the row is at the top level
+    /// or is not in the tree.
+    private func ancestors(
+        where matches: (SidebarNode) -> Bool, in nodes: [SidebarNode]? = nil,
+        chain: [SidebarNode] = []
+    ) -> [SidebarNode] {
         func find(in nodes: [SidebarNode], chain: [SidebarNode]) -> [SidebarNode]? {
             for node in nodes {
-                if node.id == targetId {
+                if matches(node) {
                     return chain
                 }
                 if let found = find(in: node.children, chain: chain + [node]) {
@@ -360,7 +394,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             }
             return nil
         }
-        return find(in: projectNodes, chain: []) ?? []
+        // `nil` is no match at all, which a caller reads as "no ancestors".
+        return find(in: nodes ?? projectNodes, chain: chain) ?? []
     }
 
     // MARK: - Row Expansion
@@ -382,7 +417,17 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             let node = notification.userInfo?["NSObject"] as? SidebarNode
         else { return }
 
+        // Closing a row also announces every open row inside it, because those rows lose
+        // their place on screen. They were not closed: recording them would leave them
+        // closed when the parent is opened again.
+        guard !isInsideClosedRow(node) else { return }
         expansionStore.setExpanded(node.rowKey, isExpanded: false)
+    }
+
+    /// Whether some row above this one is already closed. AppKit marks the row being closed
+    /// before announcing the rows inside it, which is what tells the two announcements apart.
+    private func isInsideClosedRow(_ node: SidebarNode) -> Bool {
+        ancestors { $0 === node }.contains { !outlineView.isItemExpanded($0) }
     }
 
     /// Opens a row the user just opened and the rows under it with it. AppKit expands only
