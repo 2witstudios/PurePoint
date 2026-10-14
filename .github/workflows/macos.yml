@@ -129,7 +129,7 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
       - name: Retain iOS signature and XCTest diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mobile-diagnostics
           path: ${{ runner.temp }}/mobile-diagnostics
@@ -249,7 +249,7 @@ jobs:
 
       - name: Retain macOS failure diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-diagnostics
           path: ${{ runner.temp }}/macos-diagnostics
@@ -302,7 +302,7 @@ jobs:
       - name: Relocated clean native startup and state-preserving replacement
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/PointGuardProof.app"
       - name: Retain nonpublishing proof artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: point-guard-runtime-${{ matrix.architecture }}
           path: ${{ runner.temp }}/PointGuardProof.app
@@ -348,7 +348,7 @@ jobs:
       - name: Launch relocated universal runtime on native architecture
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/UniversalProof.app"
       - name: Retain nonpublishing universal proof artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: point-guard-runtime-universal-${{ matrix.architecture }}
           path: ${{ runner.temp }}/UniversalProof.app
