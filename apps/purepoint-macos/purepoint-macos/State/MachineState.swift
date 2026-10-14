@@ -16,6 +16,20 @@ final class MachineState: Identifiable {
     private(set) var isStartingDaemon = false
     /// Bumped when the hidden set changes so the sidebar menu re-reads the count.
     private(set) var hiddenCountRevision = 0
+    /// Whether the machine has reported its project list at least once. `projects` is empty
+    /// both before the first inventory reply and for a machine with nothing registered, so
+    /// anything that has to tell the two apart — the sidebar replaying which rows are closed
+    /// — reads this instead.
+    private(set) var hasLoadedProjects = false
+
+    /// Whether this machine answers for the rows it shows: its daemon is running and has
+    /// reported its list at least once. A machine that is connecting, offline, or whose
+    /// daemon is stopped shows rows that are absent because it cannot answer, not because
+    /// they are gone — so the sidebar must not treat that as the whole tree until the
+    /// forward is back and an inventory has answered.
+    var reportsCompleteProjects: Bool {
+        state.isDaemonRunning && hasLoadedProjects
+    }
 
     @ObservationIgnored weak var appState: AppState?
     @ObservationIgnored weak var registry: WorkspaceRegistry?
@@ -75,7 +89,8 @@ final class MachineState: Identifiable {
         switch state {
         case .disconnected: "Disconnected"
         case .connecting: "Connecting…"
-        case .connected(.running): projects.isEmpty ? "Connected" : "\(projects.count) project\(projects.count == 1 ? "" : "s")"
+        case .connected(.running):
+            projects.isEmpty ? "Connected" : "\(projects.count) project\(projects.count == 1 ? "" : "s")"
         case .connected(.stopped): "Daemon stopped"
         case .connected(.incompatible(let version)): "Incompatible (protocol \(version))"
         case .offline: "Offline"
@@ -219,7 +234,9 @@ final class MachineState: Identifiable {
         do {
             response = try await client.send(.inventory(kind: "projects"))
         } catch {
-            if state.isDaemonRunning { actionError = "Could not list projects on \(machine.name): \(error.localizedDescription)" }
+            if state.isDaemonRunning {
+                actionError = "Could not list projects on \(machine.name): \(error.localizedDescription)"
+            }
             return
         }
         guard state.isDaemonRunning else { return }
@@ -248,7 +265,10 @@ final class MachineState: Identifiable {
             }
         }
         var next: [ProjectState] = []
-        for root in visible {
+        var seen = Set<String>()
+        // One row per root: a repeated root would otherwise build two sidebar nodes with
+        // the same identity, so an expansion, a lookup or a click could land on either.
+        for root in visible where seen.insert(root).inserted {
             if let existing = projects.first(where: { $0.projectRoot == root }) {
                 next.append(existing)
             } else {
@@ -259,6 +279,7 @@ final class MachineState: Identifiable {
         let added = next.filter { candidate in !projects.contains { $0 === candidate } }
         let restored = next.filter { $0.isUnavailable && wanted.contains($0.projectRoot) }
         if next.map(\.projectRoot) != projects.map(\.projectRoot) { projects = next }
+        hasLoadedProjects = true
         for project in added { project.startWatching() }
         for project in restored {
             project.isUnavailable = false

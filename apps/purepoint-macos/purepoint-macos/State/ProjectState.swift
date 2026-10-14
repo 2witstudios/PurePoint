@@ -33,6 +33,18 @@ final class ProjectState: Identifiable {
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
 
+    /// Whether a snapshot of this project's manifest has been applied at least once.
+    /// `worktrees` is empty both before that and for a project that genuinely has none, so a
+    /// caller that has to tell the two apart — the sidebar replaying which rows are closed —
+    /// reads this instead.
+    private(set) var hasLoadedWorktrees = false
+
+    /// Marks the snapshot as applied. Production sets it where the snapshot is read; tests
+    /// use this to stand in for the daemon, which unit tests cannot run.
+    func markWorktreesLoadedForTesting() {
+        hasLoadedWorktrees = true
+    }
+
     @ObservationIgnored weak var registry: WorkspaceRegistry?
     @ObservationIgnored weak var appState: AppState?
 
@@ -92,6 +104,7 @@ final class ProjectState: Identifiable {
         refreshTask?.cancel()
         manifestWatcher?.stop()
         manifestWatcher = nil
+        hasLoadedWorktrees = false
 
         openTask = Task { [weak self] in
             // Retry with backoff: right after an update relaunch the previous
@@ -144,6 +157,7 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard !Task.isCancelled else { return }
                 self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+                self.hasLoadedWorktrees = true
             } catch is CancellationError {
                 return
             } catch {
@@ -166,6 +180,7 @@ final class ProjectState: Identifiable {
         resubscribeTask?.cancel()
         manifestWatcher?.stop()
         manifestWatcher = nil
+        hasLoadedWorktrees = false
 
         startRemoteLayoutRestore()
 
@@ -178,6 +193,7 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard !Task.isCancelled else { return }
                 self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+                self.hasLoadedWorktrees = true
             } catch is CancellationError {
                 return
             } catch {
@@ -279,6 +295,7 @@ final class ProjectState: Identifiable {
                 guard let self, !Task.isCancelled else { return }
 
                 self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+                self.hasLoadedWorktrees = true
             } catch is CancellationError {
                 // Task was cancelled (new refresh started) — ignore
             } catch {
