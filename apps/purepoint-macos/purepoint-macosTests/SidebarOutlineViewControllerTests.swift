@@ -270,6 +270,28 @@ struct SidebarOutlineViewControllerTests {
         #expect(!controller.outlineView.isItemExpanded(controller.projectNodes[0].children[0]))
     }
 
+    @Test func givenAProjectThatFinishedLoadingItsRowsUnchangedShouldStillPrune() throws {
+        let suite = "pp-sidebar-expansion-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = "/tmp/sidebar-unchanged-\(UUID().uuidString)"
+        let goneKey = SidebarNode.rowKey("worktree", "wt-gone", under: SidebarNode.rowKey("project", root))
+        let store = SidebarExpansionStore(defaults: defaults)
+        store.setExpanded(goneKey, isExpanded: false)
+        let controller = SidebarOutlineViewController(expansionStore: store)
+        controller.loadViewIfNeeded()
+
+        // A project with no worktrees at all: reading its snapshot changes no row, so only the
+        // readiness flag differs. The prune still has to happen, or a deleted row's key is
+        // kept for as long as nothing else in the sidebar changes.
+        let project = makeSidebarProject(root: root, worktreeCount: 0)
+        controller.rebuildNodes(projects: [project])
+        project.markWorktreesLoadedForTesting()
+        controller.rebuildNodes(projects: [project])
+
+        #expect(store.closedRowKeys.isEmpty)
+    }
+
     @Test func givenASettledTreeShouldDropRowsThatAreGone() throws {
         let suite = "pp-sidebar-expansion-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

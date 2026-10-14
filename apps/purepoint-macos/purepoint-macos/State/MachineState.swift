@@ -22,6 +22,15 @@ final class MachineState: Identifiable {
     /// — reads this instead.
     private(set) var hasLoadedProjects = false
 
+    /// Whether this machine answers for the rows it shows: its daemon is running and has
+    /// reported its list at least once. A machine that is connecting, offline, or whose
+    /// daemon is stopped shows rows that are absent because it cannot answer, not because
+    /// they are gone — so the sidebar must not treat that as the whole tree until the
+    /// forward is back and an inventory has answered.
+    var reportsCompleteProjects: Bool {
+        state.isDaemonRunning && hasLoadedProjects
+    }
+
     @ObservationIgnored weak var appState: AppState?
     @ObservationIgnored weak var registry: WorkspaceRegistry?
     @ObservationIgnored private var connection: MachineConnection!
@@ -306,10 +315,6 @@ final class MachineState: Identifiable {
     /// stays (unwatched, shown as unavailable) so its edits are not lost.
     @discardableResult
     func removeAllProjects(keepingUnsaved: Bool) -> [RemoteLayoutSaver] {
-        // Dropping everything means the machine no longer answers for this list. Keeping the
-        // projects with unsaved tabs leaves the list intact, so the answer still stands and
-        // the rows still under them keep being reportable.
-        hasLoadedProjects = hasLoadedProjects && keepingUnsaved
         var savers: [RemoteLayoutSaver] = []
         var kept: [ProjectState] = []
         for project in projects {

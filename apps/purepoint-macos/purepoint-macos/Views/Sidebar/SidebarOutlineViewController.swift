@@ -92,6 +92,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let isStartingDaemon: Bool
         let hiddenRevision: Int
         let projects: [ProjectRenderState]
+        let hasLoadedProjects: Bool
     }
 
     private struct ProjectRenderState: Equatable {
@@ -101,6 +102,10 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let projectRoot: String
         let rootWorkspaces: [WorkspaceRenderState]
         let worktrees: [WorktreeRenderState]
+        /// A project whose snapshot has not been read shows no worktrees yet, which is not a
+        /// change to its rows — but it is a change to whether the tree may be pruned, so it
+        /// has to reach the render state or the prune would be skipped.
+        let hasLoadedWorktrees: Bool
     }
 
     private struct WorktreeRenderState: Equatable {
@@ -226,7 +231,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
                 id: machine.machine.id, name: machine.machine.name, state: machine.state,
                 statusText: machine.statusText, actionError: machine.actionError,
                 isStartingDaemon: machine.isStartingDaemon, hiddenRevision: machine.hiddenCountRevision,
-                projects: machine.projects.map(projectRenderState))
+                projects: machine.projects.map(projectRenderState),
+                hasLoadedProjects: machine.hasLoadedProjects)
         }
         return SidebarRenderState(
             activeWorkspaceId: activeWorkspaceId, projects: projects.map(projectRenderState), machines: machineStates)
@@ -257,7 +263,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             layoutError: project.isRemote ? project.registry?.layoutErrorsByProject[project.projectId] : nil,
             projectRoot: project.projectId,
             rootWorkspaces: rootWorkspaces,
-            worktrees: worktrees
+            worktrees: worktrees,
+            hasLoadedWorktrees: project.hasLoadedWorktrees
         )
     }
 
@@ -282,14 +289,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     ///
     /// An empty row in that window is not evidence that nothing is under it, so nothing may
     /// be pruned on that basis. A remote project is registered with the registry before its
-    /// snapshot has been read, which is why the registry cannot answer this on its own.
+    /// snapshot has been read, which is why the registry cannot answer this on its own; and a
+    /// machine whose daemon is not running cannot answer for its rows either.
     private var isTreeSettled: Bool {
         func settled(_ nodes: [SidebarNode]) -> Bool {
             nodes.allSatisfy { node in
                 switch node.kind {
                 case .project(let project) where !project.hasLoadedWorktrees:
                     return false
-                case .machine(let machine) where !machine.hasLoadedProjects:
+                case .machine(let machine) where !machine.reportsCompleteProjects:
                     return false
                 case .project, .machine:
                     return settled(node.children)
