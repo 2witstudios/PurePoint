@@ -7,7 +7,10 @@ struct PointGuardView: View {
     @Environment(WorkspaceRegistry.self) private var registry
     @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
 
-    private var projectRoot: String? { appState.pointGuardRoot }
+    private var projectRoot: String? {
+        guard let root = appState.pointGuardRoot, !appState.isTooBroadProjectRoot(root) else { return nil }
+        return root
+    }
 
     private var workspace: Workspace? {
         projectRoot.flatMap { registry.workspacesByProject[$0]?.first(where: \.isPointGuard) }

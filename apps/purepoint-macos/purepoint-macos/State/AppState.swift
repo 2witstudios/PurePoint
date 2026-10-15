@@ -131,7 +131,7 @@ final class AppState {
     /// Whether a path is too broad to open as a project: `/`, `$HOME`, or an ancestor
     /// of `$HOME`. Mirrors the daemon's `is_too_broad_project_root` validation so the
     /// app doesn't attempt to open roots the daemon will reject.
-    private func isTooBroadProjectRoot(_ path: String) -> Bool {
+    func isTooBroadProjectRoot(_ path: String) -> Bool {
         let url = URL(fileURLWithPath: path)
         let canonical = url.resolvingSymlinksInPath().standardizedFileURL.path
         // Filesystem root
