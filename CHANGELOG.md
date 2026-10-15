@@ -4,6 +4,11 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-10-15
+
+### Fixed
+- Point Guard no longer shows a blank agent screen when its root folder is too broad to open; it falls back to the chat surface instead.
+
 ## [0.5.1] — 2026-10-15
 
 ### Fixed
