@@ -18,15 +18,30 @@ private final class ReadOnlyAgentTerminal: TerminalView {
     }
 }
 
+// Reports viewport size changes (keyboard, rotation) so the newest rows stay visible.
+private final class AnchoredScrollView: UIScrollView {
+    var onViewportChange: (() -> Void)?
+    private var lastSize = CGSize.zero
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.size != lastSize { lastSize = bounds.size; onViewportChange?() }
+    }
+}
+
 struct AgentTerminalView: UIViewRepresentable {
     @ObservedObject var model: AgentControlModel
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+        let scroll = AnchoredScrollView()
         scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 3
         scroll.backgroundColor = .black; scroll.delegate = context.coordinator
         scroll.alwaysBounceHorizontal = true; scroll.isDirectionalLockEnabled = true
-        scroll.accessibilityLabel = "Agent terminal. Pinch to zoom and scroll sideways."
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.accessibilityLabel = "Agent terminal. Pinch to zoom, scroll sideways, double-tap to fit width."
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.toggleFit))
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
+        scroll.onViewportChange = { [weak coordinator = context.coordinator] in coordinator?.viewportChanged() }
         context.coordinator.scroll = scroll
         return scroll
     }
@@ -47,6 +62,13 @@ struct AgentTerminalView: UIViewRepresentable {
         private let terminalFont = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
         private var lastCols = 0
         private var lastRows = 0
+        // Follow the newest rows (where agents prompt) until the reader scrolls away.
+        private var followBottom = true
+        private static let zoomKey = "pi.agentTerminal.zoom.v1"
+        private var preferredZoom: CGFloat {
+            get { let value = UserDefaults.standard.double(forKey: Self.zoomKey); return value > 0 ? CGFloat(value) : 1 }
+            set { UserDefaults.standard.set(Double(newValue), forKey: Self.zoomKey) }
+        }
 
         func update(_ model: AgentControlModel) {
             guard let scroll else { return }
@@ -58,16 +80,60 @@ struct AgentTerminalView: UIViewRepresentable {
                 view.nativeBackgroundColor = .black; view.nativeForegroundColor = .white
                 terminal = view; scroll.addSubview(view)
                 epoch = model.terminalEpoch; lastCols = 0; lastRows = 0
+                followBottom = true
                 scroll.contentOffset = .zero
                 resize(cols: model.terminalBaseCols, rows: model.terminalBaseRows)
+                scroll.setZoomScale(clampedZoom(preferredZoom), animated: false)
+                scrollToBottom()
             }
             guard let terminal else { return }
-            for update in model.drainTerminal() {
+            let updates = model.drainTerminal()
+            for update in updates {
                 switch update {
                 case .output(let text): terminal.feed(text: text)
                 case .size(let cols, let rows): resize(cols: cols, rows: rows)
                 }
             }
+            if !updates.isEmpty { scrollToBottom() }
+        }
+        func viewportChanged() { updateMinimumZoom(); scrollToBottom() }
+        private var fitWidthZoom: CGFloat {
+            guard let terminal, let scroll, terminal.bounds.width > 0, scroll.bounds.width > 0 else { return 1 }
+            return scroll.bounds.width / terminal.bounds.width
+        }
+        private func updateMinimumZoom() {
+            guard let scroll else { return }
+            scroll.minimumZoomScale = min(0.5, fitWidthZoom)
+        }
+        private func clampedZoom(_ zoom: CGFloat) -> CGFloat {
+            guard let scroll else { return zoom }
+            return min(max(zoom, scroll.minimumZoomScale), scroll.maximumZoomScale)
+        }
+        private func scrollToBottom() {
+            guard followBottom, let scroll else { return }
+            let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+            if abs(scroll.contentOffset.y - maxY) > 0.5 { scroll.contentOffset = CGPoint(x: scroll.contentOffset.x, y: maxY) }
+        }
+        private func isAtBottom(_ scroll: UIScrollView) -> Bool {
+            scroll.contentOffset.y >= scroll.contentSize.height - scroll.bounds.height - 24
+        }
+        @objc func toggleFit() {
+            guard let scroll else { return }
+            let fit = clampedZoom(fitWidthZoom)
+            let target: CGFloat = abs(scroll.zoomScale - fit) < 0.01 ? clampedZoom(1) : fit
+            scroll.setZoomScale(target, animated: true)
+            preferredZoom = target
+            followBottom = true; scrollToBottom()
+        }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { followBottom = isAtBottom(scrollView) }
+        }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { followBottom = isAtBottom(scrollView) }
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { followBottom = false }
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+            preferredZoom = scale
+            followBottom = isAtBottom(scrollView) || followBottom
+            scrollToBottom()
         }
         private func resize(cols: Int, rows: Int) {
             guard let terminal, let scroll else { return }
@@ -84,8 +150,10 @@ struct AgentTerminalView: UIViewRepresentable {
                 terminal.frame = CGRect(origin: .zero, size: size)
                 terminal.resize(cols: cols, rows: rows)
                 terminal.setNeedsLayout(); terminal.layoutIfNeeded()
-                scroll.contentSize = size; scroll.setZoomScale(zoom, animated: false)
+                scroll.contentSize = size
                 lastCols = cols; lastRows = rows
+                updateMinimumZoom()
+                scroll.setZoomScale(clampedZoom(zoom), animated: false)
             }
         }
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { terminal }

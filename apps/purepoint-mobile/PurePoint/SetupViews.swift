@@ -53,34 +53,51 @@ struct ConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 12) {
-                        Image("PurePointLogo").resizable().scaledToFit().frame(width: 38, height: 38).accessibilityHidden(true)
-                        Text("PurePoint").font(.title2.weight(.semibold))
-                    }.padding(.vertical, 8)
+                    HStack(spacing: 14) {
+                        Image("PurePointLogo").resizable().scaledToFit().frame(width: 44, height: 44).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(model.selectedMachine?.name ?? "PurePoint").font(.title3.weight(.semibold)).lineLimit(1)
+                            HStack(spacing: 6) {
+                                StatusDot(color: model.connected ? .green : model.connectionStatus.hasPrefix("Connecting") ? .orange : Color(uiColor: .tertiaryLabel))
+                                Text(model.connectionStatus).lineLimit(2)
+                            }.font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }.padding(.vertical, 6).accessibilityElement(children: .combine)
+                    if !model.endpoint.isEmpty {
+                        HStack(spacing: 12) {
+                            Button { model.connect() } label: { Label("Reconnect", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }
+                                .buttonStyle(.bordered)
+                            if model.connected {
+                                Button(role: .destructive) { model.disconnect() } label: { Label("Disconnect", systemImage: "bolt.horizontal.circle").frame(maxWidth: .infinity) }
+                                    .buttonStyle(.bordered)
+                            }
+                        }.listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 12, trailing: 16))
+                    }
                 }
                 if !model.machines.isEmpty {
                     Section("Your Macs") {
                         ForEach(model.machines) { machine in
-                            HStack {
+                            let selected = model.selectedMachine?.id == machine.id
+                            HStack(spacing: 12) {
                                 Button { model.selectMachine(machine.id) } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(machine.name).foregroundStyle(.primary)
-                                            Text(machine.endpoint).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                            if model.selectedMachine?.id == machine.id { Text(model.connectionStatus).font(.caption).foregroundStyle(.secondary) }
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "desktopcomputer").font(.body).foregroundStyle(selected ? Color.accentColor : .secondary).frame(width: 28).accessibilityHidden(true)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(machine.name).foregroundStyle(.primary).lineLimit(1)
+                                            Text(machine.endpoint).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                                         }
                                         Spacer()
-                                        if model.selectedMachine?.id == machine.id { Image(systemName: "checkmark.circle.fill").accessibilityLabel("Selected Mac") }
-                                    }
+                                        if selected { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.accentColor).accessibilityLabel("Selected Mac") }
+                                    }.contentShape(Rectangle())
                                 }.buttonStyle(.plain)
-                                Button { machineName = machine.name; renaming = machine } label: { Image(systemName: "pencil") }
+                                Button { machineName = machine.name; renaming = machine } label: { Image(systemName: "pencil").frame(width: 32, height: 32) }
                                     .buttonStyle(.borderless).accessibilityLabel("Rename " + machine.name)
                             }
                         }
                     }
                 }
-                Section("Connect another Mac") {
-                    Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder") }
+                Section {
+                    Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder").font(.body.weight(.medium)) }
                         .disabled(requestingCamera || model.pairing)
                     DisclosureGroup("Paste Mac pairing code") {
                         TextField("Enrollment QR contents", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Enrollment code")
@@ -94,14 +111,10 @@ struct ConnectionView: View {
                         Button("Cancel pairing", role: .cancel) { model.cancelPairing() }
                     }
                     if let error = model.pairingError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                } header: { Text(model.machines.isEmpty ? "Connect your Mac" : "Connect another Mac") } footer: {
+                    Text("Open Connect phone in PurePoint on your Mac, on the same Tailscale network.")
                 }
-                if let error = model.error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
-                if !model.endpoint.isEmpty {
-                    Section {
-                        if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
-                        Button("Reconnect") { model.connect() }
-                    }
-                }
+                if let error = model.error { Section { Label { Text(error).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) } } }
             }
             .navigationTitle("Connections").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelPairing(); dismiss() } } }
@@ -220,14 +233,14 @@ struct ConversationView: View {
                         if model.conversations.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right") }
                         ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
                             Button { Task { await model.browse(conversation, selection: selection) } } label: {
-                                VStack(alignment: .leading, spacing: 6) { Text(conversation.title).foregroundStyle(.primary).lineLimit(2); if conversation.id == model.snapshot?.sessionId { Text("Current conversation").font(.caption.weight(.semibold)) }; if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) }; if let preview = conversation.preview, !preview.isEmpty { Text(preview).font(.caption).foregroundStyle(.secondary).lineLimit(3) } }.padding(.vertical, 6)
+                                HistoryRow(title: conversation.title, date: conversation.date.map { String($0.prefix(10)) }, preview: conversation.preview, current: conversation.id == model.snapshot?.sessionId)
                             }
                         }
                     }.searchable(text: $search, prompt: "Find a conversation").refreshable { await model.loadConversations(selection: selection) }
                 }
             }
-            .safeAreaInset(edge: .top) { VStack(alignment: .leading) { Text("Point Guard · \(model.selectedMachine?.name ?? "Mac")").font(.caption).foregroundStyle(.secondary); if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red) } }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar) }
-            .navigationTitle(model.browsing?.title ?? model.selectedMachine?.name ?? "History").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top) { if let error = model.error { NoticeBanner(text: error).padding(.horizontal, 12).padding(.vertical, 6).background(.bar) } }
+            .navigationTitle(model.browsing?.title ?? "History").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .bottomBar) { Button("New conversation") { if model.busy { confirmNew = true } else { Task { await model.changeSession(selection: selection); finish() } } }.disabled(!model.connected || model.demo || model.changingSession) }
                 ToolbarItem(placement: .topBarLeading) { if model.browsing != nil { Button("Back") { model.browsing = nil } } }
@@ -244,6 +257,25 @@ struct ConversationView: View {
         }
     }
     private func finish() { model.browsing = nil; if let closeOverlay { closeOverlay() } else { dismiss() } }
+}
+private struct HistoryRow: View {
+    let title: String
+    let date: String?
+    let preview: String?
+    let current: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                Spacer(minLength: 4)
+                if let date { Text(date).font(.caption2).foregroundStyle(.secondary).fixedSize() }
+            }
+            if let preview, !preview.isEmpty { Text(preview).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            if current {
+                Label("Current conversation", systemImage: "checkmark.circle.fill").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+            }
+        }.padding(.vertical, 4).accessibilityElement(children: .combine)
+    }
 }
 struct NeutralPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
