@@ -531,6 +531,56 @@ test("expanded presets bounded, validated rename and exact single-agent stop", a
   });
 });
 
+test("spawn instructions are optional; blank launches bare and plan mode needs instructions or a preset", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  let r = await c.request(
+    form({
+      op: "workspace.spawn",
+      operationId: "spawn-0101",
+      agentType: "custom",
+      prompt: "",
+    }),
+  );
+  assert.equal(r.state, "succeeded");
+  assert.equal(f.requests.at(-1).prompt, "");
+  r = await c.request(
+    form({
+      op: "workspace.spawn",
+      operationId: "spawn-0102",
+      agentType: "custom",
+      prompt: " \n\t",
+    }),
+  );
+  assert.equal(r.state, "succeeded");
+  assert.equal(f.requests.at(-1).prompt, "");
+  const spawns = f.requests.filter((q) => q.type === "spawn").length;
+  r = await c.request(
+    form({
+      op: "workspace.spawn",
+      operationId: "spawn-0103",
+      agentType: "custom",
+      prompt: "",
+      planMode: true,
+    }),
+  );
+  assert.equal(r.state, "failed");
+  assert.equal(f.requests.filter((q) => q.type === "spawn").length, spawns);
+  r = await c.request(
+    form({
+      op: "workspace.spawn",
+      operationId: "spawn-0104",
+      agentType: "custom",
+      prompt: "",
+      planMode: true,
+      presetId: "review",
+    }),
+  );
+  assert.equal(r.state, "succeeded");
+  assert.match(f.requests.at(-1).prompt, /\S/);
+});
+
 test("real authenticated TLS WS old grants deny management, off leaks no fleet, downgrade events fence and reconnect reconciles", async (t) => {
   const f = await fixture(t),
     directory = path.join(f.home, "trust");

@@ -28,6 +28,9 @@ const promptText = (value) =>
   value.trim().length > 0 &&
   Buffer.byteLength(value) <= 65536 &&
   !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
+// Spawn instructions are optional: blank means no instructions.
+const optionalPromptText = (value) =>
+  typeof value === "string" && (value.trim().length === 0 || promptText(value));
 // Config map keys are opaque strings, not process or filesystem identifiers.
 const configKey = (value) =>
   typeof value === "string" &&
@@ -383,11 +386,15 @@ export function workspaceConnection({
           )
             fail("unsupported", "Agent unavailable");
           if (
-            !promptText(r.prompt) ||
+            !optionalPromptText(r.prompt) ||
             (r.planMode !== undefined && typeof r.planMode !== "boolean")
           )
-            fail("invalid", "Bounded prompt and boolean plan mode required");
-          prompt = r.prompt;
+            fail(
+              "invalid",
+              "Bounded instructions and boolean plan mode required",
+            );
+          const instructions = r.prompt.trim().length === 0 ? "" : r.prompt;
+          prompt = instructions;
           agent = r.agentType;
           if (r.presetId !== undefined) {
             const preset = choices.presets.find(
@@ -395,10 +402,15 @@ export function workspaceConnection({
             );
             if (!preset)
               fail("target", "Preset unavailable for selected agent");
-            prompt = `${preset.prompt}\n\n${prompt}`;
+            prompt = instructions
+              ? `${preset.prompt}\n\n${instructions}`
+              : preset.prompt;
           }
           if (Buffer.byteLength(prompt) > 65536)
             fail("invalid", "Expanded preset prompt exceeds 65536 UTF-8 bytes");
+          // Plan mode needs an effective prompt; the daemon rejects it otherwise.
+          if (r.planMode === true && prompt.length === 0)
+            fail("invalid", "Plan mode requires instructions or a preset");
         } else if (!choices.terminalAvailable)
           fail("unsupported", "Terminal unavailable");
         ipc = {

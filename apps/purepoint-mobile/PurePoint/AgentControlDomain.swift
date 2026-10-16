@@ -268,9 +268,11 @@ struct WorkspaceCatalog: Decodable, Sendable {
     let complete: Bool
 }
 struct WorkspaceOperation: Codable, Sendable {
+    struct Detail: Codable, Sendable { let agentId: String?; let worktreeId: String? }
     let operationId: String
     let state: String
     let message: String?
+    let detail: Detail?
 }
 
 struct WorkspaceFormDraft: Codable, Equatable {
