@@ -154,3 +154,12 @@ extension AgentControlTests {
         try await AgentControlScenarios.authoritativeReviewRequiresSuccessfulFreshInventory()
     }
 }
+
+extension AgentControlTests {
+    @MainActor func testGivenDuplicateInventoryShouldKeepFirstScopedIdentityWithoutDuplicateRows() async throws {
+        try await AgentControlScenarios.duplicateInventoryKeepsFirstScopedIdentity()
+    }
+    @MainActor func testGivenWorkspaceOnlyGrantToggleShouldPreserveTerminalPromptConfirmation() async throws {
+        try await AgentControlScenarios.workspaceGrantToggleDoesNotInvalidatePrompt()
+    }
+}

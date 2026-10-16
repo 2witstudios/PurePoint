@@ -400,3 +400,70 @@ extension AgentControlScenarios {
         try check(!off, "Permission off must never count as review")
     }
 }
+
+extension AgentControlScenarios {
+    static func duplicateInventoryKeepsFirstScopedIdentity() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        let original = bridge.inventory
+        var root = try JSONSerialization.jsonObject(with: Data(original.utf8)) as! [String: Any]
+        var machine = (root["machines"] as! [[String: Any]])[0]
+        let agent = (machine["agents"] as! [[String: Any]])[0]
+        var conflictingAgent = agent; conflictingAgent["name"] = "Wrong later identity"
+        machine["agents"] = [agent, conflictingAgent]
+        let project: [String: Any] = ["id":"/repo", "name":"First project", "available":true]
+        machine["projects"] = [project, project]
+        let worktree: [String: Any] = ["projectId":"/repo", "id":"w", "name":"Worktree", "path":"/repo/w", "branch":"feature", "status":"active", "agentIds":["a", "a"]]
+        machine["worktrees"] = [worktree, worktree]
+        var later = machine; later["name"] = "Wrong later machine"
+        var otherMachine = machine; otherMachine["id"] = "other"; otherMachine["name"] = "Other scoped machine"
+        root["machines"] = [machine, later, otherMachine]
+        bridge.inventory = String(decoding: try JSONSerialization.data(withJSONObject: root), as: UTF8.self)
+        await model.refresh()
+        try check(model.machines.count == 2, "Duplicate registry machine IDs must produce one first consistent machine")
+        let first = model.machines.first { $0.id == "local" }!
+        try check(first.name == "Mac" && first.agents.count == 1 && first.agents[0].name == "Agent", "Duplicate agent IDs must preserve first identity within each machine")
+        try check(first.registeredProjects?.count == 1 && first.worktrees?.count == 1, "Project and worktree ForEach identities must be unique")
+        try check(model.shortcuts.count == 2 && Set(model.shortcuts.map(\.id)).count == 2, "Cross-machine same agent IDs remain distinct without duplicate shortcut rows")
+        let scope = model.shortcuts.first { $0.scope.machine == "local" }!.scope
+        model.togglePin(scope)
+        try check(model.pinnedShortcuts.count == 1 && model.recentShortcuts.count == 1, "Pin lookup must not trap or duplicate rows")
+        let corruptPins = try JSONSerialization.data(withJSONObject: ["pins":[scope.storageKey,scope.storageKey],"interactions":[:],"hidden":[]])
+        defaults.set(corruptPins, forKey: "pi.agentNavigation.v1")
+        let restored = AgentControlModel(defaults: defaults)
+        restored.transport(host: "host-a", connected: true, request: bridge.request)
+        try await wait { !restored.machines.isEmpty }
+        try check(restored.pinnedShortcuts.count == 1 && Set(restored.pinnedShortcuts.map(\.id)).count == 1, "Duplicate persisted pin keys cannot duplicate SwiftUI rows")
+        restored.transport(host: "", connected: false)
+    }
+}
+
+extension AgentControlScenarios {
+    static func workspaceGrantToggleDoesNotInvalidatePrompt() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        try await open(model, bridge); try finishOpen(bridge)
+        try await wait { model.streamId != nil }
+        let screen = model.screenToken, stream = model.streamId
+        model.editDraft("Keep valid prompt confirmation", screen: screen); model.sendPrompt(screen: screen)
+        try await wait { bridge.prompts.count == 1 }
+        try model.receive(event(#"{"type":"permissions","terminals":"control","workspaceManagement":false,"workspace":{"management":true}}"#))
+        try model.receive(event(#"{"type":"permissions","terminals":"control","workspaceManagement":true,"workspace":{"management":true}}"#))
+        try check(model.streamId == stream && model.screenToken == screen, "Workspace-only grant changes must retain terminal attachment")
+        bridge.prompts.removeFirst().resume(returning: try json(#"{"outcome":"confirmed"}"#))
+        try await wait { model.composer.pending == nil }
+        try check(model.composer.outcome == .confirmed && !model.composer.deliveryUncertain && model.draft.isEmpty, "Workspace-only toggle must not invalidate authoritative terminal confirmation")
+        try check(model.recoveries.isEmpty && bridge.operations.filter { $0.0 == "agent.prompt" }.count == 1, "Confirmed prompt must not retain uncertainty or replay")
+        try await wait { !model.loading }
+        bridge.holdInventory = true
+        let mutation = Task { try await model.workspaceRequest("workspace.rename", fields: ["operationId":"workspace-toggle-check"]) }
+        try await wait { bridge.inventories.count == 1 }
+        try model.receive(event(#"{"type":"permissions","terminals":"control","workspaceManagement":false,"workspace":{"management":true}}"#))
+        try model.receive(event(#"{"type":"permissions","terminals":"control","workspaceManagement":true,"workspace":{"management":true}}"#))
+        bridge.holdInventory = false
+        bridge.inventories.removeFirst().resume(returning: try json(bridge.inventory))
+        do { _ = try await mutation.value; throw CheckFailure(errorDescription: "Management revoke and regrant must still fence the old mutation") }
+        catch is AgentControlFailure {}
+        try check(model.streamId == stream && model.composer.outcome == .confirmed, "Management fence must leave confirmed terminal state intact")
+    }
+}

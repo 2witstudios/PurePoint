@@ -26,6 +26,8 @@ import Foundation
         try await AgentControlScenarios.visibleInventoryFreshnessIsSingleFlightAndPauses()
         try await AgentControlScenarios.thrownPromptReceiptIsUncertainAndKeepsBothDrafts()
         try await AgentControlScenarios.authoritativeReviewRequiresSuccessfulFreshInventory()
+        try await AgentControlScenarios.workspaceGrantToggleDoesNotInvalidatePrompt()
+        try await AgentControlScenarios.duplicateInventoryKeepsFirstScopedIdentity()
         print("Phone control lifecycle and domain checks passed")
     }
 }

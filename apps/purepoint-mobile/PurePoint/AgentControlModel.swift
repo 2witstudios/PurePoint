@@ -28,6 +28,8 @@ import SwiftUI
     private var generation = 0
     private var screen = 0
     private var permissionRevision = 0
+    // Workspace grant changes must not invalidate an authorized terminal receipt.
+    private var terminalPermissionRevision = 0
     private var refreshRevision = 0
     private var pendingOpen: AgentPendingOpen?
     private var refreshTask: Task<Void, Never>?
@@ -79,11 +81,21 @@ import SwiftUI
         return machines.first { $0.id == selected.machine }?.agents.first { $0.id == selected.agent }
     }
     var shortcuts: [AgentShortcut] {
-        machines.flatMap { machine in machine.agents.map { AgentShortcut(scope: AgentScope(host: host, machine: machine.id, agent: $0.id), machine: machine, agent: $0) } }
+        var seen = Set<String>()
+        return machines.flatMap { machine in machine.agents.compactMap { agent -> AgentShortcut? in
+            let scope = AgentScope(host: host, machine: machine.id, agent: agent.id)
+            guard seen.insert(scope.storageKey).inserted else { return nil }
+            return AgentShortcut(scope: scope, machine: machine, agent: agent)
+        } }
     }
     var pinnedShortcuts: [AgentShortcut] {
-        let entries = Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.id, $0) })
-        return navigation.pins.compactMap { entries[$0] }
+        let entries = shortcuts.reduce(into: [String: AgentShortcut]()) { entries, shortcut in
+            if entries[shortcut.id] == nil { entries[shortcut.id] = shortcut }
+        }
+        var seen = Set<String>()
+        return navigation.pins.compactMap { key in
+            guard seen.insert(key).inserted else { return nil }; return entries[key]
+        }
     }
     var recentShortcuts: [AgentShortcut] {
         shortcuts.filter { !navigation.isPinned($0.scope) && !navigation.isHidden($0.scope) }.sorted {
@@ -163,7 +175,7 @@ import SwiftUI
         closeScreen()
         let sameHost = self.host == host
         self.request = request; self.connected = connected
-        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; permissionRevision += 1
+        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; permissionRevision += 1; terminalPermissionRevision += 1
         loading = false; error = nil; discovering = connected
         guard connected else { return }
         let token = generation
@@ -236,6 +248,7 @@ import SwiftUI
     private func applyPermission(_ value: AgentTerminalPermission) {
         permissionRevision += 1
         let previous = permission
+        if previous != value { terminalPermissionRevision += 1 }
         permission = value
         restartVisibleInventory()
         if value != .control { rawTyping = false; rawText = "" }
@@ -247,7 +260,7 @@ import SwiftUI
         }
         if previous == .off && value != .off && machines.isEmpty,
            let data = defaults.data(forKey: inventoryCacheKey), let cached = try? JSONDecoder().decode(AgentInventory.self, from: data) {
-            machines = cached.machines.map { machine in
+            machines = cached.normalized.machines.map { machine in
                 AgentMachine(id: machine.id, name: machine.name, online: false, protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact, error: "Cached context; refreshing availability", complete: false, agents: machine.agents, registeredProjects: machine.registeredProjects, worktrees: machine.worktrees, metadataStatus: "offline", metadataError: "Cached context; refresh required")
             }
         }
@@ -264,7 +277,7 @@ import SwiftUI
         loading = true
         do {
             let data = try await request("agents", [:])
-            let inventory = try data.decode(AgentInventory.self)
+            let inventory = try data.decode(AgentInventory.self).normalized
             guard token == generation, revision == refreshRevision, permission != .off else { return false }
             let prior = machines
             machines = inventory.machines.map { machine in
@@ -393,13 +406,13 @@ import SwiftUI
             saveComposer(); return
         }
         recordInteraction(scope)
-        let token = generation, visible = screen, permissionToken = permissionRevision
+        let token = generation, visible = screen, permissionToken = terminalPermissionRevision
         Task { [weak self] in
             let result: AgentPromptResult
             var deliveryUncertain = false
             do {
                 guard let self, token == self.generation, visible == self.screen,
-                    permissionToken == self.permissionRevision, self.permission == .control
+                    permissionToken == self.terminalPermissionRevision, self.permission == .control
                 else {
                     throw AgentControlFailure(
                         message: "Agent selection or permission changed before sending. Text kept on this phone.")
@@ -409,7 +422,7 @@ import SwiftUI
                 ).decode(AgentPromptResult.self)
             } catch { deliveryUncertain = true; result = AgentPromptResult(outcome: .failed, reason: "Delivery uncertain: " + error.localizedDescription) }
             guard let self else { return }
-            let valid = token == self.generation && permissionToken == self.permissionRevision
+            let valid = token == self.generation && permissionToken == self.terminalPermissionRevision
             let outcome =
                 valid
                 ? result
@@ -458,15 +471,15 @@ import SwiftUI
     }
     private func input(_ op: String, fields: [String: Any]) {
         guard controlEnabled, let streamId, let request else { return }
-        let token = generation, visible = screen, permissionToken = permissionRevision
+        let token = generation, visible = screen, permissionToken = terminalPermissionRevision
         var fields = fields; fields["streamId"] = streamId
         Task { [weak self] in
             do {
                 guard let self, token == self.generation, visible == self.screen,
-                    permissionToken == self.permissionRevision, self.controlEnabled
+                    permissionToken == self.terminalPermissionRevision, self.controlEnabled
                 else { return }
                 _ = try await request(op, fields)
-                guard token == self.generation, visible == self.screen, permissionToken == self.permissionRevision
+                guard token == self.generation, visible == self.screen, permissionToken == self.terminalPermissionRevision
                 else { return }
                 if op == "terminal.raw", self.rawText == fields["data"] as? String { self.rawText = "" }
                 self.scheduleInputRefresh()

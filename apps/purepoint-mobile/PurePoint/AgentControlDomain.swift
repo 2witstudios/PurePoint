@@ -324,3 +324,23 @@ struct MobileOverlayState: Equatable, Sendable {
     mutating func dialogArrived(selection: Int) { navigator = false; history = false; dialogSelection = selection }
     func shouldPresentDialog(selection: Int) -> Bool { dialogSelection == selection && !navigator && !history }
 }
+
+extension AgentInventory {
+    // Treat repeated registry rows as one scoped identity. Keeping the first
+    // projection prevents later duplicates from changing associations.
+    var normalized: AgentInventory {
+        var seenMachines = Set<String>()
+        return AgentInventory(machines: machines.compactMap { machine in
+            guard seenMachines.insert(machine.id).inserted else { return nil }
+            var seenAgents = Set<String>(), seenProjects = Set<String>(), seenWorktrees = Set<String>()
+            return AgentMachine(
+                id: machine.id, name: machine.name, online: machine.online,
+                protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact,
+                error: machine.error, complete: machine.complete,
+                agents: machine.agents.filter { seenAgents.insert($0.id).inserted },
+                registeredProjects: machine.registeredProjects?.filter { seenProjects.insert($0.id).inserted },
+                worktrees: machine.worktrees?.filter { seenWorktrees.insert(WorkspaceLocation.key([$0.projectId, $0.id])).inserted },
+                metadataStatus: machine.metadataStatus, metadataError: machine.metadataError)
+        })
+    }
+}
