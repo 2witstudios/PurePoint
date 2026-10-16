@@ -135,7 +135,8 @@ struct AgentTerminalView: UIViewRepresentable {
         }
         // Debounced so rotation and keyboard animations settle before the agent reflows.
         private func scheduleFit() {
-            guard let model, let fitting = fittingSize, model.controlEnabled, let stream = model.streamId else { return }
+            // Forget the last key when a claim cannot be sent, so regaining Control re-claims the same size.
+            guard let model, let fitting = fittingSize, model.controlEnabled, let stream = model.streamId else { lastFit = nil; return }
             let key = "\(stream):\(fitting.cols)x\(fitting.rows)"
             guard key != lastFit else { return }
             lastFit = key

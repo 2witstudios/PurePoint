@@ -65,7 +65,11 @@ struct ConnectionView: View {
                     }.padding(.vertical, 6).accessibilityElement(children: .combine)
                     if !model.endpoint.isEmpty {
                         HStack(spacing: 12) {
-                            Button { model.connect() } label: { Label("Reconnect", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }
+                            Button {
+                                // connect() is a no-op while a socket exists; restart it explicitly.
+                                if model.connected { model.disconnect(cancelPairing: false) }
+                                model.connect()
+                            } label: { Label("Reconnect", systemImage: "arrow.clockwise").frame(maxWidth: .infinity) }
                                 .buttonStyle(.bordered)
                             if model.connected {
                                 Button(role: .destructive) { model.disconnect() } label: { Label("Disconnect", systemImage: "bolt.horizontal.circle").frame(maxWidth: .infinity) }
