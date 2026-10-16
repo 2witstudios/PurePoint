@@ -417,7 +417,9 @@ export function workspaceConnection({
       dispatched = true;
       const reply = await daemonRequest(machine.socket, ipc, {
         signal: abort.signal,
-        timeout: 65000,
+        // Spawn can await screen-confirmed prompt delivery after committing the agent.
+        // These are bridge wait caps, not bounds on daemon Git/filesystem work.
+        timeout: r.op === "workspace.spawn" ? 360000 : 65000,
       });
       check();
       const expected = {

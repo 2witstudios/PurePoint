@@ -223,3 +223,18 @@ Terminal permission events: workspace-only grant changes still fence workspace o
 Canonical agent config keys (`catalog.agents[].id`, `presets[].agentType`, `workspace.spawn.agentType`) are opaque exact strings of1–128 UTF-8 bytes, free of C0/C1 controls, with punctuation, spaces and Unicode preserved verbatim. They are never trimmed or interpreted as commands/paths. Spawn additionally requires exact membership in the freshly fetched available catalog; unknown keys reject. Machine, agent process, worktree, operation and preset IDs retain their existing strict identifier rules.
 
 Inventory timing budget: at most32 machines in sequential batches of4; each machine has sequential5s health and5s agents requests followed by parallel5s projects/worktrees metadata. Worst daemon wait is8×15s=120s (health-only offline failures40s), plus registry read, projection and transport overhead, with no extra daemon stages or automatic retries. Phone agents-only timeout150s reserves30s margin; generic35s and prompt390s remain independent.
+
+
+### Operation-specific wait caps and uncertain completion
+
+| Operation | Pre-dispatch daemon waits | Dispatch cap | Phone deadline |
+| --- | --- | --- | --- |
+| workspace.spawn (root/existing/new worktree) | metadata5s + catalog/presets10s |360s |390s |
+| workspace.terminal | metadata5s + catalog/presets10s |65s |100s |
+| workspace.rename / workspace.stop | metadata5s + health/agents10s |65s |100s |
+| workspace.createWorktree | metadata5s |65s |100s |
+| workspace.catalog / workspace.operation | metadata/catalog as applicable; status is local | existing read caps |35s |
+
+These sums bound bridge daemon waits, with local registry reads/projection/transport overhead additional. Spawn can commit its manifest entry and then wait for screen-confirmed prompt delivery before returning SpawnResult, for all three target forms. Its360s cap allows the approximately312s configured delivery path plus margin; the390s phone deadline includes up to15s preflight wait plus overhead. CreateWorktree does not spawn an embedded agent; newWorktree selected in workspace.spawn uses the same long Spawn cap. The four short mutations have exact100s phone deadlines, independent of catalog/status/generic35s and agents150s.
+
+The360s/65s dispatch values are operational bridge wait caps, **not** complete daemon execution bounds. Even root/existing-worktree Spawn may resolve its default base with multiple Git requests; new worktree creation has further prune/branch/add/hooks operations, each with its own120s Git cap. The complete Git path can exceed these bridge caps, and filesystem/manifest work has no comparable total bound. Closing the management request socket does not cancel_on_disconnect or roll back Spawn/CreateWorktree. Work may commit after timeout, disconnect or permission loss. All dispatched failures, including PROMPT_DELIVERY_FAILED after a committed spawn, remain conservatively uncertain, retained in the operation ledger; status/inventory review never automatically replays them.

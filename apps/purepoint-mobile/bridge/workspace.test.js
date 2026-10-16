@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { EventEmitter, once } from "node:events";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -14,6 +15,7 @@ import { serve } from "./network.js";
 
 async function fixture(t) {
   const home = await mkdtemp(path.join(os.tmpdir(), "mw-"));
+  const events = new EventEmitter();
   const sockets = new Set(),
     requests = [],
     agents = [];
@@ -30,14 +32,26 @@ async function fixture(t) {
     socket.on("close", () => sockets.delete(socket));
     socket.on("error", () => {});
     let pending = "";
-    const send = (value) => socket.write(JSON.stringify(value) + "\n");
+    const decoder = new StringDecoder("utf8");
+    const send = (value) => {
+      const write = () => socket.write(JSON.stringify(value) + "\n");
+      if (
+        hold &&
+        ["rename_result", "kill_result", "create_worktree_result"].includes(
+          value.type,
+        )
+      )
+        held = write;
+      else write();
+    };
     socket.on("data", (bytes) => {
-      pending += bytes.toString();
+      pending += decoder.write(bytes);
       let index;
       while ((index = pending.indexOf("\n")) >= 0) {
         const r = JSON.parse(pending.slice(0, index));
         pending = pending.slice(index + 1);
         requests.push(r);
+        events.emit(r.type, r);
         if (r.type === "health")
           send({ type: "health_report", protocol_version: 10 });
         else if (r.type === "inventory") {
@@ -152,6 +166,7 @@ async function fixture(t) {
     });
   return {
     home,
+    events,
     daemons,
     requests,
     agents,
@@ -691,4 +706,149 @@ test("opaque bounded config keys preserve dotted, spaced and Unicode agent types
     );
     assert.equal(result.state, "failed");
   }
+});
+
+test("screen-confirmed spawn receipts stay pending beyond the old deadline for root, existing and new worktrees", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  f.hold(true);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const [index, target] of ["root", "worktree", "newWorktree"].entries()) {
+    const observed = once(f.events, "spawn");
+    const operationId = `slow-spawn-${index}`;
+    const pending = c.request(
+      form({
+        op: "workspace.spawn",
+        operationId,
+        target,
+        agentType: "custom",
+        prompt: "日本語\n".repeat(6553) + "abcdef",
+        ...(target === "worktree"
+          ? { worktreeId: "wt-one" }
+          : target === "newWorktree"
+            ? { name: "slow-fixture" }
+            : {}),
+      }),
+    );
+    const [ipc] = await observed;
+    assert.equal(Buffer.byteLength(ipc.prompt), 65536);
+    t.mock.timers.tick(65001);
+    await new Promise(setImmediate);
+    assert.equal(
+      (await c.request({ op: "workspace.operation", operationId })).state,
+      "pending",
+    );
+    f.release();
+    assert.equal((await pending).state, "succeeded");
+  }
+  assert.equal(f.requests.filter((r) => r.type === "spawn").length, 3);
+});
+
+test("full spawn deadline expiration preserves uncertain ledger across reconnect without rollback or replay", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  f.hold(true);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const observed = once(f.events, "spawn"),
+    operationId = "spawn-deadline";
+  const pending = c.request(
+    form({
+      op: "workspace.spawn",
+      operationId,
+      agentType: "custom",
+      prompt: "Do work",
+    }),
+  );
+  const [ipc] = await observed;
+  assert.equal(ipc.cancel_on_disconnect, undefined);
+  t.mock.timers.tick(359999);
+  await new Promise(setImmediate);
+  assert.equal(
+    (await c.request({ op: "workspace.operation", operationId })).state,
+    "pending",
+  );
+  t.mock.timers.tick(2);
+  await new Promise(setImmediate);
+  assert.equal((await pending).state, "uncertain");
+  f.release();
+  assert.equal(f.agents.length, 1);
+  c.dispose();
+  const reconnect = f.connect();
+  t.after(reconnect.dispose);
+  assert.equal(
+    (await reconnect.request({ op: "workspace.operation", operationId })).state,
+    "uncertain",
+  );
+  assert.equal(
+    (
+      await reconnect.request(
+        form({
+          op: "workspace.spawn",
+          operationId,
+          agentType: "custom",
+          prompt: "Do work",
+        }),
+      )
+    ).state,
+    "uncertain",
+  );
+  assert.equal(f.requests.filter((r) => r.type === "spawn").length, 1);
+});
+
+test("terminal, worktree, rename and stop retain their 65-second bridge caps and uncertain ledger", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  f.hold(true);
+  f.agents.push({
+    id: "ag-known",
+    name: "Known",
+    project_root: "/registered",
+    worktree_id: null,
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const cases = [
+    { op: "workspace.terminal", target: "root", ipc: "spawn" },
+    { op: "workspace.createWorktree", name: "fixture", ipc: "create_worktree" },
+    {
+      op: "workspace.rename",
+      agentId: "ag-known",
+      name: "Renamed",
+      ipc: "rename",
+    },
+    { op: "workspace.stop", agentId: "ag-known", confirm: true, ipc: "kill" },
+  ];
+  for (const [index, { ipc, ...fields }] of cases.entries()) {
+    const operationId = `short-budget-${index}`,
+      observed = once(f.events, ipc);
+    const pending = c.request({
+      machine: "local",
+      projectId: "/registered",
+      operationId,
+      ...fields,
+    });
+    await observed;
+    t.mock.timers.tick(64999);
+    await new Promise(setImmediate);
+    assert.equal(
+      (await c.request({ op: "workspace.operation", operationId })).state,
+      "pending",
+    );
+    t.mock.timers.tick(2);
+    await new Promise(setImmediate);
+    assert.equal((await pending).state, "uncertain");
+    f.release();
+    assert.equal(
+      (await c.request({ op: "workspace.operation", operationId })).state,
+      "uncertain",
+    );
+  }
+  assert.equal(
+    f.requests.filter((r) =>
+      ["spawn", "create_worktree", "rename", "kill"].includes(r.type),
+    ).length,
+    4,
+  );
 });
