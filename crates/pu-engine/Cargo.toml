@@ -26,4 +26,5 @@ name = "pu-engine"
 path = "src/main.rs"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = "3"

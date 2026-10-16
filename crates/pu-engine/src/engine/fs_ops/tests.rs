@@ -1066,21 +1066,44 @@ async fn given_git_exec_timeout_should_kill_spawned_helpers() {
         })
         .await;
     assert!(matches!(init, Response::InitResult { .. }), "{init:?}");
-    let resp = engine
-        .handle_request(Request::GitExec {
-            cwd: p(&root),
-            program: "git".into(),
-            args: strings(&["diff"]),
-            stdin_base64: None,
-            timeout_ms: 1_500,
-        })
-        .await;
-    assert_error(resp, "timeout");
-    let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // Keep process startup outside the execution deadline: a slow launcher
+    // must not let this fixture time out before it creates the helper.
+    tokio::time::pause();
+    let request = engine.handle_request(Request::GitExec {
+        cwd: p(&root),
+        program: "git".into(),
+        args: strings(&["diff"]),
+        stdin_base64: None,
+        timeout_ms: 1_500,
+    });
+    tokio::pin!(request);
+    let startup_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let pid: libc::pid_t = loop {
+        // A runnable yield loop prevents paused time auto-advancing while the
+        // OS schedules the wrapper. Poll the real request concurrently.
+        tokio::select! {
+            response = &mut request => panic!("git_exec finished before helper readiness: {response:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(
+            std::time::Instant::now() < startup_deadline,
+            "helper never became ready"
+        );
+    };
+    // SAFETY: signal 0 only checks existence; prove the assertion is not vacuous.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "helper must be alive before timeout"
+    );
+    tokio::time::advance(Duration::from_millis(1_500)).await;
+    assert_error(request.await, "timeout");
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         // SAFETY: signal 0 only checks for existence.
