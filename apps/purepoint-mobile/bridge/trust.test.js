@@ -372,3 +372,41 @@ test("newer downgrade fences queued upgrades before durable IO completes", async
       "off",
     );
   }));
+
+test("workspace management is default-off for old control grants, persists explicitly and fences queued upgrade", async () =>
+  fixture(async (store, directory) => {
+    const device = await store.enroll({
+      enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
+        .enrollmentToken,
+      name: "Phone",
+    });
+    await store.setTerminals(device.deviceId, "control");
+    assert.equal(store.authorize(device.credential).workspaceManagement, false);
+    await assert.rejects(store.setWorkspaceManagement(device.deviceId, "true"));
+    await store.setWorkspaceManagement(device.deviceId, true);
+    assert.equal(store.listDevices()[0].workspaceManagement, true);
+    await store.close();
+    const restarted = await openTrustStore({ directory });
+    try {
+      assert.equal(
+        restarted.authorize(device.credential).workspaceManagement,
+        true,
+      );
+      const upgrade = restarted.setWorkspaceManagement(device.deviceId, true);
+      const downgrade = restarted.setWorkspaceManagement(
+        device.deviceId,
+        false,
+      );
+      assert.equal(
+        restarted.authorize(device.credential).workspaceManagement,
+        false,
+      );
+      await Promise.all([upgrade, downgrade]);
+      assert.equal(
+        restarted.authorize(device.credential).workspaceManagement,
+        false,
+      );
+    } finally {
+      await restarted.close();
+    }
+  }));

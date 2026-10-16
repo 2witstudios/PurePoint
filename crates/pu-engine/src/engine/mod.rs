@@ -103,7 +103,11 @@ impl Default for Engine {
 
 /// Build a `ConfigReport` response from a loaded config.
 /// Filters out the terminal agent (no launch args to configure).
-fn config_to_report(cfg: &pu_core::types::Config) -> Response {
+fn config_to_report(
+    cfg: &pu_core::types::Config,
+    project_root: &Path,
+    env: &[(String, String)],
+) -> Response {
     let agents = cfg
         .agents
         .iter()
@@ -111,6 +115,8 @@ fn config_to_report(cfg: &pu_core::types::Config) -> Response {
         .map(|(name, ac)| {
             let resolved = pu_core::types::resolved_launch_args(name, ac.launch_args.as_deref());
             AgentConfigInfo {
+                id: Some(name.clone()),
+                available: Some(catalog_executable_available(ac, name, project_root, env)),
                 name: ac.name.clone(),
                 command: ac.command.clone(),
                 launch_args: ac.launch_args.clone(),
@@ -120,9 +126,50 @@ fn config_to_report(cfg: &pu_core::types::Config) -> Response {
         })
         .collect();
     Response::ConfigReport {
+        terminal_available: Some(
+            config::resolve_agent(cfg, "terminal")
+                .is_some_and(|ac| catalog_executable_available(ac, "terminal", project_root, env)),
+        ),
         default_agent: cfg.default_agent.clone(),
         agents,
     }
+}
+
+/// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
+/// A worktree-relative command or its arguments may still fail at launch.
+fn catalog_executable_available(
+    ac: &pu_core::types::AgentConfig,
+    id: &str,
+    cwd: &Path,
+    env: &[(String, String)],
+) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok((command, _)) = Engine::parse_agent_command(ac, id) else {
+        return false;
+    };
+    let executable = |path: std::path::PathBuf| {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if command.contains('/') {
+        let path = Path::new(&command);
+        return executable(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        });
+    }
+    env.iter()
+        .find(|(key, _)| key == "PATH")
+        .is_some_and(|(_, path)| {
+            path.split(':').any(|dir| {
+                let dir = Path::new(dir);
+                executable(if dir.is_absolute() {
+                    dir.join(&command)
+                } else {
+                    cwd.join(dir).join(&command)
+                })
+            })
+        })
 }
 
 impl Engine {
@@ -852,10 +899,11 @@ impl Engine {
 
     async fn handle_get_config(&self, project_root: &str) -> Response {
         let pr = project_root.to_string();
+        let env = self.agent_env().await;
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             match config::load_config_strict(root) {
-                Ok(cfg) => config_to_report(&cfg),
+                Ok(cfg) => config_to_report(&cfg, root, &env),
                 Err(e) => Response::Error {
                     code: e.code().into(),
                     message: e.to_string(),
@@ -877,10 +925,11 @@ impl Engine {
     ) -> Response {
         let pr = project_root.to_string();
         let name = agent_name.to_string();
+        let env = self.agent_env().await;
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             match config::update_agent_config(root, &name, launch_args) {
-                Ok(cfg) => config_to_report(&cfg),
+                Ok(cfg) => config_to_report(&cfg, root, &env),
                 Err(e) => Response::Error {
                     code: e.code().into(),
                     message: e.to_string(),
@@ -1384,5 +1433,200 @@ mod tests {
         assert!(!repaired);
         // No backup file should be created
         assert!(!tmp.path().join("session.jsonl.bak").exists());
+    }
+}
+
+#[cfg(test)]
+mod workspace_catalog_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn agent(command: &str) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: "Friendly display label".into(),
+            command: command.into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+        }
+    }
+
+    #[test]
+    fn given_custom_labels_and_missing_binary_should_report_canonical_id_and_actual_availability() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cfg = pu_core::types::Config::default();
+        cfg.agents.clear();
+        cfg.agents.insert("canonical-id".into(), agent("/bin/sh"));
+        cfg.agents
+            .insert("missing-id".into(), agent("missing-purepoint-test-binary"));
+        cfg.agents.insert("terminal".into(), agent("/bin/sh"));
+        let Response::ConfigReport {
+            agents,
+            terminal_available,
+            ..
+        } = config_to_report(&cfg, root.path(), &[("PATH".into(), "/bin".into())])
+        else {
+            panic!("expected catalog");
+        };
+        assert_eq!(agents[0].id.as_deref(), Some("canonical-id"));
+        assert_eq!(agents[0].name, "Friendly display label");
+        assert_eq!(agents[0].available, Some(true));
+        assert_eq!(agents[1].available, Some(false));
+        assert_eq!(terminal_available, Some(true));
+        assert_eq!(agents.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn given_scoped_terminal_spawn_should_publish_root_and_worktree_inventory_membership() {
+        use pu_core::protocol::{InventoryKind, Request};
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "fixture",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&project)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let engine = Engine::with_project_registry(temp.path().join("registry.json")).unwrap();
+        engine
+            .login_env
+            .set(vec![("PATH".into(), "/usr/bin:/bin".into())])
+            .unwrap();
+        let root = project.to_string_lossy().into_owned();
+        assert!(matches!(
+            engine
+                .handle_request(Request::Init {
+                    project_root: root.clone()
+                })
+                .await,
+            Response::InitResult { .. }
+        ));
+        let Response::CreateWorktreeResult { worktree_id } = engine
+            .handle_request(Request::CreateWorktree {
+                project_root: root.clone(),
+                name: Some("terminal-fixture".into()),
+                base: None,
+            })
+            .await
+        else {
+            panic!("worktree fixture creation failed");
+        };
+        let mut ids = vec![];
+        for worktree in [None, Some(worktree_id.clone())] {
+            let request: Request = serde_json::from_value(serde_json::json!({"type":"spawn", "project_root":root, "agent":"terminal", "prompt":"", "root":worktree.is_none(), "worktree":worktree, "no_trigger":true})).unwrap();
+            let response = engine.handle_request(request).await;
+            let Response::SpawnResult { agent_id, .. } = response else {
+                engine.kill_all_sessions(Duration::from_millis(50)).await;
+                panic!("terminal launch failed: {response:?}");
+            };
+            ids.push(agent_id);
+        }
+        let Response::Inventory(agents) = engine
+            .handle_request(Request::Inventory {
+                project_root: None,
+                kind: InventoryKind::Agents,
+                state: None,
+            })
+            .await
+        else {
+            panic!("expected inventory");
+        };
+        engine.kill_all_sessions(Duration::from_millis(50)).await;
+        for (index, id) in ids.iter().enumerate() {
+            let agent = agents.agents.iter().find(|a| &a.id == id).unwrap();
+            assert_eq!(agent.project_root.as_deref(), Some(root.as_str()));
+            assert_eq!(
+                agent.worktree_id.as_deref(),
+                if index == 0 {
+                    None
+                } else {
+                    Some(worktree_id.as_str())
+                }
+            );
+        }
+        let Response::Inventory(worktrees) = engine
+            .handle_request(Request::Inventory {
+                project_root: None,
+                kind: InventoryKind::Worktrees,
+                state: None,
+            })
+            .await
+        else {
+            panic!("expected worktrees");
+        };
+        assert!(
+            worktrees
+                .worktrees
+                .iter()
+                .any(|w| w.id == worktree_id && w.agent_ids.contains(&ids[1]))
+        );
+    }
+
+    #[test]
+    fn given_login_path_and_root_relative_executables_should_probe_without_execution() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("tools")).unwrap();
+        let executable = root.path().join("tools/worker");
+        std::fs::write(&executable, "#!/bin/sh\nexit 99\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [(
+            "PATH".into(),
+            root.path().join("tools").display().to_string(),
+        )];
+        assert!(catalog_executable_available(
+            &agent("worker --flag"),
+            "custom",
+            root.path(),
+            &env
+        ));
+        assert!(catalog_executable_available(
+            &agent("./tools/worker"),
+            "custom",
+            root.path(),
+            &[]
+        ));
+        assert!(catalog_executable_available(
+            &agent("worker"),
+            "custom",
+            &root.path().join("tools"),
+            &[("PATH".into(), "".into())]
+        ));
+        assert!(!catalog_executable_available(
+            &agent("./tools/worker"),
+            "custom",
+            &root.path().join("tools"),
+            &[]
+        ));
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!catalog_executable_available(
+            &agent("worker"),
+            "custom",
+            root.path(),
+            &env
+        ));
+        assert!(!catalog_executable_available(
+            &agent(""),
+            "custom",
+            root.path(),
+            &env
+        ));
     }
 }

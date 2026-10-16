@@ -2116,9 +2116,12 @@ fn given_update_agent_config_request_with_none_should_round_trip() {
 #[test]
 fn given_config_report_response_should_round_trip() {
     let resp = Response::ConfigReport {
+        terminal_available: Some(true),
         default_agent: "claude".into(),
         agents: vec![
             AgentConfigInfo {
+                id: None,
+                available: None,
                 name: "claude".into(),
                 command: "claude".into(),
                 launch_args: Some(vec!["--verbose".into()]),
@@ -2126,6 +2129,8 @@ fn given_config_report_response_should_round_trip() {
                 interactive: true,
             },
             AgentConfigInfo {
+                id: None,
+                available: None,
                 name: "codex".into(),
                 command: "codex".into(),
                 launch_args: None,
@@ -2140,6 +2145,7 @@ fn given_config_report_response_should_round_trip() {
         Response::ConfigReport {
             default_agent,
             agents,
+            ..
         } => {
             assert_eq!(default_agent, "claude");
             assert_eq!(agents.len(), 2);

@@ -73,6 +73,8 @@ function validate(state, pin) {
       device.name.length > 80 ||
       !Number.isSafeInteger(device.createdAt) ||
       (device.revokedAt != null && !Number.isSafeInteger(device.revokedAt)) ||
+      (device.workspaceManagement !== undefined &&
+        typeof device.workspaceManagement !== "boolean") ||
       (device.terminals !== undefined &&
         !["off", "view", "control"].includes(device.terminals))
     )
@@ -141,6 +143,10 @@ export async function openTrustStore({
         device.terminals ?? "off",
       ]),
     );
+    const managementFences = new Map(
+      state.devices.map((d) => [d.deviceId, d.workspaceManagement === true]),
+    );
+    const managementVersions = new Map();
     const revocations = new Set();
     const permissionVersions = new Map();
     let tail = Promise.resolve();
@@ -239,6 +245,8 @@ export async function openTrustStore({
           ? {
               deviceId: device.deviceId,
               clientId: device.clientId,
+              workspaceManagement:
+                managementFences.get(device.deviceId) === true,
               terminals:
                 permissionFences.get(device.deviceId) ??
                 device.terminals ??
@@ -302,9 +310,50 @@ export async function openTrustStore({
         active();
         return state.devices.map(({ credentialHash, ...device }) => ({
           ...device,
+          workspaceManagement: managementFences.get(device.deviceId) === true,
           terminals:
             permissionFences.get(device.deviceId) ?? device.terminals ?? "off",
         }));
+      },
+      setWorkspaceManagement(deviceId, workspaceManagement) {
+        if (typeof workspaceManagement !== "boolean")
+          return Promise.reject(new Error("Invalid workspace permission"));
+        try {
+          active();
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        if (
+          !state.devices.some(
+            (d) => d.deviceId === deviceId && d.revokedAt == null,
+          )
+        )
+          return Promise.reject(new Error("Unknown paired device"));
+        const version = (managementVersions.get(deviceId) ?? 0) + 1;
+        managementVersions.set(deviceId, version);
+        if (!workspaceManagement) {
+          managementFences.set(deviceId, false);
+          trust.emit("permissions", deviceId);
+        }
+        return serialized(async () => {
+          const next = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, workspaceManagement } : d,
+            ),
+          };
+          await publish(file, next, assertHeld);
+          assertHeld();
+          state = next;
+          if (
+            managementVersions.get(deviceId) === version &&
+            !revocations.has(deviceId)
+          ) {
+            managementFences.set(deviceId, workspaceManagement);
+            trust.emit("permissions", deviceId);
+          }
+          return {};
+        });
       },
       setTerminals(deviceId, terminals) {
         if (!["off", "view", "control"].includes(terminals))

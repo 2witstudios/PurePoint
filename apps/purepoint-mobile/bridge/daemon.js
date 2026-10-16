@@ -123,13 +123,15 @@ export function createDaemons({
       ...registry.machines
         .filter(
           (m) =>
+            m &&
             typeof m.id === "string" &&
             /^[a-zA-Z0-9_-]+$/.test(m.id) &&
             m.id !== "local",
         )
         .map((m) => ({
           id: m.id,
-          name: m.name,
+          name:
+            typeof m.name === "string" && m.name.trim() ? m.name.trim() : m.id,
           socket: path.join(puHome, "machines", m.id, "daemon.sock"),
         })),
     ];
@@ -150,14 +152,25 @@ export function createDaemons({
       !Number.isInteger(health.protocol_version)
     )
       throw new Error("Invalid daemon health");
-    const inventory = await daemonRequest(
-      machine.socket,
-      { type: "inventory", kind: "agents" },
-      options,
-    );
-    if (inventory.type !== "inventory" || !Array.isArray(inventory.agents))
-      throw new Error("Invalid daemon inventory");
-    return { version: health.protocol_version, inventory };
+    try {
+      const inventory = await daemonRequest(
+        machine.socket,
+        { type: "inventory", kind: "agents" },
+        options,
+      );
+      if (
+        inventory.type !== "inventory" ||
+        !Array.isArray(inventory.agents) ||
+        inventory.agents.length > 4096
+      )
+        throw new Error("Invalid daemon inventory");
+      return { version: health.protocol_version, inventory };
+    } catch (error) {
+      throw Object.assign(new Error("Daemon inventory unavailable"), {
+        inventoryUnavailable: true,
+        protocolVersion: health.protocol_version,
+      });
+    }
   };
   return { machines, resolve, inspect };
 }

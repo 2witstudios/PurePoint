@@ -444,7 +444,11 @@ test("authenticated WebSocket fences inventory/input on immediate trust downgrad
     a.ws.terminate();
     b.ws.terminate();
   });
-  assert.deepEqual((await a.request("permissions")).data, { terminals: "off" });
+  assert.equal((await a.request("permissions")).data.terminals, "off");
+  assert.equal(
+    (await a.request("permissions")).data.workspaceManagement,
+    false,
+  );
   assert.equal((await a.request("agents")).ok, false);
   assert.equal(f.requests.length, 0);
   await trust.setTerminals(enrolled.deviceId, "control");
@@ -554,4 +558,24 @@ test("isolated output bursts recover repeatedly after stable drained progress an
   assert.deepEqual(await c.request(close), {});
   assert.deepEqual(await c.request(close), {});
   assert.equal(c.records.filter((r) => r.type === "terminal.closed").length, 1);
+});
+
+test("maximum UTF8 prompt survives a delayed daemon receipt with full submitted bytes", async (t) => {
+  const f = await fixture(t),
+    c = client(f);
+  t.after(c.connection.dispose);
+  f.hold(true);
+  const text = "日本語\n".repeat(6553) + "abcdef";
+  assert.equal(Buffer.byteLength(text), 65536);
+  const pending = c.request({
+    op: "agent.prompt",
+    machine: "local",
+    agentId: "ag-one",
+    text,
+  });
+  await until(() => f.inputs.length === 1);
+  assert.equal(Buffer.from(f.inputs[0].r.data, "hex").toString(), text);
+  await delay(30);
+  f.inputs[0].socket.write(JSON.stringify({ type: "ok" }) + "\n");
+  assert.equal((await pending).outcome, "confirmed");
 });

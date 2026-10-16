@@ -186,12 +186,16 @@ export async function serve(
   const editor = broadcast;
   controller.on("snapshot", snapshot);
   controller.on("editor", editor);
+  const workspaceLedger = new Map();
   wss.on("connection", (ws) => {
     const identity = identities.get(ws);
     const terminal = terminalConnection({
       ws,
       identity,
       permission: () => principal(identity.credential)?.terminals ?? "off",
+      management: () =>
+        principal(identity.credential)?.workspaceManagement === true,
+      ledger: workspaceLedger,
       send: (data) => send(ws, data),
       daemons,
       queueLimit: terminalQueueLimit,

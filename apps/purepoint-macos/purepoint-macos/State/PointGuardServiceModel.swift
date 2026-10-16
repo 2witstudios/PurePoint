@@ -345,6 +345,11 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         catch { self.error = error.localizedDescription }
     }
 
+    func setWorkspaceManagement(_ id: String, allowed: Bool) async {
+        do { _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(allowed)]); await refresh() }
+        catch { self.error = error.localizedDescription }
+    }
+
     func revokeDevice(_ id: String) async {
         do { _ = try await request("devices.revoke", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }

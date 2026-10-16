@@ -100,3 +100,19 @@ export async function serveAdmin({ token, dispatch }) {
       }),
   };
 }
+
+export function setDeviceWorkspaceManagement(
+  trust,
+  { deviceId, workspaceManagement },
+) {
+  if (
+    typeof deviceId !== "string" ||
+    !deviceId ||
+    typeof workspaceManagement !== "boolean"
+  )
+    throw new AdminError(
+      "workspace_permission",
+      "Select workspace management for a paired device.",
+    );
+  return trust.setWorkspaceManagement(deviceId, workspaceManagement);
+}

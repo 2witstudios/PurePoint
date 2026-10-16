@@ -124,3 +124,26 @@ test("owner permission administration accepts only off/view/control and rejects 
     await server.shutdown();
   }
 });
+
+test("owner workspace permission accepts only explicit boolean grant", async () => {
+  const { setDeviceWorkspaceManagement } = await import("./admin.js");
+  const calls = [];
+  const trust = {
+    setWorkspaceManagement: async (...args) => {
+      calls.push(args);
+      return {};
+    },
+  };
+  for (const workspaceManagement of [undefined, "true", 1, null])
+    assert.throws(() =>
+      setDeviceWorkspaceManagement(trust, {
+        deviceId: "phone",
+        workspaceManagement,
+      }),
+    );
+  await setDeviceWorkspaceManagement(trust, {
+    deviceId: "phone",
+    workspaceManagement: true,
+  });
+  assert.deepEqual(calls, [["phone", true]]);
+});

@@ -212,6 +212,10 @@ pub struct WorktreeDiffEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfigInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
     pub name: String,
     pub command: String,
     pub launch_args: Option<Vec<String>>,

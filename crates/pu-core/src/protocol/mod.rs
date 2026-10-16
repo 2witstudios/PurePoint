@@ -625,6 +625,8 @@ pub enum Response {
         codex_yolo: bool,
     },
     ConfigReport {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_available: Option<bool>,
         default_agent: String,
         agents: Vec<AgentConfigInfo>,
     },

@@ -1,3 +1,9 @@
+import {
+  workspaceConnection,
+  workspaceOperations,
+  workspaceFeatures,
+  projectMetadata,
+} from "./workspace.js";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import { createDaemons, connectDaemon, daemonRequest } from "./daemon.js";
@@ -15,6 +21,7 @@ const keys = Object.freeze({
   n: "n",
 });
 const ops = new Set([
+  ...workspaceOperations,
   "permissions",
   "agents",
   "terminal.open",
@@ -30,6 +37,8 @@ export function terminalConnection({
   ws,
   identity,
   permission,
+  management = () => false,
+  ledger = new Map(),
   send,
   daemons = createDaemons(),
   queueLimit = 512 * 1024,
@@ -44,7 +53,19 @@ export function terminalConnection({
     if (disposed || value === "off" || (control && value !== "control"))
       throw new Error("Terminal permission required");
   };
-  const notify = () => send({ type: "permissions", terminals: permission() });
+  const permissions = () => ({
+    terminals: permission(),
+    workspaceManagement: management(),
+    workspace: workspaceFeatures,
+  });
+  const workspace = workspaceConnection({
+    identity,
+    permission,
+    management,
+    ledger,
+    daemons,
+  });
+  const notify = () => send({ type: "permissions", ...permissions() });
   const stopAttach = (stream) => {
     const attach = stream.attach;
     stream.attach = null;
@@ -232,56 +253,78 @@ export function terminalConnection({
     return stream;
   };
   const request = async (r) => {
-    if (r.op === "permissions") return { terminals: permission() };
+    if (r.op === "permissions") return permissions();
+    if (workspaceOperations.includes(r.op)) return workspace.request(r);
     return operation(
       ["terminal.keys", "terminal.raw", "agent.prompt"].includes(r.op),
       async (signal, check) => {
         if (r.op === "agents") {
           const machines = await daemons.machines();
+          if (machines.length > 32)
+            throw new Error("Fleet exceeds 32-machine query limit");
           check();
-          const result = await Promise.all(
-            machines.map(async (machine) => {
-              try {
-                const { version, inventory } = await daemons.inspect(machine, {
-                  signal,
-                });
-                return {
-                  id: machine.id,
-                  name: machine.name,
-                  online: true,
-                  protocolVersion: version,
-                  screenMayBeInexact: version < 10,
-                  error: null,
-                  complete: inventory.complete === true,
-                  agents: inventory.agents.map((a) => ({
-                    id: a.id,
-                    name: a.name,
-                    agentType: a.agent_type,
-                    state: a.state,
-                    idleSeconds: a.idle_seconds ?? null,
-                    startedAt: a.started_at,
-                    projectRoot: a.project_root ?? null,
-                    worktreeId: a.worktree_id ?? null,
-                    screenAware: version >= 10 && a.screen_aware === true,
-                    phase: version >= 10 ? (a.phase ?? null) : null,
-                  })),
-                };
-              } catch {
-                return {
-                  id: machine.id,
-                  name: machine.name,
-                  online: false,
-                  protocolVersion: null,
-                  screenMayBeInexact: true,
-                  error:
-                    "Machine unavailable; connect this Mac and its existing forward",
-                  complete: false,
-                  agents: [],
-                };
-              }
-            }),
-          );
-          check();
+          const result = [];
+          for (let offset = 0; offset < machines.length; offset += 4) {
+            result.push(
+              ...(await Promise.all(
+                machines.slice(offset, offset + 4).map(async (machine) => {
+                  try {
+                    const { version, inventory } = await daemons.inspect(
+                      machine,
+                      {
+                        signal,
+                      },
+                    );
+                    const metadata = await projectMetadata(machine, { signal });
+                    return {
+                      id: machine.id,
+                      name: machine.name,
+                      ...metadata,
+                      online: true,
+                      protocolVersion: version,
+                      screenMayBeInexact: version < 10,
+                      error: null,
+                      complete: inventory.complete === true,
+                      agents: inventory.agents.map((a) => ({
+                        id: a.id,
+                        name: a.name,
+                        agentType: a.agent_type,
+                        state: a.state,
+                        idleSeconds: a.idle_seconds ?? null,
+                        startedAt: a.started_at,
+                        projectRoot: a.project_root ?? null,
+                        worktreeId: a.worktree_id ?? null,
+                        screenAware: version >= 10 && a.screen_aware === true,
+                        phase: version >= 10 ? (a.phase ?? null) : null,
+                      })),
+                    };
+                  } catch (error) {
+                    return {
+                      id: machine.id,
+                      name: machine.name,
+                      metadataStatus: error.inventoryUnavailable
+                        ? "error"
+                        : "offline",
+                      metadataError: error.inventoryUnavailable
+                        ? "Daemon inventory unavailable"
+                        : "Machine unavailable",
+                      projects: [],
+                      worktrees: [],
+                      online: error.inventoryUnavailable === true,
+                      protocolVersion: error.protocolVersion ?? null,
+                      screenMayBeInexact: true,
+                      error: error.inventoryUnavailable
+                        ? "Daemon inventory unavailable; refresh to retry"
+                        : "Machine unavailable; connect this Mac and its existing forward",
+                      complete: false,
+                      agents: [],
+                    };
+                  }
+                }),
+              )),
+            );
+            check();
+          }
           return { machines: result };
         }
         if (r.op === "terminal.open" || r.op === "agent.prompt") {
@@ -327,7 +370,7 @@ export function terminalConnection({
                   submit: true,
                   ...(version >= 10 ? { cancel_on_disconnect: true } : {}),
                 },
-                { signal, timeout: 65000 },
+                { signal, timeout: 360000 },
               );
               check();
               if (reply.type !== "ok")
@@ -406,6 +449,7 @@ export function terminalConnection({
     request,
     notify,
     changed() {
+      workspace.changed();
       for (const abort of pending) abort.abort();
       for (const stream of streams.values()) {
         // Close the write-capable transport before returning from a downgrade.
@@ -429,6 +473,7 @@ export function terminalConnection({
       notify();
     },
     dispose() {
+      workspace.dispose();
       disposed = true;
       for (const abort of pending) abort.abort();
       for (const stream of streams.values())
