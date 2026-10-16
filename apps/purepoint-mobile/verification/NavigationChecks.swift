@@ -69,6 +69,16 @@ import Foundation
         precondition(wrongMachine.worktreeLabel == "Location unavailable" && wrongMachine.status.contains("Unavailable"))
         let offlineContext = AgentDestinationContext.resolve(scope: AgentScope(host: "paired-bridge", machine: "machine", agent: "agent"), machines: inventory.machines, connected: false)
         precondition(offlineContext.agentName == context.agentName && offlineContext.status.contains("Unavailable"))
+        // Virtual stage budgets exercise the full admitted fleet without wall-clock waits.
+        let perMachineStageSeconds = Array(repeating: 5 + 5 + max(5, 5), count: 32)
+        let fleetBudgetSeconds = stride(from: 0, to: perMachineStageSeconds.count, by: 4).reduce(0) { budget, offset in
+            budget + perMachineStageSeconds[offset..<min(offset + 4, perMachineStageSeconds.count)].max()!
+        }
+        precondition(fleetBudgetSeconds == 120)
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "agents") >= UInt64(fleetBudgetSeconds + 30) * 1_000_000_000)
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "agent.prompt") == 390_000_000_000)
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "permissions") == 35_000_000_000)
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "sync") == 35_000_000_000)
         print("Navigation preference checks passed")
     }
 }

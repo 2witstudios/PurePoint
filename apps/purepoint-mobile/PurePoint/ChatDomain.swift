@@ -311,10 +311,16 @@ enum IncomingRecord: Sendable {
     }
 }
 
-// Prompt delivery can consume the daemon's bounded 360 second window plus
-// inventory validation and transport overhead. Ordinary Pi calls remain bounded.
+// Fleet inventory has up to eight batches of four machines. Each batch can
+// spend 5s on health, 5s on agents and 5s on parallel project/worktree reads.
+// Allow 30s beyond that 120s schedule for projection and transport. Prompt
+// delivery independently permits the daemon's 360s window plus overhead.
 enum MobileRPCTiming {
     static func timeoutNanoseconds(for operation: String) -> UInt64 {
-        operation == "agent.prompt" ? 390_000_000_000 : 35_000_000_000
+        switch operation {
+        case "agents": return 150_000_000_000
+        case "agent.prompt": return 390_000_000_000
+        default: return 35_000_000_000
+        }
     }
 }

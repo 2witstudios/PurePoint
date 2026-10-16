@@ -174,3 +174,15 @@ extension AgentControlTests {
         XCTAssertTrue(context.status.contains("Unavailable"))
     }
 }
+
+extension AgentControlTests {
+    func testGivenMaximumFleetScheduleShouldKeepAgentsDeadlineBeyondEveryBoundedBatch() {
+        let maximumMachines = 32, concurrentMachines = 4
+        let batches = (maximumMachines + concurrentMachines - 1) / concurrentMachines
+        let seconds = batches * (5 + 5 + max(5, 5))
+        XCTAssertEqual(seconds, 120)
+        XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: "agents"), UInt64(seconds + 30) * 1_000_000_000)
+        XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: "agent.prompt"), 390_000_000_000)
+        XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: "sync"), 35_000_000_000)
+    }
+}
