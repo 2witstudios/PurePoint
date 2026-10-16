@@ -58,6 +58,17 @@ import Foundation
         overlays.openHistory(); precondition(overlays.history && !overlays.navigator)
         overlays.dialogArrived(selection: 17); precondition(!overlays.history && !overlays.navigator, "Dialog arrival must leave no overlay blocking presentation")
         precondition(overlays.shouldPresentDialog(selection: 17) && !overlays.shouldPresentDialog(selection: 18), "Closing history must present the pending dialog only to its originating host selection")
+        let context = AgentDestinationContext.resolve(scope: AgentScope(host: "paired-bridge", machine: "machine", agent: "agent"), machines: inventory.machines, connected: true)
+        precondition(context.agentName == "Worker" && context.machineName == "Mac" && context.projectLabel == "Repo" && context.worktreeLabel == "Task · feature")
+        let remoteJSON = workspaceJSON.replacingOccurrences(of: "\"machine\"", with: "\"remote\"").replacingOccurrences(of: "\"Mac\"", with: "\"Remote Mac\"").replacingOccurrences(of: "\"Worker\"", with: "\"Remote worker\"").replacingOccurrences(of: "/repo", with: "/remote").replacingOccurrences(of: "\"Repo\"", with: "\"Remote repo\"")
+        let remoteInventory = try JSONDecoder().decode(AgentInventory.self, from: Data(remoteJSON.utf8))
+        let remoteContext = AgentDestinationContext.resolve(scope: AgentScope(host: "paired-bridge", machine: "remote", agent: "agent"), machines: inventory.machines + remoteInventory.machines, connected: true)
+        precondition(remoteContext.agentName == "Remote worker" && remoteContext.machineName == "Remote Mac" && remoteContext.projectLabel == "Remote repo", "Same agent/worktree IDs on another daemon must never borrow local display identity")
+        let wrongMachine = AgentDestinationContext.resolve(scope: AgentScope(host: "paired-bridge", machine: "other-machine", agent: "agent"), machines: inventory.machines, connected: true)
+        precondition(wrongMachine.machineName == "other-machine" && wrongMachine.agentName == "agent" && wrongMachine.projectLabel == "Project unavailable")
+        precondition(wrongMachine.worktreeLabel == "Location unavailable" && wrongMachine.status.contains("Unavailable"))
+        let offlineContext = AgentDestinationContext.resolve(scope: AgentScope(host: "paired-bridge", machine: "machine", agent: "agent"), machines: inventory.machines, connected: false)
+        precondition(offlineContext.agentName == context.agentName && offlineContext.status.contains("Unavailable"))
         print("Navigation preference checks passed")
     }
 }

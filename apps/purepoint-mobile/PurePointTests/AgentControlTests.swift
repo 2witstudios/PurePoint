@@ -163,3 +163,14 @@ extension AgentControlTests {
         try await AgentControlScenarios.workspaceGrantToggleDoesNotInvalidatePrompt()
     }
 }
+
+extension AgentControlTests {
+    func testGivenMissingScopedAgentShouldShowIdentityFallbackWithoutPointGuardStatus() {
+        let context = AgentDestinationContext.resolve(scope: AgentScope(host: "bridge", machine: "remote", agent: "worker"), machines: [], connected: true)
+        XCTAssertEqual(context.agentName, "worker")
+        XCTAssertEqual(context.machineName, "remote")
+        XCTAssertEqual(context.projectLabel, "Project unavailable")
+        XCTAssertEqual(context.worktreeLabel, "Location unavailable")
+        XCTAssertTrue(context.status.contains("Unavailable"))
+    }
+}

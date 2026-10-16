@@ -35,7 +35,7 @@ struct ChatView: View {
                     Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open workspace navigator")
                 }
                 ToolbarItem(placement: .principal) {
-                    Button { showConnection = true } label: {
+                    if destination == "pointGuard" { Button { showConnection = true } label: {
                         HStack(spacing: 8) {
                             Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
@@ -53,6 +53,7 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                     .accessibilityElement(children: .combine)
                     .accessibilityHint("Open connection settings")
+                    } else { AgentDestinationPrincipal(model: model.agentControl, bridgeName: model.selectedMachine?.name ?? "Mac") }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if destination == "pointGuard" { Button { overlays.openHistory(); composerFocused = false; let token = model.selectionToken; Task { await model.loadConversations(selection: token) } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Point Guard history") }
@@ -171,7 +172,6 @@ struct ChatView: View {
             .opacity(destination == "pointGuard" ? 1 : 0).disabled(destination != "pointGuard").allowsHitTesting(destination == "pointGuard").accessibilityHidden(destination != "pointGuard")
             }
             .background(Color(uiColor: .systemBackground))
-            .navigationTitle("PurePoint")
             .navigationBarTitleDisplayMode(.inline)
     }
     private var headerStatus: String {

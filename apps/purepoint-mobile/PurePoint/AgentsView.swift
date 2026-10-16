@@ -26,11 +26,34 @@ private struct AgentListRow: View {
     }
 }
 
+struct AgentDestinationPrincipal: View {
+    @ObservedObject var model: AgentControlModel
+    let bridgeName: String
+    var body: some View {
+        VStack(spacing: 2) {
+            if let context = model.destinationContext {
+                Text(context.agentName).font(.headline).lineLimit(1)
+                Text(context.machineName + " · " + context.status).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            } else {
+                Text("Projects").font(.headline)
+                Text("Via " + bridgeName).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }.accessibilityElement(children: .combine)
+    }
+}
+
 struct AgentControlView: View {
     @ObservedObject var model: AgentControlModel
     let screen: Int
     var body: some View {
         VStack(spacing: 0) {
+            if let context = model.destinationContext {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(context.agentName).font(.headline)
+                    Text(context.machineName + " · " + context.projectLabel).font(.callout)
+                    Text(context.worktreeLabel + " · " + context.status).font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(12).accessibilityElement(children: .combine)
+            }
             if let error = model.error {
                 Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled).padding(12)
             }

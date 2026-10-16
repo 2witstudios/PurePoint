@@ -344,3 +344,31 @@ extension AgentInventory {
         })
     }
 }
+
+struct AgentDestinationContext: Equatable, Sendable {
+    let agentName: String
+    let machineName: String
+    let projectLabel: String
+    let worktreeLabel: String
+    let status: String
+
+    static func resolve(scope: AgentScope, machines: [AgentMachine], connected: Bool) -> AgentDestinationContext {
+        let machine = machines.first { $0.id == scope.machine }
+        let agent = machine?.agents.first { $0.id == scope.agent }
+        let project = machine?.registeredProjects?.first { $0.id == agent?.projectRoot }
+        let worktree = machine?.worktrees?.first { $0.projectId == agent?.projectRoot && $0.id == agent?.worktreeId }
+        let available = connected && machine?.online == true && machine?.metadataStatus != "error" && agent != nil
+        let state = available
+            ? [agent?.state, agent?.phase == "dialog" ? "Answer needed" : agent?.phase?.replacingOccurrences(of: "_", with: " ")].compactMap { $0 }.joined(separator: " · ")
+            : (agent == nil ? "Unavailable" : "Unavailable · cached context")
+        return AgentDestinationContext(
+            agentName: agent.flatMap { $0.name.isEmpty ? nil : $0.name } ?? scope.agent,
+            machineName: machine.flatMap { $0.name.isEmpty ? nil : $0.name } ?? scope.machine,
+            projectLabel: project.map { $0.name.isEmpty ? $0.id : $0.name }
+                ?? agent?.projectRoot.map { $0 + " · project metadata unavailable" } ?? "Project unavailable",
+            worktreeLabel: worktree.map { $0.name + " · " + $0.branch }
+                ?? agent?.worktreeId.map { $0 + " · worktree metadata unavailable" }
+                ?? (project != nil && agent != nil ? "Project root" : "Location unavailable"),
+            status: state)
+    }
+}

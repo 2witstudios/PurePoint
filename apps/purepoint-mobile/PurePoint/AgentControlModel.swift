@@ -80,6 +80,9 @@ import SwiftUI
         guard let selected else { return nil }
         return machines.first { $0.id == selected.machine }?.agents.first { $0.id == selected.agent }
     }
+    var destinationContext: AgentDestinationContext? {
+        selected.map { AgentDestinationContext.resolve(scope: $0, machines: machines, connected: connected) }
+    }
     var shortcuts: [AgentShortcut] {
         var seen = Set<String>()
         return machines.flatMap { machine in machine.agents.compactMap { agent -> AgentShortcut? in
