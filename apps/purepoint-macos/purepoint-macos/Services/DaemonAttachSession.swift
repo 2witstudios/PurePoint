@@ -8,6 +8,8 @@ import SwiftTerm
 /// Actor isolation serializes all writes to the NWConnection, preventing garbled JSON.
 actor DaemonAttachSession {
     let agentId: String
+    private let clientId = "mac:" + UUID().uuidString
+    private var desiredSize: (Int, Int)?
     private weak var terminalView: TerminalView?
     private var connection: NWConnection?
     private var stopped = false
@@ -33,10 +35,12 @@ actor DaemonAttachSession {
         agentId: String,
         terminalView: TerminalView,
         resetBeforeReplay: Bool = false,
+        localCols: Int = 120, localRows: Int = 40,
         onFirstOutput: (() -> Void)? = nil,
         onOutput: (@MainActor @Sendable () -> Void)? = nil,
         client: DaemonClient = DaemonClient()
     ) {
+        self.desiredSize = (localCols, localRows)
         self.client = client
         self.agentId = agentId
         self.terminalView = terminalView
@@ -94,9 +98,16 @@ actor DaemonAttachSession {
 
     /// Send resize notification to the daemon. Awaiting ensures actor serializes writes.
     func sendResize(cols: Int, rows: Int) async {
-        if rows > 0 { termRows = rows }
+        guard cols > 0, rows > 0 else { return }
+        desiredSize = (cols, rows)
         guard let conn = connection else { return }
-        try? await DaemonClient.write(.resize(agentId: agentId, cols: cols, rows: rows), to: conn)
+        try? await DaemonClient.write(.claimSize(cols: cols, rows: rows), to: conn)
+    }
+
+    /// Focus is an explicit ownership claim; typing never changes ownership.
+    func claimSize() async {
+        guard let size = desiredSize else { return }
+        await sendResize(cols: size.0, rows: size.1)
     }
 
     /// Stop the attach session.
@@ -118,7 +129,7 @@ actor DaemonAttachSession {
         self.connection = conn
 
         // Send attach request
-        try await DaemonClient.write(.attach(agentId: agentId), to: conn)
+        try await DaemonClient.write(.attach(agentId: agentId, clientId: clientId), to: conn)
 
         // Read AttachReady
         let firstLine = try await reader.readLine()
@@ -136,21 +147,11 @@ actor DaemonAttachSession {
         }
         print("[DaemonAttach \(agentId.prefix(8))] attached successfully")
 
-        // Send initial resize so PTY matches the terminal view's actual dimensions.
-        // The sizeChanged delegate fires during terminal creation (before connection
-        // exists), so this is the first opportunity to sync the PTY size.
-        let (initialCols, initialRows) = await MainActor.run {
-            guard let tv else { return (0, 0) }
-            let term = tv.getTerminal()
-            return (term.cols, term.rows)
+        let focused = await MainActor.run {
+            guard let tv else { return false }
+            return tv.window?.firstResponder === tv
         }
-        if initialRows > 0 { termRows = initialRows }
-        if initialCols > 0 && initialRows > 0 {
-            try await DaemonClient.write(
-                .resize(agentId: agentId, cols: initialCols, rows: initialRows),
-                to: conn
-            )
-        }
+        if focused { await claimSize() }
 
         // The daemon replays exactly `bufferedBytes` before live output begins.
         var replayRemaining = bufferedBytes
@@ -167,6 +168,15 @@ actor DaemonAttachSession {
             let response = DaemonClient.parse(line)
 
             switch response {
+            case .resync:
+                replayRemaining = 0
+                await MainActor.run { tv?.feed(byteArray: [0x1b, 0x63]) }
+            case .ptySize(let cols, let rows, _):
+                termRows = rows
+                await MainActor.run {
+                    guard let tv else { return }
+                    (tv.superview as? ScrollableTerminal)?.applyReportedSize(cols: cols, rows: rows)
+                }
             case .output(_, let data):
                 guard !data.isEmpty else { continue }
                 if let cb = onFirstOutput {

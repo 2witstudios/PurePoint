@@ -10,6 +10,9 @@ import SwiftTerm
 class ScrollableTerminal: NSView, TerminalViewDelegate {
     let terminalView: TerminalView
     var attachSession: DaemonAttachSession?
+    private(set) var localGridSize = (cols: 120, rows: 40)
+    private var reportedGridSize: (cols: Int, rows: Int)?
+    private var lastPhysicalFont: NSFont?
 
     private var scrollMonitor: Any?
     private var mouseMonitor: Any?
@@ -52,6 +55,13 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         mouseMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
+            if event.type == .leftMouseDown, let self,
+                self.window === event.window,
+                self.bounds.contains(self.convert(event.locationInWindow, from: nil))
+            {
+                let session = self.attachSession
+                Task { await session?.claimSize() }
+            }
             self?.handleMouseEvent(event)
             return event
         }
@@ -66,13 +76,23 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     override func layout() {
         super.layout()
-        let currentSize = terminalView.frame.size
-        guard currentSize != lastKnownTerminalViewSize,
-            currentSize.width > 1,
-            currentSize.height > 1
-        else { return }
-        lastKnownTerminalViewSize = currentSize
-        terminalView.setFrameSize(currentSize)
+        refreshLocalGeometry(size: terminalView.frame.size)
+    }
+
+    /// Measure physical geometry independently of the daemon's rendering grid.
+    func refreshLocalGeometry(size: CGSize) {
+        guard size.width > 1, size.height > 1 else { return }
+        let changed = size != lastKnownTerminalViewSize || terminalView.font != lastPhysicalFont
+        guard changed else { return }
+        lastKnownTerminalViewSize = size
+        lastPhysicalFont = terminalView.font
+        terminalView.setFrameSize(size)
+        let term = terminalView.getTerminal()
+        localGridSize = (term.cols, term.rows)
+        if let reportedGridSize { renderGrid(reportedGridSize) }
+        let local = localGridSize
+        let session = attachSession
+        Task { await session?.sendResize(cols: local.cols, rows: local.rows) }
     }
 
     func tearDown() {
@@ -94,6 +114,17 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         Task { await session?.stop() }
     }
 
+    func applyReportedSize(cols: Int, rows: Int) {
+        reportedGridSize = (cols, rows)
+        renderGrid((cols, rows))
+    }
+
+    private func renderGrid(_ size: (cols: Int, rows: Int)) {
+        terminalView.getTerminal().resize(cols: size.cols, rows: size.rows)
+        terminalView.getTerminal().updateFullScreen()
+        terminalView.needsDisplay = true
+    }
+
     // MARK: - TerminalViewDelegate
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
@@ -103,8 +134,11 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        let session = attachSession
-        Task { await session?.sendResize(cols: newCols, rows: newRows) }
+        // Ignore reported model dimensions, including asynchronous callbacks.
+        // Only a changed physical frame/font can update desired local geometry.
+        if source.frame.size != lastKnownTerminalViewSize || source.font != lastPhysicalFont {
+            refreshLocalGeometry(size: source.frame.size)
+        }
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
@@ -136,9 +170,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
                 let size = self.bounds.size
                 guard size.width > 1, size.height > 1 else { return }
                 self.terminalView.getTerminal().updateFullScreen()
-                self.lastKnownTerminalViewSize = .zero
-                self.terminalView.setFrameSize(size)
-                self.lastKnownTerminalViewSize = size
+                self.refreshLocalGeometry(size: size)
                 self.terminalView.needsDisplay = true
             }
         }
@@ -147,6 +179,8 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     private func applyTheme(forceRefresh: Bool) {
         let appearance = window?.effectiveAppearance ?? NSApp.appearance ?? effectiveAppearance
         TerminalTheme.apply(to: terminalView, appearance: appearance)
+        refreshLocalGeometry(size: terminalView.frame.size)
+        if let reportedGridSize { renderGrid(reportedGridSize) }
         layer?.backgroundColor = TerminalTheme.background.cgColor
         guard forceRefresh else { return }
     }
@@ -158,7 +192,9 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     var acceptsFileDrops = true
 
     private func canAcceptDrop(_ sender: NSDraggingInfo) -> Bool {
-        acceptsFileDrops && sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        acceptsFileDrops
+            && sender.draggingPasteboard.canReadObject(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

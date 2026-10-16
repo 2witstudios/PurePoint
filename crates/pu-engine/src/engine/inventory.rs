@@ -263,6 +263,10 @@ impl Engine {
                 }
                 if kind == InventoryKind::Agents && filter.is_none_or(|f| f == state) {
                     report.agents.push(AgentInventoryEntry {
+                        screen_aware: handle.is_some_and(|h| h.screen_aware),
+                        phase: handle
+                            .filter(|h| h.screen_aware)
+                            .map(|h| h.output_buffer.input_phase().to_string()),
                         project_root: Some(root.clone()),
                         cwd: cwd.to_string(),
                         worktree_id,
@@ -341,6 +345,10 @@ impl Engine {
             }
             if kind == InventoryKind::Agents && filter.is_none_or(|f| f == state) {
                 report.agents.push(AgentInventoryEntry {
+                    screen_aware: handle.screen_aware,
+                    phase: handle
+                        .screen_aware
+                        .then(|| handle.output_buffer.input_phase().to_string()),
                     project_root: handle.project_root.clone(),
                     cwd: handle.cwd.clone(),
                     worktree_id: handle.worktree_id.clone(),

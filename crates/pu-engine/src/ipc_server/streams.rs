@@ -15,6 +15,8 @@ pub(super) async fn handle_attach_stream(
     writer: &mut IpcWriter,
     engine: &Engine,
     agent_id: &str,
+    replay: Option<pu_core::protocol::Replay>,
+    client_id: Option<String>,
 ) {
     let (buffer, master_fd, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
         Some(handles) => handles,
@@ -31,32 +33,101 @@ pub(super) async fn handle_attach_stream(
         }
     };
 
-    tracing::debug!(agent_id, "attach stream started");
+    let snapshot = replay == Some(pu_core::protocol::Replay::Snapshot);
+    let identified = client_id.is_some();
+    let (attachment, mut size_rx) = engine.register_attachment(agent_id, client_id).await;
+    // Always unregister, including failures writing initial replay.
+    run_attachment(
+        reader,
+        writer,
+        engine,
+        agent_id,
+        snapshot,
+        identified,
+        attachment,
+        &mut size_rx,
+        buffer,
+        master_fd,
+        &mut exit_rx,
+    )
+    .await;
+    engine.unregister_attachment(agent_id, attachment).await;
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn run_attachment(
+    reader: &mut IpcReader,
+    writer: &mut IpcWriter,
+    engine: &Engine,
+    agent_id: &str,
+    snapshot: bool,
+    identified: bool,
+    attachment: u64,
+    size_rx: &mut tokio::sync::broadcast::Receiver<crate::engine::PtySize>,
+    buffer: std::sync::Arc<crate::output_buffer::OutputBuffer>,
+    master_fd: std::sync::Arc<std::os::fd::OwnedFd>,
+    exit_rx: &mut tokio::sync::watch::Receiver<Option<i32>>,
+) {
     let mut watcher = buffer.subscribe();
-
-    // Send buffered output in fixed-size chunks so the client can start rendering quickly.
-    let mut offset = 0;
-    let (data, new_offset) = buffer.read_from(offset);
-    offset = new_offset;
-    if !data.is_empty() && write_output_chunks(writer, agent_id, &data).await.is_err() {
-        tracing::debug!(agent_id, "attach stream ended: write error on initial data");
+    let (data, mut offset, initial_size) = engine
+        .attachment_replay(agent_id, &buffer, snapshot, size_rx)
+        .await;
+    if write_response(
+        writer,
+        &Response::AttachReady {
+            buffered_bytes: data.len(),
+        },
+    )
+    .await
+    .is_err()
+    {
         return;
     }
-
-    // If process already exited, we've sent all buffered output above — return
-    // immediately. Without this, the streaming loop deadlocks: watcher never fires
-    // (no new output), exit_rx.changed() is disabled, and reader blocks forever.
+    let mut reported_size = initial_size.clone();
+    if identified && write_size(writer, initial_size).await.is_err() {
+        return;
+    }
+    if write_output_chunks(writer, agent_id, &data).await.is_err() {
+        return;
+    }
     if exit_rx.borrow().is_some() {
-        tracing::debug!(agent_id, "attach stream: process already exited");
         return;
     }
 
     let mut line = String::new();
     loop {
         tokio::select! {
+            biased;
+            result = size_rx.recv(), if identified => {
+                match result {
+                    Ok(size) => {
+                        reported_size = size.clone();
+                        if write_size(writer, size).await.is_err() { break }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let (data, next, size) = engine.attachment_replay(agent_id, &buffer, snapshot, size_rx).await;
+                        if snapshot && write_response(writer, &Response::Resync).await.is_err() { break }
+                        reported_size = size.clone();
+                        if write_size(writer, size).await.is_err() { break }
+                        if snapshot {
+                            offset = next;
+                            if write_output_chunks(writer, agent_id, &data).await.is_err() { break }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
             Ok(()) = watcher.changed() => {
-                let (data, new_offset) = buffer.read_from(offset);
+                let (mut data, mut new_offset, gap) = buffer.read_from(offset);
+                if snapshot && gap {
+                    if write_response(writer, &Response::Resync).await.is_err() { break }
+                    let (fresh, next, size) = engine.attachment_replay(agent_id, &buffer, true, size_rx).await;
+                    if identified && size != reported_size {
+                        reported_size = size.clone();
+                        if write_size(writer, size).await.is_err() { break }
+                    }
+                    (data, new_offset) = (fresh, next);
+                }
                 offset = new_offset;
                 if !data.is_empty()
                     && write_output_chunks(writer, agent_id, &data).await.is_err()
@@ -67,7 +138,13 @@ pub(super) async fn handle_attach_stream(
             }
             Ok(()) = exit_rx.changed() => {
                 // Drain any remaining buffered output
-                let (data, _) = buffer.read_from(offset);
+                let (mut data, _, gap) = buffer.read_from(offset);
+                if snapshot && gap {
+                    if write_response(writer, &Response::Resync).await.is_err() { break }
+                    let (fresh, _, size) = engine.attachment_replay(agent_id, &buffer, true, size_rx).await;
+                    if identified && size != reported_size && write_size(writer, size).await.is_err() { break }
+                    data = fresh;
+                }
                 if !data.is_empty() {
                     let _ = write_output_chunks(writer, agent_id, &data).await;
                 }
@@ -83,7 +160,10 @@ pub(super) async fn handle_attach_stream(
                         engine.write_to_pty(&master_fd, &data).await.ok();
                     }
                     Some(Request::Resize { cols, rows, .. }) => {
-                        engine.resize_pty(&master_fd, cols, rows).await.ok();
+                        engine.attachment_resize(agent_id, attachment, cols, rows, false).await;
+                    }
+                    Some(Request::ClaimSize { cols, rows }) => {
+                        engine.attachment_resize(agent_id, attachment, cols, rows, true).await;
                     }
                     _ => break,
                 }
@@ -91,6 +171,21 @@ pub(super) async fn handle_attach_stream(
         }
     }
     tracing::debug!(agent_id, "attach stream ended");
+}
+
+async fn write_size(
+    writer: &mut IpcWriter,
+    size: (u16, u16, Option<String>),
+) -> std::io::Result<()> {
+    write_response(
+        writer,
+        &Response::PtySize {
+            cols: size.0,
+            rows: size.1,
+            owner_client_id: size.2,
+        },
+    )
+    .await
 }
 
 /// Streaming grid subscription: forwards GridEvent broadcasts to subscriber,

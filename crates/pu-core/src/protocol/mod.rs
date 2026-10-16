@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -149,6 +149,14 @@ pub enum Request {
     },
     Attach {
         agent_id: String,
+        #[serde(default)]
+        replay: Option<Replay>,
+        #[serde(default)]
+        client_id: Option<String>,
+    },
+    ClaimSize {
+        cols: u16,
+        rows: u16,
     },
     Input {
         agent_id: String,
@@ -160,6 +168,9 @@ pub enum Request {
         /// agents get chunked typing plus a delayed Enter.
         #[serde(default)]
         submit: bool,
+        #[serde(default)]
+        // A dedicated operation socket: EOF cancels any remaining delivery steps.
+        cancel_on_disconnect: bool,
     },
     Resize {
         agent_id: String,
@@ -499,6 +510,12 @@ pub enum Response {
     AttachReady {
         buffered_bytes: usize,
     },
+    Resync,
+    PtySize {
+        cols: u16,
+        rows: u16,
+        owner_client_id: Option<String>,
+    },
     Output {
         agent_id: String,
         #[serde(with = "encoding")]
@@ -722,4 +739,13 @@ impl Request {
             _ => None,
         }
     }
+}
+
+/// Replay strategy. Omission preserves retained raw replay for legacy clients.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Replay {
+    #[default]
+    Full,
+    Snapshot,
 }

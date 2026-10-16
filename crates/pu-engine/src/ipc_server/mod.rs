@@ -23,9 +23,28 @@ mod streams;
 #[cfg(test)]
 mod tests;
 
+// Tokio may not yet have registered a readiness event for an already-visible
+// EOF. Check the kernel before polling delivery, which can enqueue an OS write.
+fn operation_disconnected(reader: &IpcReader) -> bool {
+    use std::os::fd::AsRawFd;
+    if !reader.buffer().is_empty() {
+        return true;
+    }
+    let mut byte = 0u8;
+    let result = unsafe {
+        libc::recv(
+            reader.get_ref().as_ref().as_raw_fd(),
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    result >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock
+}
+
 enum StreamMode {
     None,
-    Attach(String),
+    Attach(String, Option<pu_core::protocol::Replay>, Option<String>),
     Grid(String),
     Status(String),
     Fs { root: String, recursive: bool },
@@ -34,7 +53,11 @@ enum StreamMode {
 impl StreamMode {
     fn from_request(request: &Request) -> Self {
         match request {
-            Request::Attach { agent_id } => Self::Attach(agent_id.clone()),
+            Request::Attach {
+                agent_id,
+                replay,
+                client_id,
+            } => Self::Attach(agent_id.clone(), *replay, client_id.clone()),
             Request::SubscribeGrid { project_root } => Self::Grid(project_root.clone()),
             Request::SubscribeStatus { project_root } => Self::Status(project_root.clone()),
             Request::SubscribeFs { root, recursive } => Self::Fs {
@@ -197,8 +220,28 @@ impl IpcServer {
         let is_shutdown = matches!(request, Request::Shutdown);
         let stream_mode = StreamMode::from_request(&request);
 
-        let response = engine.handle_prepared_request(request).await;
-        if write_response(writer, &response).await.is_err() {
+        let cancel_on_disconnect = matches!(
+            &request,
+            Request::Input {
+                cancel_on_disconnect: true,
+                ..
+            }
+        );
+        if cancel_on_disconnect && operation_disconnected(reader) {
+            return false;
+        }
+        let response = if cancel_on_disconnect {
+            tokio::select! {
+                biased;
+                _ = reader.read_u8() => return false,
+                response = engine.handle_prepared_request(request) => response,
+            }
+        } else {
+            engine.handle_prepared_request(request).await
+        };
+        if !matches!(stream_mode, StreamMode::Attach(..))
+            && write_response(writer, &response).await.is_err()
+        {
             if is_shutdown {
                 shutdown.notify_one();
             }
@@ -211,11 +254,13 @@ impl IpcServer {
         }
 
         match stream_mode {
-            StreamMode::Attach(agent_id) => {
+            StreamMode::Attach(agent_id, replay, client_id) => {
                 if !matches!(response, Response::AttachReady { .. }) {
+                    let _ = write_response(writer, &response).await;
                     return false;
                 }
-                streams::handle_attach_stream(reader, writer, engine, &agent_id).await;
+                streams::handle_attach_stream(reader, writer, engine, &agent_id, replay, client_id)
+                    .await;
             }
             StreamMode::Grid(project_root) => {
                 if matches!(response, Response::GridSubscribed) {

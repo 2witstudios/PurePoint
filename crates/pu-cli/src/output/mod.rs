@@ -43,6 +43,7 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         return Ok(());
     }
     match response {
+        Response::Resync | Response::PtySize { .. } => {}
         Response::Inventory(report) => {
             let c = &report.summary;
             println!(

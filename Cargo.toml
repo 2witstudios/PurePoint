@@ -28,3 +28,7 @@ base64 = "0.23"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+vt100 = { path = "vendor/vt100-0.16.2" }
+vte = { path = "vendor/vte-0.15.0" }

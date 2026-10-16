@@ -1,4 +1,5 @@
 import Testing
+import AppKit
 import Foundation
 @testable import PurePoint
 
@@ -70,6 +71,57 @@ struct DaemonClientParseTests {
         #expect(worktrees[0].agents.count == 1)
         #expect(worktrees[0].agents["ag-1"]?.name == "claude-1")
         #expect(agents.isEmpty)
+    }
+
+    @Test func testParsePtySizeOwnershipAndResync() {
+        let json = """
+            {"type":"pty_size","cols":100,"rows":30,"owner_client_id":"mac:test"}
+            """.data(using: .utf8)!
+        guard case .ptySize(let cols, let rows, let owner) = DaemonClient.parse(json) else {
+            Issue.record("expected PTY size")
+            return
+        }
+        #expect(cols == 100)
+        #expect(rows == 30)
+        #expect(owner == "mac:test")
+        guard case .resync = DaemonClient.parse(Data(#"{"type":"resync"}"#.utf8)) else {
+            Issue.record("expected resync")
+            return
+        }
+    }
+
+    @Test func testIdentifiedAttachOptsIntoSnapshotAndClaimIsExplicit() throws {
+        let request = DaemonRequest.attach(agentId: "ag-1", clientId: "mac:test")
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+        #expect(object["client_id"] as? String == "mac:test")
+        #expect(object["replay"] as? String == "snapshot")
+        let claim =
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(DaemonRequest.claimSize(cols: 90, rows: 25)))
+            as! [String: Any]
+        #expect(claim["type"] as? String == "claim_size")
+    }
+
+    @MainActor @Test func testReportedSizeDoesNotReplaceLocalWindowDimensions() {
+        let view = ScrollableTerminal(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.layoutSubtreeIfNeeded()
+        view.refreshLocalGeometry(size: CGSize(width: 800, height: 600))
+        let local = view.localGridSize
+        view.applyReportedSize(cols: 70, rows: 20)
+        // Also simulate a delayed model resize delegate callback.
+        view.sizeChanged(source: view.terminalView, newCols: 70, newRows: 20)
+        #expect(view.localGridSize.cols == local.cols)
+        #expect(view.localGridSize.rows == local.rows)
+        #expect(view.terminalView.getTerminal().cols == 70)
+        #expect(view.terminalView.getTerminal().rows == 20)
+        view.refreshLocalGeometry(size: CGSize(width: 1000, height: 600))
+        #expect(view.localGridSize.cols > local.cols)
+        #expect(view.terminalView.getTerminal().cols == 70)
+        view.terminalView.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .regular)
+        let beforeFont = view.localGridSize.cols
+        view.refreshLocalGeometry(size: CGSize(width: 1000, height: 600))
+        #expect(view.localGridSize.cols < beforeFont)
+        #expect(view.terminalView.getTerminal().cols == 70)
+        view.tearDown()
     }
 
     @Test func testParseAttachReady() {

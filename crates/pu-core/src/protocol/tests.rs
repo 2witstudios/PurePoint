@@ -231,11 +231,17 @@ fn given_logs_request_should_default_tail_to_500() {
 fn given_attach_request_should_round_trip() {
     let req = Request::Attach {
         agent_id: "ag-abc".into(),
+        replay: None,
+        client_id: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
     match parsed {
-        Request::Attach { agent_id } => assert_eq!(agent_id, "ag-abc"),
+        Request::Attach {
+            agent_id,
+            replay: None,
+            client_id: None,
+        } => assert_eq!(agent_id, "ag-abc"),
         _ => panic!("expected Attach"),
     }
 }
@@ -485,7 +491,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(PROTOCOL_VERSION, 10);
 }
 
 // --- GridCommand round-trips ---
@@ -2071,6 +2077,7 @@ fn given_input_with_submit_should_round_trip() {
         agent_id: "ag-abc".into(),
         data: b"hello world".to_vec(),
         submit: true,
+        cancel_on_disconnect: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -2079,6 +2086,7 @@ fn given_input_with_submit_should_round_trip() {
             agent_id,
             data,
             submit,
+            ..
         } => {
             assert_eq!(agent_id, "ag-abc");
             assert_eq!(data, b"hello world");
@@ -2164,6 +2172,7 @@ fn given_input_with_submit_false_should_round_trip() {
         agent_id: "ag-abc".into(),
         data: b"raw keys".to_vec(),
         submit: false,
+        cancel_on_disconnect: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();

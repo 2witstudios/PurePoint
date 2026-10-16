@@ -292,15 +292,18 @@ nonisolated struct ScheduleInfoPayload: Decodable {
 }
 
 nonisolated enum DaemonRequest: Encodable {
-    case channelRead(projectRoot: String, after: UInt64? = nil, before: UInt64? = nil, limit: Int = 100, query: String? = nil, parentId: String? = nil, knownRevision: UInt64? = nil)
+    case channelRead(
+        projectRoot: String, after: UInt64? = nil, before: UInt64? = nil, limit: Int = 100, query: String? = nil,
+        parentId: String? = nil, knownRevision: UInt64? = nil)
     case channelSend(projectRoot: String, text: String, parentId: String? = nil, references: [ChannelReference] = [])
     case channelEdit(projectRoot: String, messageId: String, text: String)
     case channelReact(projectRoot: String, messageId: String, active: Bool)
     case health
     case initProject(projectRoot: String)
     case status(projectRoot: String, agentId: String? = nil)
-    case attach(agentId: String)
+    case attach(agentId: String, clientId: String? = nil)
     case input(agentId: String, data: Data)
+    case claimSize(cols: Int, rows: Int)
     case resize(agentId: String, cols: Int, rows: Int)
     case spawn(
         projectRoot: String, prompt: String, agent: String = "claude",
@@ -399,9 +402,17 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("status", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             if let agentId { try container.encode(agentId, forKey: .key("agent_id")) }
-        case .attach(let agentId):
+        case .attach(let agentId, let clientId):
             try container.encode("attach", forKey: .key("type"))
             try container.encode(agentId, forKey: .key("agent_id"))
+            if let clientId {
+                try container.encode(clientId, forKey: .key("client_id"))
+                try container.encode("snapshot", forKey: .key("replay"))
+            }
+        case .claimSize(let cols, let rows):
+            try container.encode("claim_size", forKey: .key("type"))
+            try container.encode(cols, forKey: .key("cols"))
+            try container.encode(rows, forKey: .key("rows"))
         case .input(let agentId, let data):
             try container.encode("input", forKey: .key("type"))
             try container.encode(agentId, forKey: .key("agent_id"))
@@ -634,6 +645,8 @@ nonisolated enum DaemonResponse: Decodable {
     case healthReport(pid: Int, uptimeSeconds: Int, protocolVersion: Int, agentCount: Int)
     case initResult(created: Bool)
     case statusReport(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
+    case resync
+    case ptySize(cols: Int, rows: Int, ownerClientId: String?)
     case attachReady(bufferedBytes: Int)
     case output(agentId: String, data: Data)
     case spawnResult(worktreeId: String?, agentId: String, status: String)
@@ -696,6 +709,11 @@ nonisolated enum DaemonResponse: Decodable {
         case "status_report":
             let p = try StatusReportPayload(from: decoder)
             self = .statusReport(worktrees: p.worktrees, agents: p.agents)
+        case "resync":
+            self = .resync
+        case "pty_size":
+            let p = try PtySizePayload(from: decoder)
+            self = .ptySize(cols: p.cols, rows: p.rows, ownerClientId: p.ownerClientId)
         case "attach_ready":
             let p = try AttachReadyPayload(from: decoder)
             self = .attachReady(bufferedBytes: p.bufferedBytes)
@@ -1152,7 +1170,7 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
 nonisolated enum DaemonProtocol {
     /// The protocol this app speaks. A daemon reporting another version is incompatible.
-    static let version = 9
+    static let version = 10
 }
 
 nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {
@@ -1264,5 +1282,15 @@ private nonisolated struct GitExecResultPayload: Decodable {
         case exitCode = "exit_code"
         case stdoutBase64 = "stdout_base64"
         case stderrBase64 = "stderr_base64"
+    }
+}
+
+private nonisolated struct PtySizePayload: Decodable {
+    let cols: Int
+    let rows: Int
+    let ownerClientId: String?
+    enum CodingKeys: String, CodingKey {
+        case cols, rows
+        case ownerClientId = "owner_client_id"
     }
 }

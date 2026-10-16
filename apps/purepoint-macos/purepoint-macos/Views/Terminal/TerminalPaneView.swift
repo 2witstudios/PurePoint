@@ -156,6 +156,7 @@ class TerminalPaneNSView: NSView {
             // Every attach replays the daemon's whole buffer; only the first
             // one lands in an empty terminal.
             resetBeforeReplay: oldSession != nil,
+            localCols: tv.localGridSize.cols, localRows: tv.localGridSize.rows,
             onFirstOutput: { [weak self] in self?.removeSpinner() },
             onOutput: { [weak self] in self?.noteOutput() },
             client: client
@@ -196,6 +197,8 @@ class TerminalPaneNSView: NSView {
     func focusTerminal() {
         guard !InlineRenameFocus.isActive, let tv = terminal?.terminalView else { return }
         window?.makeFirstResponder(tv)
+        let session = terminal?.attachSession
+        Task { await session?.claimSize() }
     }
 
     override func mouseDown(with event: NSEvent) {

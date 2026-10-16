@@ -83,11 +83,11 @@ impl OutputBuffer {
 
     /// Read bytes written since `offset`. Returns `(bytes, new_offset)`.
     /// Uses read lock + as_slices to avoid blocking concurrent readers.
-    pub fn read_from(&self, offset: usize) -> (Vec<u8>, usize) {
+    pub fn read_from(&self, offset: usize) -> (Vec<u8>, usize, bool) {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let total = inner.total_written;
         if offset >= total {
-            return (vec![], total);
+            return (vec![], total, false);
         }
         let wanted = total - offset;
         let available = inner.data.len();
@@ -101,7 +101,7 @@ impl OutputBuffer {
         } else {
             bytes.extend_from_slice(&b[skip - a.len()..]);
         }
-        (bytes, total)
+        (bytes, total, wanted > available)
     }
 
     /// Get a watch receiver for subscribing to write notifications.
@@ -154,6 +154,23 @@ impl OutputBuffer {
             .set_size(rows.max(1), cols.max(1));
     }
 
+    /// Hold the output lock across the kernel resize and parser update, so a
+    /// SIGWINCH redraw cannot be parsed at the previous dimensions.
+    pub fn resize_transaction(
+        &self,
+        rows: u16,
+        cols: u16,
+        resize: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        resize()?;
+        inner
+            .terminal
+            .screen_mut()
+            .set_size(rows.max(1), cols.max(1));
+        Ok(())
+    }
+
     /// Render from the original stream, not an arbitrary retained byte suffix.
     /// When either history bound is reached, a changed generation invalidates
     /// incremental cursors instead of silently skipping evicted output.
@@ -179,6 +196,58 @@ impl OutputBuffer {
             inner.total_written.saturating_sub(inner.data.len())
         };
         (lines.join("\n"), generation)
+    }
+
+    /// Screen reconstruction and next live offset are captured under one lock.
+    pub fn attach_snapshot(&self) -> (Vec<u8>, usize) {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let original = inner.terminal.screen();
+        let (rows, cols) = original.size();
+        let mut copy = vt100::Parser::new(rows, cols, 1024);
+        *copy.screen_mut() = original.clone();
+        // Recover the primary screen even when attached during an alternate-screen app.
+        let alternate = original.alternate_screen();
+        copy.process(b"\x1b[?47l");
+        let screen = copy.screen_mut();
+        screen.set_scrollback(usize::MAX);
+        let history = screen.scrollback();
+        let mut data = b"\x1bc".to_vec();
+        for offset in (1..=history).rev() {
+            screen.set_scrollback(offset);
+            data.extend(screen.rows(0, cols).next().unwrap_or_default().as_bytes());
+            data.extend(b"\r\n");
+        }
+        // Push every history row into scrollback before the visible-screen redraw.
+        // A short history otherwise remains on screen and is erased by the redraw.
+        for _ in 1..rows {
+            data.extend(b"\r\n");
+        }
+        screen.set_scrollback(0);
+        data.extend(screen.state_formatted());
+        data.extend(screen.continuation_formatted());
+        copy.process(b"\x1b[?47h");
+        data.extend(b"\x1b[?47h");
+        data.extend(copy.screen().state_formatted());
+        data.extend(copy.screen().continuation_formatted());
+        if !alternate {
+            data.extend(b"\x1b[?47l");
+        }
+        data.extend(inner.terminal.screen_pending_formatted());
+        (data, inner.total_written)
+    }
+
+    pub fn terminal_size(&self) -> (u16, u16) {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .terminal
+            .screen()
+            .size()
+    }
+
+    pub fn input_phase(&self) -> &'static str {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        crate::screen::input_phase(inner.terminal.screen())
     }
 
     pub fn content_idle_seconds(&self) -> u64 {
@@ -312,6 +381,203 @@ impl OutputBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_partial_opaque_string_should_never_invent_clipboard_or_title_callbacks() {
+        #[derive(Default)]
+        struct Actions {
+            clipboard: usize,
+            title: usize,
+        }
+        impl vt100::Callbacks for Actions {
+            fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, _: &[u8], _: &[u8]) {
+                self.clipboard += 1;
+            }
+            fn set_window_title(&mut self, _: &mut vt100::Screen, _: &[u8]) {
+                self.title += 1;
+            }
+        }
+        for suffix in [
+            b"52;c;SEk=\x07".as_slice(),
+            b"2;invented-title\x07".as_slice(),
+        ] {
+            let buf = OutputBuffer::new();
+            buf.write(b"\x1b]2;original-title-prefix-");
+            let (snapshot, _) = buf.attach_snapshot();
+            let mut restored = vt100::Parser::new_with_callbacks(40, 120, 1024, Actions::default());
+            restored.process(&snapshot);
+            restored.process(suffix);
+            assert_eq!(restored.callbacks().clipboard, 0);
+            assert_eq!(restored.callbacks().title, 0);
+        }
+        let buf = OutputBuffer::new();
+        buf.write(b"\x1bP1;2zopaque-");
+        let (snapshot, _) = buf.attach_snapshot();
+        assert!(
+            snapshot.ends_with(b"\x1bP~"),
+            "opaque DCS must not become a sixel introducer"
+        );
+    }
+
+    #[test]
+    fn given_every_byte_split_should_restore_parser_and_terminal_continuation() {
+        let cases: Vec<&[u8]> = vec![
+            b"\x1b[31mRED",
+            b"\xe2\x82\xac",
+            b"\xf0\x9f\x98\x80!",
+            b"\xe2x\x82\xac",
+            b"\xe2\x1b[31mRED",
+            b"\xffbad\xc0\xaf",
+            b"\x1b]0;title\x1b\\TEXT",
+            b"\x1b]0;title\x07TEXT",
+            b"\x1bP1;2qpayload\x1b\\TEXT",
+            b"\x1bPqpayload\x9cTEXT",
+            b"\x1b_Xignored\x1b\\TEXT",
+            b"ABC\x1b7\x1b[3;4H\x1b8Z",
+            b"\x1b[31mABC\x1b7\x1b[0m\x1b[3;4H\x1b8Z",
+            b"TOP\r\nrow2\r\nrow3\r\nBOTTOM\x1b[2;3r\x1b[3;1HA\nB",
+            b"\x1b[2;5r\x1b[?6h\x1b[2;3Hsaved\x1b7\x1b[3;1H\x1b8Z",
+            b"123456789012Z",
+            b"123456789012\x1b7\r\n\x1b8Z",
+            b"main\x1b[?47halt\x1b7\x1b[?47l\x1b[?47h\x1b8Z",
+            b"main\x1b[?1049halt\x1b[?1049lZ",
+            b"\x1b[3;8r\x1b[?6h\x1b[4;5HX\x1b7\x1b[2;5r\x1b8Z",
+            b"\x1b[38:2:255:0:128mCOLOR",
+            b"\x1b[99999999999999999CZ",
+            b"\x1b[31\r\nmRED",
+            b"\x1b[31\x18RED",
+            b"\x1b[31\x1aRED",
+            b"\x1b[31\x1b[32mGREEN",
+            b"\x1b[1 !pRESET",
+            b"\x1b(0qqq\x1b(BZ",
+        ];
+        let mut cases: Vec<Vec<u8>> = cases.into_iter().map(Vec::from).collect();
+        for start in [b"\x1b[".as_slice(), b"\x1bP".as_slice()] {
+            for parameters in [b"1;".repeat(40), b"1:".repeat(40), b"   ".to_vec()] {
+                let mut stream = start.to_vec();
+                stream.extend(parameters);
+                stream.extend(b"qignored\x9cTEXT\x1b\\TAIL");
+                cases.push(stream);
+            }
+        }
+        cases.extend([
+            "abc€😀日本語\r\nend".as_bytes().to_vec(),
+            b"\x1b[38:2::10:20:30mCOLOR\x1b[0m".to_vec(),
+            b"PRIMARY\x1b7\x1b[?1049hALT\x1b7\x1b[3;4H\x1b8Z\x1b[?1049l\x1b8P".to_vec(),
+            b"\x1b[?1h\x1b[?2004h\x1b[?1000h\x1b[?1006hX".to_vec(),
+            [vec![b'A'; 120], b"B\x1b7\x1b[3;4H\x1b8Z".to_vec()].concat(),
+        ]);
+        for (rows, cols) in [(6, 12), (40, 120)] {
+            for stream in &cases {
+                for split in 0..=stream.len() {
+                    let buf = OutputBuffer::new();
+                    buf.resize_terminal(rows, cols);
+                    buf.write(&stream[..split]);
+                    let (snapshot, offset) = buf.attach_snapshot();
+                    buf.write(&stream[split..]);
+                    let (live, _, gap) = buf.read_from(offset);
+                    assert!(!gap);
+                    let mut expected = vt100::Parser::new(rows, cols, 1024);
+                    expected.process(stream);
+                    let mut restored = vt100::Parser::new(rows, cols, 1024);
+                    restored.process(&snapshot);
+                    restored.process(&live);
+                    assert_eq!(
+                        restored.screen().state_formatted(),
+                        expected.screen().state_formatted(),
+                        "stream {stream:?} split {split} size {rows}x{cols}"
+                    );
+                    assert_eq!(
+                        restored.screen().continuation_formatted(),
+                        expected.screen().continuation_formatted(),
+                        "continuation stream {stream:?} split {split} size {rows}x{cols}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn given_resize_transaction_should_hold_redraws_until_new_dimensions_and_preserve_size_on_failure()
+     {
+        let buffer = std::sync::Arc::new(OutputBuffer::new());
+        let writer = buffer.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            writer.write(b"123456");
+        });
+        buffer
+            .resize_transaction(3, 5, || {
+                start_tx.send(()).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        task.join().unwrap();
+        assert!(buffer.terminal_snapshot().0.contains("12345\n6"));
+        assert!(
+            buffer
+                .resize_transaction(9, 9, || Err(std::io::Error::other("failed ioctl")))
+                .is_err()
+        );
+        assert_eq!(buffer.terminal_size(), (3, 5));
+    }
+
+    #[test]
+    fn given_concurrent_writes_should_capture_screen_and_offset_from_same_write() {
+        let buffer = std::sync::Arc::new(OutputBuffer::new());
+        let writer = buffer.clone();
+        let task = std::thread::spawn(move || {
+            for n in 1..=1000 {
+                writer.write(format!("\r\x1b[2K{n:04}").as_bytes());
+            }
+        });
+        for _ in 0..100 {
+            let (data, offset) = buffer.attach_snapshot();
+            let mut parser = vt100::Parser::new(40, 120, 0);
+            parser.process(&data);
+            let text = parser.screen().contents();
+            if offset > 0 {
+                assert_eq!(text.trim().parse::<usize>().unwrap(), offset / 9);
+            }
+        }
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn given_short_history_and_alternate_screen_should_restore_both_buffers_and_modes() {
+        let buf = OutputBuffer::new();
+        buf.write(b"history1\r\nhistory2\r\nhistory3");
+        for _ in 0..40 {
+            buf.write(b"\r\n");
+        }
+        buf.write(b"primary\x1b[?1049halternate\x1b[?1h\x1b[?2004h");
+        let (snapshot, _) = buf.attach_snapshot();
+        let mut restored = vt100::Parser::new(40, 120, 1024);
+        restored.process(&snapshot);
+        assert!(restored.screen().alternate_screen());
+        assert!(restored.screen().application_cursor());
+        assert!(restored.screen().bracketed_paste());
+        assert!(restored.screen().contents().contains("alternate"));
+        restored.process(b"\x1b[?1049l");
+        assert!(restored.screen().contents().contains("primary"));
+        restored.screen_mut().set_scrollback(usize::MAX);
+        assert!(restored.screen().contents().contains("history1"));
+    }
+
+    #[test]
+    fn given_evicted_screen_should_snapshot_original_screen_and_exact_offset() {
+        let buf = OutputBuffer::new();
+        buf.write(b"ancient screen");
+        buf.write(&b"\x1b[0m".repeat(1_100_000));
+        let (data, offset) = buf.attach_snapshot();
+        let mut parser = vt100::Parser::new(40, 120, 1024);
+        parser.process(&data);
+        assert!(parser.screen().contents().contains("ancient screen"));
+        assert_eq!(offset, buf.current_offset());
+        let (_, _, gap) = buf.read_from(0);
+        assert!(gap);
+    }
 
     #[test]
     fn given_evicted_raw_bytes_should_preserve_emulated_text_and_change_capture_generation() {
@@ -535,7 +801,7 @@ mod tests {
     fn given_read_from_zero_should_return_all_bytes() {
         let buf = OutputBuffer::new();
         buf.write(b"abcdef");
-        let (data, offset) = buf.read_from(0);
+        let (data, offset, _) = buf.read_from(0);
         assert_eq!(data, b"abcdef");
         assert_eq!(offset, 6);
     }
@@ -544,9 +810,9 @@ mod tests {
     fn given_read_from_offset_should_return_only_new_bytes() {
         let buf = OutputBuffer::new();
         buf.write(b"abc");
-        let (_, off1) = buf.read_from(0);
+        let (_, off1, _) = buf.read_from(0);
         buf.write(b"def");
-        let (data, off2) = buf.read_from(off1);
+        let (data, off2, _) = buf.read_from(off1);
         assert_eq!(data, b"def");
         assert_eq!(off2, 6);
     }
@@ -555,7 +821,7 @@ mod tests {
     fn given_read_from_beyond_total_should_return_empty() {
         let buf = OutputBuffer::new();
         buf.write(b"abc");
-        let (data, offset) = buf.read_from(100);
+        let (data, offset, _) = buf.read_from(100);
         assert!(data.is_empty());
         assert_eq!(offset, 3);
     }
@@ -756,12 +1022,12 @@ mod tests {
         // Reading from offset 5 wants bytes 5..13 = 8 bytes, but buffer only has 10 chars
         // starting from total_written - data.len() = 13 - 10 = 3
         // So offset 5 means we want from position 5, buffer starts at 3, so skip = 5 - 3 = 2
-        let (data, new_off) = buf.read_from(5);
+        let (data, new_off, _) = buf.read_from(5);
         assert_eq!(new_off, 13);
         assert_eq!(data, b"67890abc");
 
         // Reading from offset 0 can only return what's in the buffer (10 bytes from position 3)
-        let (data, _) = buf.read_from(0);
+        let (data, _, _) = buf.read_from(0);
         assert_eq!(data.len(), 10);
         assert_eq!(data, b"4567890abc");
     }

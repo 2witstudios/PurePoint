@@ -6,6 +6,7 @@ mod fs_ops;
 mod helpers;
 mod inventory;
 mod pty_operations;
+pub(crate) use pty_operations::PtySize;
 mod read;
 mod scheduler;
 mod session_repair;
@@ -68,6 +69,7 @@ pub(super) struct SaveTriggerParams {
 }
 
 pub struct Engine {
+    sizes: Mutex<HashMap<String, pty_operations::SizeState>>,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
     start_time: Instant,
@@ -126,6 +128,7 @@ fn config_to_report(cfg: &pu_core::types::Config) -> Response {
 impl Engine {
     pub fn new() -> Self {
         Self {
+            sizes: Mutex::new(HashMap::new()),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
             start_time: Instant::now(),
@@ -468,17 +471,22 @@ impl Engine {
                 )
                 .await
             }
-            Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
+            Request::Attach { agent_id, .. } => self.handle_attach(&agent_id).await,
             Request::Input {
                 agent_id,
                 data,
                 submit,
+                ..
             } => self.handle_input(&agent_id, &data, submit).await,
+            Request::ClaimSize { .. } => Response::Error {
+                code: "ATTACH_REQUIRED".into(),
+                message: "claim_size requires an attachment".into(),
+            },
             Request::Resize {
                 agent_id,
                 cols,
                 rows,
-            } => self.handle_resize(&agent_id, cols, rows).await,
+            } => self.handle_legacy_resize(&agent_id, cols, rows).await,
             Request::SubscribeGrid { project_root } => {
                 self.handle_subscribe_grid(&project_root).await
             }

@@ -29,6 +29,7 @@ pub async fn run(
             agent_id: agent_id.to_string(),
             data,
             submit,
+            cancel_on_disconnect: false,
         },
     )
     .await?;

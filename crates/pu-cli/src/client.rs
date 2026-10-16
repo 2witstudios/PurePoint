@@ -35,7 +35,7 @@ pub async fn send_request(socket: &Path, request: &Request) -> Result<Response, 
         let id = match request {
             Request::Logs { agent_id, .. }
             | Request::Input { agent_id, .. }
-            | Request::Attach { agent_id }
+            | Request::Attach { agent_id, .. }
             | Request::Resize { agent_id, .. } => Some(agent_id),
             _ => None,
         };
@@ -111,6 +111,7 @@ mod tests {
             agent_id: "ag-1".into(),
             data: b"hi".to_vec(),
             submit,
+            cancel_on_disconnect: false,
         };
         assert_eq!(timeout_for(&input(true)), DELIVERY_TIMEOUT);
         assert_eq!(timeout_for(&input(false)), REQUEST_TIMEOUT);
