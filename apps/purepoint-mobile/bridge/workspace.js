@@ -28,6 +28,12 @@ const promptText = (value) =>
   value.trim().length > 0 &&
   Buffer.byteLength(value) <= 65536 &&
   !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
+// Config map keys are opaque strings, not process or filesystem identifiers.
+const configKey = (value) =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  Buffer.byteLength(value) <= 128 &&
+  !/[\x00-\x1f\x7f-\x9f]/.test(value);
 const identifier = (value) =>
   typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const validOperation = (value) =>
@@ -168,7 +174,7 @@ export function workspaceConnection({
       config.agents.length > 256 ||
       typeof config.terminal_available !== "boolean" ||
       config.agents.some(
-        (a) => !identifier(a.id) || typeof a.available !== "boolean",
+        (a) => !configKey(a.id) || typeof a.available !== "boolean",
       )
     )
       fail("unsupported", "Daemon lacks canonical workspace catalog");
@@ -372,7 +378,7 @@ export function workspaceConnection({
           agent = "terminal";
         if (r.op === "workspace.spawn") {
           if (
-            !identifier(r.agentType) ||
+            !configKey(r.agentType) ||
             !choices.agents.some((a) => a.id === r.agentType && a.available)
           )
             fail("unsupported", "Agent unavailable");

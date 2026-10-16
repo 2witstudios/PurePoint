@@ -22,7 +22,9 @@ async function fixture(t) {
     partial = false,
     legacy = false,
     drop = false,
-    holdMetadata = false;
+    holdMetadata = false,
+    catalogKeys = ["custom"],
+    presetType = "custom";
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
@@ -72,14 +74,12 @@ async function fixture(t) {
         } else if (r.type === "get_config")
           send({
             type: "config_report",
-            agents: [
-              {
-                name: "My Agent",
-                ...(legacy ? {} : { id: "custom", available: true }),
-                command: "secret-command",
-                launch_args: ["secret-arg"],
-              },
-            ],
+            agents: catalogKeys.map((id) => ({
+              name: "My Agent",
+              ...(legacy ? {} : { id, available: true }),
+              command: "secret-command",
+              launch_args: ["secret-arg"],
+            })),
             ...(legacy ? {} : { terminal_available: true }),
           });
         else if (r.type === "list_agent_defs")
@@ -88,12 +88,12 @@ async function fixture(t) {
             agent_defs: [
               {
                 name: "review",
-                agent_type: "custom",
+                agent_type: presetType,
                 inline_prompt: "Review carefully\n\tRésumé",
               },
               {
                 name: "unsafe",
-                agent_type: "custom",
+                agent_type: presetType,
                 command: "do-not-expose",
               },
             ],
@@ -157,6 +157,10 @@ async function fixture(t) {
     agents,
     ledger,
     connect,
+    catalog(keys, type = "custom") {
+      catalogKeys = keys;
+      presetType = type;
+    },
     holdMetadata(v) {
       holdMetadata = v;
     },
@@ -607,4 +611,84 @@ test("real authenticated TLS WS old grants deny management, off leaks no fleet, 
   );
   assert.equal(f.requests.filter((r) => r.type === "spawn").length, 2);
   assert.equal((await c.request({ op: "sync" })).data.chatReady, true);
+});
+
+test("opaque bounded config keys preserve dotted, spaced and Unicode agent types in catalog, presets and fixed launches", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  const keys = [
+    "custom",
+    "claude.v2",
+    "custom agent",
+    "自定义代理",
+    " spaced ",
+    "é".repeat(64),
+  ];
+  f.catalog(keys, "custom agent");
+  const catalog = await c.request({
+    op: "workspace.catalog",
+    machine: "local",
+    projectId: "/registered",
+  });
+  assert.deepEqual(
+    catalog.agents.map((a) => a.id),
+    keys,
+  );
+  assert.equal(catalog.terminalAvailable, true);
+  assert.equal(catalog.presets[0].agentType, "custom agent");
+  for (const [index, agentType] of keys.entries()) {
+    const result = await c.request(
+      form({
+        op: "workspace.spawn",
+        operationId: `opaque-${index}`,
+        agentType,
+        prompt: "Do work",
+        ...(agentType === "custom agent" ? { presetId: "review" } : {}),
+      }),
+    );
+    assert.equal(result.state, "succeeded");
+  }
+  const terminal = await c.request(form({ operationId: "opaque-terminal" }));
+  assert.equal(terminal.state, "succeeded");
+  const requests = f.requests.filter((r) => r.type === "spawn");
+  assert.deepEqual(
+    requests.map((r) => r.agent),
+    [...keys, "terminal"],
+  );
+  assert.equal(
+    requests.every(
+      (r) =>
+        r.project_root === "/registered" &&
+        r.root === true &&
+        !r.command &&
+        !r.extra_args &&
+        !r.env,
+    ),
+    true,
+  );
+  const unknown = await c.request(
+    form({
+      op: "workspace.spawn",
+      operationId: "opaque-unknown",
+      agentType: "unknown.agent",
+      prompt: "Do work",
+    }),
+  );
+  assert.equal(unknown.state, "failed");
+  assert.equal(
+    f.requests.filter((r) => r.type === "spawn").length,
+    keys.length + 1,
+  );
+  for (const [index, agentType] of ["", "bad\nkey", "é".repeat(65)].entries()) {
+    const result = await c.request(
+      form({
+        op: "workspace.spawn",
+        operationId: `opaque-invalid-${index}`,
+        agentType,
+        prompt: "Do work",
+      }),
+    );
+    assert.equal(result.state, "failed");
+  }
 });
