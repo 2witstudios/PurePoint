@@ -850,7 +850,7 @@ struct WorkspaceLaunchForm: View {
                         Picker("Agent", selection: $draft.agentType) { Text("Select agent").tag(""); ForEach(catalog?.agents ?? []) { agent in if agent.available { Text(agent.name).tag(agent.id) } } }
                         Picker("Preset", selection: $draft.preset) { Text("None").tag(""); ForEach((catalog?.presets ?? []).filter { $0.agentType == draft.agentType }) { Text($0.name).tag($0.id) } }
                         TextField("Instructions (optional)", text: $draft.prompt, axis: .vertical).lineLimit(4...12)
-                        Toggle("Plan mode", isOn: $draft.planMode).disabled(!hasInstructions && draft.preset.isEmpty)
+                        Toggle("Plan mode", isOn: $draft.planMode).tint(.green).disabled(!hasInstructions && draft.preset.isEmpty) // An accent-tinted track hides the white knob in dark mode.
                     }
                     if target.kind == "rename" || target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree") {
                         TextField(target.kind == "rename" ? "Agent name" : "Worktree name", text: $draft.name)
@@ -878,6 +878,8 @@ struct WorkspaceLaunchForm: View {
                         Text("\(target.machineName) / \(target.projectName) / \(draft.destination == "root" ? "project root" : draft.destination == "newWorktree" ? draft.name : draft.worktree)").font(.caption).foregroundStyle(.secondary)
                         Button(role: target.kind == "stop" ? .destructive : nil) { Task { await submit() } } label: {
                             Text(actionTitle).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 36)
+                                // The accent is near-white in dark mode, so the default white label would vanish.
+                                .foregroundStyle(target.kind == "stop" ? Color.white : Color(uiColor: .systemBackground))
                         }.buttonStyle(.borderedProminent).tint(target.kind == "stop" ? Color.red : Color.accentColor).disabled(!valid)
                     }
                 }
