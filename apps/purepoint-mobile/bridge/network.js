@@ -1,3 +1,4 @@
+import { terminalConnection, terminalOperation } from "./terminals.js";
 import http from "node:http";
 import https from "node:https";
 import { timingSafeEqual } from "node:crypto";
@@ -12,7 +13,15 @@ function authenticated(header, token) {
 }
 export async function serve(
   controller,
-  { host, port, trust = null, localAdmin = null, tls = null },
+  {
+    host,
+    port,
+    trust = null,
+    localAdmin = null,
+    tls = null,
+    daemons = undefined,
+    terminalQueueLimit = undefined,
+  },
 ) {
   if (!allowedHost(host))
     throw new Error(
@@ -126,6 +135,7 @@ export async function serve(
   });
 
   const identities = new WeakMap();
+  const terminals = new WeakMap();
   server.on("upgrade", (req, socket, head) => {
     let code = 401;
     if (req.url !== "/v1" || req.headers.origin) code = 403;
@@ -177,6 +187,19 @@ export async function serve(
   controller.on("snapshot", snapshot);
   controller.on("editor", editor);
   wss.on("connection", (ws) => {
+    const identity = identities.get(ws);
+    const terminal = terminalConnection({
+      ws,
+      identity,
+      permission: () => principal(identity.credential)?.terminals ?? "off",
+      send: (data) => send(ws, data),
+      daemons,
+      queueLimit: terminalQueueLimit,
+    });
+    terminals.set(ws, terminal);
+    if (trust) terminal.notify();
+    const terminalRequestIds = new Set();
+    const activeTerminalRequestIds = new Set();
     let outstanding = 0;
     let alive = true;
     ws.on("pong", () => {
@@ -198,6 +221,7 @@ export async function serve(
       }
       outstanding++;
       let id = "";
+      let terminalRequest = false;
       try {
         const r = JSON.parse(bytes.toString());
         id = typeof r.id === "string" ? r.id : "";
@@ -207,25 +231,50 @@ export async function serve(
         }
         if (r.clientId !== identities.get(ws).clientId)
           throw new Error("Client identity does not match this connection");
-        const data = await controller.request(r);
+        if (terminalOperation(r.op)) {
+          if (r.version !== 1 || !id || id.length > 128)
+            throw new Error("Terminal request version and ID required");
+          if (terminalRequestIds.has(id) || activeTerminalRequestIds.has(id))
+            throw new Error(
+              "Duplicate terminal request; uncertain input is never replayed",
+            );
+          if (terminalRequestIds.size >= 4096)
+            terminalRequestIds.delete(terminalRequestIds.values().next().value);
+          terminalRequestIds.add(id);
+          activeTerminalRequestIds.add(id);
+          terminalRequest = true;
+        }
+        const data = await (terminalOperation(r.op)
+          ? terminal.request(r)
+          : controller.request(r));
         send(ws, { type: "receipt", id, ok: true, data });
         if (r.op === "sync") send(ws, data);
       } catch (e) {
         send(ws, { type: "receipt", id, ok: false, error: e.message });
       } finally {
+        if (terminalRequest) activeTerminalRequestIds.delete(id);
         outstanding--;
       }
     });
     ws.on("error", () => {});
     ws.on("close", () => {
+      terminal.dispose();
       clearInterval(heartbeat);
     });
   });
   const revoked = (deviceId) => {
     for (const ws of wss.clients)
-      if (identities.get(ws)?.deviceId === deviceId)
+      if (identities.get(ws)?.deviceId === deviceId) {
+        terminals.get(ws)?.dispose();
         ws.close(4001, "Device trust revoked; re-pair deliberately");
+      }
   };
+  const permissions = (deviceId) => {
+    for (const ws of wss.clients)
+      if (identities.get(ws)?.deviceId === deviceId)
+        terminals.get(ws)?.changed();
+  };
+  trust?.on("permissions", permissions);
   trust?.on("revoked", revoked);
   try {
     await new Promise((resolve, reject) => {
@@ -233,6 +282,7 @@ export async function serve(
       server.listen(port, host, () => resolve(null));
     });
   } catch (error) {
+    trust?.off("permissions", permissions);
     trust?.off("revoked", revoked);
     controller.off("snapshot", snapshot);
     controller.off("editor", editor);
@@ -241,10 +291,14 @@ export async function serve(
   return {
     address: () => server.address(),
     shutdown: async () => {
+      trust?.off("permissions", permissions);
       trust?.off("revoked", revoked);
       controller.off("snapshot", snapshot);
       controller.off("editor", editor);
-      for (const ws of wss.clients) ws.terminate();
+      for (const ws of wss.clients) {
+        terminals.get(ws)?.dispose();
+        ws.terminate();
+      }
       await new Promise((resolve) =>
         wss.close(() => server.close(() => resolve(null))),
       );

@@ -17,7 +17,10 @@ function connect(url, credential, clientId) {
         "X-PointGuard-Client-ID": clientId,
       },
     });
-    ws.once("open", () => resolve(ws));
+    ws.once("message", (bytes) => {
+      assert.equal(JSON.parse(bytes.toString()).type, "permissions");
+      resolve(ws);
+    });
     ws.once("error", reject);
   });
 }

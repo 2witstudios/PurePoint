@@ -1,6 +1,6 @@
 # Shared Point Guard Pi bridge contract
 
-Maturity: SPECIFIED. Scope: simultaneous native phone and desktop clients → shared Mac bridge → one vanilla Pi session. No dependency on PurePoint engine IPC. Authorizing briefs: Jono, 2026-10-08 and shared-client architecture correction, 2026-10-09.
+Maturity: SPECIFIED. Scope: simultaneous native phone and desktop clients → shared Mac bridge → one vanilla Pi session. Point Guard chat has no dependency on PurePoint engine IPC. The separately authorized Agents surface uses a fixed bridge API backed by daemon Unix sockets; it never exposes arbitrary engine IPC. Authorizing briefs: Jono, 2026-10-08 and shared-client architecture correction, 2026-10-09.
 
 Prerelease setup/trust reconciliation: [PGSET normative contract](../../../docs/product/point-guard-setup.md) supersedes earlier shared-token, legacy shared-secret QRv1 prototype and external-skill setup decisions below. Shared chat protocol remains v1; enrollment QR uses v1.
 
@@ -37,7 +37,7 @@ Research progressed SEED (lifetime / session authority questions), EXPLORING (up
 
 ## Interface
 
-Remote WebSocket upgrade uses a per-device bearer over certificate-pinned WSS `/v1`. Enrollment supplies authoritative clientId; any supplied X-PointGuard-Client-ID and message clientId must match that credential. Native loopback chat binds its separate token to durable desktopClientId. Every request includes `{version:1,clientId,id,op}`; identity cannot be selected by an untrusted caller. Request IDs are deduplicated by `(clientId,id)` within the bridge lifetime. Unsupported wire versions reject.
+Remote WebSocket upgrade uses a per-device bearer over certificate-pinned WSS `/v1`. Enrollment supplies authoritative clientId; any supplied X-PointGuard-Client-ID and message clientId must match that credential. Native loopback chat binds its separate token to durable desktopClientId. Every request includes `{version:1,clientId,id,op}`; identity cannot be selected by an untrusted caller. Chat request IDs are deduplicated by `(clientId,id)` within the bridge lifetime. Agents request IDs are scoped to the opening WebSocket; in-flight IDs and the 4096 most recent IDs reject duplicates. There is no lifetime request limit, so periodic inventory refresh continues indefinitely. Own closed-stream IDs are independently retained for the most recent 4096 closes to make close idempotent. Unsupported wire versions reject.
 
 Operations: `sync`, `sessions`, `history(sessionId)`, `send(text,mode:send|steer|after,epoch,images?)`, `stop(epoch,runId)`, `new(epoch)`, `resume(epoch,sessionId)`, `answer(epoch,dialogId,optionId|value|confirmed|cancelled)`. Selections require the offered option ID, with no label-answer fallback. Dialog answers bypass the serialized mutation queue to unblock native hooks; synchronous validation/removal makes the first answer win. Later answers reject as expired/already answered. Session mutations check the epoch at execution; racing switches cannot both apply. Stop targets the observed run and never kills delegated workers.
 
@@ -60,7 +60,7 @@ Up to 32 connected clients, one active session. No bridge crash durability for r
 | Browse / switch                | Read-only native projection during work; explicit idle/Stop gate before native switch       |
 | Child fails / wire unsupported | Visible setup/error state; no silent restart or uncertain resend                            |
 
-`core.js` exposes independent framing and branch/live projection helpers. `rpc.js` owns process transport and correlated commands. `controller.js` owns semantic operations and bounded in-memory projection/recovery; it depends on injected RPC/session interfaces. `setup.js` adapts native resource/session discovery; `network.js` authenticates and transports semantic records; `main.js` composes them. Swift ChatDomain is Foundation-only; ChatModel owns phone transport/draft recovery, PairingSecret owns Keychain IO, and SwiftUI views own presentation. Neither core/client calls PurePoint APIs. Public wire operations and limits are specified above; tests are colocated with each bridge boundary and the Swift domain target.
+`core.js` exposes independent framing and branch/live projection helpers. `rpc.js` owns process transport and correlated commands. `controller.js` owns semantic operations and bounded in-memory projection/recovery; it depends on injected RPC/session interfaces. `setup.js` adapts native resource/session discovery; `network.js` authenticates and transports semantic records; `main.js` composes them. Swift ChatDomain is Foundation-only; ChatModel owns phone transport/draft recovery, PairingSecret owns Keychain IO, and SwiftUI views own presentation. Chat core/client do not call PurePoint APIs. The Agents adapter alone translates fixed authenticated operations into allowlisted daemon requests. Public wire operations and limits are specified above; tests are colocated with each bridge boundary and the Swift domain target.
 
 # Historical QR pairing addition — 2026-10-08 (superseded)
 
@@ -164,3 +164,24 @@ Preferences: `pi.machines.v1` (version, machine id/endpoint/name/stateKey, selec
 Malformed/unknown registry metadata stays intact and blocks reconnect; deliberate successful pairing retains the unreadable record in `pi.machines.recovery.v1` before replacing it. Trust data never enters machine metadata. Existing certificate, endpoint, hostId, deviceId, clientId and opaque credential validation remain required; no pin reset or trust downgrade on transient failure. A successful re-pair may leave the old remote device enrollment for the owner to revoke in Mac settings; phone authentication uses only the newly verified principal.
 
 Verification: `verification/check-machines.sh`, `verification/check-machine-network.py`, `verification/check-trust-rollback.sh` (unique synthetic Keychain account), existing recovery/trust/domain/responsiveness checks and bridge Node regression suite. Human Xcode/device acceptance still includes two actual Macs, QR camera, network/background/revocation, Dynamic Type and VoiceOver; automated native-model/WSS fixtures do not establish device visual acceptance.
+
+
+## Agents on the phone (owner specification, 2026-10-16)
+
+The Mac bridge reads `POINT_GUARD_PU_HOME` (default `~/.pu`) and `machines.json`. It connects to local `daemon.sock` and existing `machines/<id>/daemon.sock` forwards only; it never starts daemons, SSH, or forwards. Offline registered machines stay visible with no invented agents. Health protocol versions below 10 use legacy full replay and explicitly report `screenMayBeInexact`; they never receive snapshot/client identity/size/cancellation extensions.
+
+Each device has `terminals: off|view|control`, default off including existing devices. `permissions` discovery and unsolicited `permissions` events expose the current permission. Off rejects inventory/terminal operations before machine discovery. View can list/open/close its own streams; Control adds prompt, fixed keys and raw input. `devices.terminals {deviceId,terminals}` is local owner administration only. Downgrades immediately abort pending requests and replace write-capable attach sockets; off closes streams, revocation closes all connections. Socket closure with v10 `cancel_on_disconnect:true` cancels future prompt delivery writes; already-started PTY writes cannot be recalled. No uncertain input is retried.
+
+Every attachment belongs exclusively to the exact opening WebSocket. A second connection for the same device cannot use its stream IDs. Attach uses `replay:snapshot,client_id:deviceId:streamId` on v10 and never sends Resize or ClaimSize. Phone keys and prompts never acquire size ownership. Output uses a bounded 512 KiB per-stream queue plus a single outstanding WebSocket send callback, respects actual `bufferedAmount`, drops stale pending output on overflow, closes attach, and waits for drain before reset and snapshot reopen. Consecutive overflow closes the stream after two recoveries; a drained stable window of five seconds clears that recovery budget; a stalled transport closes after ten seconds. Other viewers continue independently. UTF-8 decoding is incremental and resets on daemon resync or snapshot recovery.
+
+Fixed request operations (in the existing `{version:1,id,clientId,op,...}` envelope):
+
+- `permissions` → `{terminals}`.
+- `agents` → `{machines:[{id,name,online,protocolVersion,screenMayBeInexact,error,complete,agents:[{id,name,agentType,state,idleSeconds,startedAt,projectRoot,worktreeId,screenAware,phase}]}]}`. Phase is `input_ready|has_draft|dialog|busy|null`; idle/start values come directly from the daemon. Inventory is refreshed explicitly.
+- `terminal.open {machine,agentId}` → `{streamId,machine,agentId,screenMayBeInexact}`; machine `local` selects this Mac, otherwise the registry ID.
+- `terminal.close {streamId}` → `{}`.
+- `terminal.keys {streamId,key}` → `{}`; keys exactly `Esc`, `Ctrl-C`, `Tab`, `Enter`, `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `y`, `n`.
+- `terminal.raw {streamId,data}` → `{}`; literal UTF-8, at most 64 KiB.
+- `agent.prompt {machine,agentId,text}` → `{outcome:confirmed|sent|blocked|failed,reason:string|null}`; nonempty text up to 64 KiB. Fresh inventory gates known unsafe phase without waiting for daemon delivery readiness. Dialog reason is `agent is waiting on a prompt, use the keys`. Successful screen-aware echoed delivery returns confirmed, non-screen-aware write returns sent; daemon error returns failed with its reason. Permission denial remains an error receipt.
+
+Events are `{type:terminal.output,streamId,data}` (UTF-8 ANSI), `{type:terminal.size,streamId,cols,rows}` (actual PTY geometry), `{type:terminal.reset,streamId,reason}` (discard previous view before fresh snapshot output), and `{type:terminal.closed,streamId,reason}`. Events may precede the open receipt and clients bind them by stream ID. No daemon request/response passthrough, arbitrary engine operations, phone SSH, or phone size claims exist. Receipts go only to the requesting WebSocket, terminal events only to the stream owner.

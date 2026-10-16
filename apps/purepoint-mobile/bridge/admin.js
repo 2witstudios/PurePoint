@@ -7,6 +7,19 @@ export class AdminError extends Error {
     this.code = code;
   }
 }
+/** Local owner route; phones cannot reach this administrative listener. */
+export function setDeviceTerminals(trust, { deviceId, terminals }) {
+  if (
+    typeof deviceId !== "string" ||
+    !deviceId ||
+    !["off", "view", "control"].includes(terminals)
+  )
+    throw new AdminError(
+      "terminal_permission",
+      "Select Off, View or Control for a paired device.",
+    );
+  return trust.setTerminals(deviceId, terminals);
+}
 function matches(actual, expected) {
   const a = Buffer.from(actual ?? "");
   const b = Buffer.from(expected);

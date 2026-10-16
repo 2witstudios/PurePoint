@@ -139,3 +139,60 @@ test("concurrent clients are bounded and share one broadcaster without listener 
     assert.equal(c.listenerCount("editor"), 0);
   }
 });
+
+test("long-lived terminal discovery keeps polling beyond dedup window without reconnecting", async () => {
+  const controller = new EventEmitter();
+  controller.request = async () => ({});
+  const server = await serve(controller, {
+    host: "127.0.0.1",
+    port: 0,
+    localAdmin: { token, clientId: "desktop" },
+  });
+  const ws = await connect(`ws://127.0.0.1:${server.address().port}/v1`);
+  const waiting = new Map();
+  ws.on("message", (bytes) => {
+    const record = JSON.parse(bytes.toString());
+    if (record.type === "receipt") {
+      const resolve = waiting.get(record.id);
+      waiting.delete(record.id);
+      resolve?.(record);
+    }
+  });
+  const request = (id) =>
+    new Promise((resolve) => {
+      waiting.set(id, resolve);
+      ws.send(
+        JSON.stringify({
+          version: 1,
+          clientId: "desktop",
+          id,
+          op: "permissions",
+        }),
+      );
+    });
+  try {
+    assert.equal((await request("oldest")).ok, true);
+    for (let base = 0; base < 4200; base += 8) {
+      const receipts = await Promise.all(
+        Array.from({ length: 8 }, (_, offset) =>
+          request(`poll-${base + offset}`),
+        ),
+      );
+      assert.ok(receipts.every((record) => record.ok));
+    }
+    assert.equal(ws.readyState, WebSocket.OPEN);
+    assert.equal(
+      (await request("oldest")).ok,
+      true,
+      "expired ID leaves bounded recent window",
+    );
+    assert.equal(
+      (await request("poll-4199")).ok,
+      false,
+      "recent duplicate is still fenced",
+    );
+  } finally {
+    ws.terminate();
+    await server.shutdown();
+  }
+});

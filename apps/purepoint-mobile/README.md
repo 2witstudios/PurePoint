@@ -1,6 +1,6 @@
 # PurePoint Mobile
 
-Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; delegated PurePoint workers and ordinary Shell panes remain separate.
+Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; the Agents surface shows delegated PurePoint workers and ordinary Shell panes across this Mac and connected machines, separately from Point Guard chat. Each paired phone defaults to Agents and terminals Off; the Mac owner can grant View or Control in Connect phone settings. Remote agents require this Mac, its bridge, and its existing machine forwards to remain connected. The phone never uses SSH.
 
 ## Setup with the Mac app
 
