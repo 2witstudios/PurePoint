@@ -857,12 +857,12 @@ async fn given_cancellable_request_and_eof_already_buffered_should_never_start_t
 
 #[tokio::test]
 async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_live_offset() {
-    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (engine, id, _tmp) = Engine::quiet_screen_session().await;
     let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let (owner, _) = engine.register_attachment(&id, Some("owner".into())).await;
     engine.attachment_resize(&id, owner, 5, 3, true).await;
-    buffer.write(b"\x1b[2J\x1b[H");
+    // Retain history so visible-screen assertions cannot accidentally compare scrollback.
+    buffer.write(b"old\r\nold\r\nold\r\nold\r\n\x1b[2J\x1b[H");
     let (_, mut sizes) = engine.register_attachment(&id, Some("viewer".into())).await;
     let (initial, offset, size) = engine
         .attachment_replay(&id, &buffer, true, &mut sizes)
@@ -888,6 +888,10 @@ async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_liv
         update.sizes.iter().map(|size| size.0).collect::<Vec<_>>(),
         vec![10, 8]
     );
+    let (snapshot, snapshot_offset) = buffer.attach_snapshot();
+    let mut expected = vt100::Parser::new(3, 8, 1024);
+    expected.process(&snapshot);
+    assert_eq!(cursor.offset, snapshot_offset);
     let replay_bytes = update.data.len();
     let (server, client) = UnixStream::pair().unwrap();
     let (_, mut writer) = server.into_split();
@@ -914,7 +918,7 @@ async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_liv
         remaining -= data.len();
         rendered.process(&data);
     }
-    assert_eq!(rendered.screen().contents(), buffer.terminal_snapshot().0);
+    assert_eq!(rendered.screen().contents(), expected.screen().contents());
     assert!(rendered.screen().contents().contains("ABCDE\nFG"));
     assert_eq!(cursor.offset, buffer.current_offset());
     buffer.write(b"H");
@@ -924,5 +928,8 @@ async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_liv
     assert!(!live.resync);
     assert!(live.sizes.is_empty());
     rendered.process(&live.data);
-    assert_eq!(rendered.screen().contents(), buffer.terminal_snapshot().0);
+    let (snapshot, snapshot_offset) = buffer.attach_snapshot();
+    expected.process(&snapshot);
+    assert_eq!(rendered.screen().contents(), expected.screen().contents());
+    assert_eq!(cursor.offset, snapshot_offset);
 }

@@ -471,9 +471,34 @@ mod tests {
     use pu_core::protocol::Request;
     use tokio::io::AsyncWriteExt;
 
-    #[tokio::test]
+    impl super::Engine {
+        /// A real screen-aware PTY without shell prompts or SIGWINCH redraws.
+        /// Tests may inject output directly while still exercising the real resize ioctl.
+        pub(crate) async fn quiet_screen_session() -> (Self, String, tempfile::TempDir) {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let engine = Self::new();
+            let id = "quiet-screen".to_string();
+            let mut session = crate::pty_manager::NativePtyHost::new()
+                .spawn(crate::pty_manager::SpawnConfig {
+                    command: "/bin/cat".into(),
+                    args: vec![],
+                    cwd: tmp.path().display().to_string(),
+                    env: vec![],
+                    env_remove: vec![],
+                    cols: 120,
+                    rows: 40,
+                })
+                .await
+                .unwrap();
+            session.screen_aware = true;
+            engine.sessions.lock().await.insert(id.clone(), session);
+            (engine, id, tmp)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn given_concurrent_claims_and_snapshot_should_pair_screen_with_matching_geometry() {
-        let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+        let (engine, id, _tmp) = super::Engine::quiet_screen_session().await;
         let engine = std::sync::Arc::new(engine);
         let (_, mut sizes) = engine.register_attachment(&id, Some("viewer".into())).await;
         let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
@@ -492,6 +517,8 @@ mod tests {
                     .get_mut(&writer_id)
                     .unwrap()
                     .publish((cols, rows, Some("owner".into())));
+                drop(states);
+                tokio::task::yield_now().await;
             }
         });
         // Wait for at least one completed redraw before racing subsequent ones.
