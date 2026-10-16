@@ -1,6 +1,7 @@
 import Testing
 import AppKit
 import Foundation
+import SwiftTerm
 @testable import PurePoint
 
 struct DaemonClientParseTests {
