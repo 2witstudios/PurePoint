@@ -104,7 +104,7 @@ final class DelayedTrustRead: @unchecked Sendable {
         precondition(requests.filter { $0["op"]?.text == "send" }.count == 1 && requests.first { $0["op"]?.text == "send" }?["machine"]?.text == "A", "Given switching/reconnect/recovery, should send exactly once to A and never replay on B")
         precondition(aKey != bKey)
         // A fleet that never answers must not hold an otherwise synced Pi chat.
-        try mark("control-A"); try mark("hold-A-agents")
+        try mark("hold-A-agents")
         delayedModel.selectMachine(a.hostId)
         try await wait { exists("started-A-agents") }
         try await wait { delayedModel.connected && delayedModel.snapshot?.title == "A" }
