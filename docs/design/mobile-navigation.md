@@ -79,7 +79,7 @@ Stopping an agent is a distinct project-workspace management action with an expl
 | Recovery of submitted A while newer draft B exists | Both survive navigation, host changes and relaunch; append/copy/dismiss, no overwrite/resend |
 | All ten fixed quick keys | Esc, Ctrl-C, Tab, Enter, four arrows, y, n |
 | Raw typing | Explicit toggle, off by default; existing permissions and limits |
-| Read-only SwiftTerm | Actual PTY size, zoom/sideways scrolling, reset, legacy warning; no phone Resize/ClaimSize |
+| Read-only SwiftTerm | Actual PTY size, zoom/sideways scrolling, reset, legacy warning; with Control the phone claims its own size while viewing (`terminal.size`), never Resize |
 | Foreground/network/re-pair lifecycle | Existing pinned transport, bounded queues and generation fencing |
 
 Remove the separate Agents sheet toolbar entry only once this navigator fully replaces it. No feature is dropped because the visual prototype omits its control.

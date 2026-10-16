@@ -28,6 +28,7 @@ const ops = new Set([
   "terminal.close",
   "terminal.keys",
   "terminal.raw",
+  "terminal.size",
   "agent.prompt",
 ]);
 export const terminalOperation = (op) => ops.has(op);
@@ -164,6 +165,10 @@ export function terminalConnection({
         if (stream.attach !== connection) return;
         if (frame.type === "attach_ready") {
           connection.streaming();
+          // A reopened attachment (recovery, permission change) re-asserts the
+          // phone's size claim; view-only connections never hold one.
+          if (stream.claim && permission() === "control")
+            connection.send({ type: "claim_size", ...stream.claim });
           stream.ready = true;
           pump(stream);
         } else if (frame.type === "output") {
@@ -257,7 +262,12 @@ export function terminalConnection({
     if (r.op === "permissions") return permissions();
     if (workspaceOperations.includes(r.op)) return workspace.request(r);
     return operation(
-      ["terminal.keys", "terminal.raw", "agent.prompt"].includes(r.op),
+      [
+        "terminal.keys",
+        "terminal.raw",
+        "terminal.size",
+        "agent.prompt",
+      ].includes(r.op),
       async (signal, check) => {
         if (r.op === "agents") {
           const machines = await daemons.machines();
@@ -396,6 +406,7 @@ export function terminalConnection({
               attach: null,
               timer: null,
               ended: null,
+              claim: null,
             };
             streams.set(stream.id, stream);
             openAttach(stream);
@@ -418,6 +429,28 @@ export function terminalConnection({
         check();
         if (r.op === "terminal.close") {
           closeStream(stream, "Closed by viewer");
+          return {};
+        }
+        if (r.op === "terminal.size") {
+          // Explicit, Control-only size ownership for this stream's attachment.
+          // Closing the stream releases it and the daemon restores the previous owner.
+          if (
+            !Number.isInteger(r.cols) ||
+            !Number.isInteger(r.rows) ||
+            r.cols < 20 ||
+            r.cols > 500 ||
+            r.rows < 8 ||
+            r.rows > 300
+          )
+            throw new Error(
+              "Terminal size requires 20–500 columns and 8–300 rows",
+            );
+          if (stream.version < 10)
+            throw new Error("Agent daemon does not support phone sizing");
+          if (!stream.attach || stream.recovering)
+            throw new Error("Terminal is refreshing; wait for snapshot");
+          stream.claim = { cols: r.cols, rows: r.rows };
+          stream.attach.send({ type: "claim_size", ...stream.claim });
           return {};
         }
         const data =

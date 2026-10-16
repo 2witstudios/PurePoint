@@ -31,33 +31,35 @@ struct ChatView: View {
         NavigationStack {
             mainContent
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open workspace navigator")
-                }
-                ToolbarItem(placement: .principal) {
-                    if destination == "pointGuard" { Button { showConnection = true } label: {
-                        HStack(spacing: 8) {
-                            Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("PurePoint").font(.headline)
-                                HStack(spacing: 4) {
-                                    if let machine = model.selectedMachine {
-                                        Text(machine.name).lineLimit(1).truncationMode(.middle)
-                                        Text("·")
-                                    }
-                                    Text(headerStatus).fixedSize(horizontal: true, vertical: false)
-                                }.font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }.frame(minHeight: 44)
+                // Projects, workspaces and agents supply their own bar from MobileProjectsView.
+                if destination == "pointGuard" {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open workspace navigator")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityHint("Open connection settings")
-                    } else { AgentDestinationPrincipal(model: model.agentControl, bridgeName: model.selectedMachine?.name ?? "Mac") }
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if destination == "pointGuard" { Button { overlays.openHistory(); composerFocused = false; let token = model.selectionToken; Task { await model.loadConversations(selection: token) } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Point Guard history") }
-                    if destination == "pointGuard" { Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation") }
+                    ToolbarItem(placement: .principal) {
+                        Button { showConnection = true } label: {
+                            HStack(spacing: 8) {
+                                VStack(spacing: 1) {
+                                    Text("Point Guard").font(.headline)
+                                    HStack(spacing: 4) {
+                                        StatusDot(color: headerTone, size: 6)
+                                        if let machine = model.selectedMachine {
+                                            Text(machine.name).lineLimit(1).truncationMode(.middle)
+                                            Text("·")
+                                        }
+                                        Text(headerStatus).fixedSize(horizontal: true, vertical: false)
+                                    }.font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }.frame(minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityHint("Open connection settings")
+                    }
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button { overlays.openHistory(); composerFocused = false; let token = model.selectionToken; Task { await model.loadConversations(selection: token) } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Point Guard history")
+                        Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
+                    }
                 }
             }
             .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
@@ -129,7 +131,7 @@ struct ChatView: View {
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close workspace navigator")
-                        AgentNavigator(model: model.agentControl, destination: destination, pointGuard: { model.agentControl.closeScreen(); destination = "pointGuard"; closeSidebar() }, projects: { model.agentControl.closeScreen(); destination = "projects"; closeSidebar() }, open: { entry in model.agentControl.open(machine: entry.machine, agent: entry.agent, context: model.agentControl.contextToken); destination = "agent"; closeSidebar() }, connections: { closeSidebar(); showConnection = true }, close: closeSidebar)
+                        AgentNavigator(model: model.agentControl, destination: destination, hostName: model.selectedMachine?.name ?? "Mac", hostStatus: headerStatus, pointGuard: { model.agentControl.closeScreen(); destination = "pointGuard"; closeSidebar() }, projects: { model.agentControl.closeScreen(); destination = "projects"; closeSidebar() }, open: { entry in model.agentControl.open(machine: entry.machine, agent: entry.agent, context: model.agentControl.contextToken); destination = "agent"; closeSidebar() }, connections: { closeSidebar(); showConnection = true }, close: closeSidebar)
                             .frame(width: min(328, geometry.size.width - 44), height: geometry.size.height)
                             .transition(.move(edge: .leading))
                             .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })
@@ -156,15 +158,18 @@ struct ChatView: View {
     }
     private var mainContent: some View {
             ZStack {
-              MobileProjectsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Mac")
+              MobileProjectsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Mac", active: destination != "pointGuard", openNavigator: openSidebar)
                 .opacity(destination == "pointGuard" ? 0 : 1).disabled(destination == "pointGuard").allowsHitTesting(destination != "pointGuard").accessibilityHidden(destination == "pointGuard")
               VStack(spacing: 0) {
                 if let error = model.error {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-                        Text(error).font(.callout).textSelection(.enabled)
-                        Button { model.error = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Dismiss error")
-                    }.padding(16).background(Color(uiColor: .secondarySystemBackground))
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).accessibilityHidden(true)
+                        Text(error).font(.footnote).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        Button { model.error = nil } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)).frame(width: 32, height: 32) }.buttonStyle(.plain).accessibilityLabel("Dismiss error")
+                    }
+                    .padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.horizontal, 12).padding(.top, 6)
                 }
                 transcript
             }
@@ -173,6 +178,10 @@ struct ChatView: View {
             }
             .background(Color(uiColor: .systemBackground))
             .navigationBarTitleDisplayMode(.inline)
+    }
+    private var headerTone: Color {
+        if model.connected { return model.busy ? .blue : .green }
+        return model.connectionStatus.hasPrefix("Connecting") ? .orange : Color(uiColor: .tertiaryLabel)
     }
     private var headerStatus: String {
         if model.connected { return model.demo ? "Preview" : model.busy ? "Working" : "Connected" }
@@ -183,6 +192,14 @@ struct ChatView: View {
         if model.connectionStatus.hasPrefix("Reconnect paused") { return "Retry paused" }
         if model.connectionStatus.hasPrefix("Connection lost") { return "Offline" }
         return "Not connected"
+    }
+    private var composerStatus: String? {
+        var parts: [String] = []
+        if let receipt = model.submissions.last, !receipt.recoverable, receipt.status != "Accepted" {
+            parts.append(receipt.status == "Queued" ? "Queued · waiting for Point Guard" : receipt.status)
+        }
+        if let queue = model.snapshot?.queue, !queue.isEmpty { parts.append("\(queue.count) message\(queue.count == 1 ? "" : "s") queued") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
     private func updateInventoryVisibility() { model.agentControl.setInventoryVisible(showSidebar || destination != "pointGuard") }
     private func openSidebar() { composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { overlays.openNavigator() } }
@@ -216,7 +233,7 @@ struct ChatView: View {
                             .background(GeometryReader { geometry in
                                 Color.clear.preference(key: TranscriptBottomKey.self, value: geometry.frame(in: .global).maxY)
                             })
-                    }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.vertical, 24)
+                    }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.vertical, 16)
                         .background(GeometryReader { geometry in
                             Color.clear.preference(key: TranscriptHeightKey.self, value: geometry.size.height)
                         })
@@ -261,7 +278,7 @@ struct ChatView: View {
         }
     }
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             if let offer = model.editorOffer {
                 HStack { Text("Extension offered a draft").font(.footnote); Spacer(); Button("Add to draft") { model.useEditorOffer() }; Button("Dismiss") { model.editorOffer = nil } }
                     .font(.footnote).accessibilityHint(String(offer.prefix(200)))
@@ -278,10 +295,7 @@ struct ChatView: View {
                     }
                 }.font(.footnote).padding(.bottom, 2)
             }
-            if let receipt = model.submissions.last, !receipt.recoverable, receipt.status != "Accepted" {
-                Text(receipt.status == "Queued" ? "Queued · waiting for Point Guard" : receipt.status).font(.caption).foregroundStyle(.secondary)
-            }
-            if let queue = model.snapshot?.queue, !queue.isEmpty { Text("\(queue.count) message\(queue.count == 1 ? "" : "s") queued").font(.caption).foregroundStyle(.secondary) }
+            if let status = composerStatus { Text(status).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8) }
             VStack(alignment: .leading, spacing: 10) {
                 if !model.attachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -308,7 +322,7 @@ struct ChatView: View {
                         Menu {
                             Button("Steer") { model.submit(mode: "steer"); following = true }
                             Button("After reply") { model.submit(mode: "after"); following = true }
-                        } label: { Text("Send options").font(.callout.weight(.medium)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
+                        } label: { Text("Steer").font(.callout.weight(.semibold)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
                         Button { let token = model.selectionToken; Task { _ = await model.stop(selection: token) } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
                     } else {
                         Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend && !importingAttachment ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.canSend || importingAttachment).accessibilityLabel("Send message")

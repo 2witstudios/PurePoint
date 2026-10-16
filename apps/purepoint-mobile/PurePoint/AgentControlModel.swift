@@ -44,6 +44,8 @@ import SwiftUI
     private(set) var terminalBaseCols = 80
     private(set) var terminalBaseRows = 24
     private var terminalBytes = 0
+    // Last size this phone claimed for the open stream; the bridge re-asserts it on reattach.
+    private var claimedSize: (cols: Int, rows: Int, stream: String)?
     private var savedRecoveries: [String: [AgentPromptRecovery]] = [:]
     private var recoveryUnavailable = false
     private var drafts: [String: String]
@@ -357,7 +359,7 @@ import SwiftUI
         }
         saveComposer(); screen += 1; pendingOpen = nil
         if let id = streamId, let request { Task { _ = try? await request("terminal.close", ["streamId": id]) } }
-        selected = nil; streamId = nil; rawTyping = false; rawText = ""; composer = AgentComposer(); recoveries = []
+        selected = nil; streamId = nil; claimedSize = nil; rawTyping = false; rawText = ""; composer = AgentComposer(); recoveries = []
         cols = 80; rows = 24; hasSize = false; resetTerminal()
     }
 
@@ -461,6 +463,25 @@ import SwiftUI
     func sendRaw(screen token: Int) {
         guard token == screen, rawTyping, !rawText.isEmpty, rawText.utf8.count <= 65536 else { return }
         input("terminal.raw", fields: ["data": rawText])
+    }
+    /// Ask the agent's PTY to take the phone's geometry while this screen views it (Control only).
+    /// Closing the stream releases the claim and the daemon restores the previous owner's size.
+    func claimSize(cols: Int, rows: Int, screen token: Int) {
+        guard token == screen, controlEnabled, !screenMayBeInexact, let streamId, let request else { return }
+        let cols = min(max(cols, 20), 500), rows = min(max(rows, 8), 300)
+        if let claimed = claimedSize, claimed.cols == cols, claimed.rows == rows, claimed.stream == streamId { return }
+        claimedSize = (cols, rows, streamId)
+        let generationToken = generation, visible = screen
+        Task { [weak self] in
+            do {
+                _ = try await request("terminal.size", ["streamId": streamId, "cols": cols, "rows": rows])
+            } catch {
+                guard let self, generationToken == self.generation, visible == self.screen else { return }
+                if self.claimedSize?.stream == streamId { self.claimedSize = nil }
+                // A daemon without phone sizing keeps the Mac's geometry; zoom still works.
+                if !error.localizedDescription.contains("does not support") { self.error = error.localizedDescription }
+            }
+        }
     }
     private func scheduleInputRefresh() {
         guard inventoryVisible, inventoryForeground else { return }

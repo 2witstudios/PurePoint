@@ -18,15 +18,33 @@ private final class ReadOnlyAgentTerminal: TerminalView {
     }
 }
 
+// Reports viewport size changes (keyboard, rotation) so the newest rows stay visible
+// and the phone can claim a matching agent size.
+private final class AnchoredScrollView: UIScrollView {
+    var onViewportChange: (() -> Void)?
+    private var lastSize = CGSize.zero
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.size != lastSize { lastSize = bounds.size; onViewportChange?() }
+    }
+}
+
 struct AgentTerminalView: UIViewRepresentable {
     @ObservedObject var model: AgentControlModel
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+        let scroll = AnchoredScrollView()
         scroll.minimumZoomScale = 0.5; scroll.maximumZoomScale = 3
         scroll.backgroundColor = .black; scroll.delegate = context.coordinator
         scroll.alwaysBounceHorizontal = true; scroll.isDirectionalLockEnabled = true
-        scroll.accessibilityLabel = "Agent terminal. Pinch to zoom and scroll sideways."
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.accessibilityLabel = "Agent terminal. Tap to hide the keyboard. Pinch to zoom, double-tap to fit width."
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.toggleFit))
+        doubleTap.numberOfTapsRequired = 2
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.dismissKeyboard))
+        tap.require(toFail: doubleTap)
+        scroll.addGestureRecognizer(doubleTap); scroll.addGestureRecognizer(tap)
+        scroll.onViewportChange = { [weak coordinator = context.coordinator] in coordinator?.viewportChanged() }
         context.coordinator.scroll = scroll
         return scroll
     }
@@ -36,6 +54,7 @@ struct AgentTerminalView: UIViewRepresentable {
         context.coordinator.update(model)
     }
     static func dismantleUIView(_ uiView: UIScrollView, coordinator: Coordinator) {
+        coordinator.teardown()
         coordinator.terminal?.terminalDelegate = nil
         coordinator.terminal?.removeFromSuperview(); uiView.delegate = nil
     }
@@ -43,12 +62,41 @@ struct AgentTerminalView: UIViewRepresentable {
     final class Coordinator: NSObject, UIScrollViewDelegate, TerminalViewDelegate {
         weak var scroll: UIScrollView?
         fileprivate var terminal: ReadOnlyAgentTerminal?
+        private weak var model: AgentControlModel?
         private var epoch: UUID?
-        private let terminalFont = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        private let terminalFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         private var lastCols = 0
         private var lastRows = 0
+        // Follow the newest rows (where agents prompt) until the reader scrolls away.
+        private var followBottom = true
+        // Keyboard height is temporary: keep claiming the rows that fit without it.
+        private var keyboardVisible = false
+        private var fullHeight: CGFloat = 0
+        private var pendingFit: DispatchWorkItem?
+        private var lastFit: String?
+
+        override init() {
+            super.init()
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow), name: UIResponder.keyboardWillShowNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
+        }
+        func teardown() {
+            pendingFit?.cancel(); pendingFit = nil
+            NotificationCenter.default.removeObserver(self)
+        }
+        @objc private func keyboardWillShow() { keyboardVisible = true }
+        @objc private func keyboardWillHide() { keyboardVisible = false }
+        @objc func dismissKeyboard() { scroll?.window?.endEditing(true) }
+
+        private var cellSize: CGSize {
+            let font = terminalFont as CTFont
+            let width = "W".size(withAttributes: [.font: terminalFont]).width
+            let height = ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font))
+            return CGSize(width: width, height: height)
+        }
 
         func update(_ model: AgentControlModel) {
+            self.model = model
             guard let scroll else { return }
             if epoch != model.terminalEpoch || terminal == nil {
                 terminal?.terminalDelegate = nil; terminal?.removeFromSuperview()
@@ -58,34 +106,104 @@ struct AgentTerminalView: UIViewRepresentable {
                 view.nativeBackgroundColor = .black; view.nativeForegroundColor = .white
                 terminal = view; scroll.addSubview(view)
                 epoch = model.terminalEpoch; lastCols = 0; lastRows = 0
+                followBottom = true
                 scroll.contentOffset = .zero
                 resize(cols: model.terminalBaseCols, rows: model.terminalBaseRows)
+                scrollToBottom()
             }
             guard let terminal else { return }
-            for update in model.drainTerminal() {
+            let updates = model.drainTerminal()
+            for update in updates {
                 switch update {
                 case .output(let text): terminal.feed(text: text)
                 case .size(let cols, let rows): resize(cols: cols, rows: rows)
                 }
             }
+            if !updates.isEmpty { scrollToBottom() }
+            scheduleFit()
+        }
+        func viewportChanged() {
+            if !keyboardVisible, let scroll { fullHeight = scroll.bounds.height }
+            updateMinimumZoom(); scrollToBottom(); scheduleFit()
+        }
+        /// The agent size that fills this viewport at 1× zoom, without the keyboard.
+        private var fittingSize: (cols: Int, rows: Int)? {
+            guard let scroll, scroll.bounds.width > 0, scroll.bounds.height > 0 else { return nil }
+            let cell = cellSize
+            let height = keyboardVisible && fullHeight > 0 ? fullHeight : scroll.bounds.height
+            return (Int((scroll.bounds.width - 2) / cell.width), Int((height - 2) / cell.height))
+        }
+        // Debounced so rotation and keyboard animations settle before the agent reflows.
+        private func scheduleFit() {
+            // Forget the last key when a claim cannot be sent, so regaining Control re-claims the same size.
+            guard let model, let fitting = fittingSize, model.controlEnabled, let stream = model.streamId else { lastFit = nil; return }
+            let key = "\(stream):\(fitting.cols)x\(fitting.rows)"
+            guard key != lastFit else { return }
+            lastFit = key
+            pendingFit?.cancel()
+            let screen = model.screenToken
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let model = self.model, let fitting = self.fittingSize else { return }
+                model.claimSize(cols: fitting.cols, rows: fitting.rows, screen: screen)
+            }
+            pendingFit = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        }
+        private var fitWidthZoom: CGFloat {
+            guard let terminal, let scroll, terminal.bounds.width > 0, scroll.bounds.width > 0 else { return 1 }
+            return scroll.bounds.width / terminal.bounds.width
+        }
+        private func updateMinimumZoom() {
+            guard let scroll else { return }
+            scroll.minimumZoomScale = min(0.5, fitWidthZoom)
+        }
+        private func clampedZoom(_ zoom: CGFloat) -> CGFloat {
+            guard let scroll else { return zoom }
+            return min(max(zoom, scroll.minimumZoomScale), scroll.maximumZoomScale)
+        }
+        private func scrollToBottom() {
+            guard followBottom, let scroll else { return }
+            let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+            if abs(scroll.contentOffset.y - maxY) > 0.5 { scroll.contentOffset = CGPoint(x: scroll.contentOffset.x, y: maxY) }
+        }
+        private func isAtBottom(_ scroll: UIScrollView) -> Bool {
+            scroll.contentOffset.y >= scroll.contentSize.height - scroll.bounds.height - 24
+        }
+        // For agents the phone cannot size (view only, legacy daemons): fit width ↔ actual size.
+        @objc func toggleFit() {
+            guard let scroll else { return }
+            let fit = clampedZoom(fitWidthZoom)
+            scroll.setZoomScale(abs(scroll.zoomScale - fit) < 0.01 ? clampedZoom(1) : fit, animated: true)
+            followBottom = true; scrollToBottom()
+        }
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { followBottom = false }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { followBottom = isAtBottom(scrollView) }
+        }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { followBottom = isAtBottom(scrollView) }
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+            followBottom = followBottom || isAtBottom(scrollView)
+            scrollToBottom()
         }
         private func resize(cols: Int, rows: Int) {
             guard let terminal, let scroll else { return }
             if lastCols != cols || lastRows != rows {
                 terminal.agentCols = cols; terminal.agentRows = rows
-                let font = terminalFont as CTFont
-                let cellWidth = "W".size(withAttributes: [.font: terminalFont]).width
-                let cellHeight = ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font))
-                let size = CGSize(
-                    width: CGFloat(cols) * cellWidth + 0.1, height: CGFloat(rows) * cellHeight + 0.1)
+                let cell = cellSize
+                let size = CGSize(width: CGFloat(cols) * cell.width + 0.1, height: CGFloat(rows) * cell.height + 0.1)
                 // Bounds are physical agent dimensions. Zoom changes only presentation.
                 let zoom = scroll.zoomScale
                 scroll.setZoomScale(1, animated: false)
                 terminal.frame = CGRect(origin: .zero, size: size)
                 terminal.resize(cols: cols, rows: rows)
                 terminal.setNeedsLayout(); terminal.layoutIfNeeded()
-                scroll.contentSize = size; scroll.setZoomScale(zoom, animated: false)
+                scroll.contentSize = size
                 lastCols = cols; lastRows = rows
+                updateMinimumZoom()
+                // A size this phone claimed already fits at 1×; keep the reader's zoom otherwise.
+                let fits = fittingSize.map { $0.cols == cols } ?? false
+                scroll.setZoomScale(fits ? 1 : clampedZoom(zoom), animated: false)
+                if fits { scroll.contentOffset = CGPoint(x: 0, y: scroll.contentOffset.y) }
             }
         }
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { terminal }
