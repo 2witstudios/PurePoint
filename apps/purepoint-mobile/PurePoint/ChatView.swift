@@ -39,9 +39,8 @@ struct ChatView: View {
                     ToolbarItem(placement: .principal) {
                         Button { showConnection = true } label: {
                             HStack(spacing: 8) {
-                                Image("PurePointLogo").resizable().scaledToFit().frame(width: 26, height: 26).accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("PurePoint").font(.headline)
+                                VStack(spacing: 1) {
+                                    Text("Point Guard").font(.headline)
                                     HStack(spacing: 4) {
                                         StatusDot(color: headerTone, size: 6)
                                         if let machine = model.selectedMachine {
@@ -323,7 +322,7 @@ struct ChatView: View {
                         Menu {
                             Button("Steer") { model.submit(mode: "steer"); following = true }
                             Button("After reply") { model.submit(mode: "after"); following = true }
-                        } label: { Text("Send options").font(.callout.weight(.medium)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
+                        } label: { Text("Steer").font(.callout.weight(.semibold)).padding(.horizontal, 8).frame(minHeight: 44) }.disabled(!model.canSend || importingAttachment)
                         Button { let token = model.selectionToken; Task { _ = await model.stop(selection: token) } } label: { Image(systemName: "stop.fill").font(.body).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(Color.accentColor, in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.connected || model.demo).accessibilityLabel("Stop")
                     } else {
                         Button { model.submit(mode: "send"); following = true } label: { Image(systemName: "arrow.up").font(.body.weight(.semibold)).frame(width: 40, height: 40).foregroundStyle(Color(uiColor: .systemBackground)).background(model.canSend && !importingAttachment ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle()).frame(width: 44, height: 44).contentShape(Rectangle()) }.disabled(!model.canSend || importingAttachment).accessibilityLabel("Send message")

@@ -58,7 +58,7 @@ struct ConnectionView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(model.selectedMachine?.name ?? "PurePoint").font(.title3.weight(.semibold)).lineLimit(1)
                             HStack(spacing: 6) {
-                                StatusDot(color: model.connected ? .green : model.connectionStatus.hasPrefix("Connecting") ? .orange : Color(uiColor: .tertiaryLabel))
+                                StatusDot(color: model.connected ? Color.green : (model.connectionStatus.hasPrefix("Connecting") ? Color.orange : Color(uiColor: .tertiaryLabel)))
                                 Text(model.connectionStatus).lineLimit(2)
                             }.font(.footnote).foregroundStyle(.secondary)
                         }

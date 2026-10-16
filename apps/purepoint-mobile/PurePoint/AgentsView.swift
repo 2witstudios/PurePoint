@@ -5,14 +5,12 @@ import UIKit
 
 extension ControlledAgent {
     var displayName: String { name.isEmpty ? id : name }
-    var needsAnswer: Bool { phase == "dialog" }
-    var phaseLabel: String? { needsAnswer ? "Answer needed" : phase?.replacingOccurrences(of: "_", with: " ") }
+    var phaseLabel: String? { phase?.replacingOccurrences(of: "_", with: " ") }
     var shortIdleLabel: String? { idleSeconds == nil ? nil : idleLabel }
     func tone(available: Bool) -> Color {
         guard available else { return Color(uiColor: .tertiaryLabel) }
-        if needsAnswer { return .orange }
         if state == "broken" { return .red }
-        if phase == "busy" || phase == "has_draft" { return .blue }
+        if phase == "busy" || phase == "has_draft" || phase == "dialog" { return .blue }
         if phase == "input_ready" || phase == "ready" || phase == "idle" || phase == "waiting" { return .green }
         return Color(uiColor: .secondaryLabel)
     }
@@ -76,16 +74,6 @@ private struct IconTile: View {
     }
 }
 
-private struct CountBadge: View {
-    let text: String
-    var tint: Color = .orange
-    var body: some View {
-        Text(text).font(.caption2.weight(.bold)).foregroundStyle(tint)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(tint.opacity(0.15), in: Capsule())
-    }
-}
-
 private struct RowDivider: View {
     var inset: CGFloat = 44
     var body: some View { Divider().padding(.leading, inset) }
@@ -97,14 +85,13 @@ private struct AgentListRow: View {
     var body: some View {
         let tone = agent.tone(available: available)
         HStack(spacing: 12) {
-            IconTile(systemName: agent.needsAnswer ? "questionmark.bubble.fill" : "terminal", tint: tone)
+            StatusDot(color: tone).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.displayName).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
                 Text([agent.agentType, available ? (agent.phaseLabel ?? agent.state) : "Unavailable", agent.shortIdleLabel].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 4)
-            if agent.needsAnswer { CountBadge(text: "Answer") }
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
         }
         .padding(.vertical, 8).frame(minHeight: 52).contentShape(Rectangle())
@@ -149,6 +136,16 @@ struct AgentControlView: View {
                     .background(Color(uiColor: .systemBackground))
             }
             AgentTerminalView(model: model).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    if model.hasSize {
+                        Text("\(model.cols)×\(model.rows)").font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.7))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color.white.opacity(0.1), in: Capsule())
+                            .padding(8).allowsHitTesting(false)
+                            .accessibilityLabel("Agent terminal \(model.cols) columns by \(model.rows) rows")
+                    }
+                }
         }
         .background(Color.black)
         .safeAreaInset(edge: .bottom, spacing: 0) { AgentControlBar(model: model) }
@@ -168,12 +165,15 @@ struct AgentControlView: View {
 private struct AgentControlBar: View {
     @ObservedObject var model: AgentControlModel
     @State private var showRecoveries = false
+    private enum Field: Hashable { case prompt, raw }
+    @FocusState private var field: Field?
+    private var focused: Bool { field != nil }
     var body: some View {
         let token = model.screenToken
         VStack(alignment: .leading, spacing: 8) {
             if model.permission == .control {
                 AgentQuickKeys(model: model)
-                if let status { Text(status.text).font(.caption).foregroundStyle(status.warning ? .orange : .secondary).lineLimit(2).textSelection(.enabled).padding(.horizontal, 16) }
+                if let status { Text(status.text).font(.caption).foregroundStyle(status.warning ? Color.orange : Color.secondary).lineLimit(2).textSelection(.enabled).padding(.horizontal, 16) }
                 if !model.recoveries.isEmpty {
                     Button { showRecoveries = true } label: {
                         Label("\(model.recoveries.count) saved prompt\(model.recoveries.count == 1 ? "" : "s")", systemImage: "tray.full")
@@ -207,11 +207,17 @@ private struct AgentControlBar: View {
     }
     private func composerRow(_ token: Int) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
+            if focused {
+                Button { field = nil } label: {
+                    Image(systemName: "keyboard.chevron.compact.down").font(.body)
+                        .foregroundStyle(.secondary).frame(width: 36, height: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Hide keyboard")
+            }
             TextField(
                 "Message agent", text: Binding(get: { model.draft }, set: { model.editDraft($0, screen: token) }),
                 axis: .vertical
             )
-            .lineLimit(1...4).autocorrectionDisabled(false)
+            .lineLimit(1...4).autocorrectionDisabled(false).focused($field, equals: .prompt)
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .accessibilityLabel("Agent prompt. Return inserts a new line.")
@@ -222,7 +228,7 @@ private struct AgentControlBar: View {
                     .background(model.canSend ? Color.accentColor : Color(uiColor: .tertiaryLabel), in: Circle())
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }.disabled(!model.canSend).accessibilityLabel("Send prompt")
-        }.padding(.leading, 12).padding(.trailing, 6)
+        }.padding(.leading, focused ? 4 : 12).padding(.trailing, 6)
     }
     private func rawRow(_ token: Int) -> some View {
         HStack(spacing: 8) {
@@ -230,7 +236,7 @@ private struct AgentControlBar: View {
                 "Raw text · typed without Enter",
                 text: Binding(get: { model.rawText }, set: { model.editRawText($0, screen: token) }),
                 axis: .vertical
-            ).lineLimit(1...3).font(.system(.callout, design: .monospaced))
+            ).lineLimit(1...3).font(.system(.callout, design: .monospaced)).focused($field, equals: .raw)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -392,8 +398,7 @@ struct AgentNavigator: View {
                     Text("\(entry.machine.name) · \(project)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                if entry.agent.needsAnswer && isAvailable { CountBadge(text: "Answer") }
-                else if !isAvailable { Text("Unavailable").font(.caption2).foregroundStyle(.tertiary) }
+                if !isAvailable { Text("Unavailable").font(.caption2).foregroundStyle(.tertiary) }
                 if model.navigation.isPinned(entry.scope) { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true) }
             }.padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
         }
@@ -438,7 +443,7 @@ struct MobileProjectsView: View {
             }
         }
         .toolbar { if active { toolbarContent } }
-        .sheet(item: $launch) { target in WorkspaceLaunchForm(model: model, target: target) }
+        .sheet(item: $launch) { target in WorkspaceLaunchSheet(model: model, target: target) }
         .confirmationDialog("Stop this exact agent?", isPresented: Binding(get: { stop != nil }, set: { if !$0 { stop = nil } }), titleVisibility: .visible) {
             Button("Stop agent", role: .destructive) {
                 guard let stop, let project = stop.agent.projectRoot else { return }
@@ -458,10 +463,15 @@ struct MobileProjectsView: View {
             if model.selected != nil {
                 ToolbarIconButton(systemName: "chevron.backward", label: canLocate ? "Show in project" : "Back to Projects", action: back)
             } else if machine != nil && project != nil {
-                ToolbarIconButton(systemName: "chevron.backward", label: "Back to Projects", action: back)
+                Button(action: back) {
+                    HStack(spacing: 3) { Image(systemName: "chevron.backward").font(.body.weight(.semibold)); Text("Projects") }
+                }.accessibilityLabel("Back to Projects")
             }
         }
-        ToolbarItem(placement: .principal) { principal }
+        // Lists and workspaces carry a large in-content title; only the terminal uses the bar.
+        if model.selected != nil {
+            ToolbarItem(placement: .principal) { agentPrincipal }
+        }
         ToolbarItemGroup(placement: .topBarTrailing) {
             if model.selected != nil {
                 agentMenu
@@ -470,9 +480,14 @@ struct MobileProjectsView: View {
                     Button("New agent", systemImage: "sparkles") { begin("spawn", machine, project) }
                     Button("New worktree", systemImage: "arrow.triangle.branch") { begin("createWorktree", machine, project) }
                     Button("New terminal", systemImage: "terminal") { begin("terminal", machine, project) }
-                } label: { Image(systemName: "plus") }
+                } label: {
+                    HStack(spacing: 5) { Image(systemName: "plus").font(.footnote.weight(.bold)); Text("New").font(.subheadline.weight(.semibold)) }
+                        .foregroundStyle(Color(uiColor: .systemBackground))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.accentColor, in: Capsule())
+                }
                 .disabled(!model.canManage || !machine.online || !project.available)
-                .accessibilityLabel("New")
+                .accessibilityLabel("New agent, worktree or terminal")
             } else {
                 Button { Task { await model.refresh() } } label: {
                     if model.loading { ProgressView() } else { Image(systemName: "arrow.clockwise") }
@@ -480,14 +495,10 @@ struct MobileProjectsView: View {
             }
         }
     }
-    @ViewBuilder private var principal: some View {
+    @ViewBuilder private var agentPrincipal: some View {
         if let context = model.destinationContext {
-            let location = context.worktreeLabel == "Project root" ? context.projectLabel : context.worktreeLabel
+            let location = context.worktreeLabel == "Project root" ? context.projectLabel + " · root" : context.projectLabel + " · " + context.worktreeLabel
             NavigationPrincipal(title: context.agentName, subtitle: context.machineName + " · " + location, tone: model.agent?.tone(available: model.connected && !context.status.hasPrefix("Unavailable")))
-        } else if let machine, let project {
-            NavigationPrincipal(title: project.name, subtitle: machine.name, tone: machine.online && model.connected ? .green : Color(uiColor: .tertiaryLabel))
-        } else {
-            NavigationPrincipal(title: "Projects", subtitle: "Via " + hostName, tone: model.connected ? .green : Color(uiColor: .tertiaryLabel))
         }
     }
     private var agentMenu: some View {
@@ -527,6 +538,10 @@ struct MobileProjectsView: View {
 
     private var projectList: some View {
         ScrollView { LazyVStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Projects").font(.largeTitle.weight(.bold))
+                Text(listSummary).font(.footnote).foregroundStyle(.secondary)
+            }.padding(.horizontal, 4).accessibilityAddTraits(.isHeader)
             listNotices
             ForEach(model.machines) { machine in machineSection(machine) }
             if model.machines.isEmpty && !model.loading && model.connected && model.permission != .off {
@@ -537,6 +552,10 @@ struct MobileProjectsView: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .refreshable { await model.refresh() }
         .scrollPosition(id: Binding(get: { memory.projectAnchors[model.bridgeIdentity] }, set: { memory.projectAnchors[model.bridgeIdentity] = $0 }))
+    }
+    private var listSummary: String {
+        let machines = model.machines.count, agents = model.machines.reduce(0) { $0 + $1.agents.count }
+        return "\(machines) machine\(machines == 1 ? "" : "s") · \(agents) agent\(agents == 1 ? "" : "s") · via \(hostName)"
     }
     @ViewBuilder private var listNotices: some View {
         if model.permission == .off { NoticeBanner(text: "Terminal access is off. Enable viewing or control in Connect Phone on your Mac.", systemImage: "lock.fill", tint: .secondary) }
@@ -574,7 +593,6 @@ struct MobileProjectsView: View {
     private func projectRow(_ machine: AgentMachine, _ project: WorkspaceProject) -> some View {
         let agents = machine.agents.filter { $0.projectRoot == project.id }
         let worktrees = (machine.worktrees ?? []).filter { $0.projectId == project.id }.count
-        let waiting = agents.filter(\.needsAnswer).count
         let available = project.available && machine.online && model.connected
         let summary = available
             ? "\(agents.count) agent\(agents.count == 1 ? "" : "s")" + (worktrees > 0 ? " · \(worktrees) worktree\(worktrees == 1 ? "" : "s")" : "")
@@ -590,7 +608,6 @@ struct MobileProjectsView: View {
                     if let error = project.error { Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2) }
                 }
                 Spacer(minLength: 4)
-                if waiting > 0 { CountBadge(text: "\(waiting) waiting") }
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
             }.padding(.vertical, 8).frame(minHeight: 56).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityHint(project.id).id(WorkspaceLocation(host: model.bridgeIdentity, machine: machine.id, project: project.id, worktree: nil).storageKey)
@@ -605,12 +622,12 @@ struct MobileProjectsView: View {
         let missing = machine.agents.filter { agent in agent.projectRoot == project.id && agent.worktreeId != nil && !worktrees.contains(where: { $0.id == agent.worktreeId }) }
         return ScrollViewReader { proxy in
             ScrollView { LazyVStack(alignment: .leading, spacing: 20) {
-                workspaceHeader(machine, project, agentCount: machine.agents.filter { $0.projectRoot == project.id }.count, worktreeCount: worktrees.count)
+                workspaceHeader(machine, project)
                 CardSection {
-                    Label("Project root", systemImage: "folder")
+                    Text("Project root").textCase(.uppercase)
                 } content: {
                     ForEach(Array(rootAgents.enumerated()), id: \.element.id) { index, agent in
-                        if index > 0 { RowDivider() }
+                        if index > 0 { RowDivider(inset: 32) }
                         workspaceAgent(machine, agent)
                     }
                     if rootAgents.isEmpty { emptyRow("No agents at the project root") }
@@ -621,7 +638,7 @@ struct MobileProjectsView: View {
                         Label("Worktree metadata unavailable", systemImage: "questionmark.folder")
                     } content: {
                         ForEach(Array(missing.enumerated()), id: \.element.id) { index, agent in
-                            if index > 0 { RowDivider() }
+                            if index > 0 { RowDivider(inset: 32) }
                             workspaceAgent(machine, agent)
                         }
                     }
@@ -633,76 +650,69 @@ struct MobileProjectsView: View {
             .onAppear { if let highlighted { proxy.scrollTo(highlighted, anchor: .center); focusedAgent = highlighted } }
         }
     }
-    private func workspaceHeader(_ machine: AgentMachine, _ project: WorkspaceProject, agentCount: Int, worktreeCount: Int) -> some View {
+    private func workspaceHeader(_ machine: AgentMachine, _ project: WorkspaceProject) -> some View {
         let available = machine.online && model.connected && project.available
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                IconTile(systemName: "folder.fill", tint: available ? .accentColor : Color(uiColor: .tertiaryLabel))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(project.name).font(.title3.weight(.bold)).lineLimit(1)
-                    Text(project.id).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.head).textSelection(.enabled)
-                }
-            }
-            HStack(spacing: 14) {
-                Label("\(agentCount)", systemImage: "terminal").accessibilityLabel("\(agentCount) agents")
-                Label("\(worktreeCount)", systemImage: "arrow.triangle.branch").accessibilityLabel("\(worktreeCount) worktrees")
-                Label(machine.name, systemImage: "desktopcomputer").lineLimit(1)
-            }.font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            if !available { NoticeBanner(text: project.error ?? "Workspace unavailable") }
-            if machine.metadataStatus != "complete" { NoticeBanner(text: machine.metadataError ?? "Workspace metadata incomplete. Refresh to retry.") }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(project.name).font(.largeTitle.weight(.bold)).lineLimit(1).accessibilityAddTraits(.isHeader)
+            HStack(spacing: 6) {
+                StatusDot(color: available ? .green : Color(uiColor: .tertiaryLabel), size: 6)
+                Text(machine.name).lineLimit(1)
+                Text("·").foregroundStyle(.tertiary)
+                Text(project.id).font(.system(.caption, design: .monospaced)).lineLimit(1).truncationMode(.head).textSelection(.enabled)
+            }.font(.footnote).foregroundStyle(.secondary)
+            if !available { NoticeBanner(text: project.error ?? "Workspace unavailable").padding(.top, 6) }
+            if machine.metadataStatus != "complete" { NoticeBanner(text: machine.metadataError ?? "Workspace metadata incomplete. Refresh to retry.").padding(.top, 6) }
             if !model.canManage {
                 Label("Launching, renaming and stopping require workspace management and a separate grant in Connect Phone.", systemImage: "lock")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
             }
-        }
-        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }.padding(.horizontal, 4)
     }
     private func worktreeSection(_ machine: AgentMachine, _ project: WorkspaceProject, _ worktree: WorkspaceWorktree) -> some View {
         let key = WorkspaceLocation(host: model.bridgeIdentity, machine: machine.id, project: project.id, worktree: worktree.id).storageKey
         let expanded = !memory.collapsed.contains(key)
         let agents = machine.agents.filter { $0.projectRoot == project.id && $0.worktreeId == worktree.id }
-        return VStack(alignment: .leading, spacing: 6) {
+        let active = worktree.status.isEmpty || worktree.status.lowercased() == "active"
+        return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeOut(duration: 0.18)) { if expanded { memory.collapsed.insert(key) } else { memory.collapsed.remove(key) } }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.triangle.branch").accessibilityHidden(true)
-                    Text(worktree.name).lineLimit(1)
-                    Text(worktree.branch).font(.system(.caption2, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.branch").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
+                    Text(worktree.name).font(.subheadline.weight(.semibold)).foregroundStyle(active ? Color.primary : Color.secondary).lineLimit(1)
                     Spacer(minLength: 4)
-                    if !expanded && !agents.isEmpty { Text("\(agents.count)").font(.caption) }
-                    Image(systemName: "chevron.down").font(.caption2.weight(.bold)).rotationEffect(.degrees(expanded ? 0 : -90)).accessibilityHidden(true)
+                    Text(worktree.branch).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    if !active { Text(worktree.status.capitalized).font(.caption).foregroundStyle(.secondary) }
+                    Image(systemName: "chevron.down").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(expanded ? 0 : -90)).accessibilityHidden(true)
                 }
-                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                .padding(.horizontal, 6).frame(minHeight: 32).contentShape(Rectangle())
+                .frame(minHeight: 44).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(worktree.name), \(worktree.branch), \(worktree.status)")
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
-                VStack(alignment: .leading, spacing: 0) {
-                    if worktree.status.lowercased() != "active" && !worktree.status.isEmpty {
-                        Text(worktree.status.capitalized).font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-                    }
-                    ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
-                        if index > 0 { RowDivider() }
-                        workspaceAgent(machine, agent)
-                    }
-                    if !agents.isEmpty { RowDivider() }
-                    Button { begin("spawn", machine, project, worktree: worktree.id) } label: {
-                        Label("New agent here", systemImage: "plus").font(.callout.weight(.medium))
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.borderless).disabled(!model.canManage || !machine.online)
+                ForEach(agents) { agent in
+                    RowDivider(inset: 32)
+                    workspaceAgent(machine, agent)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                if active {
+                    RowDivider(inset: 32)
+                    Button { begin("spawn", machine, project, worktree: worktree.id) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus").font(.footnote.weight(.bold)).frame(width: 20)
+                            Text("Agent in this worktree").font(.callout.weight(.medium))
+                        }.foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).disabled(!model.canManage || !machine.online)
+                }
             }
         }
+        .padding(.horizontal, 14).padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
     private func emptyRow(_ text: String) -> some View {
         Text(text).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -736,9 +746,34 @@ struct WorkspaceLaunchTarget: Identifiable {
     var storageKey: String { Data(id.utf8).base64EncodedString() }
 }
 
+/// New agent / worktree / terminal share one sheet with a tab per kind. Each kind keeps
+/// its own saved form (and any in-flight operation) under its own target key.
+struct WorkspaceLaunchSheet: View {
+    @ObservedObject var model: AgentControlModel
+    let target: WorkspaceLaunchTarget
+    @State private var kind: String
+    init(model: AgentControlModel, target: WorkspaceLaunchTarget) {
+        self.model = model; self.target = target
+        _kind = State(initialValue: target.kind)
+    }
+    private static let kinds = ["spawn", "createWorktree", "terminal"]
+    var body: some View {
+        if Self.kinds.contains(target.kind) {
+            WorkspaceLaunchForm(
+                model: model,
+                target: WorkspaceLaunchTarget(host: target.host, machine: target.machine, machineName: target.machineName, project: target.project, projectName: target.projectName, worktree: target.worktree, kind: kind, agent: target.agent),
+                kind: $kind
+            ).id(kind)
+        } else {
+            WorkspaceLaunchForm(model: model, target: target)
+        }
+    }
+}
+
 struct WorkspaceLaunchForm: View {
     @ObservedObject var model: AgentControlModel
     let target: WorkspaceLaunchTarget
+    var kind: Binding<String>? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var draft = WorkspaceFormDraft()
     @State private var catalog: WorkspaceCatalog?
@@ -772,6 +807,15 @@ struct WorkspaceLaunchForm: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let kind {
+                    Section {
+                        Picker("Create", selection: kind) {
+                            Text("Agent").tag("spawn")
+                            Text("Worktree").tag("createWorktree")
+                            Text("Terminal").tag("terminal")
+                        }.pickerStyle(.segmented).labelsHidden()
+                    }.listRowBackground(Color.clear).listRowInsets(EdgeInsets()).disabled(draft.operationId != nil)
+                }
                 Section("Launch target") {
                     HStack(spacing: 12) {
                         IconTile(systemName: "folder.fill", tint: .accentColor)
@@ -784,11 +828,11 @@ struct WorkspaceLaunchForm: View {
                     LabeledContent("Machine") { Text(target.machineName) }
                     if let agent = target.agent { LabeledContent("Agent") { Text(agent).font(.system(.callout, design: .monospaced)) } }
                     if target.kind == "spawn" || target.kind == "terminal" {
-                        Picker("Location", selection: $draft.destination) {
-                            Text("Project root").tag("root")
-                            Text("Existing worktree").tag("worktree")
+                        Picker("Where", selection: $draft.destination) {
+                            Text("Root").tag("root")
                             if target.kind == "spawn" { Text("New worktree").tag("newWorktree") }
-                        }
+                            Text("Existing").tag("worktree")
+                        }.pickerStyle(.segmented)
                         if draft.destination == "worktree" {
                             Picker("Worktree", selection: $draft.worktree) { Text("Select worktree").tag(""); ForEach(availableWorktrees) { Text("\($0.name) · \($0.branch)").tag($0.id) } }
                         }
@@ -825,11 +869,13 @@ struct WorkspaceLaunchForm: View {
                         Text("No operation is replayed after reconnect. Unknown status is not proof that launch failed.").font(.caption)
                     } else {
                         Text("\(target.machineName) / \(target.projectName) / \(draft.destination == "root" ? "project root" : draft.destination == "newWorktree" ? draft.name : draft.worktree)").font(.caption).foregroundStyle(.secondary)
-                        Button(actionTitle, role: target.kind == "stop" ? .destructive : nil) { Task { await submit() } }.font(.body.weight(.semibold)).disabled(!valid)
+                        Button(role: target.kind == "stop" ? .destructive : nil) { Task { await submit() } } label: {
+                            Text(actionTitle).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 36)
+                        }.buttonStyle(.borderedProminent).tint(target.kind == "stop" ? Color.red : Color.accentColor).disabled(!valid)
                     }
                 }
             }
-            .navigationTitle(target.kind == "rename" ? "Rename agent" : target.kind == "stop" ? "Stop agent" : "New \(target.kind == "createWorktree" ? "worktree" : target.kind == "spawn" ? "agent" : "terminal")")
+            .navigationTitle(kind != nil ? "New in \(target.projectName)" : target.kind == "rename" ? "Rename agent" : target.kind == "stop" ? "Stop agent" : "New \(target.kind == "createWorktree" ? "worktree" : target.kind == "spawn" ? "agent" : "terminal")")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { save(); dismiss() }.keyboardShortcut(.cancelAction) } }
             .task {
                 if let data = UserDefaults.standard.data(forKey: key), let saved = try? JSONDecoder().decode(WorkspaceFormDraft.self, from: data) { draft = saved }

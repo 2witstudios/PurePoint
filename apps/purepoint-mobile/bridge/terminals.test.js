@@ -291,6 +291,90 @@ test("same-device attachments belong only to opening connection; keys cannot cla
   );
 });
 
+test("explicit Control size claims go only to the stream's own attachment and survive reopen", async (t) => {
+  const f = await fixture(t),
+    a = client(f),
+    b = client(f);
+  t.after(a.connection.dispose);
+  t.after(b.connection.dispose);
+  const opened = await a.request({
+    op: "terminal.open",
+    machine: "local",
+    agentId: "ag-one",
+  });
+  await until(() => f.attached.length === 1);
+  const claims = () => f.requests.filter((r) => r.type === "claim_size");
+  for (const [cols, rows] of [
+    [19, 30],
+    [501, 30],
+    [50, 7],
+    [50, 301],
+    [50.5, 30],
+  ])
+    await assert.rejects(
+      a.request({ op: "terminal.size", streamId: opened.streamId, cols, rows }),
+      /columns/,
+    );
+  await assert.rejects(
+    b.request({
+      op: "terminal.size",
+      streamId: opened.streamId,
+      cols: 50,
+      rows: 30,
+    }),
+    /connection/,
+  );
+  assert.equal(claims().length, 0);
+  await a.request({
+    op: "terminal.size",
+    streamId: opened.streamId,
+    cols: 52,
+    rows: 38,
+  });
+  await until(() => claims().length === 1);
+  assert.deepEqual(claims()[0], { type: "claim_size", cols: 52, rows: 38 });
+  // View-only reopen drops the claim (closing the attach releases ownership).
+  a.change("view");
+  await until(() => f.attached.length === 2);
+  await assert.rejects(
+    a.request({
+      op: "terminal.size",
+      streamId: opened.streamId,
+      cols: 52,
+      rows: 38,
+    }),
+    /permission/,
+  );
+  assert.equal(claims().length, 1);
+  // Restored control re-asserts the remembered claim on the new attachment.
+  a.change("control");
+  await until(() => f.attached.length === 3 && claims().length === 2);
+  assert.deepEqual(claims()[1], { type: "claim_size", cols: 52, rows: 38 });
+});
+
+test("legacy daemons reject phone size claims", async (t) => {
+  const f = await fixture(t),
+    a = client(f);
+  t.after(a.connection.dispose);
+  f.version(9);
+  const opened = await a.request({
+    op: "terminal.open",
+    machine: "local",
+    agentId: "ag-one",
+  });
+  await until(() => f.attached.length === 1);
+  await assert.rejects(
+    a.request({
+      op: "terminal.size",
+      streamId: opened.streamId,
+      cols: 52,
+      rows: 38,
+    }),
+    /does not support/,
+  );
+  assert.ok(!f.requests.some((r) => r.type === "claim_size"));
+});
+
 test("downgrade immediately cancels in-flight submit socket and prevents subsequent input", async (t) => {
   const f = await fixture(t),
     c = client(f);

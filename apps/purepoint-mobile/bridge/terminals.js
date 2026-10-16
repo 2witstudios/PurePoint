@@ -262,9 +262,12 @@ export function terminalConnection({
     if (r.op === "permissions") return permissions();
     if (workspaceOperations.includes(r.op)) return workspace.request(r);
     return operation(
-      ["terminal.keys", "terminal.raw", "terminal.size", "agent.prompt"].includes(
-        r.op,
-      ),
+      [
+        "terminal.keys",
+        "terminal.raw",
+        "terminal.size",
+        "agent.prompt",
+      ].includes(r.op),
       async (signal, check) => {
         if (r.op === "agents") {
           const machines = await daemons.machines();
@@ -439,7 +442,9 @@ export function terminalConnection({
             r.rows < 8 ||
             r.rows > 300
           )
-            throw new Error("Terminal size requires 20–500 columns and 8–300 rows");
+            throw new Error(
+              "Terminal size requires 20–500 columns and 8–300 rows",
+            );
           if (stream.version < 10)
             throw new Error("Agent daemon does not support phone sizing");
           if (!stream.attach || stream.recovering)
