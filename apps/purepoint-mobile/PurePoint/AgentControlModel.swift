@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor final class AgentControlModel: ObservableObject {
     typealias Request = @MainActor (String, [String: Any]) async throws -> JSONValue
+    @Published private(set) var workspaceManagement = false
+    @Published private(set) var workspaceSupported = false
     @Published private(set) var permission: AgentTerminalPermission = .off
     @Published private(set) var machines: [AgentMachine] = []
     @Published private(set) var connected = false
@@ -20,6 +22,7 @@ import SwiftUI
     @Published var error: String?
     @Published var rawTyping = false
     @Published var rawText = ""
+    @Published private(set) var navigation = AgentNavigationPreferences()
     private var host = ""
     private var request: Request?
     private var generation = 0
@@ -29,6 +32,12 @@ import SwiftUI
     private var pendingOpen: AgentPendingOpen?
     private var refreshTask: Task<Void, Never>?
     private var discovering = false
+    private var inventoryInFlight = false
+    private var visibleRefreshTask: Task<Void, Never>?
+    private var inventoryVisible = false
+    private var inventoryForeground = true
+    private let inventoryRefreshNanoseconds: UInt64
+    private var inputRefreshTask: Task<Void, Never>?
     private var terminalChunks: [AgentTerminalUpdate] = []
     private(set) var terminalBaseCols = 80
     private(set) var terminalBaseRows = 24
@@ -39,8 +48,10 @@ import SwiftUI
     private var composers: [AgentScope: AgentComposer] = [:]
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, inventoryRefreshNanoseconds: UInt64 = 5_000_000_000) {
+        self.inventoryRefreshNanoseconds = inventoryRefreshNanoseconds
         self.defaults = defaults
+        if let data = defaults.data(forKey: "pi.agentNavigation.v1"), let saved = try? JSONDecoder().decode(AgentNavigationPreferences.self, from: data) { navigation = saved }
         drafts = defaults.dictionary(forKey: "pi.agentDrafts.v1") as? [String: String] ?? [:]
         if let data = defaults.data(forKey: "pi.agentRecovery.v1") {
             do { savedRecoveries = try JSONDecoder().decode([String: [AgentPromptRecovery]].self, from: data) } catch {
@@ -67,7 +78,29 @@ import SwiftUI
         guard let selected else { return nil }
         return machines.first { $0.id == selected.machine }?.agents.first { $0.id == selected.agent }
     }
-    var controlEnabled: Bool { connected && permission == .control && selected != nil && streamId != nil }
+    var shortcuts: [AgentShortcut] {
+        machines.flatMap { machine in machine.agents.map { AgentShortcut(scope: AgentScope(host: host, machine: machine.id, agent: $0.id), machine: machine, agent: $0) } }
+    }
+    var pinnedShortcuts: [AgentShortcut] {
+        let entries = Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.id, $0) })
+        return navigation.pins.compactMap { entries[$0] }
+    }
+    var recentShortcuts: [AgentShortcut] {
+        shortcuts.filter { !navigation.isPinned($0.scope) && !navigation.isHidden($0.scope) }.sorted {
+            let left = navigation.recency($0.scope, startedAt: $0.agent.startedAt)
+            let right = navigation.recency($1.scope, startedAt: $1.agent.startedAt)
+            return left == right ? $0.id < $1.id : left > right
+        }
+    }
+    func togglePin(_ scope: AgentScope) {
+        if navigation.isPinned(scope) { navigation.unpin(scope) } else { navigation.pin(scope) }; saveNavigation()
+    }
+    func hideShortcut(_ scope: AgentScope) { navigation.hide(scope); saveNavigation() }
+    private func recordInteraction(_ scope: AgentScope) { navigation.interact(scope); saveNavigation() }
+    private func saveNavigation() {
+        if let data = try? JSONEncoder().encode(navigation) { defaults.set(data, forKey: "pi.agentNavigation.v1") }
+    }
+    var controlEnabled: Bool { connected && permission == .control && streamId != nil && agent != nil && machines.contains { $0.id == selected?.machine && $0.online && $0.metadataStatus != "error" } }
     var sendExplanation: String? {
         if recoveryUnavailable {
             return "Saved prompt recovery is unavailable. Resolve this phone's storage before sending."
@@ -94,8 +127,27 @@ import SwiftUI
         set { composer.text = newValue; saveComposer() }
     }
 
+    func setInventoryVisible(_ value: Bool) { guard inventoryVisible != value else { return }; inventoryVisible = value; if !value { inputRefreshTask?.cancel() }; restartVisibleInventory() }
+    func setInventoryForeground(_ value: Bool) { guard inventoryForeground != value else { return }; inventoryForeground = value; if !value { inputRefreshTask?.cancel() }; restartVisibleInventory() }
+    private func restartVisibleInventory() {
+        visibleRefreshTask?.cancel(); visibleRefreshTask = nil
+        guard inventoryVisible, inventoryForeground, connected, permission != .off else { return }
+        let token = generation
+        visibleRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, token == self.generation, self.inventoryVisible, self.inventoryForeground, self.connected, self.permission != .off else { return }
+                await self.refresh()
+                try? await Task.sleep(nanoseconds: self.inventoryRefreshNanoseconds)
+            }
+        }
+    }
+    func revokeAccess() {
+        workspaceManagement = false; workspaceSupported = false
+        applyPermission(.off)
+    }
     func transport(host: String, connected: Bool, request: Request? = nil) {
-        generation += 1; refreshRevision += 1; refreshTask?.cancel(); refreshTask = nil
+        visibleRefreshTask?.cancel(); visibleRefreshTask = nil
+        generation += 1; inventoryInFlight = false; inputRefreshTask?.cancel(); inputRefreshTask = nil; refreshRevision += 1; refreshTask?.cancel(); refreshTask = nil
         // A pending send is uncertain after disconnect, never silently resent.
         if let submission = composer.pending {
             if let selected {
@@ -109,8 +161,9 @@ import SwiftUI
         }
         // Close through the originating transport before adopting another host.
         closeScreen()
+        let sameHost = self.host == host
         self.request = request; self.connected = connected
-        self.host = host; machines = []; permission = .off; permissionRevision += 1
+        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; permissionRevision += 1
         loading = false; error = nil; discovering = connected
         guard connected else { return }
         let token = generation
@@ -121,6 +174,7 @@ import SwiftUI
                 let data = try await request("permissions", [:])
                 guard token == self.generation else { return }
                 if revision == self.permissionRevision {
+                    self.applyWorkspacePermission(data)
                     self.applyPermission(try data["terminals"].decode(AgentTerminalPermission.self))
                 }
                 await self.refresh()
@@ -131,6 +185,8 @@ import SwiftUI
 
     func receive(_ envelope: WireEnvelope) {
         if envelope.type == "permissions" {
+            workspaceManagement = envelope.workspaceManagement ?? false
+            workspaceSupported = (try? envelope.workspace?["management"].decode(Bool.self)) ?? false
             applyPermission(AgentTerminalPermission(rawValue: envelope.terminals ?? "") ?? .off)
             return
         }
@@ -141,44 +197,102 @@ import SwiftUI
         if id == streamId { apply(event) } else if pendingOpen != nil { pendingOpen?.append(event) }
     }
 
+    private func applyWorkspacePermission(_ data: JSONValue) {
+        workspaceManagement = (try? data["workspaceManagement"].decode(Bool.self)) ?? false
+        workspaceSupported = (try? data["workspace"]["management"].decode(Bool.self)) ?? false
+    }
+    var canManage: Bool { connected && permission == .control && workspaceManagement && workspaceSupported }
+    var bridgeIdentity: String { host }
+    func catalog(machine: String, project: String) async throws -> WorkspaceCatalog {
+        guard connected, permission != .off, let request else { throw AgentControlFailure(message: "Connect with terminal access to load launch options.") }
+        let token = generation, revision = permissionRevision
+        let value = try await request("workspace.catalog", ["machine": machine, "projectId": project]).decode(WorkspaceCatalog.self)
+        guard token == generation, revision == permissionRevision, permission != .off else { throw AgentControlFailure(message: "Connection or read permission changed. Reload launch options.") }; return value
+    }
+    func workspaceRequest(_ operation: String, fields: [String: Any]) async throws -> WorkspaceOperation {
+        guard canManage, let request else { throw AgentControlFailure(message: "Workspace management requires control and the separate workspace management grant in Connect Phone.") }
+        let token = generation, revision = permissionRevision
+        let value = try await request(operation, fields).decode(WorkspaceOperation.self)
+        guard token == generation, revision == permissionRevision, canManage else { throw AgentControlFailure(message: "Connection or permission changed. Outcome uncertain; inspect Projects before launching again.") }
+        await refresh()
+        guard token == generation, revision == permissionRevision, canManage else { throw AgentControlFailure(message: "Connection or permission changed while refreshing. Operation may already have committed; check status.") }
+        return value
+    }
+    func refreshWorkspaceForReview(machine: String, project: String) async -> Bool {
+        let token = generation, revision = permissionRevision
+        guard canManage, await refresh(), token == generation, revision == permissionRevision, canManage,
+              let current = machines.first(where: { $0.id == machine }), current.online, current.complete,
+              current.metadataStatus == "complete", current.registeredProjects?.contains(where: { $0.id == project && $0.available }) == true else { return false }
+        return true
+    }
+    func operationStatus(_ id: String) async throws -> WorkspaceOperation {
+        guard connected, permission != .off, let request else { throw AgentControlFailure(message: "Reconnect with terminal access to check status.") }
+        let token = generation, revision = permissionRevision
+        let value = try await request("workspace.operation", ["operationId": id]).decode(WorkspaceOperation.self)
+        guard token == generation, revision == permissionRevision, permission != .off else { throw AgentControlFailure(message: "Connection or read permission changed. Check status again.") }; return value
+    }
+    private var inventoryCacheKey: String { "pi.workspaceInventory.v1." + Data(host.utf8).base64EncodedString() }
+
     private func applyPermission(_ value: AgentTerminalPermission) {
         permissionRevision += 1
         let previous = permission
         permission = value
+        restartVisibleInventory()
         if value != .control { rawTyping = false; rawText = "" }
         if value == .off {
-            machines = []; refreshRevision += 1; closeScreen()
+            machines = []; defaults.removeObject(forKey: inventoryCacheKey); refreshRevision += 1; closeScreen()
         } else if previous != value, pendingOpen != nil {
             // An open begun under a different permission is never adopted.
             closeScreen()
         }
+        if previous == .off && value != .off && machines.isEmpty,
+           let data = defaults.data(forKey: inventoryCacheKey), let cached = try? JSONDecoder().decode(AgentInventory.self, from: data) {
+            machines = cached.machines.map { machine in
+                AgentMachine(id: machine.id, name: machine.name, online: false, protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact, error: "Cached context; refreshing availability", complete: false, agents: machine.agents, registeredProjects: machine.registeredProjects, worktrees: machine.worktrees, metadataStatus: "offline", metadataError: "Cached context; refresh required")
+            }
+        }
         if previous == .off && value != .off && !discovering { Task { [weak self] in await self?.refresh() } }
     }
 
-    func refresh() async {
-        guard connected, permission != .off, let request else { return }
+    @discardableResult func refresh() async -> Bool {
+        guard connected, permission != .off, let request else { return false }
+        guard !inventoryInFlight else { return false }
+        inventoryInFlight = true
+        let owningGeneration = generation
+        defer { if generation == owningGeneration { inventoryInFlight = false } }
         refreshRevision += 1; let revision = refreshRevision; let token = generation
         loading = true
         do {
             let data = try await request("agents", [:])
             let inventory = try data.decode(AgentInventory.self)
-            guard token == generation, revision == refreshRevision, permission != .off else { return }
-            machines = inventory.machines.sorted {
+            guard token == generation, revision == refreshRevision, permission != .off else { return false }
+            let prior = machines
+            machines = inventory.machines.map { machine in
+                guard (!machine.online || machine.metadataStatus == "error"), let cached = prior.first(where: { $0.id == machine.id }) else { return machine }
+                return AgentMachine(id: machine.id, name: machine.name, online: machine.online, protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact, error: machine.error, complete: false, agents: cached.agents, registeredProjects: cached.registeredProjects, worktrees: cached.worktrees, metadataStatus: machine.metadataStatus ?? "offline", metadataError: machine.metadataError ?? machine.error)
+            }.sorted {
                 let left = $0.agents.contains { $0.phase == "dialog" },
                     right = $1.agents.contains { $0.phase == "dialog" }
                 return left != right ? left : $0.name.localizedStandardCompare($1.name) == .orderedAscending
             }
+            if let data = try? JSONEncoder().encode(AgentInventory(machines: machines)) { defaults.set(data, forKey: inventoryCacheKey) }
             loading = false
+            return true
         } catch {
-            guard token == generation, revision == refreshRevision else { return }
+            guard token == generation, revision == refreshRevision else { return false }
             loading = false; self.error = error.localizedDescription
+            machines = machines.map { machine in
+                AgentMachine(id: machine.id, name: machine.name, online: false, protocolVersion: machine.protocolVersion, screenMayBeInexact: machine.screenMayBeInexact, error: "Cached inventory unavailable. Refresh to retry.", complete: false, agents: machine.agents, registeredProjects: machine.registeredProjects, worktrees: machine.worktrees, metadataStatus: "error", metadataError: "Inventory refresh failed")
+            }
+            return false
         }
     }
 
     func open(machine: AgentMachine, agent: ControlledAgent, context token: Int) {
-        guard token == generation, connected, permission != .off, machine.online, let request else { return }
+        guard token == generation, connected, permission != .off, machine.online, machine.metadataStatus != "error", let request else { return }
         closeScreen()
         let scope = AgentScope(host: host, machine: machine.id, agent: agent.id)
+        recordInteraction(scope)
         selected = scope; composer = composers[scope] ?? AgentComposer(text: drafts[scope.storageKey] ?? "")
         recoveries = savedRecoveries[scope.storageKey] ?? []
         screenMayBeInexact = machine.screenMayBeInexact
@@ -278,9 +392,11 @@ import SwiftUI
                 submission, outcome: .failed, reason: "Prompt recovery could not be saved. Text kept on this phone.")
             saveComposer(); return
         }
+        recordInteraction(scope)
         let token = generation, visible = screen, permissionToken = permissionRevision
         Task { [weak self] in
             let result: AgentPromptResult
+            var deliveryUncertain = false
             do {
                 guard let self, token == self.generation, visible == self.screen,
                     permissionToken == self.permissionRevision, self.permission == .control
@@ -291,7 +407,7 @@ import SwiftUI
                 result = try await request(
                     "agent.prompt", ["machine": scope.machine, "agentId": scope.agent, "text": submission.text]
                 ).decode(AgentPromptResult.self)
-            } catch { result = AgentPromptResult(outcome: .failed, reason: error.localizedDescription) }
+            } catch { deliveryUncertain = true; result = AgentPromptResult(outcome: .failed, reason: "Delivery uncertain: " + error.localizedDescription) }
             guard let self else { return }
             let valid = token == self.generation && permissionToken == self.permissionRevision
             let outcome =
@@ -310,10 +426,10 @@ import SwiftUI
                 self.settleRecovery(submission.id, scope: scope, status: nil, reason: nil)
             } else if outcome.outcome == .failed || outcome.outcome == .blocked {
                 self.settleRecovery(
-                    submission.id, scope: scope, status: valid ? outcome.outcome.label : "Delivery uncertain",
+                    submission.id, scope: scope, status: valid && !deliveryUncertain ? outcome.outcome.label : "Delivery uncertain",
                     reason: outcome.reason)
             }
-            origin.finish(submission, outcome: outcome.outcome, reason: outcome.reason)
+            origin.finish(submission, outcome: outcome.outcome, reason: outcome.reason, uncertain: deliveryUncertain || !valid)
             self.composers[scope] = origin; self.drafts[scope.storageKey] = origin.text
             self.defaults.set(self.drafts, forKey: "pi.agentDrafts.v1")
             if visible == self.screen && self.selected == scope {
@@ -330,6 +446,16 @@ import SwiftUI
         guard token == screen, rawTyping, !rawText.isEmpty, rawText.utf8.count <= 65536 else { return }
         input("terminal.raw", fields: ["data": rawText])
     }
+    private func scheduleInputRefresh() {
+        guard inventoryVisible, inventoryForeground else { return }
+        inputRefreshTask?.cancel()
+        let token = generation
+        inputRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled, let self, token == self.generation else { return }
+            await self.refresh()
+        }
+    }
     private func input(_ op: String, fields: [String: Any]) {
         guard controlEnabled, let streamId, let request else { return }
         let token = generation, visible = screen, permissionToken = permissionRevision
@@ -343,7 +469,7 @@ import SwiftUI
                 guard token == self.generation, visible == self.screen, permissionToken == self.permissionRevision
                 else { return }
                 if op == "terminal.raw", self.rawText == fields["data"] as? String { self.rawText = "" }
-                await self.refresh()
+                self.scheduleInputRefresh()
             } catch {
                 guard let self, token == self.generation, visible == self.screen else { return }
                 self.error = error.localizedDescription

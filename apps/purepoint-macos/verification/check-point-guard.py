@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='pointguard-checks-', dir='/tmp') as fol
     temporary = Path(folder)
     combined = temporary / 'ModelChecks.swift'
     combined.write_text((source / 'State/PiChatModel.swift').read_text() + '\n' + (mobile / 'PurePoint/ChatModel.swift').read_text() + '\n' + (root / 'verification/PiChatChecks.swift').read_text())
-    subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors', str(source / 'Models/PiChatDomain.swift'), str(source / 'Services/PiPairingSecret.swift'), str(combined), str(mobile / 'PurePoint/ChatDomain.swift'), str(mobile / 'PurePoint/PairingSecret.swift'), '-o', str(temporary / 'checks')], check=True)
+    subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors', str(source / 'Models/PiChatDomain.swift'), str(source / 'Services/PiPairingSecret.swift'), str(combined), str(mobile / 'PurePoint/ChatDomain.swift'), str(mobile / 'PurePoint/PairingSecret.swift'), str(mobile / 'PurePoint/AgentControlDomain.swift'), str(mobile / 'PurePoint/AgentControlModel.swift'), '-o', str(temporary / 'checks')], check=True)
     env = dict(os.environ, CFFIXED_USER_HOME=folder, POINTGUARD_FIXTURE_TOKEN=secrets.token_hex(32))
     bridge = subprocess.Popen(['node', str(root / 'verification/pi-fixture.mjs'), str(mobile)], env=env, stdout=subprocess.PIPE, text=True)
     try:

@@ -41,75 +41,6 @@ enum AttachmentImport {
     }
 }
 
-struct ConversationSidebar: View {
-    @ObservedObject var model: ChatModel
-    let selection: Int
-    let close: () -> Void
-    let newConversation: () -> Void
-    let select: (Conversation) -> Void
-    let connection: () -> Void
-    @State private var search = ""
-    private var filtered: [Conversation] {
-        model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Button(action: close) { Image(systemName: "sidebar.left").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Close conversations sidebar")
-                Text("Chats").font(.headline)
-                Spacer()
-                Button(action: newConversation) { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
-                    .disabled(!model.connected || model.demo || model.changingSession)
-                    .accessibilityLabel("New conversation")
-            }.padding(.horizontal, 8).padding(.top, 4)
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.subheadline).foregroundStyle(.tertiary)
-                TextField("Search", text: $search).font(.subheadline).autocorrectionDisabled()
-                    .accessibilityLabel("Search conversations")
-            }.padding(.horizontal, 20).frame(height: 44).padding(.bottom, 8)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    if let error = model.error {
-                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                    }
-                    if filtered.isEmpty {
-                        Text(search.isEmpty ? "No conversations yet" : "No matches")
-                            .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.vertical, 16)
-                    }
-                    ForEach(filtered) { conversation in
-                        Button { select(conversation) } label: {
-                            Text(conversation.title).font(.subheadline).lineLimit(1)
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .background(conversation.id == model.snapshot?.sessionId ? Color(uiColor: .secondarySystemBackground) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                                .contentShape(Rectangle())
-                        }
-                        .accessibilityLabel(conversation.title)
-                        .accessibilityAddTraits(conversation.id == model.snapshot?.sessionId ? .isSelected : [])
-                    }
-                }.padding(.horizontal, 8).padding(.bottom, 12)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .refreshable { await model.loadConversations(selection: selection) }
-            Button(action: connection) {
-                HStack(spacing: 8) {
-                    Image("PurePointLogo").resizable().scaledToFit().frame(width: 20, height: 20).accessibilityHidden(true)
-                    Text("PurePoint").font(.subheadline.weight(.medium))
-                    Spacer()
-                    Image(systemName: "gearshape").font(.subheadline).foregroundStyle(.secondary)
-                }.padding(.horizontal, 20).frame(height: 52).contentShape(Rectangle())
-            }.accessibilityLabel("Connection settings")
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
-        .background(Color(uiColor: .systemBackground))
-        .accessibilityAction(.escape) { close() }
-    }
-}
-
 struct ConnectionView: View {
     @ObservedObject var model: ChatModel
     @Environment(\.dismiss) private var dismiss
@@ -269,8 +200,10 @@ private struct QRScanner: UIViewControllerRepresentable {
 struct ConversationView: View {
     @ObservedObject var model: ChatModel
     let selection: Int
+    var closeOverlay: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var confirmResume = false
+    @State private var confirmNew = false
     @State private var search = ""
     var body: some View {
         NavigationStack {
@@ -279,7 +212,7 @@ struct ConversationView: View {
                     ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(20) }
                         .safeAreaInset(edge: .bottom) {
                             Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
-                                if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { dismiss() } } }
+                                if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { finish() } } }
                             }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession).padding().frame(maxWidth: .infinity).background(Color(uiColor: .systemBackground))
                         }
                 } else {
@@ -287,24 +220,30 @@ struct ConversationView: View {
                         if model.conversations.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right") }
                         ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
                             Button { Task { await model.browse(conversation, selection: selection) } } label: {
-                                VStack(alignment: .leading, spacing: 6) { Text(conversation.title).foregroundStyle(.primary).lineLimit(2); if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) } }.padding(.vertical, 6)
+                                VStack(alignment: .leading, spacing: 6) { Text(conversation.title).foregroundStyle(.primary).lineLimit(2); if conversation.id == model.snapshot?.sessionId { Text("Current conversation").font(.caption.weight(.semibold)) }; if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) }; if let preview = conversation.preview, !preview.isEmpty { Text(preview).font(.caption).foregroundStyle(.secondary).lineLimit(3) } }.padding(.vertical, 6)
                             }
                         }
                     }.searchable(text: $search, prompt: "Find a conversation").refreshable { await model.loadConversations(selection: selection) }
                 }
             }
-            .safeAreaInset(edge: .top) { if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(12).frame(maxWidth: .infinity).background(.bar) } }
-            .navigationTitle(model.browsing?.title ?? "Conversations").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top) { VStack(alignment: .leading) { Text("Point Guard · \(model.selectedMachine?.name ?? "Mac")").font(.caption).foregroundStyle(.secondary); if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red) } }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar) }
+            .navigationTitle(model.browsing?.title ?? model.selectedMachine?.name ?? "History").navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .bottomBar) { Button("New conversation") { if model.busy { confirmNew = true } else { Task { await model.changeSession(selection: selection); finish() } } }.disabled(!model.connected || model.demo || model.changingSession) }
                 ToolbarItem(placement: .topBarLeading) { if model.browsing != nil { Button("Back") { model.browsing = nil } } }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.browsing = nil; dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Button("Close") { model.browsing = nil; finish() }.keyboardShortcut(.cancelAction) }
             }
+            .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
+                Button("Stop and start new", role: .destructive) { Task { await model.changeSession(stopFirst: true, selection: selection); finish() } }
+                Button("Keep working", role: .cancel) {}
+            } message: { Text("Queued messages remain recoverable. Delegated workers keep running.") }
             .confirmationDialog("Stop Point Guard and resume this conversation?", isPresented: $confirmResume, titleVisibility: .visible) {
-                Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true, selection: selection); if model.browsing == nil { dismiss() } } } }
+                Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true, selection: selection); if model.browsing == nil { finish() } } } }
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be recoverable. Delegated workers keep running.") }
         }
     }
+    private func finish() { model.browsing = nil; if let closeOverlay { closeOverlay() } else { dismiss() } }
 }
 struct NeutralPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled

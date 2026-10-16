@@ -95,3 +95,62 @@ extension AgentControlTests {
         try await AgentControlScenarios.hostSwitchFencesLatePromptReceipt()
     }
 }
+
+extension AgentControlTests {
+    @MainActor func testGivenHeldInventoryShouldCoalesceKeysAndPreserveMaximumUncertainPrompt() async throws {
+        try await AgentControlScenarios.heldInventoryCoalescesAndMaximumPromptKeepsNewDraft()
+    }
+}
+
+extension AgentControlTests {
+    func testGivenScopedPinsShouldSurviveSwarmAndHideOnlyShortcut() throws {
+        var preferences = AgentNavigationPreferences()
+        let selected = AgentScope(host: "bridge-a", machine: "daemon", agent: "worker")
+        let other = AgentScope(host: "bridge-b", machine: "daemon", agent: "worker")
+        preferences.pin(selected)
+        for index in 0..<30 { preferences.interact(AgentScope(host: "bridge-a", machine: "daemon", agent: "swarm\(index)")) }
+        XCTAssertTrue(preferences.isPinned(selected)); XCTAssertFalse(preferences.isPinned(other))
+        let restored = try JSONDecoder().decode(AgentNavigationPreferences.self, from: JSONEncoder().encode(preferences))
+        XCTAssertEqual(restored, preferences)
+        preferences.hide(selected); XCTAssertTrue(preferences.isHidden(selected)); XCTAssertFalse(preferences.isPinned(selected))
+        preferences.interact(selected); XCTAssertFalse(preferences.isHidden(selected))
+    }
+    func testGivenPendingManagementFormShouldPersistOriginalOperationWithoutReplay() throws {
+        var form = WorkspaceFormDraft()
+        form.operationId = UUID().uuidString; form.state = "uncertain"; form.prompt = "Start this work"
+        let restored = try JSONDecoder().decode(WorkspaceFormDraft.self, from: JSONEncoder().encode(form))
+        XCTAssertEqual(restored, form)
+        XCTAssertNotNil(restored.operationId)
+    }
+}
+
+extension AgentControlTests {
+    @MainActor func testGivenOfflineInventoryShouldKeepPinsAndFenceLateManagementOnDowngrade() async throws {
+        try await AgentControlScenarios.workspaceFencesAndOfflinePins()
+    }
+}
+
+extension AgentControlTests {
+    @MainActor func testGivenVisibleSlowInventoryShouldStaySingleFlightAndPauseOffscreen() async throws {
+        try await AgentControlScenarios.visibleInventoryFreshnessIsSingleFlightAndPauses()
+    }
+    func testGivenHistoryOpenWhenDialogArrivesShouldPresentOnlyForOriginatingSelection() {
+        var overlays = MobileOverlayState()
+        overlays.openHistory(); overlays.dialogArrived(selection: 17)
+        XCTAssertFalse(overlays.history); XCTAssertFalse(overlays.navigator)
+        XCTAssertTrue(overlays.shouldPresentDialog(selection: 17))
+        XCTAssertFalse(overlays.shouldPresentDialog(selection: 18))
+    }
+}
+
+extension AgentControlTests {
+    @MainActor func testGivenNoPromptAcknowledgementShouldLabelUncertainAndRetainBothDrafts() async throws {
+        try await AgentControlScenarios.thrownPromptReceiptIsUncertainAndKeepsBothDrafts()
+    }
+}
+
+extension AgentControlTests {
+    @MainActor func testGivenSkippedOfflineOrFailedRefreshShouldNotPermitSeparateLaunch() async throws {
+        try await AgentControlScenarios.authoritativeReviewRequiresSuccessfulFreshInventory()
+    }
+}

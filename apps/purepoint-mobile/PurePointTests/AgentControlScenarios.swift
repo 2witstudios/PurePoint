@@ -8,12 +8,20 @@ import Foundation
         var opens: [CheckedContinuation<JSONValue, Error>] = []
         var prompts: [CheckedContinuation<JSONValue, Error>] = []
         var operations: [(String, [String: Any])] = []
+        var managementStatuses: [CheckedContinuation<JSONValue, Error>] = []
         var inventory = ""
+        var holdInventory = false
+        var inventories: [CheckedContinuation<JSONValue, Error>] = []
+        static func permissionJSON() throws -> JSONValue { try AgentControlScenarios.json(#"{"terminals":"control","workspaceManagement":true,"workspace":{"version":1,"management":true}}"#) }
         func request(_ op: String, _ fields: [String: Any]) async throws -> JSONValue {
             operations.append((op, fields))
             switch op {
-            case "permissions": return .object(["terminals": .string("control")])
-            case "agents": return try JSONDecoder().decode(JSONValue.self, from: Data(inventory.utf8))
+            case "permissions": return try Self.permissionJSON()
+            case "workspace.rename": return try AgentControlScenarios.json(#"{"operationId":"operation-one","state":"succeeded"}"#)
+            case "workspace.operation": return try await withCheckedThrowingContinuation { managementStatuses.append($0) }
+            case "agents":
+                if holdInventory { return try await withCheckedThrowingContinuation { inventories.append($0) } }
+                return try JSONDecoder().decode(JSONValue.self, from: Data(inventory.utf8))
             case "terminal.open": return try await withCheckedThrowingContinuation { opens.append($0) }
             case "agent.prompt": return try await withCheckedThrowingContinuation { prompts.append($0) }
             default: return .object([:])
@@ -34,10 +42,10 @@ import Foundation
     static func json(_ text: String) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
     }
-    static func setup() async throws -> (AgentControlModel, Bridge, UserDefaults, String) {
+    static func setup(interval: UInt64 = 5_000_000_000) async throws -> (AgentControlModel, Bridge, UserDefaults, String) {
         let suite = "phone-agent-checks-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
-        let model = AgentControlModel(defaults: defaults), bridge = Bridge()
+        let model = AgentControlModel(defaults: defaults, inventoryRefreshNanoseconds: interval), bridge = Bridge()
         bridge.inventory =
             #"{"machines":[{"id":"local","name":"Mac","online":true,"protocolVersion":10,"screenMayBeInexact":false,"error":null,"complete":true,"agents":[{"id":"a","name":"Agent","agentType":"claude","state":"waiting","projectRoot":"/repo","worktreeId":null,"screenAware":true,"phase":"input_ready","idleSeconds":3,"startedAt":""}]}]}"#
         model.transport(host: "host-a", connected: true, request: bridge.request)
@@ -260,5 +268,135 @@ import Foundation
         try check(
             model.draft == "Origin" && model.composer.outcome == .failed,
             "Uncertain original draft must remain recoverable on return")
+    }
+}
+
+extension AgentControlScenarios {
+    static func heldInventoryCoalescesAndMaximumPromptKeepsNewDraft() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        try await open(model, bridge); try finishOpen(bridge)
+        try await wait { model.streamId != nil }
+        bridge.holdInventory = true
+        let held = Task { await model.refresh() }
+        try await wait { bridge.inventories.count == 1 }
+        for _ in 0..<40 { model.sendKey(.up, screen: model.screenToken) }
+        for _ in 0..<20 { await model.refresh() }
+        try await Task.sleep(nanoseconds: 350_000_000)
+        try check(bridge.inventories.count == 1, "A held inventory must coalesce key and explicit refresh bursts")
+        bridge.holdInventory = false
+        bridge.inventories.removeFirst().resume(returning: try json(bridge.inventory)); _ = await held.value
+        let original = String(repeating: "a", count: 65536)
+        model.editDraft(original, screen: model.screenToken); model.sendPrompt(screen: model.screenToken)
+        try await wait { bridge.prompts.count == 1 }
+        try check(bridge.operations.last(where: { $0.0 == "agent.prompt" })?.1["text"] as? String == original, "Maximum prompt must be delivered intact")
+        model.editDraft("Newer draft", screen: model.screenToken)
+        bridge.prompts.removeFirst().resume(returning: try json(#"{"outcome":"failed","reason":"Delivery uncertain"}"#))
+        try await wait { model.composer.pending == nil }
+        try check(model.draft == "Newer draft" && model.recoveries.contains(where: { $0.text == original }), "Uncertain maximum submission and newer draft must both survive")
+    }
+}
+
+extension AgentControlScenarios {
+    static func workspaceFencesAndOfflinePins() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        let scope = model.shortcuts[0].scope
+        model.togglePin(scope)
+        bridge.inventory = #"{"machines":[{"id":"local","name":"Mac","online":false,"screenMayBeInexact":false,"complete":false,"error":"Offline","agents":[]}]}"#
+        await model.refresh()
+        try check(model.pinnedShortcuts.count == 1 && !model.pinnedShortcuts[0].machine.online, "Offline inventory must retain unavailable pinned context")
+        try model.receive(event(#"{"type":"permissions","terminals":"off","workspaceManagement":false}"#))
+        try check(model.pinnedShortcuts.isEmpty, "Off must clear restricted cached shortcuts")
+        try model.receive(event(#"{"type":"permissions","terminals":"control","workspaceManagement":true,"workspace":{"management":true}}"#))
+        for _ in 0..<30 { await Task.yield() }
+        bridge.holdInventory = true
+        let operation = Task { try await model.workspaceRequest("workspace.rename", fields: ["operationId":"operation-one"]) }
+        try await wait { bridge.inventories.count == 1 }
+        try model.receive(event(#"{"type":"permissions","terminals":"view","workspaceManagement":false}"#))
+        bridge.holdInventory = false; bridge.inventories.removeFirst().resume(returning: try json(bridge.inventory))
+        do { _ = try await operation.value; throw CheckFailure(errorDescription: "Late management result must be fenced after refresh downgrade") }
+        catch is AgentControlFailure {}
+        let status = Task { try await model.operationStatus("operation-one") }
+        try await wait { bridge.managementStatuses.count == 1 }
+        try model.receive(event(#"{"type":"permissions","terminals":"off"}"#))
+        bridge.managementStatuses.removeFirst().resume(returning: try json(#"{"operationId":"operation-one","state":"succeeded","message":"restricted"}"#))
+        do { _ = try await status.value; throw CheckFailure(errorDescription: "Late status must be fenced by read permission revision") }
+        catch is AgentControlFailure {}
+    }
+}
+
+extension AgentControlScenarios {
+    static func visibleInventoryFreshnessIsSingleFlightAndPauses() async throws {
+        let (model, bridge, defaults, suite) = try await setup(interval: 20_000_000)
+        defer { model.setInventoryVisible(false); model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        bridge.holdInventory = true
+        model.setInventoryVisible(true)
+        try await wait { bridge.inventories.count == 1 }
+        for _ in 0..<20 { await model.refresh() }
+        try await Task.sleep(nanoseconds: 80_000_000)
+        try check(bridge.inventories.count == 1, "Slow visible inventory must have only one request in flight")
+        bridge.holdInventory = false
+        let count = bridge.operations.filter { $0.0 == "agents" }.count
+        bridge.inventories.removeFirst().resume(returning: try json(bridge.inventory))
+        try await Task.sleep(nanoseconds: 80_000_000)
+        try check(bridge.operations.filter { $0.0 == "agents" }.count > count, "Visible inventory must refresh periodically")
+        model.setInventoryVisible(false)
+        let stopped = bridge.operations.filter { $0.0 == "agents" }.count
+        try await Task.sleep(nanoseconds: 80_000_000)
+        try check(bridge.operations.filter { $0.0 == "agents" }.count == stopped, "Pi-only surfaces must pause inventory reads")
+        model.setInventoryVisible(true); model.setInventoryForeground(false)
+        let background = bridge.operations.filter { $0.0 == "agents" }.count
+        try await Task.sleep(nanoseconds: 80_000_000)
+        try check(bridge.operations.filter { $0.0 == "agents" }.count == background, "Background must pause visible inventory")
+    }
+}
+
+extension AgentControlScenarios {
+    static func thrownPromptReceiptIsUncertainAndKeepsBothDrafts() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        try await open(model, bridge); try finishOpen(bridge)
+        try await wait { model.streamId != nil }
+        model.editDraft("Submitted original", screen: model.screenToken); model.sendPrompt(screen: model.screenToken)
+        try await wait { bridge.prompts.count == 1 }
+        model.editDraft("Newer draft", screen: model.screenToken)
+        bridge.prompts.removeFirst().resume(throwing: AgentControlFailure(message: "No prompt acknowledgement from your Mac"))
+        try await wait { model.composer.pending == nil }
+        try check(model.composer.deliveryUncertain && model.draft == "Newer draft", "No acknowledgement must show uncertainty without replacing newer typing")
+        try check(model.recoveries.contains(where: { $0.text == "Submitted original" && $0.status == "Delivery uncertain" }), "Original must retain explicit uncertain recovery label")
+        model.closeScreen()
+        let relaunched = AgentControlModel(defaults: defaults)
+        relaunched.transport(host: "host-a", connected: true, request: bridge.request)
+        try await wait { !relaunched.machines.isEmpty }; try await open(relaunched, bridge); try finishOpen(bridge)
+        try await wait { relaunched.streamId != nil }
+        try check(relaunched.draft == "Newer draft" && relaunched.recoveries.contains(where: { $0.status == "Delivery uncertain" }), "Both drafts and uncertain label must survive relaunch")
+        try check(bridge.operations.filter { $0.0 == "agent.prompt" }.count == 1, "Timeout must never replay")
+        relaunched.transport(host: "", connected: false)
+    }
+}
+
+extension AgentControlScenarios {
+    static func authoritativeReviewRequiresSuccessfulFreshInventory() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        let missing = await model.refreshWorkspaceForReview(machine: "local", project: "/repo")
+        try check(!missing, "Legacy or incomplete metadata must not count as authoritative review")
+        bridge.inventory = #"{"machines":[{"id":"local","name":"Mac","online":true,"screenMayBeInexact":false,"complete":true,"metadataStatus":"complete","agents":[],"projects":[{"id":"/repo","name":"Repo","available":true}],"worktrees":[]}]}"#
+        let success = await model.refreshWorkspaceForReview(machine: "local", project: "/repo")
+        try check(success, "Current complete target inventory permits deliberate separate operation")
+        bridge.holdInventory = true
+        let held = Task { await model.refresh() }
+        try await wait { bridge.inventories.count == 1 }
+        let skipped = await model.refreshWorkspaceForReview(machine: "local", project: "/repo")
+        try check(!skipped, "A skipped inflight refresh must never count as review")
+        bridge.inventories.removeFirst().resume(throwing: AgentControlFailure(message: "Offline")); _ = await held.value
+        bridge.holdInventory = false
+        bridge.inventory = #"{"machines":[{"id":"local","name":"Mac","online":false,"screenMayBeInexact":false,"complete":false,"metadataStatus":"offline","agents":[],"projects":[],"worktrees":[]}]}"#
+        let offline = await model.refreshWorkspaceForReview(machine: "local", project: "/repo")
+        try check(!offline, "Offline cached metadata must never count as review")
+        try model.receive(event(#"{"type":"permissions","terminals":"off"}"#))
+        let off = await model.refreshWorkspaceForReview(machine: "local", project: "/repo")
+        try check(!off, "Permission off must never count as review")
     }
 }

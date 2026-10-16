@@ -4,11 +4,11 @@ enum AgentTerminalPermission: String, Decodable, Sendable {
     case off, view, control
 }
 
-struct AgentInventory: Decodable, Sendable {
+struct AgentInventory: Codable, Sendable {
     let machines: [AgentMachine]
 }
 
-struct AgentMachine: Decodable, Identifiable, Sendable {
+struct AgentMachine: Codable, Identifiable, Sendable {
     let id: String
     let name: String
     let online: Bool
@@ -17,6 +17,16 @@ struct AgentMachine: Decodable, Identifiable, Sendable {
     let error: String?
     let complete: Bool
     let agents: [ControlledAgent]
+
+    var registeredProjects: [WorkspaceProject]?
+    var worktrees: [WorkspaceWorktree]?
+    var metadataStatus: String?
+    var metadataError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, online, protocolVersion, screenMayBeInexact, error, complete, agents, worktrees, metadataStatus, metadataError
+        case registeredProjects = "projects"
+    }
 
     var projects: [AgentProject] {
         Dictionary(grouping: agents, by: { $0.projectRoot ?? "" }).map { root, agents in
@@ -41,7 +51,7 @@ struct AgentProject: Identifiable, Sendable {
     var name: String { id.isEmpty ? "Other agents" : URL(fileURLWithPath: id).lastPathComponent }
 }
 
-struct ControlledAgent: Decodable, Identifiable, Sendable {
+struct ControlledAgent: Codable, Identifiable, Sendable {
     let id: String
     let name: String
     let agentType: String
@@ -111,17 +121,18 @@ struct AgentComposer: Sendable {
     private(set) var pending: AgentSubmission?
     private(set) var outcome: AgentPromptOutcome?
     private(set) var reason: String?
+    private(set) var deliveryUncertain = false
 
     mutating func begin() -> AgentSubmission? {
         guard pending == nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 65536
         else { return nil }
         let submission = AgentSubmission(id: UUID(), text: text)
-        pending = submission; outcome = nil; reason = nil
+        pending = submission; outcome = nil; reason = nil; deliveryUncertain = false
         return submission
     }
-    mutating func finish(_ submission: AgentSubmission, outcome: AgentPromptOutcome, reason: String?) {
+    mutating func finish(_ submission: AgentSubmission, outcome: AgentPromptOutcome, reason: String?, uncertain: Bool = false) {
         guard pending?.id == submission.id else { return }
-        pending = nil; self.outcome = outcome; self.reason = reason
+        pending = nil; self.outcome = outcome; self.reason = reason; deliveryUncertain = uncertain
         if (outcome == .confirmed || outcome == .sent) && text == submission.text { text = "" }
     }
 }
@@ -204,4 +215,112 @@ struct AgentPromptRecovery: Codable, Identifiable, Equatable, Sendable {
     let text: String
     var status: String
     var reason: String?
+}
+
+struct AgentNavigationPreferences: Codable, Equatable, Sendable {
+    private(set) var pins: [String] = []
+    private(set) var interactions: [String: Double] = [:]
+    private(set) var hidden: Set<String> = []
+    func isPinned(_ scope: AgentScope) -> Bool { pins.contains(scope.storageKey) }
+    func isHidden(_ scope: AgentScope) -> Bool { hidden.contains(scope.storageKey) }
+    mutating func pin(_ scope: AgentScope) {
+        hidden.remove(scope.storageKey)
+        if !isPinned(scope) { pins.append(scope.storageKey) }
+    }
+    mutating func unpin(_ scope: AgentScope) { pins.removeAll { $0 == scope.storageKey } }
+    mutating func hide(_ scope: AgentScope) { unpin(scope); hidden.insert(scope.storageKey) }
+    mutating func interact(_ scope: AgentScope, at time: Double = Date().timeIntervalSince1970) {
+        hidden.remove(scope.storageKey); interactions[scope.storageKey] = time
+    }
+    func recency(_ scope: AgentScope, startedAt: String?) -> Double {
+        interactions[scope.storageKey] ?? startedAt.flatMap { ISO8601DateFormatter().date(from: $0)?.timeIntervalSince1970 } ?? 0
+    }
+}
+
+struct AgentShortcut: Identifiable {
+    let scope: AgentScope
+    let machine: AgentMachine
+    let agent: ControlledAgent
+    var id: String { scope.storageKey }
+}
+
+struct WorkspaceProject: Codable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let available: Bool
+    let error: String?
+}
+struct WorkspaceWorktree: Codable, Identifiable, Sendable {
+    let projectId: String
+    let id: String
+    let name: String
+    let path: String
+    let branch: String
+    let status: String
+    let agentIds: [String]
+}
+struct WorkspaceCatalog: Decodable, Sendable {
+    struct Agent: Decodable, Identifiable, Sendable { let id: String; let name: String; let available: Bool }
+    struct Preset: Decodable, Identifiable, Sendable { let id: String; let name: String; let agentType: String; let prompt: String }
+    let agents: [Agent]
+    let presets: [Preset]
+    let terminalAvailable: Bool
+    let complete: Bool
+}
+struct WorkspaceOperation: Codable, Sendable {
+    let operationId: String
+    let state: String
+    let message: String?
+}
+
+struct WorkspaceFormDraft: Codable, Equatable {
+    var prompt = ""
+    var name = ""
+    var base = ""
+    var agentType = ""
+    var preset = ""
+    var destination = "root"
+    var worktree = ""
+    var planMode = false
+    var operationId: String?
+    var state: String?
+    var message: String?
+}
+
+struct WorkspaceLocation: Equatable, Sendable {
+    let host: String
+    let machine: String
+    let project: String
+    let worktree: String?
+    var storageKey: String { Self.key([host, machine, project, worktree ?? ""]) }
+    static func key(_ components: [String]) -> String { (try? JSONEncoder().encode(components).base64EncodedString()) ?? "" }
+    static func locate(_ scope: AgentScope, machines: [AgentMachine]) -> WorkspaceLocation? {
+        guard let machine = machines.first(where: { $0.id == scope.machine }),
+              let agent = machine.agents.first(where: { $0.id == scope.agent }),
+              let project = machine.registeredProjects?.first(where: { $0.id == agent.projectRoot }) else { return nil }
+        if let worktree = agent.worktreeId,
+           machine.worktrees?.contains(where: { $0.id == worktree && $0.projectId == project.id }) != true { return nil }
+        return WorkspaceLocation(host: scope.host, machine: scope.machine, project: project.id, worktree: agent.worktreeId)
+    }
+}
+
+struct WorkspaceNavigationMemory: Equatable, Sendable {
+    var projectAnchors: [String: String] = [:]
+    var workspaceAnchors: [String: String] = [:]
+    var collapsed: Set<String> = []
+    mutating func locate(_ location: WorkspaceLocation, agent: String) {
+        collapsed.remove(location.storageKey)
+        let workspace = WorkspaceLocation(host: location.host, machine: location.machine, project: location.project, worktree: nil)
+        workspaceAnchors[workspace.storageKey] = agent
+    }
+}
+
+struct MobileOverlayState: Equatable, Sendable {
+    var navigator = false
+    var history = false
+    private(set) var dialogSelection: Int?
+    mutating func openNavigator() { history = false; navigator = true }
+    mutating func openHistory() { navigator = false; history = true }
+    mutating func dialogArrived(selection: Int) { navigator = false; history = false; dialogSelection = selection }
+    func shouldPresentDialog(selection: Int) -> Bool { dialogSelection == selection && !navigator && !history }
 }

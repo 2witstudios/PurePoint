@@ -8,9 +8,10 @@ struct ChatView: View {
     @MainActor init(model: ChatModel? = nil) { _model = StateObject(wrappedValue: model ?? ChatModel()) }
     @Environment(\.scenePhase) private var scenePhase
     @State private var showConnection = false
-    @State private var showHistory = false
-    @State private var showAgents = false
-    @State private var showSidebar = false
+    @State private var overlays = MobileOverlayState()
+    private var showHistory: Bool { get { overlays.history } nonmutating set { overlays.history = newValue } }
+    @State private var destination = "pointGuard"
+    private var showSidebar: Bool { get { overlays.navigator } nonmutating set { overlays.navigator = newValue } }
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var selectedPhoto: PhotosPickerItem?
@@ -28,23 +29,10 @@ struct ChatView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                if let error = model.error {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-                        Text(error).font(.callout).textSelection(.enabled)
-                        Button { model.error = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Dismiss error")
-                    }.padding(16).background(Color(uiColor: .secondarySystemBackground))
-                }
-                transcript
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-            .background(Color(uiColor: .systemBackground))
-            .navigationTitle("PurePoint")
-            .navigationBarTitleDisplayMode(.inline)
+            mainContent
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open conversations sidebar")
+                    Button(action: openSidebar) { Image(systemName: "sidebar.left") }.accessibilityLabel("Open workspace navigator")
                 }
                 ToolbarItem(placement: .principal) {
                     Button { showConnection = true } label: {
@@ -67,8 +55,8 @@ struct ChatView: View {
                     .accessibilityHint("Open connection settings")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { showAgents = true } label: { Image(systemName: "terminal") }.accessibilityLabel("Agents on all machines")
-                    Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
+                    if destination == "pointGuard" { Button { overlays.openHistory(); composerFocused = false; let token = model.selectionToken; Task { await model.loadConversations(selection: token) } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Point Guard history") }
+                    if destination == "pointGuard" { Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation") }
                 }
             }
             .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
@@ -76,8 +64,7 @@ struct ChatView: View {
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be canceled and recoverable. Delegated workers keep running.") }
             .sheet(isPresented: $showConnection, onDismiss: presentPendingDialog) { ConnectionView(model: model) }
-            .sheet(isPresented: $showAgents, onDismiss: { model.agentControl.closeScreen(); presentPendingDialog() }) { AgentsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Mac") }
-            .sheet(isPresented: $showHistory, onDismiss: presentPendingDialog) { ConversationView(model: model, selection: model.selectionToken) }
+
             .sheet(item: dialogBinding) { dialog in ExtensionDialogView(model: model, dialog: dialog, selection: dialogSelection) }
             .onChange(of: model.snapshot?.dialogs.first?.id) { _, _ in
                 if showSidebar { closeSidebar() }
@@ -85,14 +72,19 @@ struct ChatView: View {
                     showPhotos = false; showFiles = false
                     let token = model.selectionToken
                     Task { try? await Task.sleep(nanoseconds: 400_000_000); if model.isSelected(token) { presentPendingDialog() } }
-                } else if model.snapshot?.dialogs.first != nil && showHistory { showHistory = false }
-                else { presentPendingDialog() }
+                } else if model.snapshot?.dialogs.first != nil {
+                    let token = model.selectionToken
+                    overlays.dialogArrived(selection: token)
+                    Task { await Task.yield(); if model.isSelected(token) && overlays.shouldPresentDialog(selection: token) { presentPendingDialog() } }
+                } else { presentPendingDialog() }
             }
             .onChange(of: model.selectionToken) { _, _ in
-                presentedDialog = nil; confirmNew = false; showHistory = false; showAgents = false
+                presentedDialog = nil; confirmNew = false; showHistory = false; destination = "pointGuard"
                 showPhotos = false; showFiles = false; selectedPhoto = nil; importingAttachment = false; closeSidebar()
             }
-            .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
+            .onChange(of: overlays) { _, _ in updateInventoryVisibility() }
+            .onChange(of: destination) { _, _ in updateInventoryVisibility() }
+            .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
             .onAppear { LaunchLog.logger.notice("Chat view appeared") }
             .task { guard !model.demo else { return }; if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
             .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
@@ -128,17 +120,31 @@ struct ChatView: View {
             }
         }
         .tint(.accentColor)
-        .allowsHitTesting(!showSidebar)
-        .accessibilityHidden(showSidebar)
+        .disabled(showSidebar || showHistory)
+        .allowsHitTesting(!showSidebar && !showHistory)
+        .accessibilityHidden(showSidebar || showHistory)
         .overlay(alignment: .leading) {
             if showSidebar {
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
-                        Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close conversations sidebar")
-                        ConversationSidebar(model: model, selection: model.selectionToken, close: closeSidebar, newConversation: newConversation, select: selectConversation, connection: { closeSidebar(); showConnection = true })
-                            .frame(width: min(320, geometry.size.width * 0.84), height: geometry.size.height)
+                        Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close workspace navigator")
+                        AgentNavigator(model: model.agentControl, destination: destination, pointGuard: { model.agentControl.closeScreen(); destination = "pointGuard"; closeSidebar() }, projects: { model.agentControl.closeScreen(); destination = "projects"; closeSidebar() }, open: { entry in model.agentControl.open(machine: entry.machine, agent: entry.agent, context: model.agentControl.contextToken); destination = "agent"; closeSidebar() }, connections: { closeSidebar(); showConnection = true }, close: closeSidebar)
+                            .frame(width: min(328, geometry.size.width - 44), height: geometry.size.height)
                             .transition(.move(edge: .leading))
                             .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })
+                    }
+                }
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if showHistory {
+                GeometryReader { geometry in
+                    ZStack(alignment: .trailing) {
+                        Button { showHistory = false; presentPendingDialog() } label: { Color.black.opacity(0.35).ignoresSafeArea() }.accessibilityLabel("Close history")
+                        ConversationView(model: model, selection: model.selectionToken, closeOverlay: { showHistory = false; presentPendingDialog() })
+                            .frame(width: min(328, geometry.size.width - 44), height: geometry.size.height)
+                            .accessibilityAddTraits(.isModal)
+                            .accessibilityAction(.escape) { showHistory = false; presentPendingDialog() }
                     }
                 }
             }
@@ -146,6 +152,27 @@ struct ChatView: View {
         .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
             if !showSidebar && value.startLocation.x < 24 && value.translation.width > 70 && abs(value.translation.width) > abs(value.translation.height) { openSidebar() }
         })
+    }
+    private var mainContent: some View {
+            ZStack {
+              MobileProjectsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Mac")
+                .opacity(destination == "pointGuard" ? 0 : 1).disabled(destination == "pointGuard").allowsHitTesting(destination != "pointGuard").accessibilityHidden(destination == "pointGuard")
+              VStack(spacing: 0) {
+                if let error = model.error {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                        Text(error).font(.callout).textSelection(.enabled)
+                        Button { model.error = nil } label: { Image(systemName: "xmark") }.accessibilityLabel("Dismiss error")
+                    }.padding(16).background(Color(uiColor: .secondarySystemBackground))
+                }
+                transcript
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            .opacity(destination == "pointGuard" ? 1 : 0).disabled(destination != "pointGuard").allowsHitTesting(destination == "pointGuard").accessibilityHidden(destination != "pointGuard")
+            }
+            .background(Color(uiColor: .systemBackground))
+            .navigationTitle("PurePoint")
+            .navigationBarTitleDisplayMode(.inline)
     }
     private var headerStatus: String {
         if model.connected { return model.demo ? "Preview" : model.busy ? "Working" : "Connected" }
@@ -157,20 +184,12 @@ struct ChatView: View {
         if model.connectionStatus.hasPrefix("Connection lost") { return "Offline" }
         return "Not connected"
     }
-    private func openSidebar() { let token = model.selectionToken; composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = true }; Task { if model.isSelected(token) { await model.loadConversations(selection: token) } } }
+    private func updateInventoryVisibility() { model.agentControl.setInventoryVisible(showSidebar || destination != "pointGuard") }
+    private func openSidebar() { composerFocused = false; withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { overlays.openNavigator() } }
     private func closeSidebar() { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = false } }
     private func newConversation() { let token = model.selectionToken; closeSidebar(); if model.busy { confirmNew = true } else { Task { if model.isSelected(token) { await model.changeSession(selection: token) } } } }
-    private func selectConversation(_ conversation: Conversation) {
-        let token = model.selectionToken
-        closeSidebar()
-        Task {
-            guard model.isSelected(token) else { return }
-            if model.busy || model.demo { await model.browse(conversation, selection: token); if model.isSelected(token) { showHistory = model.browsing != nil } }
-            else { await model.changeSession(to: conversation.id, selection: token) }
-        }
-    }
     private func presentPendingDialog() {
-        guard !showConnection, !showHistory, !showPhotos, !showFiles, !showAgents else { return }
+        guard !showConnection, !showHistory, !showPhotos, !showFiles, !showSidebar else { return }
         dialogSelection = model.selectionToken; presentedDialog = model.snapshot?.dialogs.first
     }
     private var dialogBinding: Binding<ExtensionDialog?> {

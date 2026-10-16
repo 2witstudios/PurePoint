@@ -19,6 +19,13 @@ import Foundation
         try await AgentControlScenarios.hostSwitchFencesLateOpenAndDraftCallbacks()
         try await AgentControlScenarios.downgradeAndLateReceipt()
         try await AgentControlScenarios.hostSwitchFencesLatePromptReceipt()
+        try await AgentControlScenarios.heldInventoryCoalescesAndMaximumPromptKeepsNewDraft()
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "agent.prompt") == 390_000_000_000)
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "sync") == 35_000_000_000)
+        try await AgentControlScenarios.workspaceFencesAndOfflinePins()
+        try await AgentControlScenarios.visibleInventoryFreshnessIsSingleFlightAndPauses()
+        try await AgentControlScenarios.thrownPromptReceiptIsUncertainAndKeepsBothDrafts()
+        try await AgentControlScenarios.authoritativeReviewRequiresSuccessfulFreshInventory()
         print("Phone control lifecycle and domain checks passed")
     }
 }

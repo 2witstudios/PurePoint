@@ -231,7 +231,7 @@ struct Snapshot: Codable, Sendable {
     let version: Int; let epoch: String; let revision: Int; let busy: Bool; var runId: String?; let sessionId: String; let title: String
     let messages: [ChatMessage]; let tools: [ToolActivity]; let queue: [QueuedText]; let dialogs: [ExtensionDialog]; let notices: [String]; var error: String?; var editor: EditorText? = nil; var canceled: [CanceledText]? = nil; var capabilities: [String]? = nil
 }
-struct Conversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String? }
+struct Conversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String?; var preview: String? = nil }
 struct History: Codable, Sendable { let sessionId: String; let title: String; let messages: [ChatMessage] }
 struct Submission: Codable, Identifiable, Sendable {
     let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool; var attachments: [ComposerAttachment]? = nil; var clientId: String? = nil
@@ -257,7 +257,7 @@ enum JSONValue: Codable, Sendable {
     var strings: [String] { if case .array(let x) = self { return x.compactMap(\.text) }; return [] }
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(self)) }
 }
-struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String? }
+struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String?; var workspaceManagement: Bool?; var workspace: JSONValue? }
 
 // A serial utility queue keeps encoding/file IO away from keyboard and rendering.
 // Coalescing replaces older pending values; serial execution prevents stale writes.
@@ -308,5 +308,13 @@ enum IncomingRecord: Sendable {
             return .snapshot(state, TranscriptRows.make(messages: state.messages, tools: state.tools))
         }
         return .envelope(try decoder.decode(WireEnvelope.self, from: data))
+    }
+}
+
+// Prompt delivery can consume the daemon's bounded 360 second window plus
+// inventory validation and transport overhead. Ordinary Pi calls remain bounded.
+enum MobileRPCTiming {
+    static func timeoutNanoseconds(for operation: String) -> UInt64 {
+        operation == "agent.prompt" ? 390_000_000_000 : 35_000_000_000
     }
 }

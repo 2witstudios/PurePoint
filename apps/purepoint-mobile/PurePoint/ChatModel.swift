@@ -457,6 +457,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         for continuation in outstanding.values { continuation.resume(throwing: MobileError("Connection interrupted. Delivery may be uncertain. Inspect the conversation before sending again.")) }
     }
     private func requirePairing(_ reason: String) {
+        agentControl.revokeAccess()
         wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Re-pair with your Mac"; error = reason
     }
     private func connectionLost(_ reason: String) {
@@ -538,9 +539,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             timeouts[id] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 35_000_000_000)
+                try? await Task.sleep(nanoseconds: MobileRPCTiming.timeoutNanoseconds(for: op))
                 guard !Task.isCancelled, let self, let continuation = self.pending.removeValue(forKey: id) else { return }
-                self.timeouts.removeValue(forKey: id); continuation.resume(throwing: MobileError("No acknowledgement from your Mac. Delivery is uncertain; inspect history before sending again."))
+                self.timeouts.removeValue(forKey: id); continuation.resume(throwing: MobileError(op == "agent.prompt" ? "Delivery uncertain: no prompt acknowledgement. Inspect the agent terminal before sending again. Your submitted text remains saved." : "No acknowledgement from your Mac. Delivery is uncertain; inspect history before sending again."))
             }
             Task { [weak self] in
                 do { try await socket.send(.string(text)) }
