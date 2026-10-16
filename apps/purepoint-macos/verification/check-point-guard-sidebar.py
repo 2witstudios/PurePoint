@@ -10,6 +10,17 @@ source = app / "purepoint-macos"
 markdown = app.parent / "shared/ChatMarkdown"
 with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder:
     executable = Path(folder) / "checks"
+    # Compile the production root-safety method against the fixture AppState.
+    # Keeping its implementation in the source list prevents an always-safe stub
+    # from hiding changes to PointGuardView's project-root guard.
+    state_source = (source / "State/AppState.swift").read_text()
+    signature = "    func isTooBroadProjectRoot(_ path: String) -> Bool {"
+    method_start = state_source.index(signature)
+    method, separator, _ = state_source[method_start:].partition("\n    }\n")
+    if not separator:
+        raise RuntimeError("Cannot locate production AppState root-safety method")
+    root_safety = Path(folder) / "AppStateRootSafety.swift"
+    root_safety.write_text("import Foundation\nextension AppState {\n" + method + separator + "}\n")
     subprocess.run([
         "xcrun", "swiftc", "-parse-as-library", "-strict-concurrency=complete", "-warnings-as-errors", "-swift-version", "5",
         str(source / "Models/PiChatDomain.swift"),
@@ -30,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(source / "Views/Chat/PointGuardConversationLayout.swift"),
         str(source / "Views/PaneGrid/DraggableSplit.swift"),
         str(app / "verification/PointGuardSidebarChecks.swift"),
+        str(root_safety),
         "-o", str(executable),
     ], check=True)
     subprocess.run([str(executable)], env=dict(os.environ, CFFIXED_USER_HOME=folder), check=True, timeout=60)
