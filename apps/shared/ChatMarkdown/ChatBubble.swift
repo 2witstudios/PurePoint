@@ -25,6 +25,10 @@ struct ChatBubble<Content: View>: View {
     let sender: ChatBubbleSender
     var compact = false
     var assistantFill = ChatBubbleStyle.assistantFill
+    /// Text on the user fill; must contrast with `ChatBubbleStyle.userFill` in both appearances.
+    var userForeground = Color.white
+    /// Minimum gap left beside an assistant bubble; `nil` uses the default inset.
+    var assistantTrailingInset: CGFloat? = nil
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -33,13 +37,13 @@ struct ChatBubble<Content: View>: View {
             ChatBubbleHuggingLayout {
                 content
                     .padding(.horizontal, compact ? 13 : 15).padding(.vertical, compact ? 8 : 10)
-                    .foregroundStyle(sender == .user ? Color.white : Color.primary)
-                    .tint(sender == .user ? Color.white : Color.accentColor)
+                    .foregroundStyle(sender == .user ? userForeground : Color.primary)
+                    .tint(sender == .user ? userForeground : Color.accentColor)
                     .background(
                         sender == .user ? ChatBubbleStyle.userFill : assistantFill,
                         in: ChatBubbleStyle.shape(sender))
             }
-            if sender == .assistant { Spacer(minLength: compact ? 28 : 48) }
+            if sender == .assistant { Spacer(minLength: assistantTrailingInset ?? (compact ? 28 : 48)) }
         }
     }
 }
