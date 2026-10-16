@@ -231,7 +231,7 @@ struct Snapshot: Codable, Sendable {
     let version: Int; let epoch: String; let revision: Int; let busy: Bool; var runId: String?; let sessionId: String; let title: String
     let messages: [ChatMessage]; let tools: [ToolActivity]; let queue: [QueuedText]; let dialogs: [ExtensionDialog]; let notices: [String]; var error: String?; var editor: EditorText? = nil; var canceled: [CanceledText]? = nil; var capabilities: [String]? = nil
 }
-struct Conversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String? }
+struct Conversation: Codable, Identifiable, Sendable { let id: String; let title: String; var date: String?; var preview: String? = nil }
 struct History: Codable, Sendable { let sessionId: String; let title: String; let messages: [ChatMessage] }
 struct Submission: Codable, Identifiable, Sendable {
     let id: String; let text: String; let sessionId: String; var status: String; var recoverable: Bool; var attachments: [ComposerAttachment]? = nil; var clientId: String? = nil
@@ -257,7 +257,7 @@ enum JSONValue: Codable, Sendable {
     var strings: [String] { if case .array(let x) = self { return x.compactMap(\.text) }; return [] }
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(self)) }
 }
-struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String? }
+struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String?; var workspaceManagement: Bool?; var workspace: JSONValue? }
 
 // A serial utility queue keeps encoding/file IO away from keyboard and rendering.
 // Coalescing replaces older pending values; serial execution prevents stale writes.
@@ -308,5 +308,26 @@ enum IncomingRecord: Sendable {
             return .snapshot(state, TranscriptRows.make(messages: state.messages, tools: state.tools))
         }
         return .envelope(try decoder.decode(WireEnvelope.self, from: data))
+    }
+}
+
+// Fleet inventory has up to eight batches of four machines. Each batch can
+// spend 5s on health, 5s on agents and 5s on parallel project/worktree reads.
+// Allow 30s beyond that 120s schedule for projection and transport. Prompt
+// delivery and workspace spawn independently permit360s dispatch plus overhead.
+// Other fixed workspace mutations allow up to80s bridge waits plus20s margin;
+// catalog/status and unrelated RPCs retain the generic deadline.
+enum MobileRPCTiming {
+    static func timeoutNanoseconds(for operation: String) -> UInt64 {
+        switch operation {
+        case "agents": return 150_000_000_000
+        case "agent.prompt": return 390_000_000_000
+        case "workspace.spawn": return 390_000_000_000
+        case "workspace.terminal": return 100_000_000_000
+        case "workspace.createWorktree": return 100_000_000_000
+        case "workspace.rename": return 100_000_000_000
+        case "workspace.stop": return 100_000_000_000
+        default: return 35_000_000_000
+        }
     }
 }

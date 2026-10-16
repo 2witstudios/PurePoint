@@ -287,3 +287,126 @@ test("permanent private old PID marker is inert; public or symlink lock refuses 
     assert.deepEqual(await readFile(path.join(directory, "trust.json")), original);
   } finally { await store?.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("terminal access defaults off for existing devices and explicit grants persist across restart", async () =>
+  fixture(async (store, directory) => {
+    const phone = await store.enroll({
+      enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
+        .enrollmentToken,
+      name: "Existing phone",
+    });
+    const legacy = JSON.parse(
+      await readFile(path.join(directory, "trust.json"), "utf8"),
+    );
+    assert.equal(legacy.devices[0].terminals, undefined);
+    await store.close();
+    const existing = await openTrustStore({ directory });
+    try {
+      assert.equal(existing.authorize(phone.credential).terminals, "off");
+      assert.equal(existing.listDevices()[0].terminals, "off");
+    } finally { await existing.close(); }
+    store = await openTrustStore({ directory });
+    assert.equal(store.authorize(phone.credential).terminals, "off");
+    assert.equal(store.listDevices()[0].terminals, "off");
+    await store.setTerminals(phone.deviceId, "control");
+    assert.equal(store.authorize(phone.credential).terminals, "control");
+    const downgrade = store.setTerminals(phone.deviceId, "view");
+    assert.equal(store.authorize(phone.credential).terminals, "view");
+    await downgrade;
+    await assert.rejects(
+      store.setTerminals(phone.deviceId, "admin"),
+      /permission/,
+    );
+    await store.close();
+    const reopened = await openTrustStore({ directory });
+    try {
+      assert.equal(reopened.authorize(phone.credential).terminals, "view");
+    } finally {
+      await reopened.close();
+    }
+  }));
+
+test("newer downgrade fences queued upgrades before durable IO completes", async (t) =>
+  fixture(async (store, directory) => {
+    const phone = await store.enroll({
+      enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
+        .enrollmentToken,
+      name: "Phone",
+    });
+    const probe = await open(path.join(directory, "probe"), "w", 0o600);
+    const prototype = Object.getPrototypeOf(probe);
+    await probe.close();
+    const originalSync = prototype.sync;
+    let release, entered;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const ready = new Promise((resolve) => {
+      entered = resolve;
+    });
+    let blocked = false;
+    t.mock.method(prototype, "sync", async function (...args) {
+      if (!blocked) {
+        blocked = true;
+        entered();
+        await gate;
+      }
+      return originalSync.apply(this, args);
+    });
+    const first = store.setTerminals(phone.deviceId, "control");
+    await ready;
+    const last = store.setTerminals(phone.deviceId, "off");
+    assert.equal(store.authorize(phone.credential).terminals, "off");
+    release();
+    await first;
+    assert.equal(
+      store.authorize(phone.credential).terminals,
+      "off",
+      "older successful grant cannot resurrect permission",
+    );
+    await last;
+    t.mock.restoreAll();
+    assert.equal(
+      JSON.parse(await readFile(path.join(directory, "trust.json"), "utf8"))
+        .devices[0].terminals,
+      "off",
+    );
+  }));
+
+test("workspace management is default-off for old control grants, persists explicitly and fences queued upgrade", async () =>
+  fixture(async (store, directory) => {
+    const device = await store.enroll({
+      enrollmentToken: JSON.parse(store.createEnrollment({ endpoint }).payload)
+        .enrollmentToken,
+      name: "Phone",
+    });
+    await store.setTerminals(device.deviceId, "control");
+    assert.equal(store.authorize(device.credential).workspaceManagement, false);
+    await assert.rejects(store.setWorkspaceManagement(device.deviceId, "true"));
+    await store.setWorkspaceManagement(device.deviceId, true);
+    assert.equal(store.listDevices()[0].workspaceManagement, true);
+    await store.close();
+    const restarted = await openTrustStore({ directory });
+    try {
+      assert.equal(
+        restarted.authorize(device.credential).workspaceManagement,
+        true,
+      );
+      const upgrade = restarted.setWorkspaceManagement(device.deviceId, true);
+      const downgrade = restarted.setWorkspaceManagement(
+        device.deviceId,
+        false,
+      );
+      assert.equal(
+        restarted.authorize(device.credential).workspaceManagement,
+        false,
+      );
+      await Promise.all([upgrade, downgrade]);
+      assert.equal(
+        restarted.authorize(device.credential).workspaceManagement,
+        false,
+      );
+    } finally {
+      await restarted.close();
+    }
+  }));

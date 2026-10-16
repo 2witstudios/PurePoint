@@ -72,7 +72,11 @@ function validate(state, pin) {
       !device.name.length ||
       device.name.length > 80 ||
       !Number.isSafeInteger(device.createdAt) ||
-      (device.revokedAt != null && !Number.isSafeInteger(device.revokedAt))
+      (device.revokedAt != null && !Number.isSafeInteger(device.revokedAt)) ||
+      (device.workspaceManagement !== undefined &&
+        typeof device.workspaceManagement !== "boolean") ||
+      (device.terminals !== undefined &&
+        !["off", "view", "control"].includes(device.terminals))
     )
       throw new Error(
         "Point Guard device trust is malformed. Restore original private state.",
@@ -82,7 +86,11 @@ function validate(state, pin) {
   }
 }
 /** One private durable writer. Unknown/legacy state never becomes remote authorization. */
-export async function openTrustStore({ directory, now = Date.now, helperPath }) {
+export async function openTrustStore({
+  directory,
+  now = Date.now,
+  helperPath,
+}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await privateEntry(directory, true);
   let lockFailure;
@@ -129,6 +137,18 @@ export async function openTrustStore({ directory, now = Date.now, helperPath }) 
     /** @type {EventEmitter & Record<string, any>} */
     const trust = new EventEmitter();
     const enrollments = new Map();
+    const permissionFences = new Map(
+      state.devices.map((device) => [
+        device.deviceId,
+        device.terminals ?? "off",
+      ]),
+    );
+    const managementFences = new Map(
+      state.devices.map((d) => [d.deviceId, d.workspaceManagement === true]),
+    );
+    const managementVersions = new Map();
+    const revocations = new Set();
+    const permissionVersions = new Map();
     let tail = Promise.resolve();
     let closed = false;
     let closing = false;
@@ -206,13 +226,32 @@ export async function openTrustStore({ directory, now = Date.now, helperPath }) 
         if (entry?.status === "pending") entry.status = "revoked";
       },
       authorize(credential) {
-        if (closed || closing || lockFailure || !lock.held || !validToken(credential)) return null;
+        if (
+          closed ||
+          closing ||
+          lockFailure ||
+          !lock.held ||
+          !validToken(credential)
+        )
+          return null;
         const hash = digest(credential);
         const device = state.devices.find(
-          (d) => same(hash, d.credentialHash) && d.revokedAt == null,
+          (d) =>
+            same(hash, d.credentialHash) &&
+            d.revokedAt == null &&
+            !revocations.has(d.deviceId),
         );
         return device
-          ? { deviceId: device.deviceId, clientId: device.clientId }
+          ? {
+              deviceId: device.deviceId,
+              clientId: device.clientId,
+              workspaceManagement:
+                managementFences.get(device.deviceId) === true,
+              terminals:
+                permissionFences.get(device.deviceId) ??
+                device.terminals ??
+                "off",
+            }
           : null;
       },
       enroll({ enrollmentToken, name }) {
@@ -257,6 +296,7 @@ export async function openTrustStore({ directory, now = Date.now, helperPath }) 
           await publish(file, next, assertHeld);
           assertHeld();
           state = next;
+          permissionFences.set(deviceId, "off");
           return {
             version: 1,
             hostId: state.hostId,
@@ -270,9 +310,117 @@ export async function openTrustStore({ directory, now = Date.now, helperPath }) 
         active();
         return state.devices.map(({ credentialHash, ...device }) => ({
           ...device,
+          workspaceManagement: managementFences.get(device.deviceId) === true,
+          terminals:
+            permissionFences.get(device.deviceId) ?? device.terminals ?? "off",
         }));
       },
+      setWorkspaceManagement(deviceId, workspaceManagement) {
+        if (typeof workspaceManagement !== "boolean")
+          return Promise.reject(new Error("Invalid workspace permission"));
+        try {
+          active();
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        if (
+          !state.devices.some(
+            (d) => d.deviceId === deviceId && d.revokedAt == null,
+          )
+        )
+          return Promise.reject(new Error("Unknown paired device"));
+        const version = (managementVersions.get(deviceId) ?? 0) + 1;
+        managementVersions.set(deviceId, version);
+        if (!workspaceManagement) {
+          managementFences.set(deviceId, false);
+          trust.emit("permissions", deviceId);
+        }
+        return serialized(async () => {
+          const next = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, workspaceManagement } : d,
+            ),
+          };
+          await publish(file, next, assertHeld);
+          assertHeld();
+          state = next;
+          if (
+            managementVersions.get(deviceId) === version &&
+            !revocations.has(deviceId)
+          ) {
+            managementFences.set(deviceId, workspaceManagement);
+            trust.emit("permissions", deviceId);
+          }
+          return {};
+        });
+      },
+      setTerminals(deviceId, terminals) {
+        if (!["off", "view", "control"].includes(terminals))
+          return Promise.reject(new Error("Invalid terminal permission"));
+        // Fence synchronously, before durable IO or earlier queued administration.
+        try {
+          active();
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        const device = state.devices.find(
+          (d) => d.deviceId === deviceId && d.revokedAt == null,
+        );
+        if (!device) return Promise.reject(new Error("Unknown paired device"));
+        const previous =
+          permissionFences.get(deviceId) ?? device.terminals ?? "off";
+        const version = (permissionVersions.get(deviceId) ?? 0) + 1;
+        permissionVersions.set(deviceId, version);
+        const downgrade =
+          ["off", "view", "control"].indexOf(terminals) <
+          ["off", "view", "control"].indexOf(previous);
+        if (downgrade) {
+          permissionFences.set(deviceId, terminals);
+          state = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, terminals } : d,
+            ),
+          };
+          trust.emit("permissions", deviceId);
+        }
+        return serialized(async () => {
+          const next = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, terminals } : d,
+            ),
+          };
+          await publish(file, next, assertHeld);
+          assertHeld();
+          state = next;
+          if (
+            permissionVersions.get(deviceId) === version &&
+            !revocations.has(deviceId)
+          ) {
+            permissionFences.set(deviceId, terminals);
+            if (!downgrade) trust.emit("permissions", deviceId);
+          }
+          return {};
+        });
+      },
       revokeDevice(deviceId) {
+        try {
+          active();
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        if (!state.devices.some((d) => d.deviceId === deviceId))
+          return Promise.reject(new Error("Unknown paired device."));
+        revocations.add(deviceId);
+        state = {
+          ...state,
+          devices: state.devices.map((d) =>
+            d.deviceId === deviceId ? { ...d, revokedAt: now() } : d,
+          ),
+        };
+        trust.emit("revoked", deviceId);
         return serialized(async () => {
           if (!state.devices.some((d) => d.deviceId === deviceId))
             throw new Error("Unknown paired device.");
@@ -285,7 +433,6 @@ export async function openTrustStore({ directory, now = Date.now, helperPath }) 
           await publish(file, next, assertHeld);
           assertHeld();
           state = next;
-          trust.emit("revoked", deviceId);
         });
       },
       rotateDevice(deviceId) {

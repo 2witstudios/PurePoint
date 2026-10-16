@@ -4,6 +4,7 @@ import SwiftUI
 enum PaneSplitNode { enum Axis { case vertical, horizontal } }
 // The daemon/workspace environment and setup sheets are stubbed. The production
 // chat model, PointGuardView, conversation layout and pane splitter remain real.
+// The script also compiles the production AppState root-safety method.
 @MainActor @Observable final class AppState {
     var showSettings = false
     var pointGuardRoot: String? = "/fixture"
@@ -266,6 +267,8 @@ struct PaneGridView: View {
         let preference = "PP_pointGuardShowConversations"
         defaults.set(false, forKey: preference)
         let appState = AppState(chat: PiChatModel(defaults: defaults))
+        precondition(appState.isTooBroadProjectRoot("/"), "Production root guard must reject filesystem root")
+        precondition(!appState.isTooBroadProjectRoot("/fixture"), "Fixture root must remain usable")
         window.setContentSize(NSSize(width: 1200, height: 600))
         host.rootView = AnyView(
             ChatFixture(probes: probes, focusLeft: true).environment(appState).defaultAppStorage(defaults))

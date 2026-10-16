@@ -76,6 +76,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 for name in ["PU_AGENT_ID", "PU_PROJECT_ROOT", "NODE_OPTIONS", "NODE_PATH", "PI_MOBILE_SESSION", "PI_MOBILE_TOKEN_FILE", "PI_MOBILE_PU_SKILL", "PI_MOBILE_CWD"] { environment.removeValue(forKey: name) }
                 environment["POINT_GUARD_STATE_DIR"] = self.stateDirectory.path
                 environment["POINT_GUARD_PU_PATH"] = runtime.pu.path
+                environment["POINT_GUARD_PU_HOME"] = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pu").path
                 environment["POINT_GUARD_LOCK_HELPER_PATH"] = runtime.lockHelper.path
                 environment["POINT_GUARD_INSTANCE_ID"] = self.instanceId
                 environment["POINT_GUARD_APP_LIFETIME"] = "stdin"
@@ -339,6 +340,16 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         enrollment = .null; enrollmentStatus = ""
         _ = await retryEnrollmentCleanup()
     }
+    func setTerminalPermission(_ id: String, permission: String) async {
+        do { _ = try await request("devices.terminals", fields: ["deviceId": .string(id), "terminals": .string(permission)]); await refresh() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func setWorkspaceManagement(_ id: String, allowed: Bool) async {
+        do { _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(allowed)]); await refresh() }
+        catch { self.error = error.localizedDescription }
+    }
+
     func revokeDevice(_ id: String) async {
         do { _ = try await request("devices.revoke", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }

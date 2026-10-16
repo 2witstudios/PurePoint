@@ -14,6 +14,8 @@ pub async fn run(socket: &Path, agent_id: &str) -> Result<(), CliError> {
         socket,
         &Request::Attach {
             agent_id: agent_id.to_string(),
+            replay: None,
+            client_id: None,
         },
     )
     .await?;

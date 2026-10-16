@@ -1297,3 +1297,19 @@ test("a reply interrupted before message_end appears once the run settles", asyn
   );
   c.dispose();
 });
+
+test("native session history exposes a bounded first-message preview independently of its title", async t => {
+  const firstMessage = "Résumé 日本語\n".repeat(100);
+  const c = new Controller(new Runtime(), {
+    list: async () => [
+      {id:"named",name:"Named conversation",firstMessage,modified:"2026-10-16"},
+      {id:"empty",name:"Empty conversation",created:"2026-10-15"},
+    ],
+  });
+  t.after(()=>c.dispose());
+  const result = await request(c,"sessions");
+  assert.equal(result.sessions[0].title,"Named conversation");
+  assert.equal(result.sessions[0].preview,firstMessage.slice(0,500)+"\n[Display truncated]");
+  assert.equal(result.sessions[0].date,"2026-10-16");
+  assert.equal(result.sessions[1].preview,"");
+});

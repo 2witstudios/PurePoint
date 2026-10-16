@@ -45,6 +45,10 @@ pub struct ProjectInventoryEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInventoryEntry {
+    #[serde(default)]
+    pub screen_aware: bool,
+    #[serde(default)]
+    pub phase: Option<String>,
     pub project_root: Option<String>,
     pub cwd: String,
     pub worktree_id: Option<String>,

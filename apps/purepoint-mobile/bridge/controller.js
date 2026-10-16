@@ -378,6 +378,7 @@ export class Controller extends EventEmitter {
         sessions: (await this.sessions.list()).map((x) => ({
           id: x.id,
           title: clip(x.name || x.firstMessage || "Untitled conversation", 200),
+          preview: clip(x.firstMessage, 500),
           date: x.modified ?? x.created,
         })),
       };

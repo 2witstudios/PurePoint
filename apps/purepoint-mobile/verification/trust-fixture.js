@@ -15,6 +15,7 @@ let prompts = 0;
 controller.request = async (r) => {
   requests++;
   if (r.op === "send") prompts++;
+  if (r.op === "permissions") return { terminals: "off" };
   return {
     type: "snapshot",
     version: 1,

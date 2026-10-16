@@ -179,23 +179,22 @@ struct ContentView: View {
     }
 
     private func focusTerminalInWindow(_ window: NSWindow) {
-        // Walk the view hierarchy to find a visible TerminalView
-        func findTerminalView(in view: NSView) -> NSView? {
+        // Walk the view hierarchy to find a visible terminal pane.
+        func findTerminalPane(in view: NSView) -> TerminalPaneNSView? {
             if let pane = view as? TerminalPaneNSView,
-                let tv = pane.terminal?.terminalView
+                pane.terminal != nil
             {
-                return tv
+                return pane
             }
             for sub in view.subviews where !sub.isHidden {
-                if let found = findTerminalView(in: sub) { return found }
+                if let found = findTerminalPane(in: sub) { return found }
             }
             return nil
         }
 
         guard let contentView = window.contentView,
-            let tv = findTerminalView(in: contentView)
+            let pane = findTerminalPane(in: contentView)
         else { return }
-        guard !InlineRenameFocus.isActive else { return }
-        window.makeFirstResponder(tv)
+        pane.focusTerminal()
     }
 }

@@ -99,6 +99,23 @@ struct PointGuardSetupView: View {
                                 Text(device["name"].text ?? "Phone")
                                 Spacer()
                                 if case .null = device["revokedAt"] {
+                                    Picker("Agents and terminals", selection: Binding(
+                                        get: { device["terminals"].text ?? "off" },
+                                        set: { permission in
+                                            if let id = device["deviceId"].text { Task { await service.setTerminalPermission(id, permission: permission) } }
+                                        }
+                                    )) {
+                                        Text("Off").tag("off")
+                                        Text("View").tag("view")
+                                        Text("Control").tag("control")
+                                    }.frame(maxWidth: 260)
+                                    Toggle("Workspace management", isOn: Binding(
+                                        get: { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false },
+                                        set: { allowed in
+                                            if let id = device["deviceId"].text { Task { await service.setWorkspaceManagement(id, allowed: allowed) } }
+                                        }
+                                    ))
+                                    .help("Requires Agents and terminals: Control. Allows spawning, renaming and stopping agents in registered projects.")
                                     Button("Require re-pair") { if let id = device["deviceId"].text { Task { await service.rotateDevice(id) } } }
                                     Button("Revoke") { if let id = device["deviceId"].text { Task { await service.revokeDevice(id) } } }
                                 } else { Text("Revoked").foregroundStyle(.secondary) }

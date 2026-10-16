@@ -1,6 +1,6 @@
 # PurePoint Mobile
 
-Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; delegated PurePoint workers and ordinary Shell panes remain separate.
+Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; the Agents surface shows delegated PurePoint workers and ordinary Shell panes across this Mac and connected machines, separately from Point Guard chat. Each paired phone defaults to Agents and terminals Off; the Mac owner can grant View or Control in Connect phone settings. Remote agents require this Mac, its bridge, and its existing machine forwards to remain connected. The phone never uses SSH.
 
 ## Setup with the Mac app
 
@@ -40,7 +40,7 @@ Agents never run local app build phases. Full app/XCTest and temporary ad-hoc ar
 
 To name your computers, tap the PurePoint chat header to open **Connections**, then tap the pencil beside a Mac under **Your Macs**. Enter a name and tap **Save**. Names are saved on this iPhone, shown in the picker and chat header, and retained when you pair the same Mac again. The address beneath each name distinguishes Macs with matching names.
 
-The compact left sidebar contains title-only conversation history, inline search, a header new-chat action and connection settings in its PurePoint footer. Tap the sidebar button or swipe right from the left edge. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs. Tap the conversation area to dismiss the keyboard for reading; interactive scroll dismissal also remains available. Connection/loading status occupies the single subtitle beneath PurePoint in the header, so reconnecting does not move the composer. Tap that header to open connection settings.
+The left navigator opens Point Guard, Projects, pinned/recent agents and Connections. Point Guard conversation history opens from its right-side toolbar control. Selecting an idle conversation resumes it; during a run you can browse read-only and explicitly Stop before resuming. Tool activity appears inline, with grouped expandable calls and outputs. Tap the conversation area to dismiss the keyboard for reading; interactive scroll dismissal also remains available. Connection/loading status occupies the single subtitle beneath PurePoint in the header, so reconnecting does not move the composer. Tap that header to open connection settings.
 
 The composer’s **+** menu offers **Photos** and **Files**. Images are prepared as JPEG and sent through native Pi RPC to an image-capable model. Text files and PDFs with selectable text are sent as named text; PDF binaries/layout and scanned PDF pages are not uploaded. Attachment chips show `Image` or `Text`, and can be removed before sending. Up to four files fit a 512 KiB prepared-data budget; each text attachment is at most 32 KiB and all prompt text at most 64 KiB. PDFs are limited to 30 pages. Attachments wait locally if Pi is busy; ordinary text can still use Send options → Steer / After reply.
 
@@ -117,3 +117,14 @@ The phone stores drafts and submission recovery receipts only. It never automati
 RPC records are limited to 8 MiB; read-only history files to 16 MiB; requests to 1 MiB; network backlog to 4 MiB. History shows at most 500 rows with a 1 MiB aggregate wire budget, tool detail has a 256 KiB budget, queue detail 128 KiB, and long text is visibly truncated. Full native history remains in Pi. There are at most 32 pending dialogs and 100 visible tools. Thinking is not exposed; images have text placeholders. Summaries/context edits retain native semantics: the display shows raw selected branch history and summary markers, while Pi independently builds compacted/edited model context.
 
 See [the researched contract and requirements](docs/contract.md) and [validation evidence](docs/validation.md).
+
+
+## Workspace management authorization and recovery
+
+Connect phone settings has a separate **Workspace management** toggle, default off for every new or previously paired device. Mutations also require **Agents and terminals: Control**. View can browse registered projects, empty workspaces, worktrees and agents; Off denies fleet metadata. Registered machine IDs scope all project paths and agent/worktree IDs. No phone command, cwd, environment, SSH or arbitrary IPC passthrough exists.
+
+New agent supports explicit project root, existing worktree or deliberate new worktree. New terminal uses scoped daemon Spawn terminal, writes the manifest, and appears in that workspace. Catalog availability is an executable hint using the daemon's login PATH and project-root cwd; a worktree-relative command, wrapper or runtime may still fail. Older daemons lacking additive canonical catalog fields show unsupported launch capability rather than guessed choices.
+
+Each submitted management form keeps its operationId. Reconnect queries workspace.operation and refreshes inventory; it never repeats a spawn, create or terminal request. A daemon commit may outlive a lost receipt or canceled socket, so post-dispatch errors are uncertain. The bridge keeps at most2048 entries without eviction for its lifetime; after restart or re-pair status can be unknown. Unknown is never proof of non-commit and never authorizes automatic replay, even with the original ID. Review authoritative inventory before explicitly launching again. Permission loss removes sensitive result detail and prevents further dispatch; it cannot recall committed work.
+
+Bridge verification requires the isolated lock helper (no install): from repository root run `cargo build -p pu-cli --bin pu-point-guard-lock`, then from this directory set `POINT_GUARD_LOCK_HELPER_PATH` to the absolute worktree `target/debug/pu-point-guard-lock` path for `npm test`. Run `npm run check` separately. Owner Xcode/device checks remain required for the Mac toggle and iPhone UI; do not run app build phases from an agent.

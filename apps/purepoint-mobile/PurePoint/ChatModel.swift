@@ -6,6 +6,7 @@ import Network
 private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefaults }
 
 @MainActor final class ChatModel: ObservableObject {
+    let agentControl = AgentControlModel()
     @Published var snapshot: Snapshot? { didSet { if !projectingSnapshot, let snapshot { transcriptRows = TranscriptRows.make(messages: snapshot.messages, tools: snapshot.tools) } else if snapshot == nil { transcriptRows = [] } } }
     private(set) var transcriptRows: [TranscriptRow] = []
     @Published var connected = false
@@ -54,6 +55,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var receiveTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
+    private var agentRequests: [String: Int] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
     private var drafts: [String: String] = [:]
     private var attachmentDrafts: [String: [ComposerAttachment]] = [:]
@@ -351,14 +353,14 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         }
         if resetRetryBudget { retryBudget.reset() }
         wantsConnection = true; retryTask?.cancel()
-        let address = endpoint; generation += 1; let current = generation
+        let address = endpoint; let loadTrust = trustLoader; generation += 1; let current = generation
         connectionStatus = "Connecting to your Mac…"
         connectionTask = Task { [weak self] in
             await self?.recoveryTask?.value
             await self?.trustWriter.drain()
             var session: URLSession?; var pin: PinnedHostSession?
             do {
-                guard let saved = try await Task.detached(priority: .userInitiated, operation: { try self?.trustLoader(address) }).value else { throw TrustFailure("No saved device trust. Scan a new Mac QR code.") }
+                guard let saved = try await Task.detached(priority: .userInitiated, operation: { try loadTrust(address) }).value else { throw TrustFailure("No saved device trust. Scan a new Mac QR code.") }
                 guard let self, !Task.isCancelled, current == self.generation else { return }
                 guard saved.valid, saved.endpoint == address else { throw TrustFailure("Saved Mac trust is invalid. Scan a new QR code deliberately.") }
                 if let selected = self.selectedMachine, !selected.id.hasPrefix("legacy:"), selected.id != saved.hostId { throw TrustFailure("Selected Mac identity changed. Scan a new QR code deliberately.") }
@@ -415,6 +417,15 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
             do {
                 try await self.syncState()
                 guard current == self.generation else { return }
+                let transport = self.generation
+                self.agentControl.transport(host: self.machineKey, connected: true) { [weak self] op, fields in
+                    guard let self, self.generation == transport, self.socket != nil else { throw MobileError("Agent connection changed. Reopen the agent before continuing.") }
+                    let id = UUID().uuidString
+                    self.agentRequests[id] = transport
+                    defer { self.agentRequests.removeValue(forKey: id) }
+                    return try await self.call(op, fields: fields, id: id)
+                }
+                // Terminal discovery and remote fleet health never gate Pi chat.
                 self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryBudget.reset()
             } catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }
@@ -439,12 +450,14 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected"
     }
     private func detach() {
+        agentControl.transport(host: machineKey, connected: false)
         generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
         hostSession?.invalidateAndCancel(); hostSession = nil; hostPin = nil
         let outstanding = pending; pending = [:]; for timeout in timeouts.values { timeout.cancel() }; timeouts = [:]
         for continuation in outstanding.values { continuation.resume(throwing: MobileError("Connection interrupted. Delivery may be uncertain. Inspect the conversation before sending again.")) }
     }
     private func requirePairing(_ reason: String) {
+        agentControl.revokeAccess()
         wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Re-pair with your Mac"; error = reason
     }
     private func connectionLost(_ reason: String) {
@@ -460,6 +473,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         case .snapshot(let state, let rows): try apply(state, rows: rows); return
         case .envelope(let envelope): record = envelope
         }
+        if record.type == "permissions" || record.type.hasPrefix("terminal.") { agentControl.receive(record); return }
         switch record.type {
         case "receipt":
             guard let id = record.id, let continuation = pending.removeValue(forKey: id) else { return }
@@ -525,9 +539,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             timeouts[id] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 35_000_000_000)
+                try? await Task.sleep(nanoseconds: MobileRPCTiming.timeoutNanoseconds(for: op))
                 guard !Task.isCancelled, let self, let continuation = self.pending.removeValue(forKey: id) else { return }
-                self.timeouts.removeValue(forKey: id); continuation.resume(throwing: MobileError("No acknowledgement from your Mac. Delivery is uncertain; inspect history before sending again."))
+                self.timeouts.removeValue(forKey: id); continuation.resume(throwing: MobileError(op == "agent.prompt" ? "Delivery uncertain: no prompt acknowledgement. Inspect the agent terminal before sending again. Your submitted text remains saved." : "No acknowledgement from your Mac. Delivery is uncertain; inspect history before sending again."))
             }
             Task { [weak self] in
                 do { try await socket.send(.string(text)) }

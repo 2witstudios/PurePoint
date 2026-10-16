@@ -162,6 +162,8 @@ async fn given_attach_request_should_stream_output_continuously() {
 
     let req = serde_json::to_string(&Request::Attach {
         agent_id: agent_id.clone(),
+        replay: None,
+        client_id: None,
     })
     .unwrap();
     writer
@@ -214,6 +216,8 @@ async fn given_attach_with_input_should_forward_to_pty() {
     // Attach
     let req = serde_json::to_string(&Request::Attach {
         agent_id: agent_id.clone(),
+        replay: None,
+        client_id: None,
     })
     .unwrap();
     writer
@@ -230,6 +234,7 @@ async fn given_attach_with_input_should_forward_to_pty() {
         agent_id: agent_id.clone(),
         data: b"hello\n".to_vec(),
         submit: false,
+        cancel_on_disconnect: false,
     })
     .unwrap();
     writer
@@ -276,6 +281,8 @@ async fn given_attach_with_resize_should_update_pty_size() {
     // Attach
     let req = serde_json::to_string(&Request::Attach {
         agent_id: agent_id.clone(),
+        replay: None,
+        client_id: None,
     })
     .unwrap();
     writer
@@ -343,7 +350,12 @@ async fn given_killed_agent_attach_should_return_error() {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
-    let attach_req = serde_json::to_string(&Request::Attach { agent_id }).unwrap();
+    let attach_req = serde_json::to_string(&Request::Attach {
+        agent_id,
+        replay: None,
+        client_id: None,
+    })
+    .unwrap();
     writer
         .write_all(format!("{attach_req}\n").as_bytes())
         .await
@@ -375,6 +387,8 @@ async fn given_attach_disconnect_should_not_crash_server() {
 
         let req = serde_json::to_string(&Request::Attach {
             agent_id: agent_id.clone(),
+            replay: None,
+            client_id: None,
         })
         .unwrap();
         writer
@@ -554,4 +568,368 @@ async fn given_subscribe_fs_should_stream_coalesced_file_events() {
     }
 
     handle.abort();
+}
+
+async fn attachment_pair(
+    engine: std::sync::Arc<Engine>,
+    agent_id: String,
+    replay: Option<pu_core::protocol::Replay>,
+    client_id: Option<&str>,
+) -> (
+    BufReader<tokio::net::unix::OwnedReadHalf>,
+    tokio::net::unix::OwnedWriteHalf,
+    tokio::task::JoinHandle<()>,
+) {
+    let (server, client) = UnixStream::pair().unwrap();
+    let (read, mut write) = server.into_split();
+    let client_id = client_id.map(str::to_owned);
+    let task = tokio::spawn(async move {
+        streams::handle_attach_stream(
+            &mut BufReader::new(read),
+            &mut write,
+            &engine,
+            &agent_id,
+            replay,
+            client_id,
+        )
+        .await;
+    });
+    let (read, write) = client.into_split();
+    (BufReader::new(read), write, task)
+}
+
+async fn next_response(reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>) -> Response {
+    let mut line = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        reader.read_line(&mut line),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+#[tokio::test]
+async fn given_identified_viewer_should_rebuild_evicted_screen_and_resync_gap() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let engine = std::sync::Arc::new(engine);
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    // Wait for shell startup, then put enduring output beyond the raw replay bound.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    buffer.write(b"\x1b[2J\x1b[Hancient screen");
+    buffer.write(&b"\x1b[0m".repeat(1_100_000));
+    let (mut reader, writer, task) = attachment_pair(
+        engine,
+        id,
+        Some(pu_core::protocol::Replay::Snapshot),
+        Some("phone"),
+    )
+    .await;
+    let bytes = match next_response(&mut reader).await {
+        Response::AttachReady { buffered_bytes } => buffered_bytes,
+        r => panic!("{r:?}"),
+    };
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::PtySize {
+            owner_client_id: None,
+            ..
+        }
+    ));
+    let (rows, cols) = buffer.terminal_size();
+    let mut terminal = vt100::Parser::new(rows, cols, 1024);
+    let mut remaining = bytes;
+    while remaining > 0 {
+        let Response::Output { data, .. } = next_response(&mut reader).await else {
+            panic!("expected output")
+        };
+        remaining -= data.len();
+        terminal.process(&data);
+    }
+    assert!(terminal.screen().contents().contains("ancient screen"));
+    buffer.write(&b"\x1b[0m".repeat(1_100_000));
+    assert!(matches!(next_response(&mut reader).await, Response::Resync));
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::Output { .. }
+    ));
+    drop(reader);
+    drop(writer);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn given_size_claims_should_ignore_nonowners_and_handoff_only_to_claimers() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (a, _) = engine.register_attachment(&id, Some("a".into())).await;
+    let (b, _) = engine.register_attachment(&id, Some("b".into())).await;
+    let (c, _) = engine.register_attachment(&id, Some("c".into())).await;
+    engine.attachment_resize(&id, a, 100, 30, true).await;
+    engine.attachment_resize(&id, b, 70, 20, false).await;
+    assert_eq!(
+        engine.attachment_size(&id).await,
+        (100, 30, Some("a".into()))
+    );
+    engine.unregister_attachment(&id, a).await;
+    assert_eq!(engine.attachment_size(&id).await, (100, 30, None));
+    engine.attachment_resize(&id, b, 70, 20, true).await;
+    engine.attachment_resize(&id, c, 90, 25, true).await;
+    // Mere resize does not reorder b's claim ahead of c.
+    engine.attachment_resize(&id, b, 75, 22, false).await;
+    engine.unregister_attachment(&id, c).await;
+    assert_eq!(
+        engine.attachment_size(&id).await,
+        (75, 22, Some("b".into()))
+    );
+    let (legacy, _) = engine.register_attachment(&id, None).await;
+    engine.attachment_resize(&id, legacy, 110, 35, false).await;
+    assert_eq!(engine.attachment_size(&id).await, (110, 35, None));
+    let (buffer, fd, _) = engine.get_attach_handles(&id).await.unwrap();
+    assert_eq!(buffer.terminal_size(), (35, 110));
+    use std::os::fd::AsRawFd;
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) },
+        0
+    );
+    assert_eq!((ws.ws_row, ws.ws_col), buffer.terminal_size());
+    engine.handle_legacy_resize(&id, 80, 24).await;
+    assert_eq!(engine.attachment_size(&id).await, (80, 24, None));
+    engine.unregister_attachment(&id, legacy).await;
+    engine.unregister_attachment(&id, b).await;
+}
+
+#[tokio::test]
+async fn given_legacy_attachment_should_never_receive_size_or_resync_frames() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let engine = std::sync::Arc::new(engine);
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    let (mut reader, mut writer, task) = attachment_pair(engine, id.clone(), None, None).await;
+    let mut remaining = match next_response(&mut reader).await {
+        Response::AttachReady { buffered_bytes } => buffered_bytes,
+        r => panic!("{r:?}"),
+    };
+    while remaining > 0 {
+        let Response::Output { data, .. } = next_response(&mut reader).await else {
+            panic!("legacy received new response")
+        };
+        remaining -= data.len();
+    }
+    writer
+        .write_all(
+            format!(
+                "{}\n",
+                serde_json::to_string(&Request::Resize {
+                    agent_id: id,
+                    cols: 101,
+                    rows: 31
+                })
+                .unwrap()
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(buffer.terminal_size(), (31, 101));
+    buffer.write(&b"\x1b[0m".repeat(1_100_000));
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::Output { .. }
+    ));
+    drop(reader);
+    drop(writer);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn given_cancellable_submit_disconnect_should_stop_future_chunks_and_enter() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    let (server, client) = UnixStream::pair().unwrap();
+    let (read, mut write) = server.into_split();
+    let (client_read, client_write) = client.into_split();
+    let request = serde_json::to_string(&Request::Input {
+        agent_id: id,
+        data: vec![b'x'; 20000],
+        submit: true,
+        cancel_on_disconnect: true,
+    })
+    .unwrap();
+    let task = tokio::spawn(async move {
+        IpcServer::dispatch_request(
+            &request,
+            &mut BufReader::new(read),
+            &mut write,
+            &engine,
+            &Notify::new(),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    drop(client_read);
+    drop(client_write);
+    assert!(
+        !tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    // One already-issued blocking OS write is accepted. No later chunks/Enter run.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let text = buffer.read_all();
+    assert!(text.iter().filter(|&&c| c == b'x').count() < 20000);
+    let offset = buffer.current_offset();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(buffer.current_offset(), offset);
+}
+
+#[tokio::test]
+async fn given_rapid_applied_sizes_should_report_every_change_in_order() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let engine = std::sync::Arc::new(engine);
+    let (owner, _) = engine.register_attachment(&id, Some("owner".into())).await;
+    let (mut reader, writer, task) =
+        attachment_pair(engine.clone(), id.clone(), None, Some("viewer")).await;
+    let mut remaining = match next_response(&mut reader).await {
+        Response::AttachReady { buffered_bytes } => buffered_bytes,
+        r => panic!("{r:?}"),
+    };
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::PtySize { .. }
+    ));
+    while remaining > 0 {
+        if let Response::Output { data, .. } = next_response(&mut reader).await {
+            remaining -= data.len();
+        }
+    }
+    for cols in [81, 82, 83] {
+        engine.attachment_resize(&id, owner, cols, 24, true).await;
+    }
+    let mut observed = Vec::new();
+    while observed.len() < 3 {
+        if let Response::PtySize { cols, .. } = next_response(&mut reader).await {
+            observed.push(cols);
+        }
+    }
+    assert_eq!(observed, vec![81, 82, 83]);
+    drop(reader);
+    drop(writer);
+    task.await.unwrap();
+    engine.unregister_attachment(&id, owner).await;
+}
+
+#[tokio::test]
+async fn given_cancellable_request_and_eof_already_buffered_should_never_start_typing() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (server, mut client) = UnixStream::pair().unwrap();
+    let (read, mut write) = server.into_split();
+    client.shutdown().await.unwrap();
+    let request = serde_json::to_string(&Request::Input {
+        agent_id: id,
+        data: b"QQQQQQQQQQQQQQQQ".to_vec(),
+        submit: true,
+        cancel_on_disconnect: true,
+    })
+    .unwrap();
+    let mut reader = BufReader::new(read);
+    let before = buffer.current_offset();
+    assert!(
+        !IpcServer::dispatch_request(&request, &mut reader, &mut write, &engine, &Notify::new())
+            .await
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (data, _, _) = buffer.read_from(before);
+    assert!(
+        data.is_empty(),
+        "PTY output changed after pre-observed EOF: {data:?}"
+    );
+    assert_eq!(
+        buffer.current_offset(),
+        before,
+        "even a partial first chunk must not be queued"
+    );
+}
+
+#[tokio::test]
+async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_live_offset() {
+    let (engine, id, _tmp) = Engine::quiet_screen_session().await;
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    let (owner, _) = engine.register_attachment(&id, Some("owner".into())).await;
+    engine.attachment_resize(&id, owner, 5, 3, true).await;
+    // Retain history so visible-screen assertions cannot accidentally compare scrollback.
+    buffer.write(b"old\r\nold\r\nold\r\nold\r\n\x1b[2J\x1b[H");
+    let (_, mut sizes) = engine.register_attachment(&id, Some("viewer".into())).await;
+    let (initial, offset, size) = engine
+        .attachment_replay(&id, &buffer, true, &mut sizes)
+        .await;
+    let mut rendered = vt100::Parser::new(3, 5, 1024);
+    rendered.process(&initial);
+    let mut cursor = crate::engine::AttachmentCursor {
+        offset,
+        size,
+        snapshot: true,
+        identified: true,
+    };
+    // Both batches remain unread by the viewer when the size changes.
+    buffer.write(b"ABCDEF");
+    engine.attachment_resize(&id, owner, 10, 3, true).await;
+    buffer.write(b"G");
+    engine.attachment_resize(&id, owner, 8, 3, true).await;
+    let update = engine
+        .attachment_update(&id, &buffer, &mut cursor, &mut sizes, None)
+        .await;
+    assert!(update.resync);
+    assert_eq!(
+        update.sizes.iter().map(|size| size.0).collect::<Vec<_>>(),
+        vec![10, 8]
+    );
+    let (snapshot, snapshot_offset) = buffer.attach_snapshot();
+    let mut expected = vt100::Parser::new(3, 8, 1024);
+    expected.process(&snapshot);
+    assert_eq!(cursor.offset, snapshot_offset);
+    let replay_bytes = update.data.len();
+    let (server, client) = UnixStream::pair().unwrap();
+    let (_, mut writer) = server.into_split();
+    let (read, _) = client.into_split();
+    let mut reader = BufReader::new(read);
+    streams::write_attachment_update(&mut writer, &id, update)
+        .await
+        .unwrap();
+    assert!(matches!(next_response(&mut reader).await, Response::Resync));
+    rendered.process(b"\x1bc");
+    // Every queued size report precedes the latest matching snapshot.
+    for expected_cols in [10, 8] {
+        let Response::PtySize { cols, rows, .. } = next_response(&mut reader).await else {
+            panic!("size report must precede snapshot output")
+        };
+        assert_eq!((cols, rows), (expected_cols, 3));
+        rendered.screen_mut().set_size(rows, cols);
+    }
+    let mut remaining = replay_bytes;
+    while remaining > 0 {
+        let Response::Output { data, .. } = next_response(&mut reader).await else {
+            panic!("expected snapshot output")
+        };
+        remaining -= data.len();
+        rendered.process(&data);
+    }
+    assert_eq!(rendered.screen().contents(), expected.screen().contents());
+    assert!(rendered.screen().contents().contains("ABCDE\nFG"));
+    assert_eq!(cursor.offset, buffer.current_offset());
+    buffer.write(b"H");
+    let live = engine
+        .attachment_update(&id, &buffer, &mut cursor, &mut sizes, None)
+        .await;
+    assert!(!live.resync);
+    assert!(live.sizes.is_empty());
+    rendered.process(&live.data);
+    let (snapshot, snapshot_offset) = buffer.attach_snapshot();
+    expected.process(&snapshot);
+    assert_eq!(rendered.screen().contents(), expected.screen().contents());
+    assert_eq!(cursor.offset, snapshot_offset);
 }

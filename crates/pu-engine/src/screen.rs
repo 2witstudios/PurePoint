@@ -102,7 +102,10 @@ impl ScreenTracker {
 
     /// Feeds any output written since the last sync.
     pub fn sync(&mut self, buffer: &OutputBuffer) {
-        let (bytes, next) = buffer.read_from(self.offset);
+        let (mut bytes, mut next, gap) = buffer.read_from(self.offset);
+        if self.offset == 0 || gap {
+            (bytes, next) = buffer.attach_snapshot();
+        }
         self.parser.process(&bytes);
         self.offset = next;
     }
@@ -183,12 +186,55 @@ fn strip_echo_marker(row: &str) -> String {
     }
 }
 
+/// Conservative phase classification; an absent box never establishes readiness.
+pub fn input_phase(screen: &vt100::Screen) -> &'static str {
+    let (height, width) = screen.size();
+    let rows: Vec<String> = (0..height)
+        .map(|r| {
+            (0..width)
+                .map(|c| match screen.cell(r, c) {
+                    Some(cell) if cell.has_contents() && !cell.dim() => cell.contents().to_string(),
+                    _ => " ".to_string(),
+                })
+                .collect()
+        })
+        .collect();
+    let text = rows.join("\n").to_lowercase();
+    if text.contains("esc to cancel")
+        || text.contains("do you want to proceed")
+        || text.contains("yes, allow")
+        || text.contains("trust this folder")
+    {
+        "dialog"
+    } else if let Some(b) = find_input_box(&rows) {
+        if b.is_empty() {
+            "input_ready"
+        } else {
+            "has_draft"
+        }
+    } else {
+        "busy"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn rows(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn given_screen_state_should_distinguish_ready_draft_dialog_and_unknown() {
+        let buffer = OutputBuffer::new();
+        assert_eq!(buffer.input_phase(), "busy");
+        buffer.write("────────\r\n❯ \x1b[2mTry this\x1b[22m\r\n────────".as_bytes());
+        assert_eq!(buffer.input_phase(), "input_ready");
+        buffer.write("\x1b[2;3H\x1b[Kdraft".as_bytes());
+        assert_eq!(buffer.input_phase(), "has_draft");
+        buffer.write(b"\x1b[5;1HDo you want to proceed? Esc to cancel");
+        assert_eq!(buffer.input_phase(), "dialog");
     }
 
     #[test]

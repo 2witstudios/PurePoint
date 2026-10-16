@@ -13,7 +13,12 @@ import {
   privatePath,
 } from "./runtime-state.js";
 import { nativeProviderSetup } from "./native-provider.js";
-import { serveAdmin, AdminError } from "./admin.js";
+import {
+  serveAdmin,
+  AdminError,
+  setDeviceTerminals,
+  setDeviceWorkspaceManagement,
+} from "./admin.js";
 import { LockError } from "./lock-helper.js";
 import { optionalRemoteListener } from "./remote-listener.js";
 import { startupFailure } from "./runtime-errors.js";
@@ -437,6 +442,10 @@ export async function runManaged(env = process.env) {
             return {};
           case "devices.list":
             return { devices: trust.listDevices() };
+          case "devices.workspaceManagement":
+            return await setDeviceWorkspaceManagement(trust, r);
+          case "devices.terminals":
+            return await setDeviceTerminals(trust, r);
           case "devices.revoke":
             await trust.revokeDevice(r.deviceId);
             return {};
