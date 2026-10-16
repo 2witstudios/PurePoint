@@ -105,7 +105,7 @@ struct DaemonClientParseTests {
     @MainActor @Test func testReportedSizeDoesNotReplaceLocalWindowDimensions() {
         let view = ScrollableTerminal(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         view.layoutSubtreeIfNeeded()
-        view.refreshLocalGeometry(size: CGSize(width: 800, height: 600))
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
         let local = view.localGridSize
         view.applyReportedSize(cols: 70, rows: 20)
         // Also simulate a delayed model resize delegate callback.
@@ -114,12 +114,14 @@ struct DaemonClientParseTests {
         #expect(view.localGridSize.rows == local.rows)
         #expect(view.terminalView.getTerminal().cols == 70)
         #expect(view.terminalView.getTerminal().rows == 20)
-        view.refreshLocalGeometry(size: CGSize(width: 1000, height: 600))
+        view.setFrameSize(NSSize(width: 1000, height: 600))
+        view.layoutSubtreeIfNeeded()
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
         #expect(view.localGridSize.cols > local.cols)
         #expect(view.terminalView.getTerminal().cols == 70)
-        view.terminalView.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .regular)
         let beforeFont = view.localGridSize.cols
-        view.refreshLocalGeometry(size: CGSize(width: 1000, height: 600))
+        view.terminalView.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .regular)
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
         #expect(view.localGridSize.cols < beforeFont)
         #expect(view.terminalView.getTerminal().cols == 70)
         view.tearDown()
