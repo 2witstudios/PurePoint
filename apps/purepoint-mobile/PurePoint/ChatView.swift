@@ -361,13 +361,13 @@ struct MessageView: View {
     let message: ChatMessage
     var body: some View {
         if message.role == "user" {
-            ChatBubble(sender: .user) { Text(message.text).font(.body).lineSpacing(3).textSelection(.enabled) }.accessibilityElement(children: .combine).accessibilityLabel("You: \(message.text)")
+            ChatBubble(sender: .user, userForeground: Color(uiColor: .systemBackground)) { Text(message.text).font(.body).lineSpacing(3).textSelection(.enabled) }.accessibilityElement(children: .combine).accessibilityLabel("You: \(message.text)")
         } else if message.role == "toolResult" {
             ToolGroupView(tools: [ToolActivity(id: message.id, name: message.activity ?? "Tool", state: message.error == nil ? "finished" : "failed", text: message.text + (message.error.map { "\n\n" + $0 } ?? ""))])
         } else if message.role == "notice" {
             Label { Text(message.text).font(.footnote).textSelection(.enabled) } icon: { Image(systemName: "text.alignleft") }.foregroundStyle(.secondary)
         } else {
-            ChatBubble(sender: .assistant) { VStack(alignment: .leading, spacing: 12) { RichText(text: message.text).equatable(); if let error = message.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) } } }
+            ChatBubble(sender: .assistant, assistantTrailingInset: 12) { VStack(alignment: .leading, spacing: 12) { RichText(text: message.text).equatable(); if let error = message.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) } } }
         }
     }
 }
