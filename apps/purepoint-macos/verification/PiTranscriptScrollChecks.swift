@@ -87,6 +87,31 @@ import Foundation
         feedbackRequest()
         for _ in 0..<10 { await settle() }
         precondition(feedbackScrolls == 2, "Scroll-induced alternating geometry must terminate")
+        let disclosureFollower = PiTranscriptScrollCoordinator()
+        var disclosureScrolls = 0
+        var disclosureAllowed = true
+        func disclosureRequest() {
+            disclosureFollower.request(canScroll: { disclosureAllowed }, scroll: { disclosureScrolls += 1 })
+        }
+        // Completed tool output has no new revision across expand/collapse/re-expand.
+        for (index, height) in [CGFloat(2000), 1000, 2000].enumerated() {
+            disclosureFollower.userLayoutChanged()
+            disclosureFollower.update(contentHeight: height, viewportHeight: 400, visibleBottom: 400)
+            disclosureRequest()
+            precondition(disclosureScrolls == index, "Disclosure intent must not scroll synchronously")
+            await settle()
+        }
+        precondition(disclosureScrolls == 3, "Re-expanding completed tools must follow without a new revision")
+        disclosureFollower.outputChanged()
+        disclosureRequest()
+        disclosureFollower.userLayoutChanged()
+        await settle()
+        precondition(disclosureScrolls == 3, "Disclosure intent must cancel stale pre-layout requests")
+        disclosureAllowed = false
+        disclosureFollower.update(contentHeight: 2500, viewportHeight: 400, visibleBottom: 400)
+        disclosureRequest()
+        await settle()
+        precondition(disclosureScrolls == 3, "Disclosure changes must preserve scrollback/browsing eligibility")
         print("Pi transcript scroll checks passed")
     }
 }

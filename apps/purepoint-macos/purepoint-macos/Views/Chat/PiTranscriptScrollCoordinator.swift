@@ -27,6 +27,13 @@ import Foundation
         attempted.removeAll()
     }
 
+    /// A disclosure toggle starts a new layout intent even without a bridge revision.
+    /// Cancel pre-toggle work; the resulting geometry will request the deferred scroll.
+    func userLayoutChanged() {
+        cancel()
+        attempted.removeAll()
+    }
+
     func cancel() {
         pending = nil
     }
@@ -50,8 +57,8 @@ import Foundation
             if let size = self.size {
                 guard size.viewport > 0, self.attempted.insert(size).inserted else { return }
             }
-            // Remember every attempted size until output changes, including alternating lazy
-            // layout estimates. Our own scrolling must not create an unbounded feedback loop.
+            // Remember attempted sizes until output or user layout intent changes, including
+            // alternating lazy estimates. Our scrolling must not create an unbounded feedback loop.
             scroll()
         }
     }

@@ -145,7 +145,7 @@ struct PiPointGuardChatView: View {
                         ForEach(PiTranscriptRows.make(messages: history.messages, tools: [])) { row in
                             switch row {
                             case .message(let message): messageView(message)
-                            case .activity(let tools): PiToolActivityView(tools: tools)
+                            case .activity(let tools): PiToolActivityView(tools: tools, onLayoutChange: transcriptScroll.userLayoutChanged)
                             }
                         }
                     } else if model.transcriptRows.isEmpty {
@@ -154,7 +154,7 @@ struct PiPointGuardChatView: View {
                         ForEach(model.transcriptRows) { row in
                             switch row {
                             case .message(let message): messageView(message)
-                            case .activity(let tools): PiToolActivityView(tools: tools)
+                            case .activity(let tools): PiToolActivityView(tools: tools, onLayoutChange: transcriptScroll.userLayoutChanged)
                             }
                         }
                     }
@@ -492,16 +492,24 @@ private struct PiAttachmentChip: View {
 
 private struct PiToolActivityView: View {
     let tools: [PiToolActivity]
+    let onLayoutChange: () -> Void
     @State private var expanded = false
     private var running: Int { tools.filter { $0.state == "running" }.count }
     private var failed: Int { tools.filter { $0.state == "failed" }.count }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
+        DisclosureGroup(isExpanded: Binding(
+            get: { expanded },
+            set: { value in
+                guard expanded != value else { return }
+                onLayoutChange()
+                expanded = value
+            })
+        ) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                     if index > 0 { Divider() }
-                    PiToolDetailView(tool: tool)
+                    PiToolDetailView(tool: tool, onLayoutChange: onLayoutChange)
                 }
             }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
         } label: {
@@ -529,8 +537,18 @@ private struct PiToolActivityView: View {
 
 private struct PiToolDetailView: View {
     let tool: PiToolActivity
+    let onLayoutChange: () -> Void
+    @State private var expanded = false
+
     var body: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: Binding(
+            get: { expanded },
+            set: { value in
+                guard expanded != value else { return }
+                onLayoutChange()
+                expanded = value
+            })
+        ) {
             ScrollView(.horizontal) {
                 Text(tool.text.isEmpty ? "No output" : tool.text)
                     .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
