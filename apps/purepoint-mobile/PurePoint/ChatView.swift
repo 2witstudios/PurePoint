@@ -9,6 +9,7 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showConnection = false
     @State private var showHistory = false
+    @State private var showAgents = false
     @State private var showSidebar = false
     @State private var showPhotos = false
     @State private var showFiles = false
@@ -66,6 +67,7 @@ struct ChatView: View {
                     .accessibilityHint("Open connection settings")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showAgents = true } label: { Image(systemName: "terminal") }.accessibilityLabel("Agents on all machines")
                     Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
                 }
             }
@@ -74,6 +76,7 @@ struct ChatView: View {
                 Button("Keep working", role: .cancel) {}
             } message: { Text("Queued messages will be canceled and recoverable. Delegated workers keep running.") }
             .sheet(isPresented: $showConnection, onDismiss: presentPendingDialog) { ConnectionView(model: model) }
+            .sheet(isPresented: $showAgents, onDismiss: { model.agentControl.closeScreen(); presentPendingDialog() }) { AgentsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Mac") }
             .sheet(isPresented: $showHistory, onDismiss: presentPendingDialog) { ConversationView(model: model, selection: model.selectionToken) }
             .sheet(item: dialogBinding) { dialog in ExtensionDialogView(model: model, dialog: dialog, selection: dialogSelection) }
             .onChange(of: model.snapshot?.dialogs.first?.id) { _, _ in
@@ -86,7 +89,7 @@ struct ChatView: View {
                 else { presentPendingDialog() }
             }
             .onChange(of: model.selectionToken) { _, _ in
-                presentedDialog = nil; confirmNew = false; showHistory = false
+                presentedDialog = nil; confirmNew = false; showHistory = false; showAgents = false
                 showPhotos = false; showFiles = false; selectedPhoto = nil; importingAttachment = false; closeSidebar()
             }
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
@@ -167,7 +170,7 @@ struct ChatView: View {
         }
     }
     private func presentPendingDialog() {
-        guard !showConnection, !showHistory, !showPhotos, !showFiles else { return }
+        guard !showConnection, !showHistory, !showPhotos, !showFiles, !showAgents else { return }
         dialogSelection = model.selectionToken; presentedDialog = model.snapshot?.dialogs.first
     }
     private var dialogBinding: Binding<ExtensionDialog?> {

@@ -257,7 +257,7 @@ enum JSONValue: Codable, Sendable {
     var strings: [String] { if case .array(let x) = self { return x.compactMap(\.text) }; return [] }
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(self)) }
 }
-struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String? }
+struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String? }
 
 // A serial utility queue keeps encoding/file IO away from keyboard and rendering.
 // Coalescing replaces older pending values; serial execution prevents stale writes.
