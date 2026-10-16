@@ -477,6 +477,7 @@ envFiles: [".env"]
 
     #[test]
     fn given_config_with_one_agent_should_merge_code_defaults() {
+        let _home = TestHome::new();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
@@ -648,6 +649,7 @@ agents:
 
     #[test]
     fn given_update_agent_config_should_preserve_other_agents() {
+        let _home = TestHome::new();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
