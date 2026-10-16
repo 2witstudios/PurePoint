@@ -559,6 +559,16 @@ test("spawn instructions are optional; blank launches bare and plan mode needs i
   r = await c.request(
     form({
       op: "workspace.spawn",
+      operationId: "spawn-0105",
+      agentType: "custom",
+      prompt: " ".repeat(65537),
+    }),
+  );
+  assert.equal(r.state, "failed");
+  assert.equal(f.requests.filter((q) => q.type === "spawn").length, spawns);
+  r = await c.request(
+    form({
+      op: "workspace.spawn",
       operationId: "spawn-0103",
       agentType: "custom",
       prompt: "",

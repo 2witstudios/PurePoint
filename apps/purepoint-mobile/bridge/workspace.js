@@ -30,7 +30,9 @@ const promptText = (value) =>
   !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 // Spawn instructions are optional: blank means no instructions.
 const optionalPromptText = (value) =>
-  typeof value === "string" && (value.trim().length === 0 || promptText(value));
+  typeof value === "string" &&
+  Buffer.byteLength(value) <= 65536 &&
+  (value.trim().length === 0 || promptText(value));
 // Config map keys are opaque strings, not process or filesystem identifiers.
 const configKey = (value) =>
   typeof value === "string" &&
