@@ -506,9 +506,8 @@ struct WorkspaceLaunchForm: View {
         do { catalog = try await model.catalog(machine: target.machine, project: target.project); error = nil } catch { self.error = error.localizedDescription }
     }
     private func submit() async {
-        guard valid else { return }
-        let id = UUID().uuidString
-        draft.operationId = id; draft.state = "pending"; save()
+        guard valid, let id = draft.beginOperation() else { return }
+        save()
         // Persist the immutable submitted form before the first network dispatch.
         guard let persisted = UserDefaults.standard.data(forKey: key), (try? JSONDecoder().decode(WorkspaceFormDraft.self, from: persisted)) == draft else { error = "Could not save operation. Nothing dispatched."; draft.operationId = nil; return }
         submitting = true; defer { submitting = false; save() }
@@ -527,7 +526,7 @@ struct WorkspaceLaunchForm: View {
         if target.kind == "stop" { fields["confirm"] = true }
         do { let result = try await model.workspaceRequest("workspace." + target.kind, fields: fields); draft.state = result.state; draft.message = result.message }
         catch {
-            draft.state = "uncertain"; draft.message = error.localizedDescription
+            draft.markUncertain(error.localizedDescription)
             if error.localizedDescription.contains("workspace_duplicate"), let result = try? await model.operationStatus(id) { draft.state = result.state; draft.message = result.message }
         }
     }

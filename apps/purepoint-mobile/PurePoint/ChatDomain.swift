@@ -314,12 +314,19 @@ enum IncomingRecord: Sendable {
 // Fleet inventory has up to eight batches of four machines. Each batch can
 // spend 5s on health, 5s on agents and 5s on parallel project/worktree reads.
 // Allow 30s beyond that 120s schedule for projection and transport. Prompt
-// delivery independently permits the daemon's 360s window plus overhead.
+// delivery and workspace spawn independently permit360s dispatch plus overhead.
+// Other fixed workspace mutations allow up to80s bridge waits plus20s margin;
+// catalog/status and unrelated RPCs retain the generic deadline.
 enum MobileRPCTiming {
     static func timeoutNanoseconds(for operation: String) -> UInt64 {
         switch operation {
         case "agents": return 150_000_000_000
         case "agent.prompt": return 390_000_000_000
+        case "workspace.spawn": return 390_000_000_000
+        case "workspace.terminal": return 100_000_000_000
+        case "workspace.createWorktree": return 100_000_000_000
+        case "workspace.rename": return 100_000_000_000
+        case "workspace.stop": return 100_000_000_000
         default: return 35_000_000_000
         }
     }

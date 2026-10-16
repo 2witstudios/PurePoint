@@ -77,6 +77,13 @@ import Foundation
         precondition(fleetBudgetSeconds == 120)
         precondition(MobileRPCTiming.timeoutNanoseconds(for: "agents") >= UInt64(fleetBudgetSeconds + 30) * 1_000_000_000)
         precondition(MobileRPCTiming.timeoutNanoseconds(for: "agent.prompt") == 390_000_000_000)
+        precondition(MobileRPCTiming.timeoutNanoseconds(for: "workspace.spawn") >= UInt64(360 + 15 + 15) * 1_000_000_000)
+        for operation in ["workspace.terminal", "workspace.createWorktree", "workspace.rename", "workspace.stop"] {
+            precondition(MobileRPCTiming.timeoutNanoseconds(for: operation) == 100_000_000_000)
+        }
+        for operation in ["workspace.catalog", "workspace.operation", "workspace.unrecognized"] {
+            precondition(MobileRPCTiming.timeoutNanoseconds(for: operation) == 35_000_000_000)
+        }
         precondition(MobileRPCTiming.timeoutNanoseconds(for: "permissions") == 35_000_000_000)
         precondition(MobileRPCTiming.timeoutNanoseconds(for: "sync") == 35_000_000_000)
         print("Navigation preference checks passed")

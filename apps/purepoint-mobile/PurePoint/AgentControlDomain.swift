@@ -285,6 +285,13 @@ struct WorkspaceFormDraft: Codable, Equatable {
     var operationId: String?
     var state: String?
     var message: String?
+    mutating func beginOperation() -> String? {
+        guard operationId == nil else { return nil }
+        let id = UUID().uuidString
+        operationId = id; state = "pending"; message = nil
+        return id
+    }
+    mutating func markUncertain(_ reason: String) { state = "uncertain"; message = reason }
 }
 
 struct WorkspaceLocation: Equatable, Sendable {

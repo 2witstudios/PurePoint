@@ -29,6 +29,7 @@ import Foundation
         try await AgentControlScenarios.authoritativeReviewRequiresSuccessfulFreshInventory()
         try await AgentControlScenarios.workspaceGrantToggleDoesNotInvalidatePrompt()
         try await AgentControlScenarios.duplicateInventoryKeepsFirstScopedIdentity()
+        try await AgentControlScenarios.heldWorkspaceSpawnReceiptPreservesDurableRecoveryAndNeverReplays()
         print("Phone control lifecycle and domain checks passed")
     }
 }

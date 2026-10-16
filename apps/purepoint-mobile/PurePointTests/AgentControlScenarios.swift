@@ -8,6 +8,7 @@ import Foundation
         var opens: [CheckedContinuation<JSONValue, Error>] = []
         var prompts: [CheckedContinuation<JSONValue, Error>] = []
         var operations: [(String, [String: Any])] = []
+        var launches: [CheckedContinuation<JSONValue, Error>] = []
         var managementStatuses: [CheckedContinuation<JSONValue, Error>] = []
         var inventory = ""
         var holdInventory = false
@@ -17,6 +18,7 @@ import Foundation
             operations.append((op, fields))
             switch op {
             case "permissions": return try Self.permissionJSON()
+            case "workspace.spawn": return try await withCheckedThrowingContinuation { launches.append($0) }
             case "workspace.rename": return try AgentControlScenarios.json(#"{"operationId":"operation-one","state":"succeeded"}"#)
             case "workspace.operation": return try await withCheckedThrowingContinuation { managementStatuses.append($0) }
             case "agents":
@@ -465,5 +467,41 @@ extension AgentControlScenarios {
         do { _ = try await mutation.value; throw CheckFailure(errorDescription: "Management revoke and regrant must still fence the old mutation") }
         catch is AgentControlFailure {}
         try check(model.streamId == stream && model.composer.outcome == .confirmed, "Management fence must leave confirmed terminal state intact")
+    }
+}
+
+extension AgentControlScenarios {
+    static func heldWorkspaceSpawnReceiptPreservesDurableRecoveryAndNeverReplays() async throws {
+        for succeeds in [true, false] {
+            let (model, bridge, defaults, suite) = try await setup()
+            defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+            var form = WorkspaceFormDraft()
+            form.prompt = String(repeating: "a", count: 65536); form.agentType = "Custom.agent 日本語"
+            let id = form.beginOperation()!
+            let key = "fixture.workspaceSubmission"
+            defaults.set(try JSONEncoder().encode(form), forKey: key)
+            let operation = Task { try await model.workspaceRequest("workspace.spawn", fields: ["operationId":id,"machine":"local","projectId":"/repo","target":"root","agentType":form.agentType,"prompt":form.prompt]) }
+            try await wait { bridge.launches.count == 1 }
+            try check(form.state == "pending" && form.beginOperation() == nil, "Held launch must retain a single immutable operation identity")
+            try check(bridge.operations.last(where: { $0.0 == "workspace.spawn" })?.1["prompt"] as? String == form.prompt, "Maximum launch prompt must remain intact while waiting for confirmed delivery")
+            if succeeds {
+                bridge.launches.removeFirst().resume(returning: try json("{\"operationId\":\"\(id)\",\"state\":\"succeeded\"}"))
+                let result = try await operation.value
+                try check(result.operationId == id && result.state == "succeeded", "Held launch receipt must be accepted after confirmed delivery")
+                form.state = result.state
+            } else {
+                model.transport(host: "host-a", connected: false)
+                bridge.launches.removeFirst().resume(throwing: AgentControlFailure(message: "No launch acknowledgement; committed outcome unknown"))
+                do { _ = try await operation.value; throw CheckFailure(errorDescription: "Interrupted launch must not report success") }
+                catch is AgentControlFailure { form.markUncertain("No acknowledgement; inspect workspace before a separate launch") }
+            }
+            defaults.set(try JSONEncoder().encode(form), forKey: key)
+            var restored = try JSONDecoder().decode(WorkspaceFormDraft.self, from: defaults.data(forKey: key)!)
+            try check(restored.operationId == id && restored.prompt == form.prompt && restored.beginOperation() == nil, "Relaunch must keep the original form and refuse implicit replay even after uncertainty")
+            try check(restored.state == (succeeds ? "succeeded" : "uncertain"), "Outcome must remain explicit in durable launch recovery")
+            model.transport(host: "host-a", connected: true, request: bridge.request)
+            try await wait { !model.machines.isEmpty }
+            try check(bridge.operations.filter { $0.0 == "workspace.spawn" }.count == 1, "Reconnect must never redispatch a launch")
+        }
     }
 }

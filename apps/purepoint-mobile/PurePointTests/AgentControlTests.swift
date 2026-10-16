@@ -186,3 +186,18 @@ extension AgentControlTests {
         XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: "sync"), 35_000_000_000)
     }
 }
+
+extension AgentControlTests {
+    @MainActor func testGivenHeldWorkspaceLaunchShouldKeepReceiptAndDurableUncertainFormWithoutReplay() async throws {
+        try await AgentControlScenarios.heldWorkspaceSpawnReceiptPreservesDurableRecoveryAndNeverReplays()
+    }
+    func testGivenWorkspaceOperationsShouldUseOnlyTheirExplicitReceiptBudgets() {
+        XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: "workspace.spawn"), 390_000_000_000)
+        for operation in ["workspace.terminal", "workspace.createWorktree", "workspace.rename", "workspace.stop"] {
+            XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: operation), 100_000_000_000)
+        }
+        for operation in ["workspace.catalog", "workspace.operation", "workspace.unrecognized", "sync"] {
+            XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: operation), 35_000_000_000)
+        }
+    }
+}
