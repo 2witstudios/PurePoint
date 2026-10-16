@@ -215,6 +215,8 @@ test("registered empty projects, partial metadata, offline machines and malforme
       machines: [
         null,
         { id: "no-name" },
+        { id: "no-name", name: "Duplicate must not replace first" },
+        { id: "local", name: "Cannot replace built-in local" },
         { id: "wrong-name", name: 42 },
         { id: "empty-name", name: " " },
         { id: "bad/id", name: "Bad" },
@@ -236,6 +238,12 @@ test("registered empty projects, partial metadata, offline machines and malforme
   const inventory = await c.request({ op: "agents" });
   assert.equal(inventory.machines[0].metadataStatus, "partial");
   assert.equal(inventory.machines[1].metadataStatus, "offline");
+  assert.equal(
+    new Set(inventory.machines.map((m) => m.id)).size,
+    inventory.machines.length,
+  );
+  assert.equal(inventory.machines.length, 4);
+  assert.equal((await f.daemons.resolve("no-name")).name, "no-name");
 });
 
 test("canonical catalog strips config secrets and command presets; old daemon capability explicit", async (t) => {

@@ -48,6 +48,7 @@ export function terminalConnection({
   const closedStreams = new Set();
   const pending = new Set();
   let disposed = false;
+  let terminalPermission = permission();
   const allowed = (control = false) => {
     const value = permission();
     if (disposed || value === "off" || (control && value !== "control"))
@@ -450,6 +451,12 @@ export function terminalConnection({
     notify,
     changed() {
       workspace.changed();
+      const current = permission();
+      if (current === terminalPermission) {
+        notify();
+        return;
+      }
+      terminalPermission = current;
       for (const abort of pending) abort.abort();
       for (const stream of streams.values()) {
         // Close the write-capable transport before returning from a downgrade.

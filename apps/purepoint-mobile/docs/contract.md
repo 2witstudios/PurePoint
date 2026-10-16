@@ -216,3 +216,5 @@ A reachable daemon whose agents inventory fails returns machine online:true, met
 
 
 Session history addition: each `sessions` result entry includes `preview: clip(firstMessage,500)` from the existing native first-message projection, independent of the title. Missing firstMessage produces an empty string, never sample text. The bound is500 JavaScript UTF-16 code units plus the existing `\n[Display truncated]` marker when clipped. Legacy clients ignore the additive field; updated clients tolerate it absent on older bridges. No extra session-file read is performed.
+
+Terminal permission events: workspace-only grant changes still fence workspace operations and emit current discovery, but do not cancel terminal prompts, close attach transports, or reset terminal output while terminals permission is unchanged. An actual terminal grant change retains the immediate terminal fence. Machine registry projection deterministically keeps the first validated entry for each machine ID; built-in local cannot be overridden, and name fallback still uses the validated ID.

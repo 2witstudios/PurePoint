@@ -112,7 +112,8 @@ async function fixture(t) {
 function client(f, { queueLimit, slow = false, now = Date.now } = {}) {
   const records = [],
     callbacks = [];
-  let permission = "control";
+  let permission = "control",
+    management = false;
   const ws = {
     readyState: 1,
     bufferedAmount: 0,
@@ -126,6 +127,7 @@ function client(f, { queueLimit, slow = false, now = Date.now } = {}) {
     ws,
     identity: { deviceId: "phone" },
     permission: () => permission,
+    management: () => management,
     send: (r) => records.push(r),
     daemons: f.daemons,
     queueLimit,
@@ -137,6 +139,10 @@ function client(f, { queueLimit, slow = false, now = Date.now } = {}) {
     ws,
     callbacks,
     request: connection.request,
+    changeWorkspace(value) {
+      management = value;
+      connection.changed();
+    },
     change(value) {
       permission = value;
       connection.changed();
@@ -578,4 +584,72 @@ test("maximum UTF8 prompt survives a delayed daemon receipt with full submitted 
   await delay(30);
   f.inputs[0].socket.write(JSON.stringify({ type: "ok" }) + "\n");
   assert.equal((await pending).outcome, "confirmed");
+});
+
+test("workspace-only grant events preserve held prompts and live attachments while terminal downgrade fences immediately", async (t) => {
+  const f = await fixture(t),
+    c = client(f);
+  t.after(c.connection.dispose);
+  const opened = await c.request({
+    op: "terminal.open",
+    machine: "local",
+    agentId: "ag-one",
+  });
+  await until(() => f.attached.length === 1);
+  f.hold(true);
+  const delivery = c.request({
+    op: "agent.prompt",
+    machine: "local",
+    agentId: "ag-one",
+    text: "Keep this prompt",
+  });
+  await until(() => f.inputs.length === 1);
+  let settled = false;
+  delivery.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  c.changeWorkspace(true);
+  c.changeWorkspace(false);
+  await delay(20);
+  assert.equal(settled, false);
+  assert.equal(f.inputs[0].socket.destroyed, false);
+  assert.equal(f.attached.length, 1);
+  assert.equal(f.attached[0].socket.destroyed, false);
+  assert.equal(
+    c.records.some((r) => r.type === "terminal.reset"),
+    false,
+  );
+  f.attached[0].send({
+    type: "output",
+    data: Buffer.from("still attached").toString("hex"),
+  });
+  await until(() =>
+    c.records.some(
+      (r) => r.type === "terminal.output" && r.data === "still attached",
+    ),
+  );
+  f.inputs[0].socket.write(JSON.stringify({ type: "ok" }) + "\n");
+  assert.equal((await delivery).outcome, "confirmed");
+  const pending = c.request({
+    op: "agent.prompt",
+    machine: "local",
+    agentId: "ag-one",
+    text: "Cancel on actual downgrade",
+  });
+  await until(() => f.inputs.length === 2);
+  c.change("view");
+  await assert.rejects(pending, /permission/);
+  await until(() => f.inputs[1].socket.destroyed);
+  await until(() => f.attached[0].socket.destroyed);
+  assert.equal(
+    c.records.some(
+      (r) => r.type === "terminal.reset" && r.streamId === opened.streamId,
+    ),
+    true,
+  );
 });

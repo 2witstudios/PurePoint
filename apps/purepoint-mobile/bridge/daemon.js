@@ -114,6 +114,7 @@ export function createDaemons({
     }
     if (!Array.isArray(registry.machines))
       throw new Error("Invalid machine registry");
+    const seen = new Set(["local"]);
     return [
       {
         id: "local",
@@ -128,6 +129,11 @@ export function createDaemons({
             /^[a-zA-Z0-9_-]+$/.test(m.id) &&
             m.id !== "local",
         )
+        .filter((m) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        })
         .map((m) => ({
           id: m.id,
           name:
