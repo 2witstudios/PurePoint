@@ -171,15 +171,16 @@ private struct AgentControlBar: View {
     var body: some View {
         let token = model.screenToken
         VStack(alignment: .leading, spacing: 8) {
+            // Saved recoveries stay reachable even when control is lost: copy, restore or dismiss.
+            if !model.recoveries.isEmpty {
+                Button { showRecoveries = true } label: {
+                    Label("\(model.recoveries.count) saved prompt\(model.recoveries.count == 1 ? "" : "s")", systemImage: "tray.full")
+                        .font(.caption.weight(.medium)).frame(minHeight: 44)
+                }.buttonStyle(.borderless).padding(.horizontal, 16)
+            }
             if model.permission == .control {
                 AgentQuickKeys(model: model)
                 if let status { Text(status.text).font(.caption).foregroundStyle(status.warning ? Color.orange : Color.secondary).lineLimit(2).textSelection(.enabled).padding(.horizontal, 16) }
-                if !model.recoveries.isEmpty {
-                    Button { showRecoveries = true } label: {
-                        Label("\(model.recoveries.count) saved prompt\(model.recoveries.count == 1 ? "" : "s")", systemImage: "tray.full")
-                            .font(.caption.weight(.medium)).frame(minHeight: 32)
-                    }.buttonStyle(.borderless).padding(.horizontal, 16)
-                }
                 composerRow(token)
                 if model.rawTyping && model.controlEnabled { rawRow(token) }
             } else {
@@ -259,9 +260,10 @@ private struct AgentQuickKeys: View {
                     } label: {
                         Text(key.label).font(.system(.footnote, design: .monospaced).weight(.medium))
                             .foregroundStyle(.primary)
-                            .padding(.horizontal, 12).frame(minWidth: 40, minHeight: 32)
+                            .padding(.horizontal, 12).frame(minWidth: 44, minHeight: 32)
                             .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .contentShape(Rectangle())
+                            // Compact key face, full 44-point hit area.
+                            .frame(minHeight: 44).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel(key.rawValue)
                 }
             }.padding(.horizontal, 12)
