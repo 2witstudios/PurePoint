@@ -13,6 +13,8 @@ struct PiPointGuardChatView: View {
     @State private var confirmResume = false
     @State private var followOutput = true
     @State private var scrollingTranscript = false
+    @State private var transcriptVisible = false
+    @State private var transcriptScroll = PiTranscriptScrollCoordinator()
     @State private var showFiles = false
     @State private var importingAttachment = false
     @FocusState private var composerFocused: Bool
@@ -176,36 +178,89 @@ struct PiPointGuardChatView: View {
             } action: { _, atBottom in
                 if atBottom && !scrollingTranscript { followOutput = true }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, _ in
-                // Markdown finishes parsing after the snapshot arrives. Follow its final layout too.
-                if followOutput && !scrollingTranscript && model.browsing == nil { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onScrollGeometryChange(for: PiTranscriptScrollCoordinator.Geometry.self) { geometry in
+                PiTranscriptScrollCoordinator.Geometry(
+                    contentHeight: geometry.contentSize.height,
+                    viewportHeight: geometry.containerSize.height,
+                    visibleBottom: geometry.contentOffset.y + geometry.containerSize.height)
+            } action: { old, geometry in
+                transcriptScroll.update(
+                    contentHeight: geometry.contentHeight, viewportHeight: geometry.viewportHeight,
+                    visibleBottom: geometry.visibleBottom)
+                // Markdown and expanded tool output can resize after the snapshot arrives.
+                // Offset-only changes from our own scroll must not request another scroll.
+                if old.contentHeight != geometry.contentHeight || old.viewportHeight != geometry.viewportHeight {
+                    requestTranscriptScroll(proxy)
+                }
             }
             .onScrollPhaseChange { oldPhase, phase, context in
-                if phase == .tracking || phase == .interacting { scrollingTranscript = true; followOutput = false }
+                if phase == .tracking || phase == .interacting {
+                    transcriptScroll.cancel()
+                    scrollingTranscript = true
+                    followOutput = false
+                }
                 if phase == .idle && oldPhase != .animating {
                     scrollingTranscript = false
                     let geometry = context.geometry
                     if geometry.containerSize.height > 0 {
                         followOutput = geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 96
+                        if followOutput { requestTranscriptScroll(proxy) }
                     }
                 }
             }
-            .onChange(of: model.snapshot?.sessionId) { _, _ in
+            .onAppear {
+                transcriptVisible = true
+                transcriptScroll.reset()
+                requestTranscriptScroll(proxy)
+            }
+            .onDisappear {
+                transcriptVisible = false
+                transcriptScroll.reset()
+            }
+            .onChange(of: ObjectIdentifier(model)) { _, _ in
+                transcriptScroll.reset()
+                scrollingTranscript = false
                 followOutput = true
-                proxy.scrollTo("bottom", anchor: .bottom)
+                requestTranscriptScroll(proxy)
+            }
+            .onChange(of: model.browsing?.sessionId) { _, _ in
+                transcriptScroll.reset()
+                if model.browsing == nil { requestTranscriptScroll(proxy) }
+            }
+            .onChange(of: model.snapshot?.sessionId) { _, _ in
+                transcriptScroll.reset()
+                scrollingTranscript = false
+                followOutput = true
+                requestTranscriptScroll(proxy)
             }
             .onChange(of: model.snapshot?.revision) { _, _ in
-                if followOutput && model.browsing == nil { proxy.scrollTo("bottom", anchor: .bottom) }
+                transcriptScroll.outputChanged()
+                requestTranscriptScroll(proxy)
             }
             .overlay(alignment: .bottomTrailing) {
                 if !followOutput {
                     Button("Latest", systemImage: "arrow.down") {
-                        followOutput = true; proxy.scrollTo("bottom", anchor: .bottom)
+                        followOutput = true
+                        scrollingTranscript = false
+                        transcriptScroll.outputChanged()
+                        requestTranscriptScroll(proxy)
                     }
                     .buttonStyle(.bordered).padding(12)
                 }
             }
         }
+    }
+
+    private func requestTranscriptScroll(_ proxy: ScrollViewProxy) {
+        guard transcriptVisible, followOutput, !scrollingTranscript, model.browsing == nil else { return }
+        let sessionId = model.snapshot?.sessionId
+        let modelId = ObjectIdentifier(model)
+        transcriptScroll.request(canScroll: {
+            transcriptVisible && followOutput && !scrollingTranscript && model.browsing == nil
+                && model.snapshot?.sessionId == sessionId && ObjectIdentifier(model) == modelId
+        }, scroll: {
+            proxy.scrollTo("bottom", anchor: .bottom)
+        })
     }
 
     private var emptyState: some View {
