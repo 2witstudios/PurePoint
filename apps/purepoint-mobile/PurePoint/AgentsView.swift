@@ -787,6 +787,9 @@ struct WorkspaceLaunchForm: View {
     private var key: String { "pi.workspaceForm.v1." + target.storageKey }
     private var availableWorktrees: [WorkspaceWorktree] { model.machines.first { $0.id == target.machine }?.worktrees?.filter { $0.projectId == target.project } ?? [] }
     private var needsCatalog: Bool { target.kind == "spawn" || target.kind == "terminal" }
+    private var hasInstructions: Bool { !draft.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    // Mirrors the bridge: blank instructions add nothing to the preset.
+    private func expandedPrompt(_ preset: WorkspaceCatalog.Preset) -> String { hasInstructions ? preset.prompt + "\n\n" + draft.prompt : preset.prompt }
     private var valid: Bool {
         guard model.canManage, model.bridgeIdentity == target.host, model.machines.contains(where: { $0.id == target.machine && $0.online && $0.metadataStatus != "error" && $0.registeredProjects?.contains(where: { $0.id == target.project && $0.available }) == true }), draft.operationId == nil, !submitting else { return false }
         if target.kind == "rename" || target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree") {
@@ -794,13 +797,15 @@ struct WorkspaceLaunchForm: View {
         }
         if target.kind == "spawn" {
             guard catalog?.agents.contains(where: { $0.id == draft.agentType && $0.available }) == true,
-                  !draft.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draft.prompt.utf8.count <= 65536 else { return false }
+                  draft.prompt.utf8.count <= 65536 else { return false }
+            // Plan mode needs instructions or a preset; the daemon rejects an empty prompt in plan mode.
+            if draft.planMode, !hasInstructions, draft.preset.isEmpty { return false }
         }
         if !draft.base.isEmpty && (target.kind == "createWorktree" || draft.destination == "newWorktree") {
             guard draft.base.utf8.count <= 128, draft.base.range(of: "^[A-Za-z0-9][A-Za-z0-9_./-]*$", options: .regularExpression) != nil, !draft.base.contains("..") else { return false }
         }
         if target.kind == "spawn", !draft.preset.isEmpty {
-            guard let preset = catalog?.presets.first(where: { $0.id == draft.preset && $0.agentType == draft.agentType }), (preset.prompt + "\n\n" + draft.prompt).utf8.count <= 65536 else { return false }
+            guard let preset = catalog?.presets.first(where: { $0.id == draft.preset && $0.agentType == draft.agentType }), expandedPrompt(preset).utf8.count <= 65536 else { return false }
         }
         if target.kind == "terminal", catalog?.terminalAvailable != true { return false }
         if draft.destination == "worktree" && (target.kind == "spawn" || target.kind == "terminal") && !availableWorktrees.contains(where: { $0.id == draft.worktree }) { return false }
@@ -844,8 +849,8 @@ struct WorkspaceLaunchForm: View {
                     if target.kind == "spawn" {
                         Picker("Agent", selection: $draft.agentType) { Text("Select agent").tag(""); ForEach(catalog?.agents ?? []) { agent in if agent.available { Text(agent.name).tag(agent.id) } } }
                         Picker("Preset", selection: $draft.preset) { Text("None").tag(""); ForEach((catalog?.presets ?? []).filter { $0.agentType == draft.agentType }) { Text($0.name).tag($0.id) } }
-                        TextField("Instructions", text: $draft.prompt, axis: .vertical).lineLimit(4...12)
-                        Toggle("Plan mode", isOn: $draft.planMode).tint(.green) // An accent-tinted track hides the white knob in dark mode.
+                        TextField("Instructions (optional)", text: $draft.prompt, axis: .vertical).lineLimit(4...12)
+                        Toggle("Plan mode", isOn: $draft.planMode).tint(.green).disabled(!draft.planMode && !hasInstructions && draft.preset.isEmpty) // An accent-tinted track hides the white knob in dark mode.
                     }
                     if target.kind == "rename" || target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree") {
                         TextField(target.kind == "rename" ? "Agent name" : "Worktree name", text: $draft.name)
@@ -931,11 +936,22 @@ struct WorkspaceLaunchForm: View {
         if target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree"), !draft.base.isEmpty { fields["base"] = draft.base }
         if let agent = target.agent { fields["agentId"] = agent }
         if target.kind == "stop" { fields["confirm"] = true }
-        do { let result = try await model.workspaceRequest("workspace." + target.kind, fields: fields); draft.state = result.state; draft.message = result.message }
-        catch {
+        do {
+            let result = try await model.workspaceRequest("workspace." + target.kind, fields: fields)
+            draft.state = result.state; draft.message = result.message
+            // A launched agent opens immediately instead of leaving the sheet on a success message.
+            if target.kind == "spawn", result.state == "succeeded", let agentId = result.detail?.agentId, openSpawned(agentId) { dismiss() }
+        } catch {
             draft.markUncertain(error.localizedDescription)
             if error.localizedDescription.contains("workspace_duplicate"), let result = try? await model.operationStatus(id) { draft.state = result.state; draft.message = result.message }
         }
+    }
+    // Returns false when the refreshed inventory does not show the agent yet; the sheet then stays on its success message.
+    private func openSpawned(_ agentId: String) -> Bool {
+        guard let machine = model.machines.first(where: { $0.id == target.machine }),
+              let agent = machine.agents.first(where: { $0.id == agentId }) else { return false }
+        model.open(machine: machine, agent: agent, context: model.contextToken)
+        return true
     }
     private func status(_ id: String) async {
         submitting = true; defer { submitting = false; save() }
