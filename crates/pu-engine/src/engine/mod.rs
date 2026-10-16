@@ -6,7 +6,7 @@ mod fs_ops;
 mod helpers;
 mod inventory;
 mod pty_operations;
-pub(crate) use pty_operations::PtySize;
+pub(crate) use pty_operations::{AttachmentCursor, AttachmentUpdate, PtySize};
 mod read;
 mod scheduler;
 mod session_repair;

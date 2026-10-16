@@ -1,6 +1,6 @@
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use crate::engine::Engine;
+use crate::engine::{AttachmentCursor, Engine};
 use pu_core::protocol::{Request, Response};
 
 use super::{
@@ -69,7 +69,7 @@ async fn run_attachment(
     exit_rx: &mut tokio::sync::watch::Receiver<Option<i32>>,
 ) {
     let mut watcher = buffer.subscribe();
-    let (data, mut offset, initial_size) = engine
+    let (data, offset, initial_size) = engine
         .attachment_replay(agent_id, &buffer, snapshot, size_rx)
         .await;
     if write_response(
@@ -83,7 +83,12 @@ async fn run_attachment(
     {
         return;
     }
-    let mut reported_size = initial_size.clone();
+    let mut cursor = AttachmentCursor {
+        offset,
+        size: initial_size.clone(),
+        snapshot,
+        identified,
+    };
     if identified && write_size(writer, initial_size).await.is_err() {
         return;
     }
@@ -99,56 +104,17 @@ async fn run_attachment(
         tokio::select! {
             biased;
             result = size_rx.recv(), if identified => {
-                match result {
-                    Ok(size) => {
-                        reported_size = size.clone();
-                        if write_size(writer, size).await.is_err() { break }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        let (data, next, size) = engine.attachment_replay(agent_id, &buffer, snapshot, size_rx).await;
-                        if snapshot && write_response(writer, &Response::Resync).await.is_err() { break }
-                        reported_size = size.clone();
-                        if write_size(writer, size).await.is_err() { break }
-                        if snapshot {
-                            offset = next;
-                            if write_output_chunks(writer, agent_id, &data).await.is_err() { break }
-                        }
-                    }
-                    Err(_) => break,
-                }
+                if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break }
+                let update = engine.attachment_update(agent_id, &buffer, &mut cursor, size_rx, Some(result)).await;
+                if write_attachment_update(writer, agent_id, update).await.is_err() { break }
             }
             Ok(()) = watcher.changed() => {
-                let (mut data, mut new_offset, gap) = buffer.read_from(offset);
-                if snapshot && gap {
-                    if write_response(writer, &Response::Resync).await.is_err() { break }
-                    let (fresh, next, size) = engine.attachment_replay(agent_id, &buffer, true, size_rx).await;
-                    if identified && size != reported_size {
-                        reported_size = size.clone();
-                        if write_size(writer, size).await.is_err() { break }
-                    }
-                    (data, new_offset) = (fresh, next);
-                }
-                offset = new_offset;
-                if !data.is_empty()
-                    && write_output_chunks(writer, agent_id, &data).await.is_err()
-                {
-                    tracing::debug!(agent_id, "attach stream ended: write error");
-                    break;
-                }
+                let update = engine.attachment_update(agent_id, &buffer, &mut cursor, size_rx, None).await;
+                if write_attachment_update(writer, agent_id, update).await.is_err() { break }
             }
             Ok(()) = exit_rx.changed() => {
-                // Drain any remaining buffered output
-                let (mut data, _, gap) = buffer.read_from(offset);
-                if snapshot && gap {
-                    if write_response(writer, &Response::Resync).await.is_err() { break }
-                    let (fresh, _, size) = engine.attachment_replay(agent_id, &buffer, true, size_rx).await;
-                    if identified && size != reported_size && write_size(writer, size).await.is_err() { break }
-                    data = fresh;
-                }
-                if !data.is_empty() {
-                    let _ = write_output_chunks(writer, agent_id, &data).await;
-                }
-                tracing::debug!(agent_id, "attach stream ended: process exited");
+                let update = engine.attachment_update(agent_id, &buffer, &mut cursor, size_rx, None).await;
+                let _ = write_attachment_update(writer, agent_id, update).await;
                 break;
             }
             result = async {
@@ -171,6 +137,20 @@ async fn run_attachment(
         }
     }
     tracing::debug!(agent_id, "attach stream ended");
+}
+
+pub(super) async fn write_attachment_update(
+    writer: &mut IpcWriter,
+    agent_id: &str,
+    update: crate::engine::AttachmentUpdate,
+) -> std::io::Result<()> {
+    if update.resync {
+        write_response(writer, &Response::Resync).await?;
+    }
+    for size in update.sizes {
+        write_size(writer, size).await?;
+    }
+    write_output_chunks(writer, agent_id, &update.data).await
 }
 
 async fn write_size(

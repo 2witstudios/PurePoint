@@ -101,13 +101,13 @@ actor DaemonAttachSession {
         guard cols > 0, rows > 0 else { return }
         desiredSize = (cols, rows)
         guard let conn = connection else { return }
-        try? await DaemonClient.write(.claimSize(cols: cols, rows: rows), to: conn)
+        try? await DaemonClient.write(.resize(agentId: agentId, cols: cols, rows: rows), to: conn)
     }
 
     /// Focus is an explicit ownership claim; typing never changes ownership.
     func claimSize() async {
-        guard let size = desiredSize else { return }
-        await sendResize(cols: size.0, rows: size.1)
+        guard let size = desiredSize, let conn = connection else { return }
+        try? await DaemonClient.write(.claimSize(cols: size.0, rows: size.1), to: conn)
     }
 
     /// Stop the attach session.

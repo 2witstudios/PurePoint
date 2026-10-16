@@ -11,6 +11,19 @@ pub(super) struct SizeState {
 
 pub(crate) type PtySize = (u16, u16, Option<String>);
 
+pub(crate) struct AttachmentCursor {
+    pub offset: usize,
+    pub size: PtySize,
+    pub snapshot: bool,
+    pub identified: bool,
+}
+
+pub(crate) struct AttachmentUpdate {
+    pub data: Vec<u8>,
+    pub sizes: Vec<PtySize>,
+    pub resync: bool,
+}
+
 impl SizeState {
     fn publish(&mut self, next: PtySize) {
         if self.current != next {
@@ -90,6 +103,56 @@ impl Engine {
         {}
         let size = sizes.get(agent_id).unwrap().current.clone();
         (data, offset, size)
+    }
+
+    /// Capture output and geometry under the same lock used by applied resizes.
+    /// A geometry change replaces unread old-size bytes with a fresh snapshot.
+    pub(crate) async fn attachment_update(
+        &self,
+        agent_id: &str,
+        buffer: &OutputBuffer,
+        cursor: &mut AttachmentCursor,
+        size_rx: &mut tokio::sync::broadcast::Receiver<PtySize>,
+        first: Option<Result<PtySize, tokio::sync::broadcast::error::RecvError>>,
+    ) -> AttachmentUpdate {
+        let states = self.sizes.lock().await;
+        let mut sizes = Vec::new();
+        let mut lagged = false;
+        match first {
+            Some(Ok(size)) => sizes.push(size),
+            Some(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => lagged = true,
+            _ => (),
+        }
+        loop {
+            match size_rx.try_recv() {
+                Ok(size) => sizes.push(size),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => lagged = true,
+                _ => break,
+            }
+        }
+        let current = &states.get(agent_id).unwrap().current;
+        if lagged && sizes.last() != Some(current) {
+            sizes.push(current.clone());
+        }
+        let geometry_changed = cursor.identified
+            && sizes
+                .iter()
+                .any(|size| size.0 != cursor.size.0 || size.1 != cursor.size.1);
+        let (mut data, mut offset, gap) = buffer.read_from(cursor.offset);
+        let reset = geometry_changed || (cursor.identified && lagged) || (cursor.snapshot && gap);
+        if reset {
+            (data, offset) = buffer.attach_snapshot();
+        }
+        cursor.offset = offset;
+        cursor.size = current.clone();
+        if !cursor.identified {
+            sizes.clear();
+        }
+        AttachmentUpdate {
+            data,
+            sizes,
+            resync: cursor.snapshot && reset,
+        }
     }
 
     #[cfg(test)]

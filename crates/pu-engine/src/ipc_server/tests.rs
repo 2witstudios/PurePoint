@@ -854,3 +854,75 @@ async fn given_cancellable_request_and_eof_already_buffered_should_never_start_t
         "even a partial first chunk must not be queued"
     );
 }
+
+#[tokio::test]
+async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_live_offset() {
+    let (engine, id, _tmp) = crate::test_helpers::init_and_spawn().await;
+    let (buffer, _, _) = engine.get_attach_handles(&id).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (owner, _) = engine.register_attachment(&id, Some("owner".into())).await;
+    engine.attachment_resize(&id, owner, 5, 3, true).await;
+    buffer.write(b"\x1b[2J\x1b[H");
+    let (_, mut sizes) = engine.register_attachment(&id, Some("viewer".into())).await;
+    let (initial, offset, size) = engine
+        .attachment_replay(&id, &buffer, true, &mut sizes)
+        .await;
+    let mut rendered = vt100::Parser::new(3, 5, 1024);
+    rendered.process(&initial);
+    let mut cursor = crate::engine::AttachmentCursor {
+        offset,
+        size,
+        snapshot: true,
+        identified: true,
+    };
+    // Both batches remain unread by the viewer when the size changes.
+    buffer.write(b"ABCDEF");
+    engine.attachment_resize(&id, owner, 10, 3, true).await;
+    buffer.write(b"G");
+    engine.attachment_resize(&id, owner, 8, 3, true).await;
+    let update = engine
+        .attachment_update(&id, &buffer, &mut cursor, &mut sizes, None)
+        .await;
+    assert!(update.resync);
+    assert_eq!(
+        update.sizes.iter().map(|size| size.0).collect::<Vec<_>>(),
+        vec![10, 8]
+    );
+    let replay_bytes = update.data.len();
+    let (server, client) = UnixStream::pair().unwrap();
+    let (_, mut writer) = server.into_split();
+    let (read, _) = client.into_split();
+    let mut reader = BufReader::new(read);
+    streams::write_attachment_update(&mut writer, &id, update)
+        .await
+        .unwrap();
+    assert!(matches!(next_response(&mut reader).await, Response::Resync));
+    rendered.process(b"\x1bc");
+    // Every queued size report precedes the latest matching snapshot.
+    for expected_cols in [10, 8] {
+        let Response::PtySize { cols, rows, .. } = next_response(&mut reader).await else {
+            panic!("size report must precede snapshot output")
+        };
+        assert_eq!((cols, rows), (expected_cols, 3));
+        rendered.screen_mut().set_size(rows, cols);
+    }
+    let mut remaining = replay_bytes;
+    while remaining > 0 {
+        let Response::Output { data, .. } = next_response(&mut reader).await else {
+            panic!("expected snapshot output")
+        };
+        remaining -= data.len();
+        rendered.process(&data);
+    }
+    assert_eq!(rendered.screen().contents(), buffer.terminal_snapshot().0);
+    assert!(rendered.screen().contents().contains("ABCDE\nFG"));
+    assert_eq!(cursor.offset, buffer.current_offset());
+    buffer.write(b"H");
+    let live = engine
+        .attachment_update(&id, &buffer, &mut cursor, &mut sizes, None)
+        .await;
+    assert!(!live.resync);
+    assert!(live.sizes.is_empty());
+    rendered.process(&live.data);
+    assert_eq!(rendered.screen().contents(), buffer.terminal_snapshot().0);
+}
