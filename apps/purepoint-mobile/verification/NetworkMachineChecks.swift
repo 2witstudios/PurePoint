@@ -1,7 +1,11 @@
 import Foundation
 
 extension ChatModel {
-    var networkPendingForChecks: Int { pending.count }
+    // Agent discovery has its own lifecycle; this invariant continues to require
+    // every Pi chat request to drain on selection change.
+    var networkPendingForChecks: Int { pending.keys.filter { agentRequests[$0] == nil }.count }
+    var networkStaleAgentPendingForChecks: Int { pending.keys.filter { agentRequests[$0].map { $0 != generation } == true }.count }
+    var networkAgentPendingForChecks: Int { pending.keys.filter { agentRequests[$0] != nil }.count }
     func networkLossForChecks() { connectionLost("Fixture unavailable") }
     var retriesForChecks: Int { retryBudget.attempts }
 }
@@ -54,7 +58,7 @@ final class DelayedTrustRead: @unchecked Sendable {
         model.draft = "A submitted"; model.submit(mode: "send")
         try await wait { ["sessions", "history", "send", "answer"].allSatisfy { exists("started-A-" + $0) } }
         model.selectMachine(b.hostId); try await wait { model.connected && model.snapshot?.title == "B" }
-        precondition(model.networkPendingForChecks == 0 && model.draft == "B draft" && model.attachments.isEmpty && model.submissions.allSatisfy { $0.text != "A submitted" }, "Given A in-flight work during switch, should drain pending callbacks without exposing A state")
+        precondition(model.networkPendingForChecks == 0 && model.networkStaleAgentPendingForChecks == 0 && model.draft == "B draft" && model.attachments.isEmpty && model.submissions.allSatisfy { $0.text != "A submitted" }, "Given A in-flight work during switch, should drain pending callbacks without exposing A state")
         for op in ["sessions", "history", "send", "answer"] { try mark("release-A-" + op) }
         try mark("broadcast-A"); await history.value; await sessions.value; await answer.value
         try await Task.sleep(nanoseconds: 80_000_000)
@@ -99,6 +103,21 @@ final class DelayedTrustRead: @unchecked Sendable {
         precondition(requests.filter { $0["op"]?.text == "stop" }.isEmpty, "Given switching, should never Stop either Mac")
         precondition(requests.filter { $0["op"]?.text == "send" }.count == 1 && requests.first { $0["op"]?.text == "send" }?["machine"]?.text == "A", "Given switching/reconnect/recovery, should send exactly once to A and never replay on B")
         precondition(aKey != bKey)
-        print("Network machine checks passed: two real pinned hosts; A/B/back; in-flight receipts/history/dialogs/editor; enrollment failure/cancel/pin; reconnect selection; explicit disconnect; zero Stop; one A send and no replay.")
+        // A fleet that never answers must not hold an otherwise synced Pi chat.
+        try mark("control-A"); try mark("hold-A-agents")
+        delayedModel.selectMachine(a.hostId)
+        try await wait { exists("started-A-agents") }
+        try await wait { delayedModel.connected && delayedModel.snapshot?.title == "A" }
+        precondition(delayedModel.networkAgentPendingForChecks > 0 && delayedModel.networkPendingForChecks == 0 && !exists("release-A-agents"), "Pi chat must be usable while fleet inventory remains held")
+        // Switch away with A inventory still held: its discovery callback must drain too.
+        // An older bridge may never answer capability discovery either.
+        try mark("hold-B-permissions")
+        delayedModel.selectMachine(b.hostId)
+        try await wait { exists("started-B-permissions") }
+        try await wait { delayedModel.connected && delayedModel.snapshot?.title == "B" }
+        precondition(delayedModel.networkAgentPendingForChecks > 0 && delayedModel.networkPendingForChecks == 0 && !exists("release-B-permissions"), "Pi chat readiness must not depend on terminal capabilities")
+        precondition(delayedModel.networkStaleAgentPendingForChecks == 0, "Held A inventory must drain on switching to B without exposing stale fleet callbacks")
+        try mark("release-A-agents"); try mark("release-B-permissions"); delayedModel.disconnect()
+        print("Network machine checks passed: two real pinned hosts; A/B/back; in-flight receipts/history/dialogs/editor; enrollment failure/cancel/pin; reconnect selection; explicit disconnect; zero Stop; one A send/no replay; held fleet inventory and capability discovery never gate Pi chat.")
     }
 }

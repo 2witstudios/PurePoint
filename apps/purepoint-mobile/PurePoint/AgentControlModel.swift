@@ -16,6 +16,7 @@ import SwiftUI
     @Published private(set) var hasSize = false
     @Published private(set) var screenMayBeInexact = false
     @Published private(set) var composer = AgentComposer()
+    @Published private(set) var recoveries: [AgentPromptRecovery] = []
     @Published var error: String?
     @Published var rawTyping = false
     @Published var rawText = ""
@@ -32,6 +33,8 @@ import SwiftUI
     private(set) var terminalBaseCols = 80
     private(set) var terminalBaseRows = 24
     private var terminalBytes = 0
+    private var savedRecoveries: [String: [AgentPromptRecovery]] = [:]
+    private var recoveryUnavailable = false
     private var drafts: [String: String]
     private var composers: [AgentScope: AgentComposer] = [:]
     private let defaults: UserDefaults
@@ -39,6 +42,13 @@ import SwiftUI
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         drafts = defaults.dictionary(forKey: "pi.agentDrafts.v1") as? [String: String] ?? [:]
+        if let data = defaults.data(forKey: "pi.agentRecovery.v1") {
+            do { savedRecoveries = try JSONDecoder().decode([String: [AgentPromptRecovery]].self, from: data) } catch {
+                recoveryUnavailable = true;
+                self.error =
+                    "Saved agent prompt recovery could not be read. Keep this phone's local data and resolve storage before sending."
+            }
+        }
     }
 
     var contextToken: Int { generation }
@@ -59,6 +69,12 @@ import SwiftUI
     }
     var controlEnabled: Bool { connected && permission == .control && selected != nil && streamId != nil }
     var sendExplanation: String? {
+        if recoveryUnavailable {
+            return "Saved prompt recovery is unavailable. Resolve this phone's storage before sending."
+        }
+        if recoveries.count >= 50 {
+            return "Saved prompt recovery is full. Copy or recover and dismiss a saved prompt before sending."
+        }
         if !connected { return "Connect to your Mac to control agents." }
         if permission != .control { return "Terminal access is view only. Enable control on your Mac." }
         if streamId == nil { return "Open the terminal before sending." }
@@ -82,6 +98,11 @@ import SwiftUI
         generation += 1; refreshRevision += 1; refreshTask?.cancel(); refreshTask = nil
         // A pending send is uncertain after disconnect, never silently resent.
         if let submission = composer.pending {
+            if let selected {
+                settleRecovery(
+                    submission.id, scope: selected, status: "Delivery uncertain",
+                    reason: "Connection changed before confirmation. Inspect the terminal before sending again.")
+            }
             composer.finish(
                 submission, outcome: .failed,
                 reason: "Connection changed. Delivery may be uncertain. Inspect the terminal before sending again.")
@@ -107,8 +128,6 @@ import SwiftUI
             if token == self.generation { self.discovering = false }
         }
     }
-
-    func waitForDiscovery() async { await refreshTask?.value }
 
     func receive(_ envelope: WireEnvelope) {
         if envelope.type == "permissions" {
@@ -161,6 +180,7 @@ import SwiftUI
         closeScreen()
         let scope = AgentScope(host: host, machine: machine.id, agent: agent.id)
         selected = scope; composer = composers[scope] ?? AgentComposer(text: drafts[scope.storageKey] ?? "")
+        recoveries = savedRecoveries[scope.storageKey] ?? []
         screenMayBeInexact = machine.screenMayBeInexact
         let token = generation, visible = screen
         pendingOpen = AgentPendingOpen(); error = nil
@@ -196,13 +216,18 @@ import SwiftUI
 
     func closeScreen() {
         if let submission = composer.pending {
+            if let selected {
+                settleRecovery(
+                    submission.id, scope: selected, status: "Delivery uncertain",
+                    reason: "Agent screen closed before confirmation. Inspect the terminal before sending again.")
+            }
             composer.finish(
                 submission, outcome: .failed,
                 reason: "Agent screen closed before confirmation. Inspect the terminal before sending again.")
         }
         saveComposer(); screen += 1; pendingOpen = nil
         if let id = streamId, let request { Task { _ = try? await request("terminal.close", ["streamId": id]) } }
-        selected = nil; streamId = nil; rawTyping = false; rawText = ""; composer = AgentComposer()
+        selected = nil; streamId = nil; rawTyping = false; rawText = ""; composer = AgentComposer(); recoveries = []
         cols = 80; rows = 24; hasSize = false; resetTerminal()
     }
 
@@ -213,11 +238,46 @@ import SwiftUI
         defaults.set(drafts, forKey: "pi.agentDrafts.v1")
     }
 
+    private func persistRecovery() {
+        guard !recoveryUnavailable else { return }
+        do { defaults.set(try JSONEncoder().encode(savedRecoveries), forKey: "pi.agentRecovery.v1") } catch {
+            recoveryUnavailable = true;
+            self.error = "Could not save prompt recovery. Text remains on this phone; resolve storage before sending."
+        }
+    }
+    private func settleRecovery(_ id: UUID, scope: AgentScope, status: String?, reason: String?) {
+        guard var items = savedRecoveries[scope.storageKey], let index = items.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        if let status { items[index].status = status; items[index].reason = reason } else { items.remove(at: index) }
+        savedRecoveries[scope.storageKey] = items
+        if selected == scope { recoveries = items }
+        persistRecovery()
+    }
+    func restoreRecovery(_ id: UUID, screen token: Int) {
+        guard token == screen, let item = recoveries.first(where: { $0.id == id }) else { return }
+        if draft.isEmpty { draft = item.text } else if draft != item.text { draft += "\n\n" + item.text }
+    }
+    func dismissRecovery(_ id: UUID, screen token: Int) {
+        guard token == screen, composer.pending?.id != id, let selected else { return }
+        settleRecovery(id, scope: selected, status: nil, reason: nil)
+    }
+
     func sendPrompt(screen token: Int) {
         guard token == screen, canSend, let scope = selected, let request, let submission = composer.begin() else {
             return
         }
-        saveComposer()
+        savedRecoveries[scope.storageKey, default: []].append(
+            AgentPromptRecovery(
+                id: submission.id, text: submission.text, status: "Delivery uncertain",
+                reason: "Awaiting confirmation. This prompt will never resend automatically."))
+        recoveries = savedRecoveries[scope.storageKey] ?? []
+        persistRecovery(); saveComposer()
+        guard !recoveryUnavailable else {
+            composer.finish(
+                submission, outcome: .failed, reason: "Prompt recovery could not be saved. Text kept on this phone.")
+            saveComposer(); return
+        }
         let token = generation, visible = screen, permissionToken = permissionRevision
         Task { [weak self] in
             let result: AgentPromptResult
@@ -244,6 +304,15 @@ import SwiftUI
                 )
             var origin = self.composers[scope] ?? AgentComposer(text: submission.text)
             if visible == self.screen && self.selected == scope { origin = self.composer }
+            if valid && origin.pending?.id == submission.id
+                && (outcome.outcome == .confirmed || outcome.outcome == .sent)
+            {
+                self.settleRecovery(submission.id, scope: scope, status: nil, reason: nil)
+            } else if outcome.outcome == .failed || outcome.outcome == .blocked {
+                self.settleRecovery(
+                    submission.id, scope: scope, status: valid ? outcome.outcome.label : "Delivery uncertain",
+                    reason: outcome.reason)
+            }
             origin.finish(submission, outcome: outcome.outcome, reason: outcome.reason)
             self.composers[scope] = origin; self.drafts[scope.storageKey] = origin.text
             self.defaults.set(self.drafts, forKey: "pi.agentDrafts.v1")
@@ -293,7 +362,7 @@ import SwiftUI
             // Never discard part of a terminal stream then continue with corrupt state.
             // Close this viewer if SwiftUI cannot drain it; the agent keeps running.
             guard terminalBytes + data.utf8.count <= 1024 * 1024 else {
-                error = "Terminal display fell behind. Close and reopen the agent for a fresh snapshot."
+                self.error = "Terminal display fell behind. Close and reopen the agent for a fresh snapshot."
                 if let streamId, let request {
                     Task { _ = try? await request("terminal.close", ["streamId": streamId]) }
                 }

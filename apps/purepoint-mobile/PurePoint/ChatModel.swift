@@ -55,6 +55,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var receiveTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
+    private var agentRequests: [String: Int] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
     private var drafts: [String: String] = [:]
     private var attachmentDrafts: [String: [ComposerAttachment]] = [:]
@@ -419,10 +420,12 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 let transport = self.generation
                 self.agentControl.transport(host: self.machineKey, connected: true) { [weak self] op, fields in
                     guard let self, self.generation == transport, self.socket != nil else { throw MobileError("Agent connection changed. Reopen the agent before continuing.") }
-                    return try await self.call(op, fields: fields)
+                    let id = UUID().uuidString
+                    self.agentRequests[id] = transport
+                    defer { self.agentRequests.removeValue(forKey: id) }
+                    return try await self.call(op, fields: fields, id: id)
                 }
-                await self.agentControl.waitForDiscovery()
-                guard current == self.generation else { return }
+                // Terminal discovery and remote fleet health never gate Pi chat.
                 self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryBudget.reset()
             } catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }

@@ -198,3 +198,10 @@ enum AgentTerminalUpdate: Sendable {
     case size(Int, Int)
     var text: String? { if case .output(let text) = self { return text }; return nil }
 }
+
+struct AgentPromptRecovery: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    let text: String
+    var status: String
+    var reason: String?
+}

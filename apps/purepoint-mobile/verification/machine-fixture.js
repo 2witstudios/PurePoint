@@ -21,7 +21,8 @@ for (const name of ["A", "B"]) {
     requests.push({ machine: name, op: r.op, clientId: r.clientId, text: r.text ?? null });
     await writeFile(path.join(directory, "requests.json"), JSON.stringify(requests));
     if (r.op !== "sync") await held(`${name}-${r.op}`);
-    if (r.op === "permissions") return { terminals: "off" };
+    if (r.op === "permissions") return { terminals: await exists(`control-${name}`) ? "control" : "off" };
+    if (r.op === "agents") return { machines: [] };
     if (r.op === "sessions") return { sessions: [{ id: `${name}-session`, title: `${name} history` }] };
     if (r.op === "history") return { sessionId: `${name}-session`, title: name, messages: [{ id: "old", role: "assistant", text: `${name} history` }] };
     if (r.op === "send") return { disposition: "queued" };

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AgentsView: View {
     @ObservedObject var model: AgentControlModel
@@ -172,6 +173,7 @@ private struct AgentPromptComposer: View {
     var body: some View {
         let token = model.screenToken
         VStack(alignment: .leading, spacing: 8) {
+            if !model.recoveries.isEmpty { AgentPromptRecoveries(model: model, screen: token) }
             if let explanation = model.sendExplanation { Text(explanation).font(.caption).foregroundStyle(.secondary) }
             if let outcome = model.composer.outcome {
                 Text(outcome.label + (model.composer.reason.map { " · " + $0 } ?? ""))
@@ -212,5 +214,35 @@ private struct AgentPromptComposer: View {
                 }
             }
         }.padding(12).background(Color(uiColor: .secondarySystemBackground))
+    }
+}
+
+private struct AgentPromptRecoveries: View {
+    @ObservedObject var model: AgentControlModel
+    let screen: Int
+    var body: some View {
+        DisclosureGroup("Saved prompts (\(model.recoveries.count))") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(model.recoveries) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(item.status).font(.caption.weight(.semibold))
+                            Text(item.text).font(.caption).lineLimit(3).textSelection(.enabled)
+                            if let reason = item.reason { Text(reason).font(.caption2).foregroundStyle(.secondary) }
+                            HStack(spacing: 16) {
+                                Button("Recover") { model.restoreRecovery(item.id, screen: screen) }
+                                    .accessibilityHint("Append saved text below your current draft. Does not send.")
+                                Button("Copy") {
+                                    guard model.screenToken == screen else { return }
+                                    UIPasteboard.general.string = item.text
+                                }
+                                Button("Dismiss", role: .destructive) { model.dismissRecovery(item.id, screen: screen) }
+                                    .disabled(model.composer.pending?.id == item.id)
+                            }.font(.caption).frame(minHeight: 44)
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(maxHeight: 180)
+        }.font(.caption)
     }
 }

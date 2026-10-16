@@ -71,6 +71,10 @@ final class AgentControlTests: XCTestCase {
 }
 
 extension AgentControlTests {
+    @MainActor func testGivenNewerDraftShouldRetainFailedOriginalAcrossNavigationHostsAndRelaunch() async throws {
+        try await AgentControlScenarios.failedOriginalAndNewerDraftSurviveNavigationHostChangeAndRelaunch()
+    }
+
     @MainActor func testGivenScreenExitShouldKeepUncertainDraftAndCloseOnlyOriginatingTransport() async throws {
         try await AgentControlScenarios.closeUsesOriginatingTransportAndNeverLeavesPendingDraft()
     }

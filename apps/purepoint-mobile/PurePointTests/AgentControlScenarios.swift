@@ -99,6 +99,64 @@ import Foundation
             "Old stream must never close a same-named stream on another host")
     }
 
+    static func failedOriginalAndNewerDraftSurviveNavigationHostChangeAndRelaunch() async throws {
+        for outcome in ["failed", "blocked", "uncertain"] {
+            let (model, bridge, defaults, suite) = try await setup()
+            defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+            try await open(model, bridge); try finishOpen(bridge)
+            try await wait { model.streamId != nil }
+            model.editDraft("Original submission", screen: model.screenToken)
+            model.sendPrompt(screen: model.screenToken)
+            try await wait { !bridge.prompts.isEmpty }
+            model.editDraft("Newer draft", screen: model.screenToken)
+            if outcome == "uncertain" { model.closeScreen() }
+            bridge.prompts.removeFirst().resume(
+                returning: try json(
+                    "{\"outcome\":\"\(outcome == "uncertain" ? "confirmed" : outcome)\",\"reason\":\"Fixture result\"}")
+            )
+            if outcome != "uncertain" { try await wait { model.composer.pending == nil }; model.closeScreen() }
+            try await open(model, bridge); try finishOpen(bridge, id: "reopened")
+            try await wait { model.streamId == "reopened" }
+            try check(
+                model.draft == "Newer draft" && model.recoveries.contains { $0.text == "Original submission" },
+                "Original failed/blocked/uncertain text and newer draft must survive screen exit")
+            model.transport(host: "host-b", connected: true, request: bridge.request)
+            try await wait { !model.machines.isEmpty }
+            try await open(model, bridge); try finishOpen(bridge, id: "b")
+            try await wait { model.streamId == "b" }
+            try check(model.recoveries.isEmpty, "Recovery must never leak to another host")
+            model.editDraft("B draft", screen: model.screenToken)
+            model.transport(host: "host-a", connected: true, request: bridge.request)
+            try await wait { !model.machines.isEmpty }
+            try await open(model, bridge); try finishOpen(bridge, id: "a")
+            try await wait { model.streamId == "a" }
+            try check(
+                model.draft == "Newer draft" && model.recoveries.contains { $0.text == "Original submission" },
+                "Returning to origin must retain both texts")
+            model.closeScreen()
+            let relaunched = AgentControlModel(defaults: defaults)
+            relaunched.transport(host: "host-a", connected: true, request: bridge.request)
+            try await wait { !relaunched.machines.isEmpty }
+            try await open(relaunched, bridge); try finishOpen(bridge, id: "relaunch")
+            try await wait { relaunched.streamId == "relaunch" }
+            try check(
+                relaunched.draft == "Newer draft"
+                    && relaunched.recoveries.contains { $0.text == "Original submission" },
+                "Relaunch must hydrate both draft and recovery")
+            let saved = relaunched.recoveries.first!
+            relaunched.restoreRecovery(saved.id, screen: relaunched.screenToken)
+            try check(
+                relaunched.draft == "Newer draft\n\nOriginal submission",
+                "Explicit recovery must append without overwriting newer typing")
+            relaunched.dismissRecovery(saved.id, screen: relaunched.screenToken)
+            try check(relaunched.recoveries.isEmpty, "Explicit dismiss must remove only the saved receipt")
+            try check(
+                bridge.operations.filter { $0.0 == "agent.prompt" }.count == 1,
+                "Recovery actions and relaunch never resend")
+            relaunched.transport(host: "", connected: false)
+        }
+    }
+
     static func eventsBeforeReceiptAndReset() async throws {
         let (model, bridge, defaults, suite) = try await setup()
         defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }

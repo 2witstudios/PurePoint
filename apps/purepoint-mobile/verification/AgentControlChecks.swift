@@ -14,6 +14,7 @@ import Foundation
             ])
         try await AgentControlScenarios.allPromptOutcomesAndNoResend()
         try await AgentControlScenarios.closeUsesOriginatingTransportAndNeverLeavesPendingDraft()
+        try await AgentControlScenarios.failedOriginalAndNewerDraftSurviveNavigationHostChangeAndRelaunch()
         try await AgentControlScenarios.eventsBeforeReceiptAndReset()
         try await AgentControlScenarios.hostSwitchFencesLateOpenAndDraftCallbacks()
         try await AgentControlScenarios.downgradeAndLateReceipt()
