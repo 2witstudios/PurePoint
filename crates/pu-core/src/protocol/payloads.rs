@@ -174,7 +174,7 @@ impl From<GatePayload> for crate::trigger_def::GateDef {
 pub struct AgentStatusReport {
     /// Optional passive observation; absence means unknown, never idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signal: Option<crate::signals::SignalSnapshot>,
+    pub signal: Option<Box<crate::signals::SignalSnapshot>>,
     pub id: String,
     pub name: String,
     pub agent_type: String,
