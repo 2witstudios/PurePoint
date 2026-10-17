@@ -294,6 +294,47 @@ test("same-device attachments belong only to opening connection; keys cannot cla
   );
 });
 
+test("raw input preserves legacy mouse bytes and validates encoding and limits", async (t) => {
+  const f = await fixture(t),
+    a = client(f),
+    b = client(f);
+  t.after(a.connection.dispose);
+  t.after(b.connection.dispose);
+  const opened = await a.request({
+    op: "terminal.open",
+    machine: "local",
+    agentId: "ag-one",
+  });
+  await until(() => f.attached.length === 1);
+  const input = {
+    op: "terminal.raw",
+    streamId: opened.streamId,
+    encoding: "base64",
+    data: Buffer.from([0x1b, 0x5b, 0x4d, 0x60, 0xa0, 0x80]).toString("base64"),
+  };
+  await a.request(input);
+  await a.request({ ...input, data: "héllo", encoding: "utf8" });
+  await until(() => f.inputs.length === 2);
+  assert.equal(f.inputs[0].r.data, "1b5b4d60a080");
+  assert.equal(f.inputs[1].r.data, Buffer.from("héllo").toString("hex"));
+  for (const data of [
+    "",
+    "!!!",
+    "YQ",
+    "YQ==\n",
+    Buffer.alloc(65537).toString("base64"),
+  ])
+    await assert.rejects(
+      a.request({ ...input, data }),
+      /Invalid terminal input/,
+    );
+  await assert.rejects(a.request({ ...input, encoding: "hex" }), /encoding/);
+  await assert.rejects(b.request(input), /connection/);
+  a.change("view");
+  await assert.rejects(a.request(input), /permission/);
+  assert.equal(f.inputs.length, 2);
+});
+
 test("explicit Control size claims go only to the stream's own attachment and survive reopen", async (t) => {
   const f = await fixture(t),
     a = client(f),

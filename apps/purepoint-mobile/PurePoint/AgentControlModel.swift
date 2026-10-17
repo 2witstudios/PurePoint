@@ -494,7 +494,7 @@ import UserNotifications
     // Called only while the terminal synthesizes a deliberate mouse-wheel event.
     func sendScroll(_ data: ArraySlice<UInt8>, screen token: Int) {
         guard token == screen, controlEnabled, !data.isEmpty else { return }
-        input("terminal.raw", fields: ["data": String(decoding: data, as: UTF8.self)])
+        input("terminal.raw", fields: ["data": Data(data).base64EncodedString(), "encoding": "base64"])
     }
     func sendRaw(screen token: Int) {
         guard token == screen, rawTyping, !rawText.isEmpty, rawText.utf8.count <= 65536 else { return }

@@ -454,6 +454,7 @@ export function terminalConnection({
           stream.attach.send({ type: "claim_size", ...stream.claim });
           return {};
         }
+        const encoding = r.op === "terminal.raw" ? r.encoding : undefined;
         const data =
           r.op === "terminal.keys"
             ? Object.hasOwn(keys, r.key)
@@ -463,17 +464,29 @@ export function terminalConnection({
         if (
           typeof data !== "string" ||
           !data.length ||
-          Buffer.byteLength(data) > 65536
+          Buffer.byteLength(data) > (encoding === "base64" ? 87384 : 65536)
         )
           throw new Error("Invalid terminal input or key");
         if (r.op === "terminal.keys" && !Object.hasOwn(keys, r.key))
           throw new Error("Unsupported terminal key");
+        if (encoding != null && encoding !== "base64" && encoding !== "utf8")
+          throw new Error("Unsupported terminal input encoding");
+        const bytes = Buffer.from(
+          data,
+          encoding === "base64" ? "base64" : "utf8",
+        );
+        if (
+          !bytes.length ||
+          bytes.length > 65536 ||
+          (encoding === "base64" && bytes.toString("base64") !== data)
+        )
+          throw new Error("Invalid terminal input encoding or size");
         if (!stream.attach || stream.recovering)
           throw new Error("Terminal is refreshing; wait for snapshot");
         stream.attach.send({
           type: "input",
           agent_id: stream.agentId,
-          data: Buffer.from(data).toString("hex"),
+          data: bytes.toString("hex"),
           submit: false,
         });
         return {};
