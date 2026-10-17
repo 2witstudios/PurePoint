@@ -2,9 +2,14 @@ import SwiftUI
 
 /// A pane-local sidebar. Native split views can grow beyond a grid cell's
 /// proposed width when their children have competing minimum sizes.
+///
+/// In split mode the rail runs the full height of the pane. Its header occupies the same
+/// row as `tabBar`, so the rail and the pane's tab strip read as one band.
 struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>: View {
     @Binding var isExpanded: Bool
     var compact = false
+    /// The pane's tab strip, drawn to the right of the rail's header.
+    var tabBar: AnyView = AnyView(EmptyView())
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let content: () -> Content
@@ -80,8 +85,12 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     }
                     .buttonStyle(.borderless)
                     .padding(.horizontal, headerPadding)
-                    .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    // Same height and color as the tab strip, so the header joins it.
+                    .frame(height: PaneTabBar.height)
+                    .background(Color(nsColor: Theme.tabBarBackground))
+                    .overlay(alignment: .bottom) { Divider() }
+                    .environment(\.colorScheme, .dark)
 
                     if isExpanded { sidebar() } else { Spacer(minLength: 0) }
                 }
@@ -105,6 +114,7 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     )
 
                 VStack(spacing: 0) {
+                    tabBar
                     HStack {
                         Spacer(minLength: 0)
                         actions()

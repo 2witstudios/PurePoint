@@ -60,10 +60,12 @@ struct PointGuardView: View {
 
 struct PointGuardChatSurfaceView: View {
     let isFocused: Bool
+    var tabBar: AnyView = AnyView(EmptyView())
     @Environment(AppState.self) private var appState
     @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
 
     var body: some View {
-        PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused)
+        PiPointGuardChatView(
+            model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused, tabBar: tabBar)
     }
 }

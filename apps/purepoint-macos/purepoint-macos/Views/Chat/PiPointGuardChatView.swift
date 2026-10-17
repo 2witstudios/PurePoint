@@ -7,6 +7,7 @@ struct PiPointGuardChatView: View {
     @Binding var showSidebar: Bool
     var isFocused = true
     var compact = false
+    var tabBar: AnyView = AnyView(EmptyView())
     @State private var search = ""
     @State private var pendingSession: PiConversation?
     @State private var confirmNew = false
@@ -21,7 +22,7 @@ struct PiPointGuardChatView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact) {
+        PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact, tabBar: tabBar) {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
             } label: {
