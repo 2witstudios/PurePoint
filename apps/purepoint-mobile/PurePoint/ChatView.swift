@@ -88,6 +88,12 @@ struct ChatView: View {
             .onChange(of: overlays) { _, _ in updateInventoryVisibility() }
             .onChange(of: destination) { _, _ in updateInventoryVisibility() }
             .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
+            .task {
+                while !Task.isCancelled {
+                    model.agentControl.updateSignalBadge()
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                }
+            }
             .onAppear { LaunchLog.logger.notice("Chat view appeared") }
             .task { guard !model.demo else { return }; if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
             .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)

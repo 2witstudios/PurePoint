@@ -87,7 +87,10 @@ private struct AgentListRow: View {
         HStack(spacing: 12) {
             StatusDot(color: tone).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.displayName).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(agent.displayName).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                    AgentStatePill(agent: agent, available: available)
+                }
                 Text([agent.agentType, available ? (agent.phaseLabel ?? agent.state) : "Unavailable", agent.shortIdleLabel].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -396,7 +399,10 @@ struct AgentNavigator: View {
             HStack(spacing: 12) {
                 StatusDot(color: entry.agent.tone(available: isAvailable)).frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.agent.displayName).font(.callout.weight(.medium)).lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(entry.agent.displayName).font(.callout.weight(.medium)).lineLimit(1)
+                        AgentStatePill(agent: entry.agent, available: isAvailable)
+                    }
                     Text("\(entry.machine.name) · \(project)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 4)
@@ -406,7 +412,7 @@ struct AgentNavigator: View {
         }
         .background(model.selected == entry.scope ? Color(uiColor: .secondarySystemBackground) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .accessibilityAddTraits(model.selected == entry.scope ? .isSelected : [])
-        .accessibilityLabel([entry.agent.name, entry.machine.name, entry.agent.projectRoot, entry.agent.worktreeId, entry.agent.agentType, isAvailable ? entry.agent.state : "Unavailable", entry.agent.phase, entry.agent.idleLabel].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([entry.agent.name, entry.machine.name, entry.agent.projectRoot, entry.agent.worktreeId, entry.agent.agentType, entry.agent.signalPresentation(available: isAvailable).accessibilityDescription, isAvailable ? entry.agent.state : "Unavailable", entry.agent.phase, entry.agent.idleLabel].compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
             Button(model.navigation.isPinned(entry.scope) ? "Unpin" : "Pin", systemImage: model.navigation.isPinned(entry.scope) ? "pin.slash" : "pin") { model.togglePin(entry.scope) }
             Button("Rename…", systemImage: "pencil") { rename(entry) }.disabled(!model.canManage || entry.agent.projectRoot == nil)
@@ -957,5 +963,22 @@ struct WorkspaceLaunchForm: View {
         submitting = true; defer { submitting = false; save() }
         do { let result = try await model.operationStatus(id); draft.state = result.state; draft.message = result.message }
         catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct AgentStatePill: View {
+    let agent: ControlledAgent
+    let available: Bool
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let state = agent.signalPresentation(available: available, now: context.date)
+            Text(state.label)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(state.needsAttention ? Color.primary : Color.secondary)
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel("Agent state: \(state.accessibilityDescription)")
+        }
     }
 }

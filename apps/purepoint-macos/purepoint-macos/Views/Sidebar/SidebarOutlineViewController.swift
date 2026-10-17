@@ -121,6 +121,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let tabCount: Int
         /// `nil` for a workspace holding only file tabs — it has no agent to report on.
         let status: AgentStatus?
+        let signal: AgentSignalPresentation?
     }
 
     // MARK: - Lifecycle
@@ -222,7 +223,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             ? nil : agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
         return WorkspaceRenderState(
             id: workspace.id, title: title, paneCount: workspace.paneCount, tabCount: workspace.tabCount,
-            status: status)
+            status: status, signal: agents.first.map { $0.signal?.presentation(agentID: $0.id, sessionID: $0.sessionId, available: !project.isUnavailable && $0.status.isAlive && !$0.suspended) ?? .unknown })
     }
 
     private func makeRenderState(projects: [ProjectState], machines: [MachineState]) -> SidebarRenderState {
@@ -700,12 +701,23 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let label = NSTextField(labelWithString: state.title)
         label.font = .systemFont(ofSize: 11)
         label.lineBreakMode = .byTruncatingTail
+        label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         label.identifier = Self.workspaceNameLabelId
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(label)
-
-        if state.paneCount > 1 || state.tabCount > 1 {
-            stack.addArrangedSubview(spacerView())
+        if let signal = state.signal {
+            let pill = NSTextField(labelWithString: " \(signal.label) ")
+            pill.font = .systemFont(ofSize: 9, weight: .medium)
+            pill.textColor = signal.needsAttention ? .labelColor : .secondaryLabelColor
+            pill.wantsLayer = true
+            pill.layer?.cornerRadius = 4
+            pill.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+            pill.setContentCompressionResistancePriority(.required, for: .horizontal)
+            pill.setContentHuggingPriority(.required, for: .horizontal)
+            stack.addArrangedSubview(pill)
         }
+
+        stack.addArrangedSubview(spacerView())
         if state.paneCount > 1 {
             stack.addArrangedSubview(makeCountIcon("rectangle.split.2x2", description: "Panes", count: state.paneCount))
         }
@@ -715,7 +727,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
         let paneNote = state.paneCount > 1 ? ", \(state.paneCount) panes" : ""
         let tabNote = state.tabCount > state.paneCount ? ", \(state.tabCount) tabs" : ""
-        cell.setAccessibilityLabel("\(state.title), \(state.status?.rawValue ?? "files")\(paneNote)\(tabNote)")
+        cell.setAccessibilityLabel("\(state.title), \(state.signal?.accessibilityDescription ?? state.status?.rawValue ?? "files")\(paneNote)\(tabNote)")
         return cell
     }
 

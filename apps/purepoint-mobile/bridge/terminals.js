@@ -303,6 +303,7 @@ export function terminalConnection({
                         state: a.state,
                         idleSeconds: a.idle_seconds ?? null,
                         startedAt: a.started_at,
+                        signal: a.signal ?? null,
                         projectRoot: a.project_root ?? null,
                         worktreeId: a.worktree_id ?? null,
                         screenAware: version >= 10 && a.screen_aware === true,

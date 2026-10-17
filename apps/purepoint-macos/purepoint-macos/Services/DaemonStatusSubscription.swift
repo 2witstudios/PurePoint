@@ -110,7 +110,8 @@ actor DaemonStatusSubscription {
                         prompt: report.prompt ?? "",
                         startedAt: report.startedAt ?? "",
                         sessionId: report.sessionId,
-                        suspended: report.suspended
+                        suspended: report.suspended,
+                    signal: report.signal.flatMap { $0.identity.worktree_id == nil ? $0 : nil }
                     )
                 }
                 await onEvent(worktreeModels, agentModels)
