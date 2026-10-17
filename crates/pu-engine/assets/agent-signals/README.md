@@ -62,3 +62,55 @@ not install anything. It creates/removes isolated HOME, agent directory, config,
 probe and socket under `/tmp`, without copying credentials. It explicitly uses
 RPC only to qualify event pairing. Full native completion/allow/deny/cancel/error/
 interrupt/child/resume and current-terminal/platform routes remain acceptance gates.
+
+## Owner-qualified attention activation (Mac only)
+
+There is an implemented activation path; no qualification or release key is enabled
+by this change. After the owner records exact native notification → existing
+terminal → specific pending request → response → authoritative resolution proof,
+they may create `.pu/agent-signals/qualifications.json` in that host's project.
+It must be a regular non-symlink file owned by the daemon user, mode 0600, at most
+16KiB/32 records. The bounded reader fails closed on malformed/unknown schema,
+missing proof, wrong tuple/mode/platform, expired/future grants or a 50ms read timeout.
+
+Schema (a template only, **not an active qualification**):
+
+```json
+{
+  "schema_version": 1,
+  "qualifications": [{
+    "tool": "pi",
+    "tool_version": "1.3.0",
+    "adapter_version": "1",
+    "platform": "macos",
+    "execution_mode": "interactive_pty",
+    "owner_confirmed": true,
+    "proof_record_url": "https://pagespace.ai/dashboard/DRIVE/OWNER_PROOF_PAGE",
+    "qualified_at_ms": 0,
+    "expires_at_ms": 0
+  }]
+}
+```
+
+Replace the proof URL and epoch-millisecond bounds only after owner proof; zero
+bounds do not qualify. `proof_record_url` is an explicit owner attestation, not
+remote verification; it is never fetched. This configuration is trusted like
+other same-user project configuration, not a security boundary against malicious
+same-UID agent code. No real HOME/config/auth is copied. Start a **new agent
+launch** to read the record; existing launches do not silently acquire a grant.
+The producer can then set `pending.actionability.macos=true` only on a validated
+authoritative pending event for that exact tuple/mode. Explicit `--mode`, `--print`
+or `-p` launches remain unqualified; RPC evidence cannot authorize an interactive
+terminal. Snapshot projection withdraws the flag when the grant expires or the
+clock falls before its qualification time; it never resolves the native request.
+Intent stays intent regardless of qualification. iOS always remains false.
+
+The native consumer separately requires its existing owner release gate:
+`PP_signalQualifiedMacAdapters` contains the base64 compact JSON tuple
+`["pi","1.3.0","1"]` = `WyJwaSIsIjEuMy4wIiwiMSJd`, plus fresh same-launch/session
+authoritative pending facts and a unique supported terminal route. The owner's
+existing native notification preferences still apply. To revoke immediately,
+remove the native release gate; remove/expire the producer grant and relaunch
+workers to withdraw producer capability. No new UI or APNs/service infrastructure
+is involved. Gating/configuration capability alone is **not delivered native
+attention notification acceptance**; real owner terminal/device proof remains open.

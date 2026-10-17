@@ -1,6 +1,7 @@
 //! Observation-only, launch-scoped native adapters. No process or input ownership.
 mod install;
 mod normalize;
+mod qualification;
 
 use pu_core::signals::*;
 use serde_json::Value;
@@ -15,17 +16,23 @@ pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 pub(crate) struct LaunchState {
     reducer: Mutex<Option<SignalReducer>>,
     identity: Mutex<SignalIdentity>,
+    macos_qualification: Option<qualification::Grant>,
     // Dropping the last state removes only exact owned artifacts.
     _artifacts: install::Artifacts,
 }
 
 impl LaunchState {
     pub(crate) fn snapshot(&self) -> Option<SignalSnapshot> {
-        self.reducer
-            .lock()
-            .ok()?
-            .as_ref()
-            .map(|r| r.snapshot(now_ms()))
+        let mut snapshot = self.reducer.lock().ok()?.as_ref()?.snapshot(now_ms());
+        if !self
+            .macos_qualification
+            .is_some_and(|grant| grant.current(now_ms()))
+        {
+            for request in &mut snapshot.pending_attention {
+                request.actionability.macos = false;
+            }
+        }
+        Some(snapshot)
     }
 }
 
@@ -166,6 +173,7 @@ pub(crate) async fn prepare(
     } else {
         None
     };
+    let macos_qualification = qualification::load(project, tool, version, args).await;
     let config = if tool == "claude" {
         let p = artifacts
             .write("claude-settings.json", install::claude_settings(&helper))
@@ -204,6 +212,7 @@ pub(crate) async fn prepare(
         state: Arc::new(LaunchState {
             reducer: Mutex::new(reducer),
             identity: Mutex::new(identity),
+            macos_qualification,
             _artifacts: artifacts,
         }),
     })
@@ -379,6 +388,10 @@ impl Intake {
             if let SignalEventKind::AttentionPending { request } = &mut kind {
                 request.event_id = event_id.clone();
                 request.turn_id = turn_id.clone();
+                request.actionability.macos = state
+                    .macos_qualification
+                    .is_some_and(|grant| grant.current(now_ms()));
+                request.actionability.ios = false;
             }
             let event = SignalEvent {
                 schema_version: 1,
@@ -436,6 +449,7 @@ mod tests {
                 state: Arc::new(LaunchState {
                     reducer: Mutex::new(reducer),
                     identity: Mutex::new(identity),
+                    macos_qualification: None,
                     _artifacts: artifacts,
                 }),
             },
@@ -828,6 +842,59 @@ mod tests {
         assert_eq!(snapshot.activity, SignalActivity::Working);
         receive(&mut adapter, &prepared.state, valid);
         assert_eq!(prepared.state.snapshot().unwrap(), snapshot);
+    }
+    #[tokio::test]
+    async fn given_owner_qualification_should_mark_only_authoritative_pending_and_withdraw_after_expiry()
+     {
+        use std::os::unix::fs::PermissionsExt;
+        let (mut prepared, tmp) = fixture("pi", None);
+        let now = now_ms();
+        let path = tmp.path().join(".pu/agent-signals/qualifications.json");
+        std::fs::write(&path,serde_json::to_vec(&json!({"schema_version":1,"qualifications":[{"tool":"pi","tool_version":"1.3.0","adapter_version":"1","platform":"macos","execution_mode":"interactive_pty","owner_confirmed":true,"proof_record_url":"https://pagespace.ai/dashboard/drive/fixture-only","qualified_at_ms":now-1000,"expires_at_ms":now+1000}]})).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let grant = qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", &[])
+            .await
+            .unwrap();
+        Arc::get_mut(&mut prepared.state)
+            .unwrap()
+            .macos_qualification = Some(grant);
+        let mut adapter = intake("pi");
+        adapter.version = "1.3.0".into();
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"observer_bound","session_id":"root","native_pid":123,"sequence":1,"occurred_at_ms":now_ms()}),
+        );
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"ui_prompt_start","kind":"confirm","request_id":"ui-1","session_id":"root","native_pid":123,"sequence":2,"occurred_at_ms":now_ms()}),
+        );
+        let request = prepared
+            .state
+            .snapshot()
+            .unwrap()
+            .pending_attention
+            .remove(0);
+        assert!(request.actionability.macos);
+        assert!(!request.actionability.ios);
+        assert_eq!(request.kind, AttentionKind::Question);
+        tokio::time::sleep(Duration::from_millis(1020)).await;
+        assert!(
+            !prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .macos
+        );
+        assert!(
+            qualification::load(
+                tmp.path().to_str().unwrap(),
+                "pi",
+                "1.3.0",
+                &["--mode".into(), "rpc".into()]
+            )
+            .await
+            .is_none()
+        );
     }
     #[test]
     fn given_private_token_should_compare_entire_equal_length_input() {
