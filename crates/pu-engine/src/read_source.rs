@@ -359,6 +359,128 @@ pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError>
     select_codex_source(&filter_codex_rollouts(paths), cwd)
 }
 
+/// One process-tree snapshot and one owned-descriptor query for all observed
+/// launches. PID-tagged lsof output preserves ownership even for identical cwds.
+/// Limits fail closed; no directory scan, service, or process ownership changes.
+pub(crate) async fn discover_codex_roots(
+    roots: Vec<(String, u32, String)>,
+) -> std::collections::HashMap<String, Option<Binding>> {
+    use std::collections::{HashMap, HashSet};
+    use tokio::io::AsyncReadExt;
+    if roots.is_empty() || roots.len() > 256 {
+        return HashMap::new();
+    }
+    let tree = crate::pty_manager::snapshot_process_tree().await;
+    let mut owners = HashMap::new();
+    let mut all = HashSet::new();
+    for (id, pid, cwd) in roots {
+        let mut owned = HashSet::new();
+        let mut queue = vec![pid as i32];
+        while let Some(pid) = queue.pop() {
+            if pid <= 0 || !owned.insert(pid) {
+                continue;
+            }
+            if owned.len() > 128 {
+                break;
+            }
+            if let Some(children) = tree.get(&pid) {
+                queue.extend(children);
+            }
+        }
+        if owned.len() > 128 {
+            continue;
+        }
+        all.extend(owned.iter().copied());
+        owners.insert(id, (owned, cwd));
+    }
+    if all.is_empty() || all.len() > 4096 {
+        return HashMap::new();
+    }
+    let mut pids: Vec<_> = all.into_iter().collect();
+    pids.sort_unstable();
+    let proc_pids = pids.clone();
+    let proc_paths = tokio::task::spawn_blocking(move || {
+        let mut paths = HashMap::new();
+        let mut count = 0;
+        for pid in proc_pids {
+            let value = crate::os::proc_open_files(&[pid], 100_000 - count)?;
+            count += value.len();
+            if count >= 100_000 {
+                return Some(None);
+            }
+            paths.insert(pid, value);
+        }
+        Some(Some(paths))
+    })
+    .await;
+    let paths = match proc_paths {
+        Ok(Some(Some(paths))) => paths,
+        Ok(Some(None)) | Err(_) => return HashMap::new(),
+        Ok(None) => {
+            let pid_list = pids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let Ok(mut child) = tokio::process::Command::new("lsof")
+                .args(["-a", "-p", &pid_list, "-Fpn"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+            else {
+                return HashMap::new();
+            };
+            let mut bytes = Vec::new();
+            let result = child
+                .stdout
+                .take()
+                .unwrap()
+                .take(8 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .await;
+            if result.is_err() || bytes.len() > 8 * 1024 * 1024 {
+                return HashMap::new();
+            }
+            if child.wait().await.is_err() {
+                return HashMap::new();
+            }
+            let mut paths: HashMap<i32, Vec<PathBuf>> = HashMap::new();
+            let mut owner = None;
+            for line in String::from_utf8_lossy(&bytes).lines() {
+                if let Some(pid) = line.strip_prefix('p') {
+                    owner = pid
+                        .parse::<i32>()
+                        .ok()
+                        .filter(|pid| pids.binary_search(pid).is_ok());
+                } else if let (Some(pid), Some(path)) = (owner, line.strip_prefix('n')) {
+                    paths.entry(pid).or_default().push(PathBuf::from(path));
+                }
+            }
+            paths
+        }
+    };
+    tokio::task::spawn_blocking(move || {
+        owners
+            .into_iter()
+            .map(|(id, (pids, cwd))| {
+                let paths = pids
+                    .iter()
+                    .filter_map(|pid| paths.get(pid))
+                    .flatten()
+                    .cloned()
+                    .collect();
+                (
+                    id,
+                    select_codex_source(&filter_codex_rollouts(paths), &cwd).ok(),
+                )
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 fn filter_codex_rollouts(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
         .into_iter()
@@ -371,7 +493,17 @@ fn filter_codex_rollouts(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn first_record(path: &Path) -> Result<Value, SourceError> {
-    let file = std::fs::File::open(path)?;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    // Header candidates are untrusted paths even when an owned process holds
+    // them. Never follow a replacement link or block a shared scan on a FIFO.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(SourceError::IdentityUnavailable);
+    }
     let mut line = String::new();
     std::io::BufReader::new(file.take(1024 * 1024 + 1)).read_line(&mut line)?;
     if line.len() > 1024 * 1024 {
@@ -880,5 +1012,69 @@ mod tests {
             select_codex_source(&[binding.path, other], &cwd),
             Err(SourceError::Ambiguous)
         ));
+    }
+}
+
+#[cfg(test)]
+mod batched_discovery_tests {
+    use super::*;
+    #[test]
+    fn given_symlink_rollout_should_not_follow_it_during_shared_discovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        std::fs::write(
+            &target,
+            r#"{"type":"session_meta","payload":{"source":"cli","id":"root","cwd":"/same"}}"#,
+        )
+        .unwrap();
+        let link = temp.path().join("rollout-link.jsonl");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        assert!(select_codex_source(&[link], "/same").is_err());
+    }
+
+    #[test]
+    fn given_fifo_rollout_should_reject_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rollout-pipe.jsonl");
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        assert!(select_codex_source(&[path], "/same").is_err());
+    }
+
+    #[tokio::test]
+    async fn given_owned_roots_in_same_directory_should_not_borrow_each_others_rollouts() {
+        use tokio::io::AsyncReadExt;
+        let temp = tempfile::tempdir().unwrap();
+        let mut children = Vec::new();
+        let mut roots = Vec::new();
+        for n in 0..2 {
+            let path = temp.path().join(format!("rollout-{n}.jsonl"));
+            std::fs::write(&path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"source\":\"cli\",\"id\":\"root-{n}\",\"cwd\":\"/same\"}}}}\n")).unwrap();
+            let mut child = tokio::process::Command::new("sh")
+                .args(["-c", "exec 3< \"$1\"; printf x; exec sleep 30", "probe"])
+                .arg(path)
+                .stdout(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut ready = [0];
+            child
+                .stdout
+                .take()
+                .unwrap()
+                .read_exact(&mut ready)
+                .await
+                .unwrap();
+            roots.push((n.to_string(), child.id().unwrap(), "/same".to_owned()));
+            children.push(child);
+        }
+        let results = discover_codex_roots(roots).await;
+        assert_eq!(results["0"].as_ref().unwrap().session_id, "root-0");
+        assert_eq!(results["1"].as_ref().unwrap().session_id, "root-1");
+        for mut child in children {
+            child.kill().await.unwrap();
+            child.wait().await.unwrap();
+        }
     }
 }

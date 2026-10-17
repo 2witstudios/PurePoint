@@ -440,13 +440,14 @@ impl Engine {
         if let Some(observation) = observation {
             observation
                 .with_output(handle.output_buffer.clone())
-                .activate(
+                .activate_with_sources(
                     &self.signal_states,
                     &project_root,
                     &handle.cwd,
                     handle.pid,
                     handle.exit_rx.clone(),
                     self.status_channels.clone(),
+                    self.native_sources.clone(),
                 );
         }
 

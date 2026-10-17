@@ -231,8 +231,19 @@ impl Observer {
         mut exit: tokio::sync::watch::Receiver<Option<i32>>,
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
         output: Arc<OutputBuffer>,
+        discovery: Arc<super::batch::Sampler<(u32, String), Binding>>,
     ) {
+        let Some(launch) = state
+            .upgrade()
+            .map(|s| s.identity.lock().unwrap().launch_id.clone())
+        else {
+            return;
+        };
+        let Some(registration) = discovery.register(launch.clone(), (pid, cwd.clone())) else {
+            return;
+        };
         tokio::spawn(async move {
+            let _registration = registration;
             let mut protocol = Protocol::default();
             let mut history = History {
                 session: self.initial_session,
@@ -242,8 +253,6 @@ impl Observer {
             let mut offset = 0;
             let mut lost = false;
             let mut binding: Option<Binding> = None;
-            let mut binding_current = false;
-            let mut next_discovery = tokio::time::Instant::now();
             let mut publication = super::NativePublication::default();
             let mut tick = tokio::time::interval(Duration::from_millis(250));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -259,36 +268,40 @@ impl Observer {
                 let previous_status = protocol.status;
                 protocol.feed(&bytes);
                 // A real native turn start should not wait for an idle retry.
-                if protocol.status == Some(Status::Working) && previous_status != protocol.status {
-                    next_discovery = tokio::time::Instant::now();
-                }
+                let urgent =
+                    protocol.status == Some(Status::Working) && previous_status != protocol.status;
                 let result = if dead || lost {
                     None
                 } else {
-                    if tokio::time::Instant::now() >= next_discovery {
-                        let observed = tokio::time::timeout(
-                            Duration::from_secs(2),
-                            crate::read_source::discover_codex(pid, &cwd),
-                        )
-                        .await
-                        .ok()
-                        .and_then(Result::ok);
-                        next_discovery = tokio::time::Instant::now() + Duration::from_secs(2);
-                        binding_current = false;
-                        if let Some(observed) = observed {
-                            if binding
+                    let mut binding_current = false;
+                    let observed = discovery
+                        .sample(&launch, urgent, |roots| async move {
+                            tokio::time::timeout(
+                                Duration::from_secs(2),
+                                crate::read_source::discover_codex_roots(
+                                    roots
+                                        .into_iter()
+                                        .map(|(id, (pid, cwd))| (id, pid, cwd))
+                                        .collect(),
+                                ),
+                            )
+                            .await
+                            .unwrap_or_default()
+                        })
+                        .await;
+                    if let Some(observed) = observed {
+                        if binding
+                            .as_ref()
+                            .is_some_and(|bound| !same_native_root(bound, &observed))
+                            || self
+                                .expected
                                 .as_ref()
-                                .is_some_and(|bound| !same_native_root(bound, &observed))
-                                || self
-                                    .expected
-                                    .as_ref()
-                                    .is_some_and(|id| id != &observed.session_id)
-                            {
-                                lost = true;
-                            } else {
-                                binding = Some(observed);
-                                binding_current = true;
-                            }
+                                .is_some_and(|id| id != &observed.session_id)
+                        {
+                            lost = true;
+                        } else {
+                            binding = Some(observed);
+                            binding_current = true;
                         }
                     }
                     if let Some(binding) = binding.as_ref().filter(|_| !lost && binding_current) {

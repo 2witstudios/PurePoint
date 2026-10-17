@@ -71,6 +71,7 @@ pub(super) struct SaveTriggerParams {
 pub struct Engine {
     sizes: Mutex<HashMap<String, pty_operations::SizeState>>,
     signal_states: crate::signals::SignalStates,
+    native_sources: Arc<crate::signals::NativeSources>,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
     start_time: Instant,
@@ -178,6 +179,7 @@ impl Engine {
         Self {
             sizes: Mutex::new(HashMap::new()),
             signal_states: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            native_sources: Arc::default(),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
             start_time: Instant::now(),

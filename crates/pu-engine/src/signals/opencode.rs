@@ -15,9 +15,42 @@ pub(super) struct Observer {
     outcome_fence: OutcomeFence,
 }
 
+#[derive(Clone)]
 struct NativeObservation {
     snapshot: SignalSnapshot,
     idle_revision: Option<i64>,
+}
+
+#[derive(Clone)]
+struct Root {
+    identity: SignalIdentity,
+    cwd: String,
+}
+struct Service {
+    client: reqwest::Client,
+    sampler: Arc<super::batch::Sampler<Root, NativeObservation>>,
+}
+/// Groups only observers of the same private native service registration.
+/// Weak entries and registration guards prevent retaining finished launches.
+#[derive(Default)]
+pub(super) struct Services(Mutex<HashMap<PathBuf, Weak<Service>>>);
+impl Services {
+    fn group(&self, path: &Path) -> Option<Arc<Service>> {
+        let mut services = self.0.lock().unwrap();
+        services.retain(|_, service| service.strong_count() > 0);
+        if let Some(service) = services.get(path).and_then(Weak::upgrade) {
+            return Some(service);
+        }
+        if services.len() >= 256 {
+            return None;
+        }
+        let service = Arc::new(Service {
+            client: client()?,
+            sampler: Arc::new(super::batch::Sampler::new(Duration::from_millis(500))),
+        });
+        services.insert(path.to_owned(), Arc::downgrade(&service));
+        Some(service)
+    }
 }
 
 struct OutcomeFence {
@@ -267,6 +300,126 @@ async fn poll(
     })
 }
 
+// Per-service bracketing avoids downloading the global active map per agent.
+// Each root still has its own metadata bracket and exact identity/cwd checks.
+// A changing unrelated root does not invalidate another root's current view.
+async fn poll_batch(
+    client: &reqwest::Client,
+    path: &Path,
+    roots: Vec<(String, Root)>,
+) -> HashMap<String, Option<NativeObservation>> {
+    async fn sample(
+        client: &reqwest::Client,
+        path: &Path,
+        roots: Vec<(String, Root)>,
+    ) -> Option<HashMap<String, Option<NativeObservation>>> {
+        let path = path.to_owned();
+        let r = tokio::task::spawn_blocking(move || registration(&path))
+            .await
+            .ok()??;
+        let health = get(client, &r, "/api/info").await?;
+        if health["pid"].as_u64() != Some(u64::from(r.pid)) || health["version"] != r.version {
+            return None;
+        }
+        let before = get(client, &r, "/api/session/active").await?;
+        let r = Arc::new(r);
+        let mut pending = roots.into_iter();
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut observed = Vec::new();
+        loop {
+            while tasks.len() < 32 {
+                let Some((id, root)) = pending.next() else {
+                    break;
+                };
+                let (client, r) = (client.clone(), r.clone());
+                tasks.spawn(async move {
+                    let value = async {
+                        let session = format!("/api/session/{}", root.identity.native_session_id);
+                        let info = get(&client, &r, &session).await?;
+                        let permissions =
+                            get(&client, &r, &format!("{session}/permission")).await?;
+                        let forms = get(&client, &r, &format!("{session}/form")).await?;
+                        Some((info, permissions, forms))
+                    }
+                    .await;
+                    (id, root, value)
+                });
+            }
+            if tasks.is_empty() {
+                break;
+            }
+            observed.push(tasks.join_next().await?.ok()?);
+        }
+        let after = get(client, &r, "/api/session/active").await?;
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut pending = observed.into_iter();
+        let mut observed = Vec::new();
+        loop {
+            while tasks.len() < 32 {
+                let Some((id, root, value)) = pending.next() else {
+                    break;
+                };
+                let (client, r) = (client.clone(), r.clone());
+                tasks.spawn(async move {
+                    let value = async {
+                        let (info, permissions, forms) = value?;
+                        let session = format!("/api/session/{}", root.identity.native_session_id);
+                        if get(&client, &r, &session).await? != info {
+                            return None;
+                        }
+                        Some((info, permissions, forms))
+                    }
+                    .await;
+                    (id, root, value)
+                });
+            }
+            if tasks.is_empty() {
+                break;
+            }
+            observed.push(tasks.join_next().await?.ok()?);
+        }
+
+        if get(client, &r, "/api/info").await? != health {
+            return None;
+        }
+        let now = now_ms();
+        Some(
+            observed
+                .into_iter()
+                .map(|(id, root, value)| {
+                    let sid = &root.identity.native_session_id;
+                    let value = value.and_then(|(info, permissions, forms)| {
+                        if before["data"][sid] != after["data"][sid] {
+                            return None;
+                        }
+                        Some(NativeObservation {
+                            snapshot: snapshot(
+                                &root.identity,
+                                &root.cwd,
+                                &info,
+                                &after,
+                                &permissions,
+                                &forms,
+                                now,
+                            )?,
+                            idle_revision: info["data"]["time"]["idle"].as_i64(),
+                        })
+                    });
+                    (id, value)
+                })
+                .collect(),
+        )
+    }
+    if roots.is_empty() || roots.len() > 256 {
+        return HashMap::new();
+    }
+    tokio::time::timeout(Duration::from_secs(2), sample(client, path, roots))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
 impl Observer {
     pub(super) fn activate(
         self,
@@ -275,12 +428,24 @@ impl Observer {
         cwd: String,
         mut exit: tokio::sync::watch::Receiver<Option<i32>>,
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
+        services: &Services,
     ) {
+        let Some(service) = services.group(&self.registration) else {
+            return;
+        };
+        let Some(identity) = state.upgrade().map(|s| s.identity.lock().unwrap().clone()) else {
+            return;
+        };
+        let launch = identity.launch_id.clone();
+        let Some(registration) = service
+            .sampler
+            .register(launch.clone(), Root { identity, cwd })
+        else {
+            return;
+        };
         tokio::spawn(async move {
+            let _registration = registration;
             let mut outcome_fence = self.outcome_fence;
-            let Some(client) = client() else {
-                return;
-            };
             let mut interval = tokio::time::interval(Duration::from_millis(500));
             let mut publication = super::NativePublication::default();
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -290,18 +455,16 @@ impl Observer {
                     break;
                 };
                 let dead = exit.borrow().is_some() || exit.has_changed().is_err();
-                let identity = state.identity.lock().unwrap().clone();
                 let result = if dead {
                     None
                 } else {
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
-                        poll(&client, &self.registration, &identity, &cwd),
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|value| outcome_fence.apply(value))
+                    service
+                        .sampler
+                        .sample(&launch, false, |roots| {
+                            poll_batch(&service.client, &self.registration, roots)
+                        })
+                        .await
+                        .and_then(|value| outcome_fence.apply(value))
                 };
                 let dead = dead || exit.borrow().is_some() || exit.has_changed().is_err();
                 {
@@ -574,6 +737,198 @@ mod tests {
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(registration(&link).is_none());
     }
+    #[tokio::test]
+    async fn given_multiple_roots_should_share_service_reads_and_preserve_each_root() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let requests = observed.clone();
+        let racing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let active_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_racing = racing.clone();
+        let server_reads = active_reads.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 8192];
+                let n = stream.read(&mut bytes).await.unwrap();
+                let request = String::from_utf8_lossy(&bytes[..n]);
+                let line = request.lines().next().unwrap();
+                assert!(line.starts_with("GET "));
+                let path = line.split_whitespace().nth(1).unwrap().to_owned();
+                requests.lock().unwrap().push(path.clone());
+                let body = match path.as_str() {
+                    "/api/info" => json!({"version":"2.0.28","pid":123}),
+                    "/api/session/active" => {
+                        let n = server_reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let mut value = json!({"data":{"ses_1":{"type":"running"}}});
+                        if server_racing.load(std::sync::atomic::Ordering::SeqCst) && n > 0 {
+                            value["data"]["unrelated"] = json!({"type":"running"});
+                        }
+                        value
+                    }
+                    p if p.ends_with("/permission") || p.ends_with("/form") => json!({"data":[]}),
+                    p => {
+                        let sid = p.strip_prefix("/api/session/").unwrap();
+                        let mut value = info();
+                        value["data"]["id"] = sid.into();
+                        if sid == "ses_1"
+                            && server_racing.load(std::sync::atomic::Ordering::SeqCst)
+                            && server_reads.load(std::sync::atomic::Ordering::SeqCst) >= 2
+                        {
+                            value["data"]["time"]["idle"] = 99999.into();
+                        }
+                        value
+                    }
+                }
+                .to_string();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("opencode")).unwrap();
+        let path = temp.path().join("opencode/service.json");
+        write_registration(&path, &url, "2.0.28");
+        let roots: Vec<_> = (0..3)
+            .map(|n| {
+                let mut identity = identity();
+                identity.native_session_id = format!("ses_{n}");
+                identity.launch_id = format!("launch-{n}");
+                (
+                    n.to_string(),
+                    Root {
+                        identity,
+                        cwd: "/owned".into(),
+                    },
+                )
+            })
+            .collect();
+        let values = poll_batch(&client().unwrap(), &path, roots.clone()).await;
+        assert_eq!(values.len(), 3);
+        assert_eq!(
+            values["1"].as_ref().unwrap().snapshot.activity,
+            SignalActivity::Working
+        );
+        assert_eq!(
+            values["0"]
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .identity
+                .native_session_id,
+            "ses_0"
+        );
+        assert_eq!(
+            values["2"].as_ref().unwrap().snapshot.identity.launch_id,
+            "launch-2"
+        );
+        {
+            let requests = observed.lock().unwrap();
+            assert_eq!(requests.len(), 4 + 4 * 3);
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|p| *p == "/api/session/active")
+                    .count(),
+                2
+            );
+            assert_eq!(requests.iter().filter(|p| *p == "/api/info").count(), 2);
+        }
+        racing.store(true, std::sync::atomic::Ordering::SeqCst);
+        active_reads.store(0, std::sync::atomic::Ordering::SeqCst);
+        let raced = poll_batch(&client().unwrap(), &path, roots).await;
+        assert!(
+            raced["1"].is_none(),
+            "Metadata changed across the active-map bracket"
+        );
+        assert!(
+            raced["0"].is_some(),
+            "Unrelated activity must not invalidate root 0"
+        );
+        assert!(
+            raced["2"].is_some(),
+            "Unrelated activity must not invalidate root 2"
+        );
+        racing.store(false, std::sync::atomic::Ordering::SeqCst);
+        observed.lock().unwrap().clear();
+        let sources = Arc::new(super::super::NativeSources::default());
+        let states = super::super::SignalStates::default();
+        let (exit, receiver) = tokio::sync::watch::channel(None);
+        let environment = vec![(
+            "XDG_STATE_HOME".into(),
+            temp.path().to_string_lossy().into_owned(),
+        )];
+        for n in 0..3 {
+            prepare(
+                temp.path().to_str().unwrap(),
+                &format!("agent{n}"),
+                None,
+                &format!("ses_{n}"),
+                &[],
+                &environment,
+            )
+            .unwrap()
+            .activate_with_sources(
+                &states,
+                "project",
+                "/owned",
+                777,
+                receiver.clone(),
+                Arc::default(),
+                sources.clone(),
+            );
+        }
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if states
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .filter(|state| state.snapshot().is_some())
+                    .count()
+                    == 3
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        {
+            let requests = observed.lock().unwrap();
+            let first = &requests[..16];
+            assert_eq!(
+                first.iter().filter(|p| *p == "/api/session/active").count(),
+                2,
+                "Production launch activation must share its service sampler"
+            );
+            assert_eq!(first.iter().filter(|p| *p == "/api/info").count(), 2);
+            for n in 0..3 {
+                assert_eq!(
+                    first
+                        .iter()
+                        .filter(|p| *p == &format!("/api/session/ses_{n}"))
+                        .count(),
+                    2
+                );
+            }
+        }
+        exit.send(Some(0)).unwrap();
+        task.abort();
+    }
+
     #[tokio::test]
     async fn given_existing_service_should_read_native_snapshots_without_starting_server_or_mutating_requests()
      {

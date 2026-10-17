@@ -72,13 +72,29 @@ Mac/iOS acceptance. All production attention notifications remain gated.
 
 Native observers publish semantic changes immediately. Timestamp-only refreshes
 are coalesced into a 10-second heartbeat, below the consumer's 30-second lease;
-qualification withdrawal and disconnection still publish immediately. Unbound
-Codex source discovery/ownership checks wait at least 2 seconds; a native Working transition
-allows an immediate retry so a newly started turn need not wait for idle backoff.
+qualification withdrawal and disconnection still publish immediately. Codex source discovery is shared within the existing Engine: one process-tree
+snapshot and one PID-tagged, owned-descriptor query cover up to 256 observed
+launches every 2 seconds. Native Working edges request a newer view with shared
+single-flight coalescing and a 250ms global retry floor. At most 128 owned PIDs
+per root, 4096 PIDs per batch and 8MiB of lsof output are accepted; overflow fails
+closed. Roots in the same directory cannot borrow each other's descriptors.
 Bound Codex launches recheck that the owned process still holds the same root,
 not merely that the old file still exists. A different root latches observation
 lost without rebinding the native session; a temporarily unavailable check
 withdraws observation until the original root is proved again.
+
+OpenCode observers of the same private service registration share a 500ms
+sampling group: two health reads and two active-map reads per batch, plus four
+root-specific reads per agent (4 + 4N requests, rather than 8N). Each root's
+metadata is checked before and after the shared active-map bracket; unrelated
+root changes do not invalidate a stable root. Root reads have at most 32 concurrent
+requests, with existing per-request limits and a 2-second whole-batch deadline.
+A service group accepts at most 256 launch registrations. Failures are cached at
+the same bounded cadence; cached native timestamps never renew source freshness.
+Registration guards remove finished launches, weak service entries are reclaimed,
+and registration epochs prevent cache reuse after replacement. Samplers belong to
+the Engine, not a global singleton or new service; they do not start processes,
+change PTYs, write native config or migrate native session ownership.
 
 Codex checks the executable's exact version once before launch with a 500ms
 deadline and bounded output, using a disposable HOME/CODEX_HOME because native

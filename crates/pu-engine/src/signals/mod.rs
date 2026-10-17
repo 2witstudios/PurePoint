@@ -1,4 +1,5 @@
 //! Observation-only, launch-scoped native adapters. No process or input ownership.
+mod batch;
 mod claude;
 mod codex;
 mod install;
@@ -15,6 +16,20 @@ use std::time::Duration;
 use tokio::net::UnixDatagram;
 
 pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
+
+/// Read-only samplers live with this Engine, never in a global/service singleton.
+pub(crate) struct NativeSources {
+    codex: Arc<batch::Sampler<(u32, String), crate::read_source::Binding>>,
+    opencode: opencode::Services,
+}
+impl Default for NativeSources {
+    fn default() -> Self {
+        Self {
+            codex: Arc::new(batch::Sampler::new(Duration::from_secs(2))),
+            opencode: opencode::Services::default(),
+        }
+    }
+}
 
 // Native image/PDF tool results can exceed 1MiB in one JSONL record. Keep the
 // per-poll I/O budget separate from this finite record-assembly limit.
@@ -335,7 +350,20 @@ impl Prepared {
         self.output = Some(output);
         self
     }
+    #[cfg(test)]
     pub(crate) fn activate(
+        self,
+        states: &SignalStates,
+        project: &str,
+        cwd: &str,
+        pid: u32,
+        exit: tokio::sync::watch::Receiver<Option<i32>>,
+        channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
+    ) {
+        self.activate_with_sources(states, project, cwd, pid, exit, channels, Arc::default());
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn activate_with_sources(
         self,
         states: &SignalStates,
         project: &str,
@@ -343,6 +371,7 @@ impl Prepared {
         pid: u32,
         mut exit: tokio::sync::watch::Receiver<Option<i32>>,
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
+        sources: Arc<NativeSources>,
     ) {
         let id = self.state.identity.lock().unwrap().agent_id.clone();
         states.lock().unwrap().insert(id, self.state.clone());
@@ -350,9 +379,14 @@ impl Prepared {
         let project = project.to_string();
         if let Some(observer) = self.observer {
             match observer {
-                NativeObserver::OpenCode(observer) => {
-                    observer.activate(weak, project, cwd.to_owned(), exit, channels)
-                }
+                NativeObserver::OpenCode(observer) => observer.activate(
+                    weak,
+                    project,
+                    cwd.to_owned(),
+                    exit,
+                    channels,
+                    &sources.opencode,
+                ),
                 NativeObserver::Codex(observer) => {
                     if let Some(output) = self.output {
                         observer.activate(
@@ -363,6 +397,7 @@ impl Prepared {
                             exit,
                             channels,
                             output,
+                            sources.codex.clone(),
                         );
                     }
                 }
