@@ -251,6 +251,11 @@ impl SignalReducer {
         if event.confidence != SignalConfidence::Authoritative {
             return ApplyResult::Ignored;
         }
+        if self.is_semantic_noop(&event) {
+            return ApplyResult::Ignored;
+        }
+        let matches_pending = matches!(&event.kind, SignalEventKind::AttentionResolved { request_id }
+            if self.snapshot.pending_attention.iter().any(|r| r.request_id == *request_id));
         let recovering = matches!(event.kind, SignalEventKind::Reconciled { .. });
         if matches!(
             self.snapshot.observation.state,
@@ -264,37 +269,32 @@ impl SignalReducer {
         {
             self.invalidate(ObservationState::Stale);
         }
-        // One global freshness lease cannot certify old unresolved requests after a gap.
-        if self.snapshot.observation.state == ObservationState::Stale
-            && !recovering
-            && !(self.snapshot.pending_attention.is_empty()
+        let stale_resolution =
+            self.snapshot.observation.state == ObservationState::Stale && matches_pending;
+        let new_attention_after_stale = self.snapshot.observation.state == ObservationState::Stale
+            && self.snapshot.pending_attention.is_empty()
+            && matches!(event.kind, SignalEventKind::AttentionPending { .. });
+        // Exact removal cannot certify other retained facts. A new request can only
+        // recover once stale requests are gone, and must discard stale turn facts.
+        let stale_progress = recovering
+            || stale_resolution
+            || new_attention_after_stale
+            || (self.snapshot.pending_attention.is_empty()
                 && matches!(
                     event.kind,
                     SignalEventKind::Start | SignalEventKind::Outcome { .. }
-                ))
-        {
+                ));
+        if self.snapshot.observation.state == ObservationState::Stale && !stale_progress {
             return ApplyResult::Ignored;
         }
         // Replay IDs are safety history, not a rolling cache. Once full, no new
         // authoritative fact may mutate the snapshot without retaining its ID.
-        if self.event_ids.len() == self.limits.max_event_ids
-            && !matches!(
-                event.kind,
-                SignalEventKind::StopAttempt
-                    | SignalEventKind::AttentionIntent { .. }
-                    | SignalEventKind::RecoverableError
-            )
-        {
+        if self.event_ids.len() == self.limits.max_event_ids {
             self.invalidate(ObservationState::Lost);
             return ApplyResult::CapacityExceeded;
         }
         match &event.kind {
             SignalEventKind::Start => {
-                if event.turn_id.as_ref().is_some_and(|id| {
-                    self.closed_turn_ids.contains(id) || self.turn_id.as_ref() == Some(id)
-                }) {
-                    return ApplyResult::Ignored;
-                }
                 if let Some(id) = &self.turn_id
                     && !self.closed_turn_ids.contains(id)
                 {
@@ -309,12 +309,6 @@ impl SignalReducer {
                 self.snapshot.outcome = None;
             }
             SignalEventKind::Outcome { kind } => {
-                if *kind == OutcomeKind::Unknown
-                    || self.snapshot.activity != SignalActivity::Working
-                    || event.turn_id != self.turn_id
-                {
-                    return ApplyResult::Ignored;
-                }
                 if let Some(id) = &event.turn_id {
                     if self.closed_turn_ids.len() >= self.limits.max_event_ids {
                         self.invalidate(ObservationState::Lost);
@@ -331,20 +325,14 @@ impl SignalReducer {
                 });
             }
             SignalEventKind::AttentionPending { request } => {
-                if self.resolved_request_ids.contains(&request.request_id) {
-                    return ApplyResult::Ignored;
-                }
-                if self
-                    .snapshot
-                    .pending_attention
-                    .iter()
-                    .any(|r| r.request_id == request.request_id)
-                {
-                    return ApplyResult::Ignored;
-                }
                 if self.snapshot.pending_attention.len() >= self.limits.max_pending {
                     self.invalidate(ObservationState::Lost);
                     return ApplyResult::CapacityExceeded;
+                }
+                if new_attention_after_stale {
+                    // This request is current evidence only of itself, not the previous turn.
+                    self.snapshot.activity = SignalActivity::Unknown;
+                    self.snapshot.outcome = None;
                 }
                 self.snapshot.pending_attention.push(request.clone());
             }
@@ -367,14 +355,6 @@ impl SignalReducer {
                 pending_attention,
                 outcome,
             } => {
-                if (*activity == SignalActivity::Working || self.turn_id != event.turn_id)
-                    && event
-                        .turn_id
-                        .as_ref()
-                        .is_some_and(|id| self.closed_turn_ids.contains(id))
-                {
-                    return ApplyResult::Ignored;
-                }
                 let mut to_close = Vec::new();
                 if self.turn_id != event.turn_id
                     && let Some(id) = &self.turn_id
@@ -411,6 +391,12 @@ impl SignalReducer {
         }
         self.sequence = Some(event.sequence);
         self.event_ids.push(event.event_id.clone());
+        if matches!(event.kind, SignalEventKind::AttentionResolved { .. })
+            && (stale_resolution || !matches_pending)
+        {
+            // Safety tombstones and precise removals do not renew unrelated state/evidence.
+            return ApplyResult::Applied;
+        }
         if !matches!(
             event.kind,
             SignalEventKind::Disconnected | SignalEventKind::Loss
@@ -432,6 +418,43 @@ impl SignalReducer {
             event_id: event.event_id,
         });
         ApplyResult::Applied
+    }
+
+    fn is_semantic_noop(&self, event: &SignalEvent) -> bool {
+        match &event.kind {
+            SignalEventKind::Start => event.turn_id.as_ref().is_some_and(|id| {
+                self.closed_turn_ids.contains(id) || self.turn_id.as_ref() == Some(id)
+            }),
+            SignalEventKind::Outcome { .. } => {
+                self.snapshot.activity != SignalActivity::Working || event.turn_id != self.turn_id
+            }
+            SignalEventKind::AttentionPending { request } => {
+                self.resolved_request_ids.contains(&request.request_id)
+                    || self
+                        .snapshot
+                        .pending_attention
+                        .iter()
+                        .any(|r| r.request_id == request.request_id)
+            }
+            SignalEventKind::AttentionResolved { request_id } => {
+                self.resolved_request_ids.contains(request_id)
+            }
+            SignalEventKind::Reconciled { activity, .. } => {
+                (*activity == SignalActivity::Working || self.turn_id != event.turn_id)
+                    && event
+                        .turn_id
+                        .as_ref()
+                        .is_some_and(|id| self.closed_turn_ids.contains(id))
+            }
+            SignalEventKind::StopAttempt
+            | SignalEventKind::AttentionIntent { .. }
+            | SignalEventKind::RecoverableError => true,
+            SignalEventKind::Disconnected => {
+                self.snapshot.observation.state == ObservationState::Disconnected
+            }
+            SignalEventKind::Loss => self.snapshot.observation.state == ObservationState::Lost,
+            SignalEventKind::Unknown => false,
+        }
     }
 
     /// Expiry never infers successful completion or resolves pending requests.
@@ -1294,6 +1317,565 @@ mod tests {
             after.observation.last_received_at_ms,
             before.observation.last_received_at_ms
         );
+    }
+    fn fresh(mut event: SignalEvent, now_ms: i64) -> SignalEvent {
+        event.occurred_at_ms = now_ms;
+        event
+    }
+    #[test]
+    fn given_late_matching_resolution_should_remove_only_that_request_without_reviving_stale_facts()
+    {
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(request(2, "one", AttentionKind::Question), 101);
+        r.apply(request(3, "two", AttentionKind::Permission), 102);
+        let before = r.snapshot(1200);
+        assert_eq!(before.observation.state, ObservationState::Stale);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        4,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "one".into()
+                        }
+                    ),
+                    1200
+                ),
+                1200
+            ),
+            ApplyResult::Applied
+        );
+        let after = r.snapshot(1200);
+        assert_eq!(after.pending_attention.len(), 1);
+        assert_eq!(after.pending_attention[0].request_id, "two");
+        assert_eq!(after.observation, before.observation);
+        assert_eq!(after.evidence, before.evidence);
+        assert_eq!(after.activity, before.activity);
+        assert_eq!(after.outcome, None);
+        let mut next = fresh(event(5, SignalEventKind::Start), 1201);
+        next.turn_id = Some("next".into());
+        assert_eq!(r.apply(next, 1201), ApplyResult::Ignored);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        6,
+                        SignalEventKind::Outcome {
+                            kind: OutcomeKind::Completed
+                        }
+                    ),
+                    1202
+                ),
+                1202
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(1202).pending_attention[0].request_id, "two");
+        assert_eq!(r.snapshot(1202).outcome, None);
+    }
+    #[test]
+    fn given_all_stale_requests_resolved_should_accept_later_definitive_outcome_without_inferred_success()
+     {
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(request(2, "one", AttentionKind::Question), 101);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        3,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "one".into()
+                        }
+                    ),
+                    1200
+                ),
+                1200
+            ),
+            ApplyResult::Applied
+        );
+        let resolved = r.snapshot(1200);
+        assert_eq!(resolved.pending_attention.len(), 0);
+        assert_eq!(resolved.observation.state, ObservationState::Stale);
+        assert_eq!(resolved.outcome, None);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        4,
+                        SignalEventKind::Outcome {
+                            kind: OutcomeKind::Completed
+                        }
+                    ),
+                    1201
+                ),
+                1201
+            ),
+            ApplyResult::Applied
+        );
+        let finished = r.snapshot(1201);
+        assert!(finished.is_current(1201));
+        assert_eq!(finished.outcome.unwrap().kind, OutcomeKind::Completed);
+    }
+    #[test]
+    fn given_full_history_should_ignore_semantic_repeats_without_losing_current_state() {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 2,
+            },
+        )
+        .unwrap();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(
+            event(
+                2,
+                SignalEventKind::AttentionResolved {
+                    request_id: "known".into(),
+                },
+            ),
+            101,
+        );
+        let before = r.snapshot(102);
+        assert_eq!(
+            r.apply(event(3, SignalEventKind::Start), 102),
+            ApplyResult::Ignored
+        );
+        assert_eq!(
+            r.apply(
+                event(
+                    4,
+                    SignalEventKind::AttentionResolved {
+                        request_id: "known".into()
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(102), before);
+        let mut next = event(5, SignalEventKind::Start);
+        next.turn_id = Some("next".into());
+        assert_eq!(r.apply(next, 103), ApplyResult::CapacityExceeded);
+        assert_eq!(r.snapshot(103).observation.state, ObservationState::Lost);
+    }
+    #[test]
+    fn given_unknown_resolution_should_remember_it_once_without_renewing_unrelated_freshness() {
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        let before = r.snapshot(101);
+        assert_eq!(
+            r.apply(
+                event(
+                    2,
+                    SignalEventKind::AttentionResolved {
+                        request_id: "unknown".into()
+                    }
+                ),
+                101
+            ),
+            ApplyResult::Applied
+        );
+        assert_eq!(r.snapshot(101), before);
+        assert_eq!(
+            r.apply(
+                event(
+                    3,
+                    SignalEventKind::AttentionResolved {
+                        request_id: "unknown".into()
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(102), before);
+        assert_eq!(
+            r.apply(request(4, "unknown", AttentionKind::Question), 103),
+            ApplyResult::Ignored
+        );
+    }
+    #[test]
+    fn given_pi_style_ui_without_agent_start_should_recover_new_prompt_after_late_answer() {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 30_000,
+                max_pending: 4,
+                max_event_ids: 16,
+            },
+        )
+        .unwrap();
+        let mut first = request(1, "ui-1", AttentionKind::Question);
+        first.turn_id = None;
+        if let SignalEventKind::AttentionPending { request } = &mut first.kind {
+            request.turn_id = None;
+        }
+        r.apply(first, 100);
+        let mut end = fresh(
+            event(
+                2,
+                SignalEventKind::AttentionResolved {
+                    request_id: "ui-1".into(),
+                },
+            ),
+            30_101,
+        );
+        end.turn_id = None;
+        assert_eq!(r.apply(end, 30_101), ApplyResult::Applied);
+        let after_end = r.snapshot(30_101);
+        assert_eq!(after_end.pending_attention.len(), 0);
+        assert_eq!(after_end.observation.state, ObservationState::Stale);
+        assert_eq!(after_end.outcome, None);
+        let mut second = fresh(request(3, "ui-2", AttentionKind::Question), 30_102);
+        second.turn_id = None;
+        if let SignalEventKind::AttentionPending { request } = &mut second.kind {
+            request.turn_id = None;
+        }
+        assert_eq!(r.apply(second, 30_102), ApplyResult::Applied);
+        let next = r.snapshot(30_102);
+        assert!(next.is_current(30_102));
+        assert_eq!(next.activity, SignalActivity::Unknown);
+        assert_eq!(next.outcome, None);
+        assert_eq!(next.pending_attention[0].request_id, "ui-2");
+        let mut end = fresh(
+            event(
+                4,
+                SignalEventKind::AttentionResolved {
+                    request_id: "ui-2".into(),
+                },
+            ),
+            30_103,
+        );
+        end.turn_id = None;
+        assert_eq!(r.apply(end, 30_103), ApplyResult::Applied);
+        let done = r.snapshot(30_103);
+        assert!(done.is_current(30_103));
+        assert!(done.pending_attention.is_empty());
+        assert_eq!(done.outcome, None);
+        assert_eq!(done.activity, SignalActivity::Unknown);
+    }
+    #[test]
+    fn given_new_attention_after_stale_requests_clear_should_not_revive_old_finished_or_working() {
+        for terminal in [false, true] {
+            let mut r = reducer();
+            r.apply(event(1, SignalEventKind::Start), 100);
+            if terminal {
+                r.apply(
+                    event(
+                        2,
+                        SignalEventKind::Outcome {
+                            kind: OutcomeKind::Completed,
+                        },
+                    ),
+                    101,
+                );
+            }
+            r.apply(request(3, "old", AttentionKind::Question), 102);
+            assert_eq!(
+                r.apply(
+                    fresh(
+                        event(
+                            4,
+                            SignalEventKind::AttentionResolved {
+                                request_id: "old".into()
+                            }
+                        ),
+                        1200
+                    ),
+                    1200
+                ),
+                ApplyResult::Applied
+            );
+            assert_eq!(
+                r.apply(
+                    fresh(request(5, "new", AttentionKind::Question), 1201),
+                    1201
+                ),
+                ApplyResult::Applied
+            );
+            let after = r.snapshot(1201);
+            assert!(after.is_current(1201));
+            assert_eq!(after.activity, SignalActivity::Unknown);
+            assert_eq!(after.outcome, None);
+        }
+    }
+    #[test]
+    fn given_stale_requests_should_reject_wrong_id_replays_and_new_attention_until_exact_removals()
+    {
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(request(2, "one", AttentionKind::Question), 101);
+        r.apply(request(3, "two", AttentionKind::Question), 102);
+        let before = r.snapshot(1200);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        4,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "wrong".into()
+                        }
+                    ),
+                    1200
+                ),
+                1200
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(1200), before);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        5,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "one".into()
+                        }
+                    ),
+                    1201
+                ),
+                1201
+            ),
+            ApplyResult::Applied
+        );
+        let partial = r.snapshot(1201);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        6,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "one".into()
+                        }
+                    ),
+                    1202
+                ),
+                1202
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(
+            r.apply(
+                fresh(request(7, "new-unrelated", AttentionKind::Question), 1203),
+                1203
+            ),
+            ApplyResult::Ignored
+        );
+        let mut replay = fresh(
+            event(
+                8,
+                SignalEventKind::AttentionResolved {
+                    request_id: "two".into(),
+                },
+            ),
+            1204,
+        );
+        replay.event_id = "event-5".into();
+        assert_eq!(r.apply(replay, 1204), ApplyResult::Ignored);
+        assert_eq!(r.snapshot(1204), partial);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        9,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "two".into()
+                        }
+                    ),
+                    1205
+                ),
+                1205
+            ),
+            ApplyResult::Applied
+        );
+        let mut next = fresh(event(10, SignalEventKind::Start), 1206);
+        next.turn_id = Some("next-turn".into());
+        assert_eq!(r.apply(next, 1206), ApplyResult::Applied);
+        let active = r.snapshot(1206);
+        assert!(active.is_current(1206));
+        assert_eq!(active.activity, SignalActivity::Working);
+        assert_eq!(active.outcome, None);
+    }
+    #[test]
+    fn given_nonstale_health_loss_should_not_use_late_resolution_or_new_prompt_to_restore_current()
+    {
+        for reason in [
+            ObservationState::Lost,
+            ObservationState::Disconnected,
+            ObservationState::ProcessDead,
+        ] {
+            let mut r = reducer();
+            r.apply(request(1, "pending", AttentionKind::Question), 100);
+            r.invalidate(reason);
+            let before = r.snapshot(1200);
+            assert_eq!(
+                r.apply(
+                    fresh(
+                        event(
+                            2,
+                            SignalEventKind::AttentionResolved {
+                                request_id: "pending".into()
+                            }
+                        ),
+                        1200
+                    ),
+                    1200
+                ),
+                ApplyResult::Ignored
+            );
+            assert_eq!(
+                r.apply(
+                    fresh(request(3, "new", AttentionKind::Question), 1201),
+                    1201
+                ),
+                ApplyResult::Ignored
+            );
+            assert_eq!(r.snapshot(1201), before);
+        }
+    }
+    #[test]
+    fn given_stale_resolution_at_history_capacity_should_preserve_request_and_fail_closed() {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 1,
+            },
+        )
+        .unwrap();
+        r.apply(request(1, "pending", AttentionKind::Question), 100);
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        2,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "pending".into()
+                        }
+                    ),
+                    1200
+                ),
+                1200
+            ),
+            ApplyResult::CapacityExceeded
+        );
+        let snap = r.snapshot(1200);
+        assert_eq!(snap.observation.state, ObservationState::Lost);
+        assert_eq!(snap.pending_attention[0].request_id, "pending");
+        assert_eq!(snap.outcome, None);
+    }
+    #[test]
+    fn given_exact_expiry_or_invalid_late_evidence_should_never_resolve_from_old_child_or_weak_signals()
+     {
+        let mut r = reducer();
+        r.apply(request(1, "pending", AttentionKind::Question), 100);
+        let before = r.snapshot(1100);
+        for variant in 0..4 {
+            let mut e = fresh(
+                event(
+                    2,
+                    SignalEventKind::AttentionResolved {
+                        request_id: "pending".into(),
+                    },
+                ),
+                1100,
+            );
+            match variant {
+                0 => e.occurred_at_ms = 100,
+                1 => e.parent_session_id = Some("root".into()),
+                2 => e.identity.generation += 1,
+                _ => e.confidence = SignalConfidence::Heuristic,
+            }
+            assert_ne!(r.apply(e, 1100), ApplyResult::Applied);
+            assert_eq!(r.snapshot(1100), before);
+        }
+        assert_eq!(
+            r.apply(
+                fresh(
+                    event(
+                        3,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "pending".into()
+                        }
+                    ),
+                    1100
+                ),
+                1100
+            ),
+            ApplyResult::Applied
+        );
+        assert_eq!(r.snapshot(1100).pending_attention.len(), 0);
+        assert_eq!(r.snapshot(1100).observation.state, ObservationState::Stale);
+    }
+    #[test]
+    fn given_capacity_should_ignore_duplicate_pending_wrong_outcomes_and_closed_starts() {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 2,
+            },
+        )
+        .unwrap();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(request(2, "pending", AttentionKind::Question), 101);
+        let before = r.snapshot(102);
+        assert_eq!(
+            r.apply(request(3, "pending", AttentionKind::Question), 102),
+            ApplyResult::Ignored
+        );
+        let mut wrong = event(
+            4,
+            SignalEventKind::Outcome {
+                kind: OutcomeKind::Completed,
+            },
+        );
+        wrong.turn_id = Some("wrong".into());
+        assert_eq!(r.apply(wrong, 102), ApplyResult::Ignored);
+        assert_eq!(r.snapshot(102), before);
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 2,
+            },
+        )
+        .unwrap();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(
+            event(
+                2,
+                SignalEventKind::Outcome {
+                    kind: OutcomeKind::Completed,
+                },
+            ),
+            101,
+        );
+        let before = r.snapshot(102);
+        assert_eq!(
+            r.apply(event(3, SignalEventKind::Start), 102),
+            ApplyResult::Ignored
+        );
+        assert_eq!(
+            r.apply(
+                event(
+                    4,
+                    SignalEventKind::Outcome {
+                        kind: OutcomeKind::Errored
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(102), before);
     }
 }
 
