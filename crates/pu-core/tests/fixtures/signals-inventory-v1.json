@@ -1,0 +1,72 @@
+{
+  "observed_at": "2026-10-17T00:00:00Z",
+  "project_root": "/fixture/project",
+  "complete": true,
+  "summary": {
+    "projects": 1,
+    "worktrees": 1,
+    "agents": 1,
+    "running": 1,
+    "suspended": 0,
+    "broken": 0,
+    "unknown": 0,
+    "running_ai_agents": 1,
+    "running_terminals": 0
+  },
+  "projects": [],
+  "worktrees": [],
+  "agents": [
+    {
+      "screen_aware": false,
+      "phase": null,
+      "project_root": "/fixture/project",
+      "cwd": "/fixture/project",
+      "worktree_id": null,
+      "id": "ag-root",
+      "name": "Root",
+      "agent_type": "fixture",
+      "state": "running",
+      "pid": 42,
+      "exit_code": null,
+      "idle_seconds": 0,
+      "started_at": "2026-10-17T00:00:00Z",
+      "signal": {
+        "schema_version": 1,
+        "identity": {
+          "agent_id": "ag-root",
+          "worktree_id": null,
+          "launch_id": "launch-root-1",
+          "generation": 1,
+          "native_session_id": "native-root"
+        },
+        "activity": "working",
+        "pending_attention": [
+          {
+            "request_id": "request-1",
+            "kind": "permission",
+            "event_id": "event-permission-1",
+            "turn_id": "turn-1",
+            "confidence": "authoritative",
+            "actionability": {
+              "macos": false,
+              "ios": false
+            }
+          }
+        ],
+        "outcome": null,
+        "observation": {
+          "state": "current",
+          "last_received_at_ms": 1792195200000,
+          "expires_at_ms": 1792195230000
+        },
+        "evidence": {
+          "tool": "fixture",
+          "tool_version": "1.0",
+          "adapter_version": "1",
+          "confidence": "authoritative",
+          "event_id": "event-permission-1"
+        }
+      }
+    }
+  ]
+}

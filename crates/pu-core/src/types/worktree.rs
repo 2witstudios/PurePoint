@@ -80,6 +80,7 @@ mod tests {
                 gate_attempts: None,
                 no_trigger: false,
                 trigger_name: None,
+                signal: None,
             },
         );
         let entry = WorktreeEntry {
