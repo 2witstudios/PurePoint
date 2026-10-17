@@ -65,7 +65,7 @@ marker = shlex.quote(str(root/'accepted-once'))
 command = 'sleep 2; echo sandbox-deny >&2; exit 2'
 if args.scenario == 'reject_after_complete':command=f'if test -f {marker}; then sleep 2; echo sandbox-deny >&2; exit 2; fi; touch {marker}'
 if args.scenario.startswith('reject'):hook.write_text(json.dumps({'hooks':{'UserPromptSubmit':[{'hooks':[{'type':'command','command':command}]}]}}))
-env = {'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(config), 'ANTHROPIC_API_KEY': 'sandbox-fixture', 'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{server.server_port}', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_AUTOUPDATER': '1', 'PATH': '/opt/homebrew/bin:/usr/bin:/bin', 'TERM': 'xterm-256color', 'SHELL': '/bin/sh', 'LANG': 'en_US.UTF-8', 'CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS': '1'}
+env = {'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(config), 'ANTHROPIC_API_KEY': 'sandbox-fixture', 'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{server.server_port}', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_AUTOUPDATER': '1', 'PATH': '/opt/homebrew/bin:/usr/bin:/bin', 'TERM': 'xterm-256color', 'SHELL': '/bin/sh', 'LANG': 'en_US.UTF-8'}
 sid = str(uuid.uuid4())
 (a, b) = pty.openpty()
 fcntl.ioctl(b, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))

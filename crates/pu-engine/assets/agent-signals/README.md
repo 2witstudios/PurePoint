@@ -211,3 +211,10 @@ busy regressions pass. The isolated native rejection probes prove no new Working
 no invented outcome, and no revival/replacement of a previously completed event.
 Parent lineage is bounded4096 IDs per turn;512 superseded roots are tombstoned,
 without eviction. Exceeding a source history bound withdraws observation.
+
+The default-environment Claude question probe also passes without
+`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`; production does not enable that flag.
+Registry selection requires the exact owned PID/session/cwd/interactive tuple,
+ignores foreign background rows, and rejects duplicate exact roots. Unit probes
+cover a shared-PID child row, late terminal flush, root replay and bounded-history
+no-ops. Native child/resume and complete public Engine qualification remain open.

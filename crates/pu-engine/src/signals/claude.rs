@@ -88,7 +88,12 @@ impl Observer {
         let matching: Vec<_> = rows
             .as_array()?
             .iter()
-            .filter(|r| r["pid"].as_u64() == Some(u64::from(pid)))
+            .filter(|r| {
+                r["pid"].as_u64() == Some(u64::from(pid))
+                    && r["cwd"].as_str() == Some(cwd)
+                    && r["sessionId"].as_str() == Some(session)
+                    && r["kind"] == "interactive"
+            })
             .collect();
         if matching.len() != 1 {
             return None;
@@ -686,6 +691,125 @@ mod tests {
         current["parentUuid"] = json!("next");
         t.record(&current, &id, "/owned").unwrap();
         assert_eq!(t.outcome.as_ref().unwrap().turn_id.as_deref(), Some("next"));
+    }
+
+    #[test]
+    fn closed_root_replays_and_capacity_noops_preserve_the_current_turn() {
+        let mut t = Transcript::default();
+        let id = identity();
+        for index in 0..513 {
+            t.record(
+                &record(
+                    "user",
+                    &format!("root{index}"),
+                    json!({"content":"accepted"}),
+                ),
+                &id,
+                "/owned",
+            )
+            .unwrap();
+        }
+        assert_eq!(t.closed_turns.len(), 512);
+        for root in ["root0", "root512"] {
+            t.record(
+                &record("user", root, json!({"content":"replay"})),
+                &id,
+                "/owned",
+            )
+            .unwrap();
+        }
+        assert_eq!(t.turn.as_deref(), Some("root512"));
+        assert_eq!(t.closed_turns.len(), 512);
+        assert!(
+            t.record(
+                &record("user", "overflow", json!({"content":"new"})),
+                &id,
+                "/owned"
+            )
+            .is_none()
+        );
+        assert_eq!(t.turn.as_deref(), Some("root512"));
+    }
+    #[test]
+    fn delayed_terminal_flush_can_close_unknown_idle_without_reopening_settled_activity() {
+        let mut t = Transcript::default();
+        let id = identity();
+        let busy = json!({"status":"busy"});
+        let idle = json!({"status":"idle"});
+        t.record(
+            &record("user", "turn", json!({"content":"accepted"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        t.snapshot(&id, &busy, 100).unwrap();
+        assert!(t.snapshot(&id, &idle, 101).unwrap().outcome.is_none());
+        let mut error = record("assistant", "late-flush", json!({"content":[]}));
+        error["isApiErrorMessage"] = json!(true);
+        t.record(&error, &id, "/owned").unwrap();
+        assert_eq!(
+            t.snapshot(&id, &idle, 102).unwrap().outcome.unwrap().kind,
+            OutcomeKind::Errored
+        );
+        assert!(t.snapshot(&id, &busy, 103).is_none());
+        t.record(
+            &record("user", "next", json!({"content":"accepted next"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        t.snapshot(&id, &idle, 104).unwrap();
+        assert_eq!(
+            t.snapshot(&id, &busy, 105).unwrap().activity,
+            SignalActivity::Working
+        );
+    }
+    #[tokio::test]
+    async fn native_registry_selection_ignores_children_sharing_the_parent_pid() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("rows.json");
+        let command = root.path().join("claude");
+        let row = json!({"pid":123,"cwd":root.path().to_str().unwrap(),"sessionId":"native","kind":"interactive","startedAt":1,"status":"busy"});
+        let mut child = row.clone();
+        child["sessionId"] = json!("child");
+        child["kind"] = json!("background");
+        std::fs::write(
+            &data,
+            serde_json::to_vec(&json!([row.clone(), child])).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &command,
+            format!(
+                "#!/bin/sh\nexec /bin/cat '{}'\n",
+                data.to_string_lossy().replace('\'', "'\"'\"'")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let observer = Observer {
+            command: command.to_string_lossy().into_owned(),
+            env: vec![],
+        };
+        assert_eq!(
+            observer
+                .row(root.path().to_str().unwrap(), 123, "native")
+                .await
+                .unwrap(),
+            row
+        );
+        std::fs::write(
+            &data,
+            serde_json::to_vec(&json!([row.clone(), row])).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            observer
+                .row(root.path().to_str().unwrap(), 123, "native")
+                .await
+                .is_none()
+        );
     }
 
     /// Driven only by an isolated native CLI fixture; never reads real user config.
