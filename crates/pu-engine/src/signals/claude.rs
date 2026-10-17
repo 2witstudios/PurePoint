@@ -372,12 +372,12 @@ impl Transcript {
             .unwrap_or(0);
         let complete: Vec<u8> = self.partial.drain(..end).collect();
         for line in complete.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
-            if line.len() > 1024 * 1024 {
+            if line.len() > super::MAX_NATIVE_RECORD_BYTES {
                 return None;
             }
             self.record(&serde_json::from_slice::<Value>(line).ok()?, identity, cwd)?;
         }
-        if self.partial.len() > 1024 * 1024 {
+        if self.partial.len() > super::MAX_NATIVE_RECORD_BYTES {
             return None;
         }
         self.poisoned = false;
@@ -659,6 +659,37 @@ mod tests {
             Value::Null
         };
         json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":"native","cwd":"/owned","version":"2.1.300","isSidechain":false,"message":message})
+    }
+    #[test]
+    fn given_large_native_image_result_should_resolve_the_request_and_preserve_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("history");
+        let user = record("user", "turn", json!({"content":"read image"}));
+        let call = record(
+            "assistant",
+            "a",
+            json!({"content":[{"type":"tool_use","id":"image-read","name":"Read"}]}),
+        );
+        let result = record(
+            "user",
+            "image-result",
+            json!({"content":[{"type":"tool_result","tool_use_id":"image-read","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"A".repeat(10*1024*1024)}}]}]}),
+        );
+        let mut completed = record(
+            "assistant",
+            "end",
+            json!({"stop_reason":"end_turn","content":[]}),
+        );
+        completed["parentUuid"] = json!("image-result");
+        std::fs::write(&path, format!("{user}\n{call}\n{result}\n{completed}\n")).unwrap();
+        let mut transcript = Transcript::default();
+        transcript.read(&path, &identity(), "/owned").unwrap();
+        assert!(!transcript.poisoned);
+        assert!(!transcript.unchanged(&path));
+        transcript.read(&path, &identity(), "/owned").unwrap();
+        assert!(transcript.unchanged(&path));
+        assert!(transcript.tools.is_empty());
+        assert_eq!(transcript.outcome.unwrap().kind, OutcomeKind::Completed);
     }
     #[test]
     fn existing_large_history_is_consumed_in_bounded_batches() {

@@ -207,12 +207,12 @@ impl Cursor {
             .unwrap_or(0);
         let complete: Vec<_> = self.partial.drain(..end).collect();
         for line in complete.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
-            if line.len() > 1024 * 1024 {
+            if line.len() > super::MAX_NATIVE_RECORD_BYTES {
                 return None;
             }
             history.record(&serde_json::from_slice::<Value>(line).ok()?, cwd)?;
         }
-        if self.partial.len() > 1024 * 1024 {
+        if self.partial.len() > super::MAX_NATIVE_RECORD_BYTES {
             return None;
         }
         self.poisoned = false;
@@ -653,6 +653,30 @@ mod tests {
     }
     fn event(kind: &str, turn: &str) -> Value {
         json!({"type":"event_msg","payload":{"type":kind,"turn_id":turn,"root_turn_id":turn}})
+    }
+    #[test]
+    fn given_large_native_image_record_should_preserve_the_current_turn_and_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("history");
+        let image = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":format!("data:image/png;base64,{}", "A".repeat(10*1024*1024))}]}});
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{image}\n{}\n",
+                meta(),
+                event("task_started", "turn"),
+                event("task_complete", "turn")
+            ),
+        )
+        .unwrap();
+        let mut history = History::default();
+        let mut cursor = Cursor::default();
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(!cursor.poisoned);
+        assert!(!cursor.unchanged(&path));
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(cursor.unchanged(&path));
+        assert_eq!(history.outcome.unwrap().kind, OutcomeKind::Completed);
     }
     #[test]
     fn existing_large_history_is_consumed_in_bounded_batches() {

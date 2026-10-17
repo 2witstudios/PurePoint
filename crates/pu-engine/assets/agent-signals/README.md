@@ -55,7 +55,7 @@ Mac/iOS acceptance. All production attention notifications remain gated.
 
 * Claude observation runs outside the PTY. It reads only that owned PID's registry record and exact root transcript; it never launches list subprocesses or scans all agents per poll.
   A native poll has a 5s overall deadline. Registry reads reject symlinks, nonregular/foreign-owned or group/world-writable files and data over 16KiB; exact PID/domain/session/cwd/kind/entrypoint/protocol/version/start epoch are required. Native registry and transcript versions are checked directly; no helper CLI process is launched. Registry start time must postdate the recorded pre-spawn lower bound, so a crashed predecessor's record cannot bind a reused PID.
-  Transcript reads are incremental, at most 8MiB per poll/1MiB per record, and retain
+  Transcript reads are incremental, at most 8MiB per poll/32MiB per record, and retain
   only IDs, tool categories and structural outcomes. Existing histories larger than
   the per-poll budget are caught up incrementally. A timed-out Claude poll retains
   its single in-flight reader and private replay/settlement state. Native registry is sampled on
@@ -64,6 +64,11 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   Up to 64 unresolved tool IDs are retained. Queries do not change user settings,
   input, resume, process/session ownership or permission policy. No hook/helper is
   needed for Claude. Initial idle without a terminal result does not invent Finished.
+
+* Claude/Codex assemble records across polls up to 32MiB, so ordinary native
+  image/PDF payloads do not exceed a text-only 1MiB limit and permanently disable
+  observation. The 8MiB per-poll I/O budget remains unchanged; only structural
+  facts/IDs survive parsing. Larger records still fail closed at the explicit cap.
 
 Native observers publish semantic changes immediately. Timestamp-only refreshes
 are coalesced into a 10-second heartbeat, below the consumer's 30-second lease;
@@ -92,7 +97,7 @@ python3 crates/pu-engine/tests/agent_signals_pi_harness.py \
 ```
 
 For the public Engine route, compile a standalone runner from exact Cargo artifact
-paths, then select one native tool and scenario (question, permission, error, interrupt, permission_deny, question_cancel, resume, worktree or question_hold; Codex also supports resume_pending):
+paths, then select one native tool and scenario (question, permission, error, interrupt, permission_deny, question_cancel, resume, worktree or question_hold; Codex also supports resume_pending, Claude/Codex support image):
 
 ```sh
 python3 crates/pu-engine/verification/build-engine-signals-probe.py /tmp/pp-signals-proof
@@ -108,6 +113,9 @@ wrapper budget; cleanup escalates a stuck runner without skipping native-service
 and fixture-server teardown. Codex `resume_pending` suspends at an actual pending
 permission, checks the resumed idle state before new input, then verifies a fresh
 turn completes without inheriting the previous process's work or request.
+The `image` case reads a real noisy PNG through native Read/view_image, requires
+actual image content in native JSONL and completion through the public Engine;
+Claude additionally requires a native record larger than the former 1MiB limit.
 
 Use `claude` or `opencode` with its pinned absolute binary path for the other
 adapters. The driver verifies runner provenance, uses fresh private HOME/config

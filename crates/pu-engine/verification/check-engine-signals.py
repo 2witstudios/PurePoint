@@ -5,12 +5,14 @@ from pathlib import Path
 from signal_probe_support import source_state_sha256, stop_process
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('tool', choices=['claude', 'codex', 'opencode'])
-parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'worktree', 'question_hold'])
+parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'worktree', 'question_hold', 'image'])
 parser.add_argument('cli')
 parser.add_argument('--runner', required=True, help='Exact candidate owned-native-signals.rs executable; compile against cargo compiler-artifact paths')
 args = parser.parse_args()
 if args.scenario == 'resume_pending' and args.tool != 'codex':
     parser.error('resume_pending checks the Codex interrupted-history regression')
+if args.scenario == 'image' and args.tool == 'opencode':
+    parser.error('image checks the Claude/Codex native JSONL record regression')
 mode = {'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
 runner_path = Path(args.runner).resolve()
 provenance = json.loads((runner_path.parent / 'provenance.json').read_text())
@@ -57,6 +59,13 @@ if args.scenario == 'worktree':
     (repo / 'fixture.txt').write_text('Isolated native agent worktree proof\n')
     subprocess.run(['git', '-C', str(repo), 'add', 'fixture.txt'], env=env, check=True)
     subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Native QA', '-c', 'user.email=qa@example.invalid', 'commit', '-qm', 'Isolated fixture'], env=env, check=True)
+if args.scenario == 'image':
+    import struct, zlib
+    width = 1024
+    pixels = b''.join(b'\0' + os.urandom(width * 3) for _ in range(width))
+    def png_chunk(kind, data):
+        return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data) & 0xffffffff)
+    (repo / 'noise.png').write_bytes(b'\x89PNG\r\n\x1a\n' + png_chunk(b'IHDR', struct.pack('!IIBBBBB', width, width, 8, 2, 0, 0, 0)) + png_chunk(b'IDAT', zlib.compress(pixels)) + png_chunk(b'IEND', b''))
 print('ROOT', root, 'TOOL', args.tool, 'SCENARIO', args.scenario, flush=True)
 (root / 'runner-provenance.json').write_text(json.dumps(provenance, indent=2))
 (root / 'fixture.json').write_text(json.dumps({'tool': args.tool, 'scenario': args.scenario, 'provider_source': str(helper), 'worktree_source': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'runner': str(Path(args.runner).resolve())}))
@@ -69,6 +78,19 @@ try:
     print('RUNNER_EXIT', code, flush=True)
     print((root / 'runner.log').read_text()[-3000:], flush=True)
     assert code == 0, root
+    if args.scenario == 'image':
+        directory = config / ('projects' if args.tool == 'claude' else 'sessions')
+        records = [line for path in directory.rglob('*.jsonl') for line in path.read_text().splitlines()]
+        def image_blocks(value):
+            if isinstance(value, dict):
+                return int(value.get('type') in ['image', 'input_image']) + sum(image_blocks(v) for v in value.values())
+            return sum(map(image_blocks, value)) if isinstance(value, list) else 0
+        images = sum(image_blocks(json.loads(line)) for line in records)
+        maximum = max((len(line.encode('utf-8')) for line in records), default=0)
+        assert images > 0, 'Native tool did not produce image content'
+        if args.tool == 'claude':
+            assert maximum > 1024 * 1024, 'Native large-image regression was not exercised'
+        (root / 'native-image-checks.json').write_text(json.dumps({'passed': True, 'native_image_blocks': images, 'max_record_bytes': maximum}, indent=2))
     if args.scenario in ['permission', 'question', 'permission_deny', 'question_cancel', 'question_hold']:
         if args.tool == 'opencode':
             results = [{'output': r, 'is_error': False} for r in json.loads((root / 'native-tool-results.json').read_text())]

@@ -37,9 +37,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":{"message":"sandbox failure","type":"invalid_request_error"}}')
             return
         events = [{'type': 'response.created', 'response': {'id': 'resp_probe'}}, {'type': 'response.output_item.done', 'item': {'type': 'message', 'role': 'assistant', 'id': 'msg_probe', 'content': [{'type': 'output_text', 'text': 'Native probe done.'}]}}, {'type': 'response.completed', 'response': {'id': 'resp_probe', 'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}}}]
-        if mode in ['permission', 'question'] and (not any((x.get('type') == 'function_call_output' for x in request.get('input', []) if isinstance(x, dict)))):
+        if mode in ['permission', 'question', 'image'] and (not any((x.get('type') == 'function_call_output' for x in request.get('input', []) if isinstance(x, dict)))):
             arguments = {'cmd': 'printf native-proof', 'sandbox_permissions': 'require_escalated', 'justification': 'Approve the isolated native probe?'} if mode == 'permission' else {'questions': [{'id': 'probe', 'header': 'Probe', 'question': 'Native exact question?', 'options': [{'label': 'First', 'description': 'First choice'}, {'label': 'Second', 'description': 'Second choice'}]}]}
-            events[1] = {'type': 'response.output_item.done', 'item': {'type': 'function_call', 'call_id': 'call_native_' + mode, 'name': 'exec_command' if mode == 'permission' else 'request_user_input', 'arguments': json.dumps(arguments)}}
+            if mode == 'image':
+                arguments = {'path': str(repo / 'noise.png')}
+            events[1] = {'type': 'response.output_item.done', 'item': {'type': 'function_call', 'call_id': 'call_native_' + mode, 'name': {'permission': 'exec_command', 'question': 'request_user_input', 'image': 'view_image'}[mode], 'arguments': json.dumps(arguments)}}
         data = ''.join(('event: ' + e['type'] + '\ndata: ' + json.dumps(e) + '\n\n' for e in events)).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')

@@ -16,6 +16,10 @@ use tokio::net::UnixDatagram;
 
 pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 
+// Native image/PDF tool results can exceed 1MiB in one JSONL record. Keep the
+// per-poll I/O budget separate from this finite record-assembly limit.
+const MAX_NATIVE_RECORD_BYTES: usize = 32 * 1024 * 1024;
+
 pub(crate) struct LaunchState {
     reducer: Mutex<Option<SignalReducer>>,
     identity: Mutex<SignalIdentity>,
