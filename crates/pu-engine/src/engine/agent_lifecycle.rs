@@ -423,7 +423,7 @@ impl Engine {
         let effective_session_id = agent_entry.session_id.clone();
 
         // 4. Construct resume command based on agent type
-        let (command, args, session_id) = match self.build_resume_command(
+        let (command, mut args, session_id) = match self.build_resume_command(
             &agent_entry.agent_type,
             &agent_cfg,
             effective_session_id.as_deref(),
@@ -439,6 +439,17 @@ impl Engine {
             &mut env,
             worktree_id.as_ref().map(|_| Path::new(&cwd)),
         );
+        let observation = crate::signals::prepare(
+            project_root,
+            agent_id,
+            worktree_id.clone(),
+            &agent_entry.agent_type,
+            session_id.as_deref(),
+            &command,
+            &mut args,
+            &mut env,
+        )
+        .await;
         let spawn_config = SpawnConfig {
             command,
             args,
@@ -459,6 +470,15 @@ impl Engine {
             }
         };
 
+        if let Some(observation) = observation {
+            observation.activate(
+                &self.signal_states,
+                project_root,
+                handle.pid,
+                handle.exit_rx.clone(),
+                self.status_channels.clone(),
+            );
+        }
         handle.screen_aware = agent_entry.agent_type == "claude";
         handle.project_root = Some(project_root.to_string());
         handle.name = agent_entry.name.clone();
@@ -590,6 +610,9 @@ impl Engine {
             for id in agent_ids {
                 pending_inputs.remove(id);
             }
+        }
+        for id in agent_ids {
+            self.signal_states.lock().unwrap().remove(id);
         }
         let handles: Vec<(String, AgentHandle)> = {
             let mut sessions = self.sessions.lock().await;

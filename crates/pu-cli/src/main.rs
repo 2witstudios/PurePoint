@@ -5,6 +5,7 @@ mod error;
 mod machine_target;
 mod output;
 mod service;
+mod signal_helper;
 mod skill;
 
 use clap::{Parser, Subcommand};
@@ -736,8 +737,22 @@ enum TriggerAction {
     },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "__agent-signal")
+    {
+        signal_helper::run();
+        return;
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main());
+}
+
+async fn async_main() {
     let cli = Cli::parse();
     if let Some(root) = &cli.project {
         commands::set_project_override(root.clone());

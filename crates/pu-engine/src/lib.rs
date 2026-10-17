@@ -14,3 +14,5 @@ pub mod screen;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;
+
+pub mod signals;

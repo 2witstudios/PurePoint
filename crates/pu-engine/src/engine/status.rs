@@ -73,6 +73,7 @@ impl Engine {
         let (status, exit_code, idle_seconds) =
             self.live_agent_status_sync(&agent.id, agent, sessions);
         AgentStatusReport {
+            signal: self.signal_snapshot(&agent.id).map(Box::new),
             id: agent.id.clone(),
             name: agent.name.clone(),
             agent_type: agent.agent_type.clone(),

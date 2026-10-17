@@ -3,6 +3,7 @@ use pu_core::protocol::{AgentStatusReport, GridCommand, PROTOCOL_VERSION};
 
 fn make_agent_report(id: &str, status: AgentStatus) -> AgentStatusReport {
     AgentStatusReport {
+        signal: None,
         id: id.into(),
         name: format!("{id}-name"),
         agent_type: "claude".into(),
