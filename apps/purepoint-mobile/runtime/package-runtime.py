@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 SOURCE = Path(__file__).resolve().parents[1]
@@ -18,6 +21,25 @@ PIN = json.loads((SOURCE / 'runtime/node-release.json').read_text())
 
 def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
+
+def download_archive(url, destination):
+    """Retry transient network failures without publishing partial cache entries."""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response, destination.open('wb') as output:
+                shutil.copyfileobj(response, output)
+                expected = getattr(response, 'headers', {}).get('Content-Length')
+                if expected is not None and output.tell() != int(expected):
+                    raise urllib.error.ContentTooShortError('Incomplete runtime archive', None)
+            return
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as error:
+            destination.unlink(missing_ok=True)
+            if isinstance(error, urllib.error.HTTPError) and error.code not in (408, 429) and error.code < 500:
+                raise
+            if attempt == 2:
+                raise
+            print(f'Transient runtime download failure; retry {attempt + 1}/2: {error}', file=sys.stderr)
+            time.sleep(attempt + 1)
 
 def complete_darwin_graph(modules, arches, cache):
     # npm selects optional binaries for the build host. Restore every advertised
@@ -43,7 +65,7 @@ def complete_darwin_graph(modules, arches, cache):
             with tempfile.NamedTemporaryFile(dir=cache, suffix='.download', delete=False) as file:
                 download = Path(file.name)
             try:
-                urllib.request.urlretrieve(entry['resolved'], download)
+                download_archive(entry['resolved'], download)
                 actual = base64.b64encode(hashlib.sha512(download.read_bytes()).digest()).decode()
                 if actual != expected:
                     raise ValueError('Locked native package checksum mismatch')
@@ -110,7 +132,7 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
             if not archive.exists():
                 download = archive.with_suffix('.download')
                 try:
-                    urllib.request.urlretrieve(f"https://nodejs.org/dist/v{PIN['version']}/{pin['name']}", download)
+                    download_archive(f"https://nodejs.org/dist/v{PIN['version']}/{pin['name']}", download)
                     if hashlib.sha256(download.read_bytes()).hexdigest() != pin['sha256']:
                         raise ValueError('Pinned Node checksum mismatch')
                     os.replace(download, archive)
