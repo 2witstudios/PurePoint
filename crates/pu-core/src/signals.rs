@@ -182,6 +182,8 @@ pub struct SignalReducer {
     sequence: Option<u64>,
     event_ids: Vec<String>,
     turn_id: Option<String>,
+    // Terminal eligibility survives an Unknown public activity projection after staleness.
+    active_turn_confirmed: bool,
     resolved_request_ids: Vec<String>,
     closed_turn_ids: Vec<String>,
 }
@@ -214,6 +216,7 @@ impl SignalReducer {
             sequence: None,
             event_ids: Vec::new(),
             turn_id: None,
+            active_turn_confirmed: false,
             resolved_request_ids: Vec::new(),
             closed_turn_ids: Vec::new(),
         })
@@ -306,6 +309,7 @@ impl SignalReducer {
                 }
                 self.turn_id = event.turn_id.clone();
                 self.snapshot.activity = SignalActivity::Working;
+                self.active_turn_confirmed = true;
                 self.snapshot.outcome = None;
             }
             SignalEventKind::Outcome { kind } => {
@@ -317,6 +321,7 @@ impl SignalReducer {
                     self.closed_turn_ids.push(id.clone());
                 }
                 self.snapshot.activity = SignalActivity::Idle;
+                self.active_turn_confirmed = false;
                 self.snapshot.outcome = Some(SignalOutcome {
                     kind: *kind,
                     event_id: event.event_id.clone(),
@@ -377,6 +382,7 @@ impl SignalReducer {
                 self.closed_turn_ids.extend(to_close);
                 self.turn_id = event.turn_id.clone();
                 self.snapshot.activity = *activity;
+                self.active_turn_confirmed = *activity == SignalActivity::Working;
                 self.resolved_request_ids
                     .retain(|id| !pending_attention.iter().any(|r| &r.request_id == id));
                 self.snapshot.pending_attention = pending_attention.clone();
@@ -426,7 +432,7 @@ impl SignalReducer {
                 self.closed_turn_ids.contains(id) || self.turn_id.as_ref() == Some(id)
             }),
             SignalEventKind::Outcome { .. } => {
-                self.snapshot.activity != SignalActivity::Working || event.turn_id != self.turn_id
+                !self.active_turn_confirmed || event.turn_id != self.turn_id
             }
             SignalEventKind::AttentionPending { request } => {
                 self.resolved_request_ids.contains(&request.request_id)
@@ -1876,6 +1882,140 @@ mod tests {
             ApplyResult::Ignored
         );
         assert_eq!(r.snapshot(102), before);
+    }
+    #[test]
+    fn given_confirmed_active_turn_through_late_answer_and_new_ui_should_accept_its_authoritative_terminal()
+     {
+        for kind in [
+            OutcomeKind::Completed,
+            OutcomeKind::Errored,
+            OutcomeKind::Interrupted,
+        ] {
+            let mut r = reducer();
+            r.apply(event(1, SignalEventKind::Start), 100);
+            r.apply(request(2, "ui-1", AttentionKind::Question), 101);
+            assert_eq!(
+                r.apply(
+                    fresh(
+                        event(
+                            3,
+                            SignalEventKind::AttentionResolved {
+                                request_id: "ui-1".into()
+                            }
+                        ),
+                        1200
+                    ),
+                    1200
+                ),
+                ApplyResult::Applied
+            );
+            assert_eq!(
+                r.apply(
+                    fresh(request(4, "ui-2", AttentionKind::Question), 1201),
+                    1201
+                ),
+                ApplyResult::Applied
+            );
+            let prompt = r.snapshot(1201);
+            assert_eq!(prompt.activity, SignalActivity::Unknown);
+            assert_eq!(prompt.outcome, None);
+            r.apply(
+                fresh(
+                    event(
+                        5,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "ui-2".into(),
+                        },
+                    ),
+                    1202,
+                ),
+                1202,
+            );
+            let mut wrong = fresh(event(6, SignalEventKind::Outcome { kind }), 1203);
+            wrong.turn_id = Some("other-turn".into());
+            assert_eq!(r.apply(wrong, 1203), ApplyResult::Ignored);
+            assert_eq!(
+                r.apply(
+                    fresh(event(7, SignalEventKind::Outcome { kind }), 1204),
+                    1204
+                ),
+                ApplyResult::Applied
+            );
+            let terminal = r.snapshot(1204);
+            assert!(terminal.is_current(1204));
+            assert_eq!(terminal.activity, SignalActivity::Idle);
+            assert_eq!(terminal.outcome.as_ref().unwrap().kind, kind);
+            assert_eq!(
+                r.apply(
+                    fresh(event(8, SignalEventKind::Outcome { kind }), 1205),
+                    1205
+                ),
+                ApplyResult::Ignored
+            );
+        }
+    }
+    #[test]
+    fn given_never_started_or_previously_closed_turn_with_fresh_ui_should_not_gain_terminal_eligibility()
+     {
+        for closed in [false, true] {
+            let mut r = reducer();
+            if closed {
+                r.apply(event(1, SignalEventKind::Start), 100);
+                r.apply(
+                    event(
+                        2,
+                        SignalEventKind::Outcome {
+                            kind: OutcomeKind::Completed,
+                        },
+                    ),
+                    101,
+                );
+            }
+            r.apply(request(3, "ui-1", AttentionKind::Question), 102);
+            r.apply(
+                fresh(
+                    event(
+                        4,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "ui-1".into(),
+                        },
+                    ),
+                    1200,
+                ),
+                1200,
+            );
+            r.apply(
+                fresh(request(5, "ui-2", AttentionKind::Question), 1201),
+                1201,
+            );
+            r.apply(
+                fresh(
+                    event(
+                        6,
+                        SignalEventKind::AttentionResolved {
+                            request_id: "ui-2".into(),
+                        },
+                    ),
+                    1202,
+                ),
+                1202,
+            );
+            let before = r.snapshot(1203);
+            for (seq, kind) in [
+                (7, OutcomeKind::Completed),
+                (8, OutcomeKind::Errored),
+                (9, OutcomeKind::Interrupted),
+            ] {
+                let mut terminal = fresh(event(seq, SignalEventKind::Outcome { kind }), 1203);
+                if !closed {
+                    terminal.turn_id = None;
+                }
+                assert_eq!(r.apply(terminal, 1203), ApplyResult::Ignored);
+            }
+            assert_eq!(r.snapshot(1203), before);
+            assert_eq!(before.outcome, None);
+            assert_eq!(before.activity, SignalActivity::Unknown);
+        }
     }
 }
 
