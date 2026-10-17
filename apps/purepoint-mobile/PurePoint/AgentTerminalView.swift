@@ -233,7 +233,27 @@ struct AgentTerminalView: UIViewRepresentable {
             return term.isCurrentBufferAlternate && term.mouseMode != .off && abs(velocity.y) > abs(velocity.x)
         }
 
-        @objc private func scrollAgent(_ pan: UIPanGestureRecognizer) {
+        // The wheel pan can already be recognized when a second finger arrives.
+        // Keep the viewport pinch eligible instead of relying on the pan's touch limit.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            otherGestureRecognizer === scroll?.pinchGestureRecognizer
+        }
+
+        func canForwardScroll(_ pan: UIPanGestureRecognizer) -> Bool {
+            guard pan.numberOfTouches == 1, let pinch = scroll?.pinchGestureRecognizer else { return false }
+            return pinch.numberOfTouches < 2 && pinch.state != .began && pinch.state != .changed
+        }
+
+        @objc func scrollAgent(_ pan: UIPanGestureRecognizer) {
+            guard canForwardScroll(pan) else {
+                // Simultaneous pinch updates still accumulate pan translation. Drop it
+                // so lifting the second finger cannot replay zoom motion as wheel input.
+                pan.setTranslation(.zero, in: pan.view)
+                return
+            }
             guard let terminal, let model else { return }
             if pan.state == .began {
                 scrollScreen = model.screenToken
@@ -246,7 +266,9 @@ struct AgentTerminalView: UIViewRepresentable {
             let delta = pan.translation(in: terminal).y
             let ticks = min(8, Int(abs(delta) / 12))
             guard ticks > 0 else { return }
-            pan.setTranslation(CGPoint(x: 0, y: delta.truncatingRemainder(dividingBy: 12)), in: terminal)
+            // Keep movement beyond this batch's cap for the next update.
+            let consumed = CGFloat(ticks) * 12 * (delta > 0 ? 1 : -1)
+            pan.setTranslation(CGPoint(x: 0, y: delta - consumed), in: terminal)
             let point = pan.location(in: terminal)
             let x = max(0, min(term.cols - 1, Int(point.x / terminal.bounds.width * CGFloat(term.cols))))
             let y = max(0, min(term.rows - 1, Int((point.y - terminal.contentOffset.y) / terminal.bounds.height * CGFloat(term.rows))))

@@ -339,26 +339,32 @@ extension AgentControlScenarios {
 
 extension AgentControlScenarios {
     static func visibleInventoryFreshnessIsSingleFlightAndPauses() async throws {
-        let (model, bridge, defaults, suite) = try await setup(interval: 20_000_000)
+        // Use a real polling delay longer than the old 80 ms assertion window.
+        let (model, bridge, defaults, suite) = try await setup(interval: 200_000_000)
         defer { model.setInventoryVisible(false); model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
         bridge.holdInventory = true
         model.setInventoryVisible(true)
         try await wait { bridge.inventories.count == 1 }
         for _ in 0..<20 { await model.refresh() }
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: 450_000_000)
         try check(bridge.inventories.count == 1, "Slow visible inventory must have only one request in flight")
         bridge.holdInventory = false
         let count = bridge.operations.filter { $0.0 == "agents" }.count
         bridge.inventories.removeFirst().resume(returning: try json(bridge.inventory))
-        try await Task.sleep(nanoseconds: 80_000_000)
+        // Wait for the observable refresh, allowing CI scheduling delays without
+        // weakening the requirement that visible inventory eventually refreshes.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while bridge.operations.filter({ $0.0 == "agents" }).count <= count && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         try check(bridge.operations.filter { $0.0 == "agents" }.count > count, "Visible inventory must refresh periodically")
         model.setInventoryVisible(false)
         let stopped = bridge.operations.filter { $0.0 == "agents" }.count
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: 450_000_000)
         try check(bridge.operations.filter { $0.0 == "agents" }.count == stopped, "Pi-only surfaces must pause inventory reads")
         model.setInventoryVisible(true); model.setInventoryForeground(false)
         let background = bridge.operations.filter { $0.0 == "agents" }.count
-        try await Task.sleep(nanoseconds: 80_000_000)
+        try await Task.sleep(nanoseconds: 450_000_000)
         try check(bridge.operations.filter { $0.0 == "agents" }.count == background, "Background must pause visible inventory")
     }
 }
