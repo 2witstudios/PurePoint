@@ -24,7 +24,8 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
                     prompt: report.prompt ?? "",
                     startedAt: report.startedAt ?? "",
                     sessionId: report.sessionId,
-                    suspended: report.suspended
+                    suspended: report.suspended,
+                    signal: report.signal.flatMap { $0.identity.worktree_id == nil ? $0 : nil }
                 )
             }
             return WorkspaceSnapshot(worktrees: worktreeModels, rootAgents: rootAgents)
@@ -38,7 +39,11 @@ nonisolated struct DaemonWorkspaceService: WorkspaceService {
     static func parseWorktrees(_ entries: [WorktreeEntry]) -> [WorktreeModel] {
         entries.map { entry in
             let agents = entry.agents.values
-                .map { AgentModel(from: $0) }
+                .map { agent in
+                    var model = AgentModel(from: agent)
+                    if model.signal?.identity.worktree_id != entry.id { model.signal = nil }
+                    return model
+                }
                 .sorted(by: { $0.startedAt < $1.startedAt })
 
             return WorktreeModel(

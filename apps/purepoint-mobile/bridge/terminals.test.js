@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import { EventEmitter, once } from "node:events";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
@@ -25,6 +25,7 @@ async function fixture(t) {
   const attached = [];
   const inputs = [];
   const requests = [];
+  let signalSnapshot = undefined;
   let phase = "input_ready",
     aware = true,
     fail = false,
@@ -59,6 +60,7 @@ async function fixture(t) {
                 started_at: "2026-10-16T13:00:00Z",
                 screen_aware: aware,
                 phase,
+                signal: signalSnapshot,
               },
             ],
           });
@@ -92,6 +94,7 @@ async function fixture(t) {
     attached,
     inputs,
     requests,
+    signal(value) { signalSnapshot = value; },
     phase(value) {
       phase = value;
     },
@@ -736,4 +739,17 @@ test("workspace-only grant events preserve held prompts and live attachments whi
     ),
     true,
   );
+});
+
+test("additive authoritative signal forwards exact CORE inventory facts without affecting terminal readiness", async (t) => {
+  const producer = JSON.parse(await readFile(new URL("../../../crates/pu-core/tests/fixtures/signals-inventory-v1.json", import.meta.url), "utf8"));
+  const f = await fixture(t), c = client(f);
+  t.after(c.connection.dispose);
+  f.signal(producer.agents[0].signal);
+  const inventory = await c.request({ op: "agents" });
+  assert.deepEqual(inventory.machines[0].agents[0].signal, producer.agents[0].signal);
+  assert.equal(inventory.machines[0].agents[0].phase, "input_ready");
+  f.signal(undefined);
+  const legacy = await c.request({ op: "agents" });
+  assert.equal(legacy.machines[0].agents[0].signal, null);
 });

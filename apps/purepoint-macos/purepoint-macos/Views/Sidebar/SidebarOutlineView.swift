@@ -125,6 +125,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
     }
 
     func updateNSViewController(_ vc: SidebarOutlineViewController, context: Context) {
+        _ = appState.signalClock
         // The canonical workspace list is the sidebar's only input.
         vc.workspacesByProject = registry.workspacesByProject
         vc.activeWorkspaceId = registry.activeWorkspaceId

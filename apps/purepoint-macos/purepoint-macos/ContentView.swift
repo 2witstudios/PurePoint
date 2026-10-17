@@ -30,6 +30,12 @@ struct ContentView: View {
             DetailView(selection: $selection)
         }
         .navigationTitle("")
+        .task {
+            while !Task.isCancelled {
+                appState.updateAgentSignals()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
         .overlay(alignment: .top) {
             if let error = appState.daemonError {
                 DaemonErrorBanner(message: error) {

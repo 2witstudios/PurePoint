@@ -4,6 +4,15 @@ struct SettingsGeneralView: View {
     @Environment(SettingsState.self) private var settingsState
     @Environment(AppState.self) private var appState
 
+    @AppStorage("PP_signal_permissionNotifications") private var permissionNotifications = false
+    @AppStorage("PP_signal_permissionSound") private var permissionSound = false
+    @AppStorage("PP_signal_questionNotifications") private var questionNotifications = false
+    @AppStorage("PP_signal_questionSound") private var questionSound = false
+    @AppStorage("PP_signal_errorNotifications") private var errorNotifications = false
+    @AppStorage("PP_signal_errorSound") private var errorSound = false
+    @AppStorage("PP_signal_completionNotifications") private var completionNotifications = false
+    @AppStorage("PP_signal_completionSound") private var completionSound = false
+
     private var paletteItems: [CommandPaletteItem] {
         CommandPaletteItem.buildItems(
             builtInVariants: AgentVariant.variantsWithWorktree,
@@ -37,6 +46,23 @@ struct SettingsGeneralView: View {
 
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                     .padding(.vertical, 8)
+            }
+            .groupBoxStyle(SettingsGroupBoxStyle())
+
+            GroupBox("Agent notifications") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Permission notifications", isOn: $permissionNotifications)
+                    Toggle("Permission sound", isOn: $permissionSound)
+                    Toggle("Question notifications", isOn: $questionNotifications)
+                    Toggle("Question sound", isOn: $questionSound)
+                    Toggle("Error notifications", isOn: $errorNotifications)
+                    Toggle("Error sound", isOn: $errorSound)
+                    Toggle("Completion notifications", isOn: $completionNotifications)
+                    Toggle("Completion sound", isOn: $completionSound)
+                    Text("Alerts become available for qualified agent signals. Permission and question alerts require a verified route to the exact request. iOS background push is not available.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
 

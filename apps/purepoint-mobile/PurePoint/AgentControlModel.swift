@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import UserNotifications
+#endif
 
 @MainActor final class AgentControlModel: ObservableObject {
     typealias Request = @MainActor (String, [String: Any]) async throws -> JSONValue
@@ -64,6 +67,34 @@ import SwiftUI
                     "Saved agent prompt recovery could not be read. Keep this phone's local data and resolve storage before sending."
             }
         }
+    }
+
+    var signalAttentionCount: Int {
+        guard connected, inventoryForeground else { return 0 }
+        return Set(machines.flatMap { machine in
+            machine.agents.compactMap { agent -> String? in
+                guard machine.online, machine.metadataStatus != "error",
+                    agent.signal?.identity.worktree_id == agent.worktreeId,
+                    agent.signalPresentation().needsAttention else { return nil }
+                return AgentScope(host: host, machine: machine.id, agent: agent.id).storageKey
+            }
+        }).count
+    }
+    private var lastSignalBadge: Int?
+    func updateSignalBadge() {
+        let count = signalAttentionCount
+        guard lastSignalBadge != count else { return }
+        lastSignalBadge = count
+        #if os(iOS)
+        Task { @MainActor [weak self] in
+            let center = UNUserNotificationCenter.current()
+            if count > 0 {
+                guard (try? await center.requestAuthorization(options: [.badge])) == true else { return }
+            }
+            guard let self, self.signalAttentionCount == count else { return }
+            try? await center.setBadgeCount(count)
+        }
+        #endif
     }
 
     var contextToken: Int { generation }
@@ -145,7 +176,7 @@ import SwiftUI
     }
 
     func setInventoryVisible(_ value: Bool) { guard inventoryVisible != value else { return }; inventoryVisible = value; if !value { inputRefreshTask?.cancel() }; restartVisibleInventory() }
-    func setInventoryForeground(_ value: Bool) { guard inventoryForeground != value else { return }; inventoryForeground = value; if !value { inputRefreshTask?.cancel() }; restartVisibleInventory() }
+    func setInventoryForeground(_ value: Bool) { guard inventoryForeground != value else { return }; inventoryForeground = value; updateSignalBadge(); if !value { inputRefreshTask?.cancel() }; restartVisibleInventory() }
     private func restartVisibleInventory() {
         visibleRefreshTask?.cancel(); visibleRefreshTask = nil
         guard inventoryVisible, inventoryForeground, connected, permission != .off else { return }

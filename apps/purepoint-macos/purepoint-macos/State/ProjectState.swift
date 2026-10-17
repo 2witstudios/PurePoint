@@ -263,6 +263,7 @@ final class ProjectState: Identifiable {
     }
 
     func stopWatching() {
+        invalidateSignals()
         channel.shutdown()
         openTask?.cancel()
         remoteLayoutTask?.cancel()
@@ -283,6 +284,15 @@ final class ProjectState: Identifiable {
     }
 
     // MARK: - Data
+
+    private func invalidateSignals() {
+        rootAgents = rootAgents.map { var agent = $0; agent.signal = nil; return agent }
+        worktrees = worktrees.map { worktree in
+            var copy = worktree
+            copy.agents = copy.agents.map { var agent = $0; agent.signal = nil; return agent }
+            return copy
+        }
+    }
 
     func refresh() {
         let root = projectRoot
@@ -579,6 +589,7 @@ final class ProjectState: Identifiable {
                 // resumes, so this project's agents come back on the new one.
                 onDaemonLost: {
                     guard let self else { return }
+                    self.invalidateSignals()
                     if self.isRemote {
                         // Never start a remote daemon; resubscribe once it answers again.
                         self.resubscribeTask?.cancel()

@@ -1,3 +1,5 @@
+import AppKit
+import CryptoKit
 import Foundation
 import Observation
 
@@ -81,6 +83,66 @@ final class AppState {
     }
 
     var isLoaded: Bool { !projects.isEmpty }
+
+    // Freshness advances even when no new status packet arrives.
+    var signalClock = Date()
+    @ObservationIgnored private lazy var signalNotifications = AgentSignalNotifications()
+
+    private func signalIdentity(projectID: String, agentID: String) -> String {
+        let data = (try? JSONEncoder().encode([projectID, agentID])) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func updateAgentSignals() {
+        signalClock = Date()
+        var foreground: String?
+        let agents = managedProjects.flatMap { project in
+            project.allAgents.map { agent -> AgentSignalAlertPolicy.Agent in
+                let identity = self.signalIdentity(projectID: project.projectId, agentID: agent.id)
+                if NSApplication.shared.isActive, NSApplication.shared.keyWindow != nil, activeProjectRoot == project.projectId,
+                    focusedAgentId == agent.id { foreground = identity }
+                return .init(identity: identity, launch: agent.signal?.identity.launch_id ?? "",
+                    presentation: agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
+                        available: !project.isUnavailable && agent.status.isAlive && !agent.suspended, now: signalClock) ?? .unknown,
+                    qualificationKey: agent.signal?.qualificationKey,
+                    macOSActionable: agent.signal?.pending_attention.contains {
+                        $0.event_id == agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
+                            available: !project.isUnavailable && agent.status.isAlive && !agent.suspended, now: signalClock).eventID && $0.actionability?.macos == true
+                    } ?? false)
+            }
+        }
+        signalNotifications.open = { [weak self] destination in
+            guard let self,
+                let match = self.managedProjects.lazy.compactMap({ project -> (ProjectState, AgentModel)? in
+                    guard let agent = project.allAgents.first(where: {
+                        self.signalIdentity(projectID: project.projectId, agentID: $0.id) == destination.identity
+                    }) else { return nil }
+                    return (project, agent)
+                }).first else { return }
+            let (project, agent) = match
+            guard
+                agent.signal?.identity.launch_id == destination.launch,
+                agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
+                    available: !project.isUnavailable && agent.status.isAlive && !agent.suspended).eventID == destination.presentation.eventID
+            else { return }
+            Task { [weak self, weak project] in
+                guard let self, let project,
+                    let response = try? await project.client.send(.status(projectRoot: project.projectRoot)),
+                    case .statusReport(let worktrees, let roots) = response else { return }
+                let current = roots.first(where: { $0.id == agent.id })?.signal
+                    ?? worktrees.lazy.compactMap { $0.agents[agent.id]?.signal }.first
+                guard current?.identity.launch_id == destination.launch,
+                    current?.presentation(agentID: agent.id, sessionID: agent.sessionId).eventID == destination.presentation.eventID,
+                    self.managedProjects.contains(where: { $0 === project }), !project.isUnavailable else { return }
+                // Navigation uses existing workspace/tab routing, never an input command.
+                project.refresh()
+                self.activeProjectRoot = project.projectId
+                self.pendingSelectAgentId = agent.id
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+        }
+        signalNotifications.update(agents, foregroundIdentity: foreground)
+    }
 
     // MARK: - Project Management
 

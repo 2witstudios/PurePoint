@@ -856,9 +856,10 @@ nonisolated struct AgentStatusReport: Decodable {
     let sessionId: String?
     let prompt: String?
     let suspended: Bool
+    let signal: AgentSignalSnapshot?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, status, pid, prompt, suspended
+        case id, name, status, pid, prompt, suspended, signal
         case agentType = "agent_type"
         case exitCode = "exit_code"
         case idleSeconds = "idle_seconds"
@@ -880,6 +881,7 @@ nonisolated struct AgentStatusReport: Decodable {
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
+        signal = try? container.decodeIfPresent(AgentSignalSnapshot.self, forKey: .signal)
         suspended = try container.decodeIfPresent(Bool.self, forKey: .suspended) ?? false
     }
 }
