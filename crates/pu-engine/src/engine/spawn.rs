@@ -170,7 +170,7 @@ impl Engine {
         let prompt = &prompt;
 
         // When a terminal command is set, it becomes the PTY process directly
-        let (command, args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
+        let (command, mut args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
             terminal_command
         {
             let has_metacharacters = cmd.contains('|')
@@ -319,6 +319,17 @@ impl Engine {
             };
             crate::read_source::resolve_exact(runtime, id, &cwd, &env).ok()
         });
+        let observation = crate::signals::prepare(
+            &project_root,
+            &agent_id,
+            worktree_id.clone(),
+            &agent_type,
+            session_id.as_deref(),
+            &command,
+            &mut args,
+            &mut env,
+        )
+        .await;
         let read_cwd = cwd.clone();
         let read_type = agent_type.clone();
         let spawn_config = SpawnConfig {
@@ -424,6 +435,16 @@ impl Engine {
         handle.worktree_id = worktree_id.clone();
         let pid = handle.pid;
 
+        if let Some(observation) = observation {
+            observation.activate(
+                &self.signal_states,
+                &project_root,
+                handle.pid,
+                handle.exit_rx.clone(),
+                self.status_channels.clone(),
+            );
+        }
+
         // Store handle in session map BEFORE writing manifest.
         // ManifestWatcher in Swift fires on manifest write and immediately
         // tries to attach — the session must already be in the map.
@@ -477,6 +498,7 @@ impl Engine {
 
         // Update manifest
         let agent_entry = AgentEntry {
+            signal: None,
             id: agent_id.clone(),
             name: agent_name.clone(),
             agent_type,

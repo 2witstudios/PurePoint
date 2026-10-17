@@ -263,6 +263,7 @@ impl Engine {
                 }
                 if kind == InventoryKind::Agents && filter.is_none_or(|f| f == state) {
                     report.agents.push(AgentInventoryEntry {
+                        signal: self.signal_snapshot(&agent.id),
                         screen_aware: handle.is_some_and(|h| h.screen_aware),
                         phase: handle
                             .filter(|h| h.screen_aware)
@@ -345,6 +346,7 @@ impl Engine {
             }
             if kind == InventoryKind::Agents && filter.is_none_or(|f| f == state) {
                 report.agents.push(AgentInventoryEntry {
+                    signal: self.signal_snapshot(id),
                     screen_aware: handle.screen_aware,
                     phase: handle
                         .screen_aware
@@ -427,6 +429,7 @@ impl Engine {
         if matches!(request, Request::Status { .. }) {
             let exit_code = *handle.exit_rx.borrow();
             return Some(Response::AgentStatus(AgentStatusReport {
+                signal: self.signal_snapshot(id).map(Box::new),
                 id: id.clone(),
                 name: "shell".into(),
                 agent_type: "terminal".into(),

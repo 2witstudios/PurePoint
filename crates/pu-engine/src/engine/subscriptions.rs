@@ -205,6 +205,7 @@ impl Engine {
                         self.live_agent_status_sync(&agent.id, agent, &sessions);
                     agent.status = status;
                     agent.exit_code = exit_code;
+                    agent.signal = self.signal_snapshot(&agent.id);
                 }
                 wt
             })
