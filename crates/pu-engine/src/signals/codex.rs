@@ -343,6 +343,18 @@ impl History {
             return Some(());
         }
         self.session.as_ref()?;
+        // Native response items carry their causal turn even when a model reuses
+        // a call ID. Delayed prior-turn calls/results must not mutate this turn.
+        let native_turn = &p["internal_chat_message_metadata_passthrough"]["turn_id"];
+        if v["type"] == "response_item" && !native_turn.is_null() {
+            let Some(native_turn) = native_turn.as_str() else {
+                return Some(());
+            };
+            if self.turn.as_deref() != Some(native_turn) || self.closed_turns.contains(native_turn)
+            {
+                return Some(());
+            }
+        }
         match (v["type"].as_str(), p["type"].as_str()) {
             (Some("event_msg"), Some("task_started" | "turn_started")) => {
                 let turn = p["turn_id"]
@@ -583,6 +595,30 @@ mod tests {
         h.record(&event("task_complete", "next"), "/owned").unwrap();
         assert_eq!(h.outcome.as_ref().unwrap().kind, OutcomeKind::Completed);
     }
+    #[test]
+    fn delayed_tool_frames_cannot_replace_or_resolve_a_new_turns_reused_call_id() {
+        let mut h = History::default();
+        h.record(&meta(), "/owned").unwrap();
+        h.record(&event("task_started", "old"), "/owned").unwrap();
+        h.record(&event("task_complete", "old"), "/owned").unwrap();
+        h.record(&event("task_started", "new"), "/owned").unwrap();
+        let mut call = json!({"type":"response_item","payload":{"type":"function_call","call_id":"reused","name":"exec_command","internal_chat_message_metadata_passthrough":{"turn_id":"new"}}});
+        h.record(&call, "/owned").unwrap();
+        call["payload"]["name"] = json!("request_user_input");
+        call["payload"]["internal_chat_message_metadata_passthrough"]["turn_id"] = json!("old");
+        h.record(&call, "/owned").unwrap();
+        assert_eq!(
+            h.tools.get("reused"),
+            Some(&Some(AttentionKind::Permission))
+        );
+        let mut result = json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"reused","internal_chat_message_metadata_passthrough":{"turn_id":"old"}}});
+        h.record(&result, "/owned").unwrap();
+        assert!(h.tools.contains_key("reused"));
+        result["payload"]["internal_chat_message_metadata_passthrough"]["turn_id"] = json!("new");
+        h.record(&result, "/owned").unwrap();
+        assert!(h.tools.is_empty());
+    }
+
     #[test]
     fn wrong_root_or_version_never_binds() {
         for (key, value) in [

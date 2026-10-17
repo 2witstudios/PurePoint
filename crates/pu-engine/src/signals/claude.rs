@@ -2,7 +2,8 @@
 use super::{LaunchState, NativeObserver, Prepared, install, now_ms};
 use pu_core::signals::*;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
@@ -246,9 +247,95 @@ struct Transcript {
     settled: bool,
     working_seen: bool,
     lineage: HashSet<String>,
+    pending_records: BTreeMap<String, DeferredRecord>,
+    waiting_for_parent: HashMap<String, Vec<String>>,
+    record_sequence: u64,
     closed_turns: HashSet<String>,
     tools: BTreeMap<String, bool>,
     outcome: Option<SignalOutcome>,
+}
+
+struct DeferredRecord {
+    parent: String,
+    order: u64,
+    facts: RecordFacts,
+}
+
+struct RecordFacts {
+    tools: Option<Vec<(String, bool)>>,
+    results: Option<Vec<String>>,
+    outcome: Option<OutcomeKind>,
+}
+
+impl RecordFacts {
+    fn from_record(record: &Value) -> Self {
+        let parts: Vec<_> = record["message"]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .collect();
+        let tools = if record["type"] == "assistant" {
+            let entries: Vec<_> = parts
+                .iter()
+                .filter(|part| part["type"] == "tool_use")
+                .collect();
+            if entries.len() > 64 {
+                None
+            } else {
+                entries
+                    .into_iter()
+                    .map(|part| {
+                        Some((
+                            part["id"]
+                                .as_str()
+                                .filter(|id| crate::read_source::valid_session_id(id))?
+                                .into(),
+                            part["name"] == "AskUserQuestion",
+                        ))
+                    })
+                    .collect()
+            }
+        } else {
+            Some(Vec::new())
+        };
+        let results = if record["type"] == "user" {
+            let entries: Vec<_> = parts
+                .iter()
+                .filter(|part| part["type"] == "tool_result")
+                .collect();
+            if entries.len() > 64 {
+                None
+            } else {
+                entries
+                    .into_iter()
+                    .map(|part| {
+                        Some(
+                            part["tool_use_id"]
+                                .as_str()
+                                .filter(|id| crate::read_source::valid_session_id(id))?
+                                .into(),
+                        )
+                    })
+                    .collect()
+            }
+        } else {
+            Some(Vec::new())
+        };
+        let outcome = if record["type"] != "assistant" {
+            None
+        } else if record["isApiErrorMessage"] == true {
+            Some(OutcomeKind::Errored)
+        } else if record["message"]["stop_reason"] == "end_turn" {
+            Some(OutcomeKind::Completed)
+        } else {
+            None
+        };
+        Self {
+            tools,
+            results,
+            outcome,
+        }
+    }
 }
 
 impl Transcript {
@@ -349,60 +436,114 @@ impl Transcript {
             self.working_seen = false;
             self.tools.clear();
             self.outcome = None;
+            self.discard_waiting(self.lineage.iter().cloned().collect());
             self.lineage.clear();
+            if self.pending_records.len() >= 4096 {
+                return None;
+            }
             self.lineage.insert(uuid.into());
+            return self.promote_waiting(uuid);
+        }
+        if self.lineage.contains(uuid) || self.pending_records.contains_key(uuid) {
             return Some(());
         }
-        if self.lineage.contains(uuid) {
-            return Some(());
-        }
-        if !v["parentUuid"]
+        let Some(parent) = v["parentUuid"]
             .as_str()
-            .is_some_and(|parent| self.lineage.contains(parent))
-        {
+            .filter(|id| crate::read_source::valid_session_id(id))
+        else {
+            return Some(());
+        };
+        if self.closed_turns.contains(parent) {
+            self.discard_waiting(vec![uuid.into()]);
             return Some(());
         }
-        if self.lineage.len() >= 4096 {
+        if self.lineage.len() + self.pending_records.len() >= 4096 {
             return None;
         }
+        let facts = RecordFacts::from_record(v);
+        if !self.lineage.contains(parent) {
+            self.record_sequence = self.record_sequence.checked_add(1)?;
+            self.pending_records.insert(
+                uuid.into(),
+                DeferredRecord {
+                    parent: parent.into(),
+                    order: self.record_sequence,
+                    facts,
+                },
+            );
+            self.waiting_for_parent
+                .entry(parent.into())
+                .or_default()
+                .push(uuid.into());
+            return Some(());
+        }
         self.lineage.insert(uuid.into());
-        if v["type"] == "user" {
-            for result in results {
-                self.tools.remove(result["tool_use_id"].as_str()?);
+        self.apply_facts(uuid, facts)?;
+        self.promote_waiting(uuid)
+    }
+
+    fn apply_facts(&mut self, uuid: &str, facts: RecordFacts) -> Option<()> {
+        for id in facts.results? {
+            self.tools.remove(&id);
+        }
+        if !self.settled {
+            for (id, question) in facts.tools? {
+                if self.tools.len() >= 64 && !self.tools.contains_key(&id) {
+                    return None;
+                }
+                self.tools.insert(id, question);
+                self.outcome = None;
             }
-        } else if v["type"] == "assistant" {
-            for content in message["content"].as_array().into_iter().flatten() {
-                if content["type"] == "tool_use" && !self.settled {
-                    let id = content["id"]
-                        .as_str()
-                        .filter(|s| crate::read_source::valid_session_id(s))?;
-                    if self.tools.len() >= 64 {
-                        return None;
-                    }
-                    self.tools
-                        .insert(id.into(), content["name"] == "AskUserQuestion");
-                    self.outcome = None;
+        }
+        if let Some(kind) = facts.outcome
+            && (!self.settled || self.outcome.is_none())
+        {
+            self.outcome = Some(SignalOutcome {
+                kind,
+                event_id: format!("claude-message:{uuid}"),
+                turn_id: self.turn.clone(),
+                confidence: SignalConfidence::Authoritative,
+            });
+        }
+        Some(())
+    }
+
+    fn promote_waiting(&mut self, parent: &str) -> Option<()> {
+        let mut ready = BinaryHeap::new();
+        if let Some(children) = self.waiting_for_parent.remove(parent) {
+            for id in children {
+                if let Some(record) = self.pending_records.get(&id) {
+                    ready.push(Reverse((record.order, id)));
                 }
             }
-            let kind = if v["isApiErrorMessage"] == true {
-                Some(OutcomeKind::Errored)
-            } else if message["stop_reason"] == "end_turn" {
-                Some(OutcomeKind::Completed)
-            } else {
-                None
-            };
-            if let Some(kind) = kind
-                && (!self.settled || self.outcome.is_none())
-            {
-                self.outcome = Some(SignalOutcome {
-                    kind,
-                    event_id: format!("claude-message:{uuid}"),
-                    turn_id: self.turn.clone(),
-                    confidence: SignalConfidence::Authoritative,
-                });
+        }
+        while let Some(Reverse((_, id))) = ready.pop() {
+            let record = self.pending_records.remove(&id)?;
+            if !self.lineage.contains(&record.parent) {
+                return None;
+            }
+            self.lineage.insert(id.clone());
+            self.apply_facts(&id, record.facts)?;
+            if let Some(children) = self.waiting_for_parent.remove(&id) {
+                for child in children {
+                    if let Some(record) = self.pending_records.get(&child) {
+                        ready.push(Reverse((record.order, child)));
+                    }
+                }
             }
         }
         Some(())
+    }
+
+    fn discard_waiting(&mut self, mut retired: Vec<String>) {
+        while let Some(parent) = retired.pop() {
+            if let Some(children) = self.waiting_for_parent.remove(&parent) {
+                for id in children {
+                    self.pending_records.remove(&id);
+                    retired.push(id);
+                }
+            }
+        }
     }
 
     fn snapshot(
@@ -914,6 +1055,118 @@ mod tests {
         row["startedAt"] = json!(now_ms());
         std::fs::write(path, serde_json::to_vec(&row).unwrap()).unwrap();
         assert_eq!(observer.row("/owned", 123, "native").await.unwrap(), row);
+    }
+
+    #[test]
+    fn out_of_order_native_parent_edges_apply_only_after_current_root_is_proven() {
+        let mut transcript = Transcript::default();
+        let id = identity();
+        transcript
+            .record(
+                &record("user", "turn", json!({"content":"accepted"})),
+                &id,
+                "/owned",
+            )
+            .unwrap();
+        let mut child = record("attachment", "child", json!({}));
+        child["parentUuid"] = json!("ancestor");
+        transcript.record(&child, &id, "/owned").unwrap();
+        let mut ask = record(
+            "assistant",
+            "ask",
+            json!({"content":[{"type":"tool_use","id":"request","name":"Write"}]}),
+        );
+        ask["parentUuid"] = json!("child");
+        transcript.record(&ask, &id, "/owned").unwrap();
+        let waiting = json!({"status":"waiting","waitingFor":"permission prompt"});
+        assert!(transcript.snapshot(&id, &waiting, 100).is_none());
+        let mut ancestor = record("attachment", "ancestor", json!({}));
+        ancestor["parentUuid"] = json!("turn");
+        transcript.record(&ancestor, &id, "/owned").unwrap();
+        assert_eq!(
+            transcript
+                .snapshot(&id, &waiting, 101)
+                .unwrap()
+                .pending_attention[0]
+                .request_id,
+            "request"
+        );
+        let mut result = record(
+            "user",
+            "answer",
+            json!({"content":[{"type":"tool_result","tool_use_id":"request"}]}),
+        );
+        result["parentUuid"] = json!("ask");
+        transcript.record(&result, &id, "/owned").unwrap();
+        assert!(transcript.tools.is_empty());
+    }
+
+    #[test]
+    fn deferred_records_before_a_root_and_retired_branch_facts_remain_separate() {
+        let mut t = Transcript::default();
+        let id = identity();
+        let mut child = record("attachment", "child", json!({}));
+        child["parentUuid"] = json!("turn");
+        t.record(&child, &id, "/owned").unwrap();
+        let mut ask = record(
+            "assistant",
+            "ask",
+            json!({"content":[{"type":"tool_use","id":"request","name":"AskUserQuestion"}]}),
+        );
+        ask["parentUuid"] = json!("child");
+        t.record(&ask, &id, "/owned").unwrap();
+        assert!(t.tools.is_empty());
+        t.record(
+            &record("user", "turn", json!({"content":"accepted"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        assert_eq!(t.tools.len(), 1);
+        let mut old_error = record("assistant", "old-error", json!({"stop_reason":"end_turn"}));
+        old_error["isApiErrorMessage"] = json!(true);
+        old_error["parentUuid"] = json!("old-meta");
+        t.record(&old_error, &id, "/owned").unwrap();
+        t.record(
+            &record("user", "next", json!({"content":"accepted next"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        ask["uuid"] = json!("new-ask");
+        ask["parentUuid"] = json!("next");
+        t.record(&ask, &id, "/owned").unwrap();
+        let mut old_meta = record("attachment", "old-meta", json!({}));
+        old_meta["parentUuid"] = json!("turn");
+        t.record(&old_meta, &id, "/owned").unwrap();
+        assert!(t.outcome.is_none());
+        assert_eq!(t.tools.len(), 1);
+        assert!(!t.pending_records.contains_key("old-error"));
+    }
+
+    #[test]
+    fn unresolved_parent_history_is_bounded_and_replays_do_not_consume_capacity() {
+        let mut t = Transcript::default();
+        let id = identity();
+        t.record(
+            &record("user", "turn", json!({"content":"accepted"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        for n in 0..4095 {
+            let mut edge = record("attachment", &format!("edge-{n}"), json!({}));
+            edge["parentUuid"] = json!("missing");
+            t.record(&edge, &id, "/owned").unwrap();
+        }
+        let mut replay = record("attachment", "edge-0", json!({}));
+        replay["parentUuid"] = json!("missing");
+        t.record(&replay, &id, "/owned").unwrap();
+        assert_eq!(t.pending_records.len(), 4095);
+        replay["uuid"] = json!("overflow");
+        assert!(t.record(&replay, &id, "/owned").is_none());
+        assert_eq!(t.pending_records.len(), 4095);
+        assert!(t.pending_records.contains_key("edge-0"));
     }
 
     #[test]
