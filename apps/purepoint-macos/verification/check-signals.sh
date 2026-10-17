@@ -19,7 +19,7 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors -D MOB
  "$repo/apps/purepoint-mobile/PurePoint/AgentControlDomain.swift" "$checks/SignalWireChecks.swift" -o "$task_dir/phone-wire"
 "$task_dir/phone-wire" "$repo"
 swiftc -typecheck -default-isolation MainActor -strict-concurrency=complete -warnings-as-errors \
- "$mac/Models/AgentSignalPolicy.swift" "$mac/Models/AgentSignalSnapshot.swift" "$mac/Models/AgentSignalRouting.swift" "$mac/Services/AgentSignalNotifications.swift"
+ "$mac/Models/AgentSignalPolicy.swift" "$mac/Models/AgentSignalSnapshot.swift" "$mac/Models/AgentSignalRouting.swift" "$mac/Models/AgentSignalPendingTaps.swift" "$mac/Services/AgentSignalNotifications.swift"
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
  "$repo/apps/purepoint-mobile/PurePoint/ChatDomain.swift" \
  "$repo/apps/purepoint-mobile/PurePoint/AgentControlDomain.swift" \
@@ -31,3 +31,7 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
  "$mac/Models/AgentSignalPolicy.swift" "$mac/Models/AgentSignalSnapshot.swift" "$mac/Models/AgentSignalRouting.swift" \
  "$checks/SignalRoutingChecks.swift" -o "$task_dir/routing"
 "$task_dir/routing"
+
+swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
+ "$mac/Models/AgentSignalPendingTaps.swift" "$checks/SignalPendingTapChecks.swift" -o "$task_dir/pending-taps"
+"$task_dir/pending-taps"

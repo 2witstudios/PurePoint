@@ -87,7 +87,7 @@ final class AppState {
 
     // Freshness advances even when no new status packet arrives.
     var signalClock = Date()
-    @ObservationIgnored private lazy var signalNotifications = AgentSignalNotifications()
+    @ObservationIgnored private lazy var signalNotifications = AgentSignalNotifications.shared
 
     var signalRoutingTargets: [AgentSignalRouting.Target] {
         guard let registry else { return [] }
@@ -156,31 +156,29 @@ final class AppState {
                 let agent = project.agent(byId: destination.agentID),
                 destination.matches(agent.signal), agent.status.isAlive, !agent.suspended, !project.isUnavailable,
                 AgentSignalRouting.target(for: destination, among: self.signalRoutingTargets) != nil
-            else { return }
-            Task { [weak self, weak project] in
-                guard let self, let project,
-                    let response = try? await project.client.send(.status(projectRoot: project.projectRoot)),
-                    case .statusReport(let worktrees, let roots) = response else { return }
-                let current: AgentSignalSnapshot?
-                if let worktreeID = destination.worktreeID {
-                    let matching = worktrees.filter { $0.id == worktreeID }
-                    guard matching.count == 1 else { return }
-                    guard let entry = matching[0].agents[destination.agentID], entry.status.isAlive,
-                        entry.suspended != true else { return }
-                    current = entry.signal
-                } else {
-                    let matching = roots.filter { $0.id == destination.agentID }
-                    guard matching.count == 1 else { return }
-                    guard matching[0].status == "running", !matching[0].suspended else { return }
-                    current = matching[0].signal
-                }
-                guard destination.matches(current),
-                    self.managedProjects.contains(where: { $0 === project }), !project.isUnavailable,
-                    AgentSignalRouting.target(for: destination, among: self.signalRoutingTargets) != nil else { return }
-                project.refresh()
-                self.pendingSignalDestination = destination
-                NSApplication.shared.activate(ignoringOtherApps: true)
+            else { return false }
+            guard let response = try? await project.client.send(.status(projectRoot: project.projectRoot)),
+                case .statusReport(let worktrees, let roots) = response else { return false }
+            let current: AgentSignalSnapshot?
+            if let worktreeID = destination.worktreeID {
+                let matching = worktrees.filter { $0.id == worktreeID }
+                guard matching.count == 1 else { return false }
+                guard let entry = matching[0].agents[destination.agentID], entry.status.isAlive,
+                    entry.suspended != true else { return false }
+                current = entry.signal
+            } else {
+                let matching = roots.filter { $0.id == destination.agentID }
+                guard matching.count == 1 else { return false }
+                guard matching[0].status == "running", !matching[0].suspended else { return false }
+                current = matching[0].signal
             }
+            guard destination.matches(current),
+                self.managedProjects.contains(where: { $0 === project }), !project.isUnavailable,
+                AgentSignalRouting.target(for: destination, among: self.signalRoutingTargets) != nil else { return false }
+            project.refresh()
+            self.pendingSignalDestination = destination
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return true
         }
         signalNotifications.update(agents, foregroundIdentity: foreground)
     }

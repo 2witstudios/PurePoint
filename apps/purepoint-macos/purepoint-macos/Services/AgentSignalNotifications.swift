@@ -3,13 +3,16 @@ import UserNotifications
 
 /// Local delivery only. It never sends input, resolves requests or owns agent sessions.
 @MainActor final class AgentSignalNotifications: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = AgentSignalNotifications()
+    private var pendingTaps = AgentSignalPendingTaps()
+    private var drainingTaps = false
     private let center = UNUserNotificationCenter.current()
     private let defaults: UserDefaults
     private var acknowledgedErrors: [String] = []
     private var policy = AgentSignalAlertPolicy()
     private var knownNotificationKeys = Set<String>()
     private var routes: [String: AgentSignalAlertPolicy.Agent] = [:]
-    var open: ((AgentSignalAlertPolicy.Agent) -> Void)?
+    var open: ((AgentSignalAlertPolicy.Agent) async -> Bool)?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -46,6 +49,7 @@ import UserNotifications
         routes = agents.reduce(into: [:]) { result, agent in
             if let key = agent.eventKey { result[key] = agent }
         }
+        drainPendingTaps()
         for agent in result.alerts {
             guard let eventKey = agent.eventKey else { continue }
             let kind = agent.presentation.label
@@ -73,13 +77,29 @@ import UserNotifications
         }
     }
 
+    private func drainPendingTaps() {
+        guard !drainingTaps, let open else { return }
+        drainingTaps = true
+        Task {
+            defer { drainingTaps = false }
+            while let key = pendingTaps.next(availableKeys: Set(routes.keys)), let route = routes[key] {
+                guard await open(route) else { return }
+                pendingTaps.complete(key)
+            }
+        }
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let key = response.notification.request.identifier
+        let shouldOpen = response.actionIdentifier == UNNotificationDefaultActionIdentifier
         Task { @MainActor [weak self] in
-            if let self, let agent = routes[key] { open?(agent) }
+            if let self, shouldOpen {
+                pendingTaps.enqueue(key)
+                drainPendingTaps()
+            }
             completionHandler()
         }
     }
