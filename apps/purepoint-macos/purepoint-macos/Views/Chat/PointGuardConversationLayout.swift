@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Matches `PaneTabBar.height`. Declared here, not referenced, so this file compiles without the pane grid.
+private let headerHeight: CGFloat = 30
+
 /// A pane-local sidebar. Native split views can grow beyond a grid cell's
 /// proposed width when their children have competing minimum sizes.
 ///
@@ -15,9 +18,6 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
     @ViewBuilder let content: () -> Content
     @State private var preferredWidth: CGFloat = 210
     @State private var resizeStart: CGFloat?
-
-    /// Matches `PaneTabBar.height`. Not referenced directly so this file compiles without the pane grid.
-    private static let headerHeight: CGFloat = 30
 
     var body: some View {
         if compact {
@@ -90,7 +90,7 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     .padding(.horizontal, headerPadding)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     // Same height and color as the tab strip, so the header joins it.
-                    .frame(height: Self.headerHeight)
+                    .frame(height: headerHeight)
                     .background(Color(nsColor: Theme.tabBarBackground))
                     .overlay(alignment: .bottom) { Divider() }
                     .environment(\.colorScheme, .dark)
