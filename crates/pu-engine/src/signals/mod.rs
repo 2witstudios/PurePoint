@@ -27,7 +27,7 @@ impl LaunchState {
         if !self
             .macos_qualification
             .as_ref()
-            .is_some_and(|grant| grant.current(now_ms()))
+            .is_some_and(|grant| grant.current_now())
         {
             for request in &mut snapshot.pending_attention {
                 request.actionability.macos = false;
@@ -401,7 +401,7 @@ impl Intake {
                 request.actionability.macos = state
                     .macos_qualification
                     .as_ref()
-                    .is_some_and(|grant| grant.current(now_ms()));
+                    .is_some_and(|grant| grant.current_now());
                 request.actionability.ios = false;
             }
             let event = SignalEvent {

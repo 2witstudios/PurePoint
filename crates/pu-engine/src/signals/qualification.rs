@@ -4,25 +4,43 @@ use serde::Deserialize;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub(super) struct Grant {
     qualified_at_ms: i64,
     expires_at_ms: i64,
-    invalidated: AtomicBool,
-    observed_at_ms: AtomicI64,
+    clock: Mutex<GrantClock>,
+}
+struct GrantClock {
+    invalidated: bool,
+    observed_at_ms: i64,
 }
 impl Grant {
-    pub fn current(&self, now: i64) -> bool {
+    pub fn current_now(&self) -> bool {
+        self.current_with_clock(|| chrono::Utc::now().timestamp_millis())
+    }
+
+    fn current_with_clock(&self, clock: impl FnOnce() -> i64) -> bool {
+        // Sampling and comparison share one critical section: concurrent readers
+        // must not mistake reordered wall-clock samples for a real rollback.
+        let Ok(mut state) = self.clock.lock() else {
+            return false;
+        };
+        let now = clock();
         // Once this launch observes expiration/rollback, authorization cannot
         // revive under a later clock correction. A new owner-qualified launch
         // must load a current grant explicitly.
-        let previous = self.observed_at_ms.fetch_max(now, Ordering::AcqRel);
-        if now < previous || now < self.qualified_at_ms || now >= self.expires_at_ms {
-            self.invalidated.store(true, Ordering::Release);
+        if now < state.observed_at_ms || now < self.qualified_at_ms || now >= self.expires_at_ms {
+            state.invalidated = true;
         }
-        !self.invalidated.load(Ordering::Acquire)
+        state.observed_at_ms = state.observed_at_ms.max(now);
+        !state.invalidated
+    }
+
+    #[cfg(test)]
+    pub fn current(&self, now: i64) -> bool {
+        self.current_with_clock(|| now)
     }
 }
 #[derive(Deserialize)]
@@ -122,8 +140,10 @@ fn load_sync(
         let grant = Grant {
             qualified_at_ms: r.qualified_at_ms,
             expires_at_ms: r.expires_at_ms,
-            invalidated: AtomicBool::new(false),
-            observed_at_ms: AtomicI64::new(now),
+            clock: Mutex::new(GrantClock {
+                invalidated: false,
+                observed_at_ms: now,
+            }),
         };
         (r.tool == tool
             && r.tool_version == version
@@ -133,7 +153,7 @@ fn load_sync(
             && r.owner_confirmed
             && proof_valid
             && r.qualified_at_ms > 0
-            && grant.current(now))
+            && grant.current_with_clock(|| now))
         .then_some(grant)
     })
 }
@@ -152,6 +172,47 @@ mod tests {
     }
     fn entry() -> serde_json::Value {
         json!({"schema_version":1,"qualifications":[{"tool":"pi","tool_version":"1.3.0","adapter_version":"1","platform":"macos","execution_mode":"interactive_pty","owner_confirmed":true,"proof_record_url":"https://pagespace.ai/dashboard/drive/record","qualified_at_ms":100,"expires_at_ms":10000}]})
+    }
+    #[test]
+    fn given_concurrent_pollers_should_sample_clock_in_high_water_order_without_false_rollback() {
+        use std::sync::{Arc, mpsc};
+        let tmp = tempfile::tempdir().unwrap();
+        config(tmp.path(), entry());
+        let grant = Arc::new(load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (second_read_tx, second_read_rx) = mpsc::channel();
+        let first = grant.clone();
+        let a = std::thread::spawn(move || {
+            first.current_with_clock(|| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                8000
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second = grant.clone();
+        let b = std::thread::spawn(move || {
+            second.current_with_clock(|| {
+                second_read_tx.send(()).unwrap();
+                8001
+            })
+        });
+        // B must not read its clock between A's read and high-water comparison.
+        let second_read_early = second_read_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_ok();
+        release_tx.send(()).unwrap();
+        let first_current = a.join().unwrap();
+        let second_current = b.join().unwrap();
+        assert!(
+            !second_read_early,
+            "Clock sampling escaped the grant critical section"
+        );
+        assert!(
+            first_current && second_current,
+            "Normal concurrent polling invalidated the grant"
+        );
     }
     #[test]
     fn given_explicit_owner_proof_should_enable_only_exact_current_interactive_mac_tuple() {
