@@ -11,7 +11,7 @@ and `research_notes/Agent state signal discovery/`.
 | pi 1.3.0 | Launch-only `--extension`; first private frame must match owned PTY PID before exact native session binding | Native agent_start, final settled outcome, UI prompt pairs. Generic confirm means question, never permission. RPC confirm/select/input pairs observed with this extension/helper, no model credentials; model lifecycle/terminal notification routes not qualified. Native session changes within a process are not silently rebound. |
 | OpenCode v2.0.28 | Read-only authenticated queries of the existing managed service; exact launch-assigned root session | Discovers only its private owner-mode0600 XDG state registration. Validates loopback URL, exact service version/PID, session ID, root parent and directory; GET-only active/session/permission/form snapshots project Working, terminal outcomes and pending requests. Checks execution state around the snapshot to reject mixed transitions. No plugin injection, service start/restart, --standalone, ownership migration or user configuration changes. Native registration/session/form payloads captured with real2.0.28 in an isolated HOME; complete model-turn and native terminal interaction qualification is still in progress. Explicit custom --server/--standalone routes are not yet observed. |
 | Gemini 0.64.0 | Fixture-only normalizer | Pin 4a0749aceac5643e6f85a36d7420314d85e13b52. Start/end boundaries and ToolPermission subtype intents; no proved launch-only settings/exact root session installation or universal resolution/error hooks. |
-| Codex CLI 0.163.0 | Fixture-only hook normalizer | Source pin 5009a99dfc07830ddf7464c26f310a2b8532b55d is not binary equivalence proof. No app-server ownership; no prose question/error inference. |
+| Codex CLI 0.163.0 | Existing PTY OSC7501 plus incremental rollout held by the exact owned native PID; no hook/config/ownership changes | Actual native idle/working/blocked packets, exact CLI root/session/cwd/version and native turn/call IDs. Generic blocked is classified only with one outstanding known root call; unknown or concurrent calls fail closed. Native task_complete.error distinguishes API failure from completion. Explicit root terminal records resolve requests; source truncation/replacement/byte loss invalidates observation. Production observer passed real isolated interactive permission→approval→completion, question→answer→completion, and API400→error using a local fake provider and a disclosed raw-PTY-to-OutputBuffer test seam. A spoofed OSC packet in assistant content was stripped by the native UI. Public Engine Spawn, deny/cancel/interrupt/child/resume and native-app routes still require qualification. |
 | Cursor | Fixture-only stop-boundary normalizer | CLI parity and install/timeout unknown; no ACP ownership, no generic IDE hooks presented as CLI proof. |
 
 Every attention actionability flag remains false. RPC UI proof does not establish
@@ -149,3 +149,24 @@ production observer probe, checks exact pending/outcome states and exit withdraw
 and terminates only its owned CLI/mock server. Captures remain in its printed
 sandbox path for inspection. It does not build/install native apps or prove OS
 notification routing, real-provider behavior, child/resume or interrupt outcomes.
+
+### Codex native observer reproduction
+
+```sh
+python3 crates/pu-engine/verification/check-codex-signals.py \
+  target/debug/deps/pu_engine-… /absolute/path/to/codex question
+# Repeat with permission and error.
+```
+
+This uses an isolated real native CLI/PTY and local fake Responses provider.
+It preserves `--no-daemon`, mirrors only exact captured raw PTY bytes into the real
+OutputBuffer, and runs the production observer including PID-to-rollout discovery.
+It asserts exact native request IDs, terminal outcomes and exit withdrawal. This
+stream-mirroring test seam is not a public Engine Spawn/PTY-host or app-route proof.
+No real credentials/config are copied, and no diagnostic logging is enabled.
+The native OSC state is consumed in order; buffer eviction permanently loses that
+launch's observation. All tool-call candidates count toward ambiguity, even unknown
+tool kinds. Rollout identity/history loss is latched, with at most64 pending calls,
+512 closed/superseded turn IDs,8MiB read per poll and1MiB per record. Native event IDs
+come from the ordered stream offset/turn/call IDs, never receipt time. Observation
+samples the existing buffer every250ms without writing input or adding a PTY reader.

@@ -1,5 +1,6 @@
 //! Observation-only, launch-scoped native adapters. No process or input ownership.
 mod claude;
+mod codex;
 mod install;
 mod normalize;
 mod opencode;
@@ -50,11 +51,13 @@ pub(crate) struct Prepared {
     version: String,
     state: Arc<LaunchState>,
     observer: Option<NativeObserver>,
+    output: Option<Arc<crate::output_buffer::OutputBuffer>>,
 }
 
 enum NativeObserver {
     OpenCode(opencode::Observer),
     Claude(claude::Observer),
+    Codex(codex::Observer),
 }
 
 fn now_ms() -> i64 {
@@ -97,6 +100,9 @@ pub(crate) async fn prepare(
     env.retain(|(key, _)| !key.starts_with("PU_SIGNAL_"));
     if tool == "opencode" && Path::new(command).file_name()?.to_str()? == tool {
         return opencode::prepare(project, agent, worktree, session?, args, env);
+    }
+    if tool == "codex" && Path::new(command).file_name()?.to_str()? == tool {
+        return codex::prepare(project, agent, worktree, session);
     }
     if tool == "claude" && Path::new(command).file_name()?.to_str()? == tool {
         return claude::prepare(project, agent, worktree, session?, command, env);
@@ -222,10 +228,15 @@ pub(crate) async fn prepare(
             _artifacts: artifacts,
         }),
         observer: None,
+        output: None,
     })
 }
 
 impl Prepared {
+    pub(crate) fn with_output(mut self, output: Arc<crate::output_buffer::OutputBuffer>) -> Self {
+        self.output = Some(output);
+        self
+    }
     pub(crate) fn activate(
         self,
         states: &SignalStates,
@@ -244,6 +255,19 @@ impl Prepared {
                 NativeObserver::OpenCode(observer) => {
                     observer.activate(weak, project, cwd.to_owned(), exit, channels)
                 }
+                NativeObserver::Codex(observer) => {
+                    if let Some(output) = self.output {
+                        observer.activate(
+                            weak,
+                            project,
+                            cwd.to_owned(),
+                            pid,
+                            exit,
+                            channels,
+                            output,
+                        );
+                    }
+                }
                 NativeObserver::Claude(observer) => {
                     observer.activate(weak, project, cwd.to_owned(), pid, exit, channels)
                 }
@@ -257,6 +281,7 @@ impl Prepared {
             version,
             state: _,
             observer: _,
+            output: _,
         } = self;
         tokio::spawn(async move {
             let mut data = vec![0_u8; 256 * 1024 + 1];
@@ -487,6 +512,7 @@ mod tests {
                     _artifacts: artifacts,
                 }),
                 observer: None,
+                output: None,
             },
             tmp,
         )

@@ -46,6 +46,7 @@ pub(super) fn prepare(
             macos_qualification: None,
             _artifacts: artifacts,
         }),
+        output: None,
         observer: Some(NativeObserver::Claude(Observer {
             command: command.into(),
             env: env.to_vec(),

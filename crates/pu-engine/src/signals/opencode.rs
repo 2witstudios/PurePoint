@@ -59,6 +59,7 @@ pub(super) fn prepare(
             macos_qualification: None,
             _artifacts: artifacts,
         }),
+        output: None,
         observer: Some(super::NativeObserver::OpenCode(Observer {
             registration: state_home.join("opencode/service.json"),
         })),
