@@ -4,10 +4,10 @@ import argparse, ast, base64, hashlib, http.server, json, os, signal, socket, su
 from pathlib import Path
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('tool',choices=['claude','codex','opencode'])
-parser.add_argument('scenario',choices=['question','permission','error','interrupt'])
+parser.add_argument('scenario',choices=['question','permission','error','interrupt','permission_deny','question_cancel','resume','worktree'])
 parser.add_argument('cli')
 parser.add_argument('--runner',required=True,help='Exact candidate owned-native-signals.rs executable; compile against cargo compiler-artifact paths')
-args=parser.parse_args();mode=args.scenario
+args=parser.parse_args();mode={"permission_deny":"permission","question_cancel":"question"}.get(args.scenario,args.scenario)
 runner_path=Path(args.runner).resolve()
 provenance=json.loads((runner_path.parent/'provenance.json').read_text())
 assert provenance['runner_sha256']==hashlib.sha256(runner_path.read_bytes()).hexdigest(), 'Runner differs from recorded compiler artifacts'
@@ -18,7 +18,9 @@ root=Path(tempfile.mkdtemp(prefix='ppqa-',dir='/tmp')).resolve();home=root/'home
 for directory in [home,config,repo,state,data,root/'tmp',root/'cache']:directory.mkdir()
 helper=Path.cwd()/f'crates/pu-engine/verification/check-{args.tool}-signals.py'
 node=next(n for n in ast.parse(helper.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='Handler')
-exec(compile(ast.Module(body=[node],type_ignores=[]),str(helper),'exec'),globals())
+fixture_globals=dict(globals());fixture_globals['args']=argparse.Namespace(scenario=mode)
+exec(compile(ast.Module(body=[node],type_ignores=[]),str(helper),'exec'),fixture_globals)
+Handler=fixture_globals['Handler']
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
 threading.Thread(target=server.serve_forever,daemon=True).start()
 env={'HOME':str(home),'TMPDIR':str(root/'tmp'),'PATH':'/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin','SHELL':'/bin/sh','TERM':'xterm-256color','LANG':'en_US.UTF-8'}
@@ -45,6 +47,11 @@ else:
  env.update({'XDG_STATE_HOME':str(state),'XDG_CONFIG_HOME':str(config),'XDG_DATA_HOME':str(data),'XDG_CACHE_HOME':str(root/'cache'),'OPENCODE_DISABLE_AUTOUPDATE':'1','OPENCODE_DISABLE_MODELS_FETCH':'1','OPENCODE_CONFIG_CONTENT':json.dumps(settings)})
  with socket.socket() as reservation:reservation.bind(('127.0.0.1',0));port=reservation.getsockname()[1]
  (config/'opencode').mkdir();path=config/'opencode/service.json';path.write_text(json.dumps({'hostname':'127.0.0.1','port':port}));path.chmod(0o600)
+if args.scenario=='worktree':
+ subprocess.run(['git','init','-q',str(repo)],env=env,check=True)
+ (repo/'fixture.txt').write_text('Isolated native agent worktree proof\n')
+ subprocess.run(['git','-C',str(repo),'add','fixture.txt'],env=env,check=True)
+ subprocess.run(['git','-C',str(repo),'-c','user.name=Native QA','-c','user.email=qa@example.invalid','commit','-qm','Isolated fixture'],env=env,check=True)
 print('ROOT',root,'TOOL',args.tool,'SCENARIO',args.scenario,flush=True)
 (root/'runner-provenance.json').write_text(json.dumps(provenance,indent=2))
 (root/'fixture.json').write_text(json.dumps({'tool':args.tool,'scenario':args.scenario,'provider_source':str(helper),'worktree_source':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'runner':str(Path(args.runner).resolve())}))
@@ -55,6 +62,28 @@ try:
  print('RUNNER_EXIT',code,flush=True)
  print((root/'runner.log').read_text()[-3000:],flush=True)
  assert code==0,root
+ if args.scenario=='permission_deny' and args.tool in ['claude','opencode']:
+  assert not (repo/'native-file.txt').exists(), 'Denied native write was actually executed'
+ if args.scenario in ['permission_deny','question_cancel']:
+  if args.tool=='opencode':
+   results=json.loads((root/'native-tool-results.json').read_text())
+   assert any('reject' in str(r).lower() or 'aborted' in str(r).lower() for r in results), 'No native rejection result'
+  else:
+   results=[]
+   directory=config/('projects' if args.tool=='claude' else 'sessions')
+   for path in directory.rglob('*.jsonl'):
+    for line in path.read_text().splitlines():
+     item=json.loads(line)
+     if args.tool=='codex':
+      payload=item.get('payload',{})
+      if payload.get('type')=='function_call_output' and payload.get('call_id')=='call_native_'+mode:
+       results.append(payload.get('output',''))
+     else:
+      content=item.get('message',{}).get('content',[])
+      if isinstance(content,list):
+       results.extend(c.get('content','') for c in content if isinstance(c,dict) and c.get('type')=='tool_result' and c.get('tool_use_id')=='toolu_native_question' and c.get('is_error') is True)
+   assert any('reject' in str(r).lower() or 'aborted' in str(r).lower() for r in results), 'No exact native tool rejection result'
+ print('NATIVE_RESPONSE_SEMANTICS_PASS',flush=True)
  pid_path=root/'owned-pid.txt'
  if pid_path.exists():
   pid=int(pid_path.read_text());deadline=time.monotonic()+3

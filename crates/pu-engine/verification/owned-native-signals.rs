@@ -1,4 +1,4 @@
-use pu_core::protocol::{InventoryKind, KillTarget, Request, Response};
+use pu_core::protocol::{InventoryKind, KillTarget, Request, Response, SuspendTarget};
 use pu_core::signals::{AttentionKind, OutcomeKind, SignalActivity, SignalSnapshot};
 use pu_engine::engine::Engine;
 use serde_json::json;
@@ -116,7 +116,7 @@ async fn stages(
         }
     }
 
-    if tool == "codex" && scenario == "question" {
+    if tool == "codex" && scenario.starts_with("question") {
         raw(e, id, b"/plan").await?;
         tokio::time::sleep(Duration::from_millis(300)).await;
         raw(e, id, b"\r").await?;
@@ -130,6 +130,8 @@ async fn stages(
     let mut request = None;
     let mut answered = false;
     let mut recovered = false;
+    let negative = matches!(scenario, "permission_deny" | "question_cancel");
+    let mut recovery_working = false;
     loop {
         if let Some(s) = capture(e, project, dir, "latest", id).await? {
             if s.is_current(chrono::Utc::now().timestamp_millis()) {
@@ -148,8 +150,10 @@ async fn stages(
                         answered = true;
                     }
                 }
-                if (scenario == "question" || scenario == "permission") && request.is_none() {
-                    let kind = if scenario == "question" {
+                if (scenario.starts_with("question") || scenario.starts_with("permission"))
+                    && request.is_none()
+                {
+                    let kind = if scenario.starts_with("question") {
                         AttentionKind::Question
                     } else {
                         AttentionKind::Permission
@@ -166,13 +170,51 @@ async fn stages(
                             })
                             .await,
                         )?;
-                        raw(e, id, b"\r").await?;
-                        if tool != "claude" {
-                            tokio::time::sleep(Duration::from_millis(300)).await;
+                        if negative {
+                            if scenario == "permission_deny" && tool == "claude" {
+                                raw(e, id, b"\x1b[B\x1b[B").await?;
+                                tokio::time::sleep(Duration::from_millis(250)).await;
+                                raw(e, id, b"\r").await?;
+                            } else if scenario == "permission_deny" && tool == "opencode" {
+                                raw(e, id, b"\x1b[C").await?;
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                raw(e, id, b"\x1b[C").await?;
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                raw(e, id, b"\r").await?;
+                                tokio::time::sleep(Duration::from_millis(300)).await;
+                                raw(e, id, b"\r").await?;
+                            } else {
+                                raw(e, id, b"\x1b").await?;
+                            }
+                        } else {
                             raw(e, id, b"\r").await?;
+                            if tool != "claude" {
+                                tokio::time::sleep(Duration::from_millis(300)).await;
+                                raw(e, id, b"\r").await?;
+                            }
                         }
                         answered = true;
                     }
+                }
+                if negative
+                    && answered
+                    && !recovered
+                    && s.activity == SignalActivity::Idle
+                    && s.pending_attention.is_empty()
+                {
+                    capture(e, project, dir, "negative-resolved", id).await?;
+                    raw(e, id, b"Recover after negative native response").await?;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    raw(e, id, b"\r").await?;
+                    recovered = true;
+                }
+                if negative
+                    && recovered
+                    && s.activity == SignalActivity::Working
+                    && s.pending_attention.is_empty()
+                {
+                    recovery_working = true;
+                    capture(e, project, dir, "recovery-working", id).await?;
                 }
                 if tool == "claude"
                     && scenario == "interrupt"
@@ -196,7 +238,10 @@ async fn stages(
                 } else {
                     OutcomeKind::Completed
                 };
-                if s.outcome.as_ref().is_some_and(|o| o.kind == expected) {
+                if working
+                    && s.outcome.as_ref().is_some_and(|o| o.kind == expected)
+                    && (!negative || (recovered && recovery_working))
+                {
                     if scenario == "interrupt" && tool == "claude" && !recovered {
                         return Err("no actual native cancel/recovery".into());
                     }
@@ -282,7 +327,7 @@ fn main() {
                 "--model".into(),
                 "claude-sonnet-4-6".into(),
             ]);
-            if scenario == "permission" {
+            if scenario.starts_with("permission") {
                 extra.extend(["--permission-mode".into(), "manual".into()]);
             }
         }
@@ -296,7 +341,7 @@ fn main() {
                 agent: tool.clone(),
                 name: Some("native-owned-proof".into()),
                 base: None,
-                root: true,
+                root: scenario != "worktree",
                 worktree: None,
                 command: None,
                 no_auto: true,
@@ -312,7 +357,67 @@ fn main() {
         } else {
             return Err(format!("spawn failed: {response:?}"));
         };
-        let result = stages(&e, &project, &id, dir, tool, scenario).await;
+        let result = async {
+            stages(&e, &project, &id, dir, tool, scenario).await?;
+            if scenario == "worktree" {
+                let signal = capture(&e, &project, dir, "worktree", &id)
+                    .await?
+                    .ok_or("no worktree signal")?;
+                if signal.identity.worktree_id.is_none() {
+                    return Err("missing scoped worktree identity".into());
+                }
+            }
+
+            if scenario == "resume" {
+                let before = capture(&e, &project, dir, "before-suspend", &id)
+                    .await?
+                    .ok_or("no initial signal")?;
+                let suspended = e
+                    .handle_request(Request::Suspend {
+                        project_root: project.clone(),
+                        target: SuspendTarget::Agent(id.clone()),
+                    })
+                    .await;
+                save(dir, "suspended.json", &suspended)?;
+                if !matches!(suspended, Response::SuspendResult { .. }) {
+                    return Err(format!("suspend failed: {suspended:?}"));
+                }
+                let inventory = e
+                    .handle_request(Request::Inventory {
+                        project_root: Some(project.clone()),
+                        kind: InventoryKind::Agents,
+                        state: None,
+                    })
+                    .await;
+                let wire = serde_json::to_value(&inventory).map_err(|e| e.to_string())?;
+                save(dir, "suspended-inventory.json", &inventory)?;
+                if wire["agents"][0]["state"] == "running" || !wire["agents"][0]["signal"].is_null()
+                {
+                    return Err("suspended agent retained live signal".into());
+                }
+                let resumed = e
+                    .handle_request(Request::Resume {
+                        project_root: project.clone(),
+                        agent_id: id.clone(),
+                    })
+                    .await;
+                save(dir, "resumed.json", &resumed)?;
+                if !matches!(resumed, Response::ResumeResult { .. }) {
+                    return Err(format!("resume failed: {resumed:?}"));
+                }
+                stages(&e, &project, &id, dir, tool, scenario).await?;
+                let after = capture(&e, &project, dir, "after-resume", &id)
+                    .await?
+                    .ok_or("no resumed signal")?;
+                if before.identity.native_session_id != after.identity.native_session_id
+                    || before.identity.launch_id == after.identity.launch_id
+                {
+                    return Err("resume identity did not preserve native session/new launch".into());
+                }
+            }
+            Ok(())
+        }
+        .await;
         save(
             dir,
             "final-logs.json",
