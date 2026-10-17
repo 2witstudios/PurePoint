@@ -1,0 +1,349 @@
+use pu_core::protocol::{InventoryKind, KillTarget, Request, Response};
+use pu_core::signals::{AttentionKind, OutcomeKind, SignalActivity, SignalSnapshot};
+use pu_engine::engine::Engine;
+use serde_json::json;
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+fn save(dir: &Path, name: &str, v: &impl serde::Serialize) -> Result<(), String> {
+    std::fs::write(
+        dir.join(name),
+        serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+async fn capture(
+    e: &Engine,
+    project: &str,
+    dir: &Path,
+    tag: &str,
+    id: &str,
+) -> Result<Option<SignalSnapshot>, String> {
+    let status = e
+        .handle_request(Request::Status {
+            project_root: project.into(),
+            agent_id: None,
+        })
+        .await;
+    let inventory = e
+        .handle_request(Request::Inventory {
+            project_root: Some(project.into()),
+            kind: InventoryKind::Agents,
+            state: None,
+        })
+        .await;
+    let (worktrees, agents) = e
+        .compute_full_status(project)
+        .await
+        .map_err(|e| e.to_string())?;
+    let event = Response::StatusEvent { worktrees, agents };
+    let frame = json!({"captured_at_ms":chrono::Utc::now().timestamp_millis(),"status":status,"inventory":inventory,"status_event":event});
+    save(dir, &format!("{tag}.json"), &frame)?;
+    let agent = frame["inventory"]["agents"]
+        .as_array()
+        .ok_or("no inventory agents")?
+        .iter()
+        .find(|a| a["id"] == id)
+        .ok_or("owned agent absent")?;
+    if agent["state"] != "running" {
+        return Err(format!("owned agent not Running: {}", agent["state"]));
+    }
+    if let Some(pid) = agent["pid"].as_u64() {
+        std::fs::write(dir.join("owned-pid.txt"), pid.to_string()).map_err(|e| e.to_string())?;
+    }
+    if agent["signal"].is_null() {
+        return Ok(None);
+    }
+    let snapshot: SignalSnapshot =
+        serde_json::from_value(agent["signal"].clone()).map_err(|e| e.to_string())?;
+    if snapshot.identity.agent_id != id || snapshot.identity.native_session_id.is_empty() {
+        return Err("native identity mismatch".into());
+    }
+    if snapshot
+        .pending_attention
+        .iter()
+        .any(|p| p.actionability.macos || p.actionability.ios)
+    {
+        return Err("unqualified attention activated".into());
+    }
+    Ok(Some(snapshot))
+}
+async fn raw(e: &Engine, id: &str, data: &[u8]) -> Result<(), String> {
+    let response = e
+        .handle_request(Request::Input {
+            agent_id: id.into(),
+            data: data.to_vec(),
+            submit: false,
+            cancel_on_disconnect: false,
+        })
+        .await;
+    if !matches!(response, Response::Ok) {
+        return Err(format!("input failed: {response:?}"));
+    }
+    Ok(())
+}
+async fn stages(
+    e: &Engine,
+    project: &str,
+    id: &str,
+    dir: &Path,
+    tool: &str,
+    scenario: &str,
+) -> Result<(), String> {
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    if tool == "opencode" {
+        let until = Instant::now() + Duration::from_secs(25);
+        loop {
+            let logs = e
+                .handle_request(Request::Logs {
+                    agent_id: id.into(),
+                    tail: 65536,
+                })
+                .await;
+            let text = serde_json::to_value(logs).map_err(|e| e.to_string())?;
+            if text["data"]
+                .as_str()
+                .is_some_and(|s| s.contains("Native fixture"))
+            {
+                break;
+            }
+            if Instant::now() > until {
+                return Err("native OpenCode input UI not ready".into());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    if tool == "codex" && scenario == "question" {
+        raw(e, id, b"/plan").await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        raw(e, id, b"\r").await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    raw(e, id, b"Native test hello").await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    raw(e, id, b"\r").await?;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut working = false;
+    let mut request = None;
+    let mut answered = false;
+    let mut recovered = false;
+    loop {
+        if let Some(s) = capture(e, project, dir, "latest", id).await? {
+            if s.is_current(chrono::Utc::now().timestamp_millis()) {
+                if s.activity == SignalActivity::Working
+                    && s.pending_attention.is_empty()
+                    && !working
+                {
+                    working = true;
+                    capture(e, project, dir, "working", id).await?;
+                    if scenario == "interrupt" {
+                        raw(e, id, b"\x1b").await?;
+                        if tool == "opencode" {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            raw(e, id, b"\x1b").await?;
+                        }
+                        answered = true;
+                    }
+                }
+                if (scenario == "question" || scenario == "permission") && request.is_none() {
+                    let kind = if scenario == "question" {
+                        AttentionKind::Question
+                    } else {
+                        AttentionKind::Permission
+                    };
+                    if let Some(pending) = s.pending_attention.iter().find(|p| p.kind == kind) {
+                        request = Some(pending.request_id.clone());
+                        capture(e, project, dir, "pending", id).await?;
+                        save(
+                            dir,
+                            "pending-logs.json",
+                            &e.handle_request(Request::Logs {
+                                agent_id: id.into(),
+                                tail: 65536,
+                            })
+                            .await,
+                        )?;
+                        raw(e, id, b"\r").await?;
+                        if tool != "claude" {
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            raw(e, id, b"\r").await?;
+                        }
+                        answered = true;
+                    }
+                }
+                if tool == "claude"
+                    && scenario == "interrupt"
+                    && working
+                    && answered
+                    && !recovered
+                    && s.activity == SignalActivity::Idle
+                    && s.outcome.is_none()
+                    && s.pending_attention.is_empty()
+                {
+                    capture(e, project, dir, "interrupted-unknown", id).await?;
+                    raw(e, id, b"Recover after native cancellation").await?;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    raw(e, id, b"\r").await?;
+                    recovered = true;
+                }
+                let expected = if scenario == "error" {
+                    OutcomeKind::Errored
+                } else if scenario == "interrupt" && tool != "claude" {
+                    OutcomeKind::Interrupted
+                } else {
+                    OutcomeKind::Completed
+                };
+                if s.outcome.as_ref().is_some_and(|o| o.kind == expected) {
+                    if scenario == "interrupt" && tool == "claude" && !recovered {
+                        return Err("no actual native cancel/recovery".into());
+                    }
+                    if !working {
+                        return Err("no actual Working stage captured".into());
+                    }
+                    if (scenario == "question" || scenario == "permission")
+                        && (!answered || request.is_none())
+                    {
+                        return Err("terminal outcome without native request/input".into());
+                    }
+                    if !s.pending_attention.is_empty() {
+                        return Err("native request retained after terminal outcome".into());
+                    }
+                    capture(e, project, dir, "resolved", id).await?;
+                    save(
+                        dir,
+                        "resolved-logs.json",
+                        &e.handle_request(Request::Logs {
+                            agent_id: id.into(),
+                            tail: 65536,
+                        })
+                        .await,
+                    )?;
+                    save(
+                        dir,
+                        "result.json",
+                        &json!({"result":"PASS","tool":tool,"scenario":scenario,"agent_id":id,"native_session_id":s.identity.native_session_id,"request_id":request,"working":working,"actual_public_spawn_input_status_inventory_event":true,"app_device_notification":"NOT RUN"}),
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
+        if Instant::now() > deadline {
+            return Err("native stages timeout; inspect latest frame/logs".into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    let dir = Path::new(&args[1]);
+    let tool = &args[2];
+    let cli = &args[3];
+    let scenario = &args[4];
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let outcome: Result<(), String> = rt.block_on(async {
+        let e = Arc::new(Engine::new());
+        let project = dir.join("project");
+        std::fs::create_dir_all(&project).map_err(|e| e.to_string())?;
+        let project = project
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .into_owned();
+        save(
+            dir,
+            "init.json",
+            &e.handle_request(Request::Init {
+                project_root: project.clone(),
+            })
+            .await,
+        )?;
+        let mut agents = serde_json::Map::new();
+        agents.insert(
+            tool.clone(),
+            json!({"name":tool,"command":cli,"interactive":true,"launchArgs":[]}),
+        );
+        let config = json!({"defaultAgent":tool,"agents":agents,"envFiles":[]});
+        std::fs::write(
+            Path::new(&project).join(".pu/config.yaml"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .map_err(|e| e.to_string())?;
+        let mut extra = Vec::new();
+        if tool == "claude" {
+            extra.extend([
+                "--setting-sources".into(),
+                "".into(),
+                "--model".into(),
+                "claude-sonnet-4-6".into(),
+            ]);
+            if scenario == "permission" {
+                extra.extend(["--permission-mode".into(), "manual".into()]);
+            }
+        }
+        if tool == "codex" {
+            extra.push("--no-alt-screen".into());
+        }
+        let response = e
+            .handle_request(Request::Spawn {
+                project_root: project.clone(),
+                prompt: String::new(),
+                agent: tool.clone(),
+                name: Some("native-owned-proof".into()),
+                base: None,
+                root: true,
+                worktree: None,
+                command: None,
+                no_auto: true,
+                extra_args: extra,
+                plan_mode: false,
+                no_trigger: true,
+                trigger: None,
+            })
+            .await;
+        save(dir, "spawn.json", &response)?;
+        let id = if let Response::SpawnResult { agent_id, .. } = response {
+            agent_id
+        } else {
+            return Err(format!("spawn failed: {response:?}"));
+        };
+        let result = stages(&e, &project, &id, dir, tool, scenario).await;
+        save(
+            dir,
+            "final-logs.json",
+            &e.handle_request(Request::Logs {
+                agent_id: id.clone(),
+                tail: 65536,
+            })
+            .await,
+        )?;
+        save(
+            dir,
+            "cleanup.json",
+            &e.handle_request(Request::Kill {
+                project_root: project.clone(),
+                target: KillTarget::Agent(id),
+                exclude: vec![],
+            })
+            .await,
+        )?;
+        save(
+            dir,
+            "shutdown.json",
+            &e.handle_request(Request::Shutdown).await,
+        )?;
+        result
+    });
+    match outcome {
+        Ok(()) => println!("PASS public Engine {tool}/{scenario}"),
+        Err(error) => {
+            eprintln!("FAIL: {error}");
+            std::process::exit(1)
+        }
+    }
+}
