@@ -9,12 +9,13 @@ and `research_notes/Agent state signal discovery/`.
 | --- | --- | --- |
 | Claude Code 2.1.300 | Read-only `claude agents --json` plus incremental exact root transcript; no injected hooks/settings | Exact owned PID/session/cwd/interactive kind/start epoch, exact CLI/transcript version. Positive native busy means Working; native waiting category is joined to a single unresolved native tool-use ID for Question or Permission. Native idle plus structural assistant end_turn/API-error metadata means Completed/Errored. Ambiguous/missing IDs, future versions, child/foreign records and incomplete/mixed views withdraw observation. Real interactive CLI plus local fake Anthropic provider passed question→answer→completion, manual Write approval→completion, and API400→error through the production observer; no real credentials or config copied. Interrupt outcome classification, concurrent dialogs, MCP elicitation and full Engine/native-app route qualification remain open. |
 | pi 1.3.0 | Launch-only `--extension`; first private frame must match owned PTY PID before exact native session binding | Native agent_start, final settled outcome, UI prompt pairs. Generic confirm means question, never permission. RPC confirm/select/input pairs observed with this extension/helper, no model credentials; model lifecycle/terminal notification routes not qualified. Native session changes within a process are not silently rebound. |
-| OpenCode v2.0.28 | Read-only authenticated queries of the existing managed service; exact launch-assigned root session | Discovers only its private owner-mode0600 XDG state registration. Validates loopback URL, exact service version/PID, session ID, root parent and directory; GET-only active/session/permission/form snapshots project Working, terminal outcomes and pending requests. Checks execution state around the snapshot to reject mixed transitions. No plugin injection, service start/restart, --standalone, ownership migration or user configuration changes. Native registration/session/form payloads captured with real2.0.28 in an isolated HOME; complete model-turn and native terminal interaction qualification is still in progress. Explicit custom --server/--standalone routes are not yet observed. |
+| OpenCode v2.0.28 | Read-only authenticated queries of the existing managed service; exact launch-assigned root session | Private owner-mode0600 XDG state registration, loopback URL, exact service version/PID, root ID and directory. GET-only active/session/permission/form snapshots project Working, native terminal outcomes and pending request IDs; execution/session views are checked around the query. No plugin injection, service start/restart, --standalone, ownership migration or user configuration changes. Production observer passed real interactive Write approval→actual sandbox file→completion, question→native First answer→completion, and API400→error with a local fake provider. Harness services use distinct disposable config ports. Public Engine Spawn, deny/cancel/interrupt/child/resume and native-app route qualification remain open. Explicit custom --server/--standalone routes are not yet observed. |
 | Gemini 0.64.0 | Fixture-only normalizer | Pin 4a0749aceac5643e6f85a36d7420314d85e13b52. Start/end boundaries and ToolPermission subtype intents; no proved launch-only settings/exact root session installation or universal resolution/error hooks. |
 | Codex CLI 0.163.0 | Existing PTY OSC7501 plus incremental rollout held by the exact owned native PID; no hook/config/ownership changes | Actual native idle/working/blocked packets, exact CLI root/session/cwd/version and native turn/call IDs. Generic blocked is classified only with one outstanding known root call; unknown or concurrent calls fail closed. Native task_complete.error distinguishes API failure from completion. Explicit root terminal records resolve requests; source truncation/replacement/byte loss invalidates observation. Production observer passed real isolated interactive permission→approval→completion, question→answer→completion, and API400→error using a local fake provider and a disclosed raw-PTY-to-OutputBuffer test seam. A spoofed OSC packet in assistant content was stripped by the native UI. Public Engine Spawn, deny/cancel/interrupt/child/resume and native-app routes still require qualification. |
 | Cursor | Fixture-only stop-boundary normalizer | CLI parity and install/timeout unknown; no ACP ownership, no generic IDE hooks presented as CLI proof. |
 
-Every attention actionability flag remains false. RPC UI proof does not establish
+No qualification or release key is enabled by this change. Attention flags remain
+false without an exact owner-attested native/platform route. RPC UI proof does not establish
 interactive terminal discovery/response, platform notification routes, or physical
 Mac/iOS acceptance. All production attention notifications remain gated.
 
@@ -170,3 +171,32 @@ tool kinds. Rollout identity/history loss is latched, with at most64 pending cal
 512 closed/superseded turn IDs,8MiB read per poll and1MiB per record. Native event IDs
 come from the ordered stream offset/turn/call IDs, never receipt time. Observation
 samples the existing buffer every250ms without writing input or adding a PTY reader.
+
+### OpenCode native observer reproduction
+
+```sh
+python3 crates/pu-engine/verification/check-opencode-signals.py \
+  target/debug/deps/pu_engine-… /absolute/path/to/opencode question
+# Repeat with permission, error, or completion.
+```
+
+This creates fresh HOME/XDG roots and a native managed-service configuration with
+an isolated loopback port. The ordinary native CLI starts its own managed service;
+the production adapter only discovers and queries that service. Permission proof
+checks the actual sandbox file, and question proof checks the native First answer
+returned to the fake provider. Cleanup targets only that sandbox's owned CLI and
+registered service. It never changes the real user's OpenCode configuration.
+
+### Native adapter qualification tuples
+
+The same existing private project qualification file now supports each exact
+adapter tuple below. The native consumer's independent release tuple gate still
+applies. Defaults remain empty. The CLI/provider harnesses above do **not** prove
+notification tap → existing terminal → exact request → answer → resolution and
+must not be presented as production platform attestation. iOS stays false.
+
+| tool | tool_version | adapter_version | native Mac tuple key |
+| --- | --- | --- | --- |
+| claude | 2.1.300 | 2 | `WyJjbGF1ZGUiLCIyLjEuMzAwIiwiMiJd` |
+| codex | 0.163.0 | 2 | `WyJjb2RleCIsIjAuMTYzLjAiLCIyIl0` |
+| opencode | 2.0.28 | 1 | `WyJvcGVuY29kZSIsIjIuMC4yOCIsIjEiXQ` |

@@ -616,4 +616,99 @@ mod tests {
             .is_none()
         );
     }
+    #[tokio::test]
+    #[ignore = "requires sandbox native OpenCode probe context"]
+    async fn native_interactive_observer_probe() {
+        let path =
+            std::env::var("PUREPOINT_OPENCODE_PROBE_CONTEXT").expect("sandbox context required");
+        let context: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let cwd = context["cwd"].as_str().unwrap();
+        let env: Vec<(String, String)> = serde_json::from_value(context["env"].clone()).unwrap();
+        let prepared = prepare(
+            cwd,
+            "probe",
+            None,
+            context["session"].as_str().unwrap(),
+            &[],
+            &env,
+        )
+        .unwrap();
+        let states = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        prepared.activate(
+            &states,
+            cwd,
+            cwd,
+            context["pid"].as_u64().unwrap() as u32,
+            rx,
+            Arc::default(),
+        );
+        let mut captures = Vec::new();
+        for _ in 0..300 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if let Some(snapshot) = states
+                .lock()
+                .unwrap()
+                .get("probe")
+                .and_then(|s| s.snapshot())
+            {
+                captures.push(snapshot);
+            }
+        }
+        tx.send(Some(0)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            states
+                .lock()
+                .unwrap()
+                .get("probe")
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .observation
+                .state,
+            ObservationState::ProcessDead
+        );
+        std::fs::write(
+            Path::new(&path).with_file_name("observer-captures.json"),
+            serde_json::to_vec(&captures).unwrap(),
+        )
+        .unwrap();
+        let current: Vec<_> = captures
+            .iter()
+            .filter(|s| s.is_current(s.observation.last_received_at_ms.unwrap()))
+            .collect();
+        assert!(
+            current
+                .iter()
+                .any(|s| s.activity == SignalActivity::Working)
+        );
+        let expected = context["expected"].as_str().unwrap();
+        if expected == "error" {
+            assert!(current.iter().any(|s| {
+                s.outcome
+                    .as_ref()
+                    .is_some_and(|o| o.kind == OutcomeKind::Errored)
+            }));
+        } else {
+            if expected != "completion" {
+                let kind = if expected == "question" {
+                    AttentionKind::Question
+                } else {
+                    AttentionKind::Permission
+                };
+                assert!(
+                    current
+                        .iter()
+                        .any(|s| s.pending_attention.iter().any(|p| p.kind == kind))
+                );
+            }
+            assert!(current.iter().any(|s| {
+                s.pending_attention.is_empty()
+                    && s.outcome
+                        .as_ref()
+                        .is_some_and(|o| o.kind == OutcomeKind::Completed)
+            }));
+        }
+    }
 }

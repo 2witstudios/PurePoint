@@ -27,16 +27,29 @@ pub(crate) struct LaunchState {
 
 impl LaunchState {
     pub(crate) fn snapshot(&self) -> Option<SignalSnapshot> {
-        if let Some(snapshot) = self.native_snapshot.lock().ok()?.as_ref() {
-            return Some(snapshot.clone());
-        }
-        let mut snapshot = self.reducer.lock().ok()?.as_ref()?.snapshot(now_ms());
-        if !self
-            .macos_qualification
-            .as_ref()
-            .is_some_and(|grant| grant.current_now())
-        {
-            for request in &mut snapshot.pending_attention {
+        let native = self.native_snapshot.lock().ok()?.clone();
+        let is_native = native.is_some();
+        let mut snapshot = native.or_else(|| {
+            self.reducer
+                .lock()
+                .ok()?
+                .as_ref()
+                .map(|r| r.snapshot(now_ms()))
+        })?;
+        let authorized = self.macos_qualification.as_ref().is_some_and(|grant| {
+            grant.current_now()
+                && snapshot
+                    .evidence
+                    .as_ref()
+                    .is_some_and(|evidence| grant.matches(evidence))
+        });
+        let current = snapshot.is_current(now_ms());
+        for request in &mut snapshot.pending_attention {
+            if is_native {
+                request.actionability.macos =
+                    authorized && current && request.confidence == SignalConfidence::Authoritative;
+                request.actionability.ios = false;
+            } else if !authorized {
                 request.actionability.macos = false;
             }
         }
@@ -85,7 +98,8 @@ fn helper(env: &[(String, String)]) -> Option<PathBuf> {
 /// Add launch-only observation artifacts. Failure never prevents the native launch.
 /// OpenCode observes its existing service without changing launch options.
 /// Claude reads its native interactive registry and transcript.
-/// Gemini/Codex/Cursor still require production source connections.
+/// Codex reads the existing PTY protocol and its exact owned rollout.
+/// Gemini/Cursor still require production source connections.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare(
     project: &str,
@@ -99,13 +113,22 @@ pub(crate) async fn prepare(
 ) -> Option<Prepared> {
     env.retain(|(key, _)| !key.starts_with("PU_SIGNAL_"));
     if tool == "opencode" && Path::new(command).file_name()?.to_str()? == tool {
-        return opencode::prepare(project, agent, worktree, session?, args, env);
+        let mut prepared = opencode::prepare(project, agent, worktree, session?, args, env)?;
+        Arc::get_mut(&mut prepared.state)?.macos_qualification =
+            qualification::load(project, tool, "2.0.28", "1", args).await;
+        return Some(prepared);
     }
     if tool == "codex" && Path::new(command).file_name()?.to_str()? == tool {
-        return codex::prepare(project, agent, worktree, session);
+        let mut prepared = codex::prepare(project, agent, worktree, session)?;
+        Arc::get_mut(&mut prepared.state)?.macos_qualification =
+            qualification::load(project, tool, "0.163.0", "2", args).await;
+        return Some(prepared);
     }
     if tool == "claude" && Path::new(command).file_name()?.to_str()? == tool {
-        return claude::prepare(project, agent, worktree, session?, command, env);
+        let mut prepared = claude::prepare(project, agent, worktree, session?, command, env)?;
+        Arc::get_mut(&mut prepared.state)?.macos_qualification =
+            qualification::load(project, tool, "2.1.300", "2", args).await;
+        return Some(prepared);
     }
     if tool != "pi" || Path::new(command).file_name()?.to_str()? != tool {
         return None;
@@ -191,7 +214,7 @@ pub(crate) async fn prepare(
     } else {
         None
     };
-    let macos_qualification = qualification::load(project, tool, version, args).await;
+    let macos_qualification = qualification::load(project, tool, version, "1", args).await;
     let p = artifacts
         .write(
             "pi.mjs",
@@ -902,6 +925,127 @@ mod tests {
         receive(&mut adapter, &prepared.state, valid);
         assert_eq!(prepared.state.snapshot().unwrap(), snapshot);
     }
+
+    #[tokio::test]
+    async fn native_owner_qualification_must_enable_only_exact_adapter_and_current_requests() {
+        use std::os::unix::fs::PermissionsExt;
+        let (mut prepared, tmp) = fixture("claude", Some("root"));
+        let now = now_ms();
+        let path = tmp.path().join(".pu/agent-signals/qualifications.json");
+        std::fs::write(&path,serde_json::to_vec(&json!({"schema_version":1,"qualifications":[{"tool":"claude","tool_version":"2.1.300","adapter_version":"2","platform":"macos","execution_mode":"interactive_pty","owner_confirmed":true,"proof_record_url":"https://pagespace.ai/dashboard/drive/fixture-only","qualified_at_ms":now-1000,"expires_at_ms":now+10000}]})).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        Arc::get_mut(&mut prepared.state)
+            .unwrap()
+            .macos_qualification =
+            qualification::load(tmp.path().to_str().unwrap(), "claude", "2.1.300", "2", &[]).await;
+        let identity = prepared.state.identity.lock().unwrap().clone();
+        let mut reducer = SignalReducer::new(identity, limits()).unwrap();
+        let event = SignalEvent {
+            schema_version: 1,
+            tool: "claude".into(),
+            tool_version: "2.1.300".into(),
+            adapter_version: "2".into(),
+            identity: prepared.state.identity.lock().unwrap().clone(),
+            parent_session_id: None,
+            turn_id: None,
+            event_id: "native-request".into(),
+            sequence: 1,
+            occurred_at_ms: now,
+            confidence: SignalConfidence::Authoritative,
+            kind: SignalEventKind::AttentionPending {
+                request: PendingAttention {
+                    request_id: "native".into(),
+                    kind: AttentionKind::Question,
+                    event_id: "native-request".into(),
+                    turn_id: None,
+                    confidence: SignalConfidence::Authoritative,
+                    actionability: AttentionActionability::default(),
+                },
+            },
+        };
+        reducer.apply(event, now);
+        *prepared.state.native_snapshot.lock().unwrap() = Some(reducer.snapshot(now));
+        assert!(
+            prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .macos
+        );
+
+        assert!(
+            qualification::load(tmp.path().to_str().unwrap(), "claude", "2.1.300", "1", &[])
+                .await
+                .is_none()
+        );
+        assert!(
+            !prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .ios
+        );
+        {
+            let mut native = prepared.state.native_snapshot.lock().unwrap();
+            native
+                .as_mut()
+                .unwrap()
+                .evidence
+                .as_mut()
+                .unwrap()
+                .adapter_version = "1".into();
+        }
+        assert!(
+            !prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .macos
+        );
+        {
+            let mut native = prepared.state.native_snapshot.lock().unwrap();
+            native
+                .as_mut()
+                .unwrap()
+                .evidence
+                .as_mut()
+                .unwrap()
+                .adapter_version = "2".into();
+            native.as_mut().unwrap().pending_attention[0].confidence =
+                SignalConfidence::SourceConfirmed;
+        }
+        assert!(
+            !prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .macos
+        );
+        {
+            let mut native = prepared.state.native_snapshot.lock().unwrap();
+            native.as_mut().unwrap().pending_attention[0].confidence =
+                SignalConfidence::Authoritative;
+            native.as_mut().unwrap().observation.state = ObservationState::Disconnected;
+        }
+        assert!(
+            !prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .macos
+        );
+        prepared
+            .state
+            .native_snapshot
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .observation
+            .state = ObservationState::Current;
+        assert!(
+            !prepared
+                .state
+                .macos_qualification
+                .as_ref()
+                .unwrap()
+                .current(now + 20000)
+        );
+        let final_snapshot = prepared.state.snapshot().unwrap();
+        assert!(!final_snapshot.pending_attention[0].actionability.macos);
+        assert_eq!(final_snapshot.pending_attention[0].request_id, "native");
+    }
+
     #[tokio::test]
     async fn given_owner_qualification_should_mark_only_authoritative_pending_and_withdraw_after_expiry()
      {
@@ -911,7 +1055,7 @@ mod tests {
         let path = tmp.path().join(".pu/agent-signals/qualifications.json");
         std::fs::write(&path,serde_json::to_vec(&json!({"schema_version":1,"qualifications":[{"tool":"pi","tool_version":"1.3.0","adapter_version":"1","platform":"macos","execution_mode":"interactive_pty","owner_confirmed":true,"proof_record_url":"https://pagespace.ai/dashboard/drive/fixture-only","qualified_at_ms":now-1000,"expires_at_ms":now+1000}]})).unwrap()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let grant = qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", &[])
+        let grant = qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", "1", &[])
             .await
             .unwrap();
         Arc::get_mut(&mut prepared.state)
@@ -949,6 +1093,7 @@ mod tests {
                 tmp.path().to_str().unwrap(),
                 "pi",
                 "1.3.0",
+                "1",
                 &["--mode".into(), "rpc".into()]
             )
             .await
@@ -998,7 +1143,7 @@ mod tests {
         Arc::get_mut(&mut prepared.state)
             .unwrap()
             .macos_qualification =
-            qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", &[]).await;
+            qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", "1", &[]).await;
         let mut adapter = intake("pi");
         adapter.version = "1.3.0".into();
         receive(
