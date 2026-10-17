@@ -1,6 +1,7 @@
 //! Observation-only, launch-scoped native adapters. No process or input ownership.
 mod install;
 mod normalize;
+mod opencode;
 mod qualification;
 
 use pu_core::signals::*;
@@ -16,6 +17,7 @@ pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 pub(crate) struct LaunchState {
     reducer: Mutex<Option<SignalReducer>>,
     identity: Mutex<SignalIdentity>,
+    native_snapshot: Mutex<Option<SignalSnapshot>>,
     macos_qualification: Option<qualification::Grant>,
     // Dropping the last state removes only exact owned artifacts.
     _artifacts: install::Artifacts,
@@ -23,6 +25,9 @@ pub(crate) struct LaunchState {
 
 impl LaunchState {
     pub(crate) fn snapshot(&self) -> Option<SignalSnapshot> {
+        if let Some(snapshot) = self.native_snapshot.lock().ok()?.as_ref() {
+            return Some(snapshot.clone());
+        }
         let mut snapshot = self.reducer.lock().ok()?.as_ref()?.snapshot(now_ms());
         if !self
             .macos_qualification
@@ -43,6 +48,7 @@ pub(crate) struct Prepared {
     tool: String,
     version: String,
     state: Arc<LaunchState>,
+    opencode: Option<opencode::Observer>,
 }
 
 fn now_ms() -> i64 {
@@ -68,8 +74,8 @@ fn helper(env: &[(String, String)]) -> Option<PathBuf> {
 }
 
 /// Add launch-only observation artifacts. Failure never prevents the native launch.
-/// OpenCode/Gemini/Codex/Cursor stay uninstalled until their existing ownership and
-/// exact session binding paths are qualified; their normalizers remain fixture-tested.
+/// OpenCode observes its existing service without changing launch options.
+/// Gemini/Codex/Cursor still require production source connections.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare(
     project: &str,
@@ -82,6 +88,9 @@ pub(crate) async fn prepare(
     env: &mut Vec<(String, String)>,
 ) -> Option<Prepared> {
     env.retain(|(key, _)| !key.starts_with("PU_SIGNAL_"));
+    if tool == "opencode" && Path::new(command).file_name()?.to_str()? == tool {
+        return opencode::prepare(project, agent, worktree, session?, args, env);
+    }
     if !matches!(tool, "claude" | "pi") || Path::new(command).file_name()?.to_str()? != tool {
         return None;
     }
@@ -213,9 +222,11 @@ pub(crate) async fn prepare(
         state: Arc::new(LaunchState {
             reducer: Mutex::new(reducer),
             identity: Mutex::new(identity),
+            native_snapshot: Mutex::new(None),
             macos_qualification,
             _artifacts: artifacts,
         }),
+        opencode: None,
     })
 }
 
@@ -224,6 +235,7 @@ impl Prepared {
         self,
         states: &SignalStates,
         project: &str,
+        cwd: &str,
         pid: u32,
         mut exit: tokio::sync::watch::Receiver<Option<i32>>,
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
@@ -232,12 +244,17 @@ impl Prepared {
         states.lock().unwrap().insert(id, self.state.clone());
         let weak = Arc::downgrade(&self.state);
         let project = project.to_string();
+        if let Some(observer) = self.opencode {
+            observer.activate(weak, project, cwd.to_owned(), exit, channels);
+            return;
+        }
         let Self {
             socket,
             token,
             tool,
             version,
             state: _,
+            opencode: _,
         } = self;
         tokio::spawn(async move {
             let mut data = vec![0_u8; 256 * 1024 + 1];
@@ -463,9 +480,11 @@ mod tests {
                 state: Arc::new(LaunchState {
                     reducer: Mutex::new(reducer),
                     identity: Mutex::new(identity),
+                    native_snapshot: Mutex::new(None),
                     macos_qualification: None,
                     _artifacts: artifacts,
                 }),
+                opencode: None,
             },
             tmp,
         )
@@ -501,7 +520,7 @@ mod tests {
         let (status, mut updates) = tokio::sync::broadcast::channel(64);
         channels.lock().await.insert("project".into(), status);
         let (tx, rx) = tokio::sync::watch::channel(None);
-        prepared.activate(&states, "project", 123, rx, channels);
+        prepared.activate(&states, "project", "/owned", 123, rx, channels);
         let socket = std::os::unix::net::UnixDatagram::unbound().unwrap();
         for (token, payload) in [
             (
@@ -567,7 +586,7 @@ mod tests {
         let path = prepared.state._artifacts.socket_directory.join("s");
         let states = SignalStates::default();
         let (_tx, rx) = tokio::sync::watch::channel(None);
-        prepared.activate(&states, "project", 123, rx, Arc::default());
+        prepared.activate(&states, "project", "/owned", 123, rx, Arc::default());
         let socket = std::os::unix::net::UnixDatagram::unbound().unwrap();
         send(
             &socket,

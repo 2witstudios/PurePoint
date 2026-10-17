@@ -9,7 +9,7 @@ and `research_notes/Agent state signal discovery/`.
 | --- | --- | --- |
 | Claude Code 2.1.300 | Launch-only `--settings`; exact preassigned native session; skip if user already supplied `--settings` | Submit is source-confirmed entry only and cannot establish Working or clear an outcome. StopFailure is an API-failure boundary, authoritative only with its own native prompt/turn identity and a matching independently confirmed active turn. No authoritative Claude activity source is enabled; hook-only evidence therefore remains Unknown. Stop and permission/question/MCP intent do not establish completion or displayed pending input. Actual isolated print-JSON SessionStart/UserPromptSubmit captured with exact session via this CLI relay; other native scenarios not run. |
 | pi 1.3.0 | Launch-only `--extension`; first private frame must match owned PTY PID before exact native session binding | Native agent_start, final settled outcome, UI prompt pairs. Generic confirm means question, never permission. RPC confirm/select/input pairs observed with this extension/helper, no model credentials; model lifecycle/terminal notification routes not qualified. Native session changes within a process are not silently rebound. |
-| OpenCode v2.0.28 | **Unavailable in production**; passive plugin artifact/normalizer fixtures only | Pin 026b106bc5d41b679ffc413264229c340871e4d3. `packages/cli/src/services/server-connection.ts` reuses managed service; `server-process.ts` consumes OPENCODE_CONFIG_CONTENT only at server startup. Existing launch exposes no proved authenticated endpoint/root association for per-launch intake. No --standalone, server restart, global config mutation or private server added. Plugin setup uses existing `context.event.subscribe`; forms need not block work. |
+| OpenCode v2.0.28 | Read-only authenticated queries of the existing managed service; exact launch-assigned root session | Discovers only its private owner-mode0600 XDG state registration. Validates loopback URL, exact service version/PID, session ID, root parent and directory; GET-only active/session/permission/form snapshots project Working, terminal outcomes and pending requests. Checks execution state around the snapshot to reject mixed transitions. No plugin injection, service start/restart, --standalone, ownership migration or user configuration changes. Native registration/session/form payloads captured with real2.0.28 in an isolated HOME; complete model-turn and native terminal interaction qualification is still in progress. Explicit custom --server/--standalone routes are not yet observed. |
 | Gemini 0.64.0 | Fixture-only normalizer | Pin 4a0749aceac5643e6f85a36d7420314d85e13b52. Start/end boundaries and ToolPermission subtype intents; no proved launch-only settings/exact root session installation or universal resolution/error hooks. |
 | Codex CLI 0.163.0 | Fixture-only hook normalizer | Source pin 5009a99dfc07830ddf7464c26f310a2b8532b55d is not binary equivalence proof. No app-server ownership; no prose question/error inference. |
 | Cursor | Fixture-only stop-boundary normalizer | CLI parity and install/timeout unknown; no ACP ownership, no generic IDE hooks presented as CLI proof. |
@@ -46,6 +46,12 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   owned files are removed; later edits/unrelated files are preserved. No user
   settings/auth copies, user-home config writes, daemon binary installs, app builds,
   new outbox/gateway/APNs or execution-mode changes.
+* OpenCode polling runs independently of the PTY and never replies to requests.
+  Native HTTP requests disable proxies/redirects, cap each response at1MiB,
+  have a1s request timeout and2s overall snapshot deadline, and poll at500ms.
+  A failed snapshot withdraws observation; a subsequent complete native snapshot
+  can reconcile it. Owned PTY exit irreversibly withdraws that launch's observer.
+  Each snapshot holds at most64 pending IDs and refers only to the assigned root.
 
 ## Checks and reproduction
 

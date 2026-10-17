@@ -439,6 +439,7 @@ impl Engine {
             observation.activate(
                 &self.signal_states,
                 &project_root,
+                &handle.cwd,
                 handle.pid,
                 handle.exit_rx.clone(),
                 self.status_channels.clone(),
