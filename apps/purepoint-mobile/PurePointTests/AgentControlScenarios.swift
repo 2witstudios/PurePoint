@@ -218,6 +218,8 @@ import Foundation
         model.editDraft("New host", screen: model.screenToken)
         model.editDraft("Stale edit", screen: oldScreen)
         try check(model.draft == "New host", "Old text binding must never overwrite another agent's draft")
+        model.sendScroll(Array("\u{1b}[<64;1;1M".utf8)[...], screen: oldScreen)
+        try check(!bridge.operations.contains { $0.0 == "terminal.raw" }, "Old scroll action must never target new agent")
         model.sendKey(.interrupt, screen: oldScreen)
         try check(!bridge.operations.contains { $0.0 == "terminal.keys" }, "Old key action must never target new agent")
     }
@@ -235,6 +237,8 @@ import Foundation
         try check(
             !model.controlEnabled && !model.canSend && !model.rawTyping,
             "Downgrade must disable every input immediately")
+        model.sendScroll(Array("\u{1b}[<64;1;1M".utf8)[...], screen: token)
+        try check(!bridge.operations.contains { $0.0 == "terminal.raw" }, "View permission must reject scroll input")
         bridge.prompts.removeFirst().resume(returning: try json(#"{"outcome":"confirmed","reason":null}"#))
         try await wait { model.composer.pending == nil }
         try check(
@@ -279,6 +283,11 @@ extension AgentControlScenarios {
         defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
         try await open(model, bridge); try finishOpen(bridge)
         try await wait { model.streamId != nil }
+        let wheel = "\u{1b}[<64;1;1M"
+        model.sendScroll(Array(wheel.utf8)[...], screen: model.screenToken)
+        try await wait { bridge.operations.contains { $0.0 == "terminal.raw" } }
+        try check(bridge.operations.last(where: { $0.0 == "terminal.raw" })?.1["data"] as? String == wheel,
+                  "Control scroll must forward the wheel sequence without enabling raw typing")
         bridge.holdInventory = true
         let held = Task { await model.refresh() }
         try await wait { bridge.inventories.count == 1 }

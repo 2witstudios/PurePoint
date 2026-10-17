@@ -3,13 +3,14 @@ import SwiftTerm
 import UIKit
 import CoreText
 
-// The terminal has no input path. Even terminal-generated responses, mouse events,
-// paste and hardware keys are dropped; deliberate control uses the fixed bridge ops.
+// Automatic responses, paste and hardware keys are dropped. Only deliberate
+// full-screen scroll gestures may forward generated wheel events through Control.
 private final class ReadOnlyAgentTerminal: TerminalView {
     var agentCols = 80
     var agentRows = 24
     override var canBecomeFirstResponder: Bool { false }
     override func paste(_ sender: Any?) {}
+
     override func layoutSubviews() {
         super.layoutSubviews()
         if getTerminal().cols != agentCols || getTerminal().rows != agentRows {
@@ -59,11 +60,14 @@ struct AgentTerminalView: UIViewRepresentable {
         coordinator.terminal?.removeFromSuperview(); uiView.delegate = nil
     }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate, TerminalViewDelegate {
+    final class Coordinator: NSObject, UIScrollViewDelegate, TerminalViewDelegate, UIGestureRecognizerDelegate {
         weak var scroll: UIScrollView?
         fileprivate var terminal: ReadOnlyAgentTerminal?
         private weak var model: AgentControlModel?
         private var epoch: UUID?
+        private var forwardingScroll = false
+        private var scrollScreen = 0
+        private var scrollEpoch: UUID?
         private let terminalFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         private var lastCols = 0
         private var lastRows = 0
@@ -105,6 +109,12 @@ struct AgentTerminalView: UIViewRepresentable {
                 view.terminalDelegate = self; view.allowMouseReporting = false
                 view.nativeBackgroundColor = .black; view.nativeForegroundColor = .white
                 terminal = view; scroll.addSubview(view)
+                let pan = UIPanGestureRecognizer(target: self, action: #selector(scrollAgent(_:)))
+                pan.maximumNumberOfTouches = 1
+                pan.delegate = self
+                view.addGestureRecognizer(pan)
+                view.panGestureRecognizer.require(toFail: pan)
+                scroll.panGestureRecognizer.require(toFail: pan)
                 epoch = model.terminalEpoch; lastCols = 0; lastRows = 0
                 followBottom = true
                 scroll.contentOffset = .zero
@@ -210,7 +220,41 @@ struct AgentTerminalView: UIViewRepresentable {
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: TerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-        func send(source: TerminalView, data: ArraySlice<UInt8>) {}
+        func send(source: TerminalView, data: ArraySlice<UInt8>) {
+            guard forwardingScroll, source === terminal, scrollEpoch == epoch else { return }
+            model?.sendScroll(data, screen: scrollScreen)
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+                  let terminal, let model, model.controlEnabled else { return false }
+            let term = terminal.getTerminal()
+            let velocity = pan.velocity(in: terminal)
+            return term.isCurrentBufferAlternate && term.mouseMode != .off && abs(velocity.y) > abs(velocity.x)
+        }
+
+        @objc private func scrollAgent(_ pan: UIPanGestureRecognizer) {
+            guard let terminal, let model else { return }
+            if pan.state == .began {
+                scrollScreen = model.screenToken
+                scrollEpoch = epoch
+            }
+            guard pan.state == .changed, scrollEpoch == epoch,
+                  scrollScreen == model.screenToken, model.controlEnabled else { return }
+            let term = terminal.getTerminal()
+            guard term.isCurrentBufferAlternate, term.mouseMode != .off else { return }
+            let delta = pan.translation(in: terminal).y
+            let ticks = min(8, Int(abs(delta) / 12))
+            guard ticks > 0 else { return }
+            pan.setTranslation(CGPoint(x: 0, y: delta.truncatingRemainder(dividingBy: 12)), in: terminal)
+            let point = pan.location(in: terminal)
+            let x = max(0, min(term.cols - 1, Int(point.x / terminal.bounds.width * CGFloat(term.cols))))
+            let y = max(0, min(term.rows - 1, Int((point.y - terminal.contentOffset.y) / terminal.bounds.height * CGFloat(term.rows))))
+            let flags = term.encodeButton(button: delta > 0 ? 4 : 5, release: false, shift: false, meta: false, control: false)
+            forwardingScroll = true
+            defer { forwardingScroll = false }
+            for _ in 0..<ticks { term.sendEvent(buttonFlags: flags, x: x, y: y) }
+        }
         func scrolled(source: TerminalView, position: Double) {}
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
         func bell(source: TerminalView) {}
