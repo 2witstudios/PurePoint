@@ -47,6 +47,7 @@ Alternative considered: a dedicated mTLS worker protocol with enrollment, ledger
 - Given a remote daemon with a different protocol version, should show the machine as incompatible and make no other requests.
 - Given an unreachable machine, should show it offline and retry with backoff without blocking local projects.
 - Given a remote agent, should attach, send input, resize and kill it exactly like a local agent.
+- Given a remote terminal, should open clicked web URLs and OSC 8 hyperlinks on the viewing Mac. Text selection and Cmd+C/Cmd+V use that Mac's clipboard; ordinary clicks and drags are not sent to the remote TUI. Option-click/drag opts into remote mouse handling; Command-click stays local. Native selection covers the displayed terminal buffer, so scroll a fullscreen TUI to the desired text before selecting it.
 - Given spawn or new worktree on a remote project, should run on that machine.
 - Given a remote project, should browse, preview, edit and save files, show git status/diffs/review and persist workspace layouts on that machine.
 - Given a save whose file changed remotely since it was read, should reject the write with a conflict.

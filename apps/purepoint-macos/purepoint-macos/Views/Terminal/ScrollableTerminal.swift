@@ -10,6 +10,11 @@ import SwiftTerm
 class ScrollableTerminal: NSView, TerminalViewDelegate {
     let terminalView: TerminalView
     var attachSession: DaemonAttachSession?
+    /// Remote TUIs must not handle browser/clipboard gestures on their host.
+    var usesRemoteHost = false
+    var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    private var clickedLink: URL?
+    private var linkDragStarted = false
     private(set) var localGridSize = (cols: 120, rows: 40)
     private var reportedGridSize: (cols: Int, rows: Int)?
     private var lastPhysicalFont: NSFont?
@@ -62,7 +67,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
                 let session = self.attachSession
                 Task { await session?.claimSize() }
             }
-            self?.handleMouseEvent(event)
+            if self?.handleMouseEvent(event) == true { return nil }
             return event
         }
 
@@ -148,6 +153,42 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(content, forType: .string)
     }
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard let url = URL(string: link), url.scheme != nil else { return }
+        openLink(url)
+    }
+
+    /// Resolve a link in the displayed cells, using the physical cell size even when
+    /// another attached client owns the daemon's grid dimensions.
+    func link(at point: NSPoint) -> URL? {
+        let term = terminalView.getTerminal()
+        let size = terminalView.getOptimalFrameSize().size
+        let cellWidth = (size.width - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / CGFloat(term.cols)
+        let cellHeight = size.height / CGFloat(term.rows)
+        guard cellWidth > 0, cellHeight > 0, terminalView.bounds.contains(point) else { return nil }
+        let col = Int(point.x / cellWidth)
+        let row = Int((terminalView.bounds.height - point.y) / cellHeight)
+        guard let cell = term.getCharData(col: col, row: row) else { return nil }
+        if let payload = cell.getPayload() as? String,
+            let separator = payload.firstIndex(of: ";"),
+            let url = URL(string: String(payload[payload.index(after: separator)...])),
+            url.scheme != nil
+        {
+            return url
+        }
+        // Plain web URLs are common in TUIs that do not emit OSC 8 hyperlinks.
+        var text = ""
+        var offset = 0
+        for column in 0..<term.cols {
+            guard let data = term.getCharData(col: column, row: row), data.width > 0 else { continue }
+            if column <= col { offset = text.utf16.count }
+            text.append(term.getCharacter(for: data))
+        }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        return detector.matches(in: text, range: NSRange(location: 0, length: text.utf16.count))
+            .first { NSLocationInRange(offset, $0.range) && ["http", "https"].contains($0.url?.scheme?.lowercased() ?? "") }?.url
+    }
+
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
     // MARK: - Theme
@@ -236,35 +277,53 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     /// Decides who owns selection for each click gesture.
     ///
-    /// On the alternate screen with mouse tracking on (Claude Code fullscreen, OpenCode,
-    /// Codex) there is no scrollback, so native selection can only cover the visible
-    /// screen. Forward the mouse to the app instead: it selects across its own scrollback,
-    /// autoscrolls at the edges and copies via OSC 52 (see `clipboardCopy`). Holding Option
-    /// forces native selection. Everywhere else, native selection is used and we supply the
-    /// drag-past-the-edge autoscroll that SwiftTerm doesn't schedule.
-    private func handleMouseEvent(_ event: NSEvent) {
+    /// Local fullscreen TUIs own selection across their internal scrollback. Remote
+    /// terminals use native selection so copying writes this Mac's clipboard. Option
+    /// forces native selection locally and lets a remote TUI receive mouse gestures.
+    /// Command-click always stays local for SwiftTerm hyperlinks.
+    @discardableResult
+    func handleMouseEvent(_ event: NSEvent) -> Bool {
         switch event.type {
         case .leftMouseDown:
             nativeDragActive = false
+            clickedLink = nil
+            linkDragStarted = false
             guard let window = event.window,
                 let hit = window.contentView?.hitTest(event.locationInWindow),
                 hit === terminalView || hit.isDescendant(of: terminalView)
-            else { return }
+            else { return false }
+            if usesRemoteHost && !event.modifierFlags.contains(.option) {
+                clickedLink = link(at: terminalView.convert(event.locationInWindow, from: nil))
+            }
             let term = terminalView.getTerminal()
             let appOwnsSelection =
                 term.isCurrentBufferAlternate && term.mouseMode != .off
-                && !event.modifierFlags.contains(.option)
+                && (usesRemoteHost ? event.modifierFlags.contains(.option) : !event.modifierFlags.contains(.option))
+                && !event.modifierFlags.contains(.command)
             terminalView.allowMouseReporting = appOwnsSelection
             nativeDragActive = !appOwnsSelection
         case .leftMouseDragged:
-            guard nativeDragActive else { return }
+            linkDragStarted = true
+            guard nativeDragActive else { return false }
             updateDragAutoscroll(for: event)
         case .leftMouseUp:
+            let handledLink = clickedLink != nil
+            if let clickedLink, event.window === terminalView.window,
+                !linkDragStarted,
+                clickedLink == link(at: terminalView.convert(event.locationInWindow, from: nil))
+            {
+                openLink(clickedLink)
+            }
+            clickedLink = nil
             nativeDragActive = false
             stopDragAutoscroll()
+            // SwiftTerm also opens OSC links on Command-mouseUp. Consume a
+            // locally handled link gesture so it cannot launch twice (or after a drag).
+            return handledLink
         default:
             break
         }
+        return false
     }
 
     private func updateDragAutoscroll(for event: NSEvent) {

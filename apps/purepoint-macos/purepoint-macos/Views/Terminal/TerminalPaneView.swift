@@ -33,7 +33,10 @@ class TerminalPaneNSView: NSView {
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; remote agents attach over their machine.
     var client = DaemonClient() {
-        didSet { terminal?.acceptsFileDrops = isLocalClient }
+        didSet {
+            terminal?.acceptsFileDrops = isLocalClient
+            terminal?.usesRemoteHost = !isLocalClient
+        }
     }
     /// Local file paths only mean something to this Mac's daemon.
     private var isLocalClient: Bool { client.socketPath == DaemonEndpoint.localSocketPath }
@@ -69,6 +72,7 @@ class TerminalPaneNSView: NSView {
         tv.pinToEdges(of: self)
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
         tv.acceptsFileDrops = isLocalClient
+        tv.usesRemoteHost = !isLocalClient
         terminal = tv
 
         // Show a small spinner while waiting for first output
