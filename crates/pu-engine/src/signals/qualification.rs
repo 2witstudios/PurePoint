@@ -4,16 +4,23 @@ use serde::Deserialize;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-#[derive(Clone, Copy)]
 pub(super) struct Grant {
     qualified_at_ms: i64,
     expires_at_ms: i64,
+    invalidated: AtomicBool,
 }
 impl Grant {
-    pub fn current(self, now: i64) -> bool {
-        self.qualified_at_ms <= now && now < self.expires_at_ms
+    pub fn current(&self, now: i64) -> bool {
+        // Once this launch observes expiration/rollback, authorization cannot
+        // revive under a later clock correction. A new owner-qualified launch
+        // must load a current grant explicitly.
+        if now < self.qualified_at_ms || now >= self.expires_at_ms {
+            self.invalidated.store(true, Ordering::Release);
+        }
+        !self.invalidated.load(Ordering::Acquire)
     }
 }
 #[derive(Deserialize)]
@@ -85,7 +92,7 @@ fn load_sync(
     let meta = file.metadata().ok()?;
     if !meta.is_file()
         || meta.len() > 16 * 1024
-        || meta.mode() & 0o077 != 0
+        || meta.mode() & 0o7777 != 0o600
         || meta.uid() != unsafe { libc::geteuid() }
     {
         return None;
@@ -113,6 +120,7 @@ fn load_sync(
         let grant = Grant {
             qualified_at_ms: r.qualified_at_ms,
             expires_at_ms: r.expires_at_ms,
+            invalidated: AtomicBool::new(false),
         };
         (r.tool == tool
             && r.tool_version == version
@@ -154,6 +162,26 @@ mod tests {
         assert!(load_sync(tmp.path(), "pi", "1.3.1", true, 200).is_none());
         assert!(load_sync(tmp.path(), "pi", "1.3.0", false, 200).is_none());
         assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 10000).is_none());
+    }
+    #[test]
+    fn given_observed_expiry_should_never_reauthorize_the_same_grant_after_clock_rollback() {
+        let tmp = tempfile::tempdir().unwrap();
+        config(tmp.path(), entry());
+        let grant = load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap();
+        assert!(grant.current(5000));
+        assert!(!grant.current(10000));
+        assert!(!grant.current(5000));
+    }
+    #[test]
+    fn given_owner_only_executable_file_should_reject_nonexact_private_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        config(tmp.path(), entry());
+        std::fs::set_permissions(
+            tmp.path().join(".pu/agent-signals/qualifications.json"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 200).is_none());
     }
     #[test]
     fn given_missing_proof_or_untrusted_file_should_keep_actionability_false() {

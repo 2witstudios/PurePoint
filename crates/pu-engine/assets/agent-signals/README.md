@@ -101,8 +101,9 @@ launch** to read the record; existing launches do not silently acquire a grant.
 The producer can then set `pending.actionability.macos=true` only on a validated
 authoritative pending event for that exact tuple/mode. Explicit `--mode`, `--print`
 or `-p` launches remain unqualified; RPC evidence cannot authorize an interactive
-terminal. Snapshot projection withdraws the flag when the grant expires or the
-clock falls before its qualification time; it never resolves the native request.
+terminal. Snapshot projection permanently withdraws the loaded grant when it observes
+expiry or the clock falls before its qualification time; later clock rollback
+cannot reactivate that launch grant; it never resolves the native request.
 Intent stays intent regardless of qualification. iOS always remains false.
 
 The native consumer separately requires its existing owner release gate:

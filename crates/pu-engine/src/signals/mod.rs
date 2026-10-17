@@ -26,6 +26,7 @@ impl LaunchState {
         let mut snapshot = self.reducer.lock().ok()?.as_ref()?.snapshot(now_ms());
         if !self
             .macos_qualification
+            .as_ref()
             .is_some_and(|grant| grant.current(now_ms()))
         {
             for request in &mut snapshot.pending_attention {
@@ -303,6 +304,16 @@ impl Intake {
         let Some(session) = normalize::session(&self.tool, payload) else {
             return;
         };
+        if self.tool == "pi"
+            && payload.get("turn_id").is_some_and(|id| {
+                !id.is_null()
+                    && !id
+                        .as_str()
+                        .is_some_and(crate::read_source::valid_session_id)
+            })
+        {
+            return;
+        }
         let pi_sequence = if self.tool == "pi" {
             if payload["native_pid"].as_u64() != Some(u64::from(self.pid)) {
                 return;
@@ -356,7 +367,6 @@ impl Intake {
             if self.previous_native.is_none_or(|old| native != old + 1) {
                 reducer.invalidate(ObservationState::Lost);
             }
-            self.previous_native = Some(native);
         }
         if let Some((mut kind, confidence)) = normalize::kind(&self.tool, payload) {
             self.sequence += 1;
@@ -390,6 +400,7 @@ impl Intake {
                 request.turn_id = turn_id.clone();
                 request.actionability.macos = state
                     .macos_qualification
+                    .as_ref()
                     .is_some_and(|grant| grant.current(now_ms()));
                 request.actionability.ios = false;
             }
@@ -407,7 +418,10 @@ impl Intake {
                 confidence,
                 kind,
             };
-            reducer.apply(event, now_ms());
+            let result = reducer.apply(event, now_ms());
+            if result != ApplyResult::Invalid && self.tool == "pi" {
+                self.previous_native = pi_sequence;
+            }
         }
     }
 }
@@ -894,6 +908,37 @@ mod tests {
             )
             .await
             .is_none()
+        );
+    }
+    #[tokio::test]
+    async fn given_reducer_invalid_pi_envelope_should_not_burn_a_corrected_source_sequence() {
+        let (prepared, _tmp) = fixture("pi", None);
+        let mut adapter = intake("pi");
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"observer_bound","session_id":"root","native_pid":123,"sequence":1,"occurred_at_ms":now_ms()}),
+        );
+        for malformed in [json!(""), json!("invalid/turn"), json!(42)] {
+            receive(
+                &mut adapter,
+                &prepared.state,
+                json!({"type":"agent_start","session_id":"root","native_pid":123,"sequence":2,"turn_id":malformed,"occurred_at_ms":now_ms()}),
+            );
+            assert_eq!(adapter.previous_native, Some(1));
+            assert_eq!(
+                prepared.state.snapshot().unwrap().observation.state,
+                ObservationState::Unavailable
+            );
+        }
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"agent_start","session_id":"root","native_pid":123,"sequence":2,"occurred_at_ms":now_ms()}),
+        );
+        assert_eq!(
+            prepared.state.snapshot().unwrap().activity,
+            SignalActivity::Working
         );
     }
     #[test]

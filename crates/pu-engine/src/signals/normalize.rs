@@ -207,7 +207,11 @@ fn pending(id: &str, kind: AttentionKind, payload: &Value) -> PendingAttention {
 }
 
 pub(super) fn session<'a>(tool: &str, payload: &'a Value) -> Option<&'a str> {
-    if payload["agent_id"].as_str().is_some() || payload["parent_session_id"].as_str().is_some() {
+    if payload.get("agent_id").is_some_and(|id| !id.is_null())
+        || payload
+            .get("parent_session_id")
+            .is_some_and(|id| !id.is_null())
+    {
         return None;
     }
     if tool == "opencode" {
@@ -243,6 +247,7 @@ mod tests {
         }
         assert!(kind("claude", &json!({"hook_event_name":"SubagentStop"})).is_none());
         assert!(session("claude", &json!({"session_id":"root","agent_id":"child"})).is_none());
+        assert!(session("pi", &json!({"session_id":"root","parent_session_id":42})).is_none());
     }
     #[test]
     fn given_opencode_nonblocking_form_should_retain_request_without_claiming_platform_actionability()
