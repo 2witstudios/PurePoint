@@ -116,6 +116,7 @@ mod tests {
                 gate_attempts: None,
                 no_trigger: false,
                 trigger_name: None,
+                signal: None,
             },
         );
         assert!(matches!(m.find_agent("ag-1"), Some(AgentLocation::Root(_))));
@@ -150,6 +151,7 @@ mod tests {
                 gate_attempts: None,
                 no_trigger: false,
                 trigger_name: None,
+                signal: None,
             },
         );
         m.worktrees.insert(
@@ -199,6 +201,7 @@ mod tests {
             gate_attempts: None,
             no_trigger: false,
             trigger_name: None,
+            signal: None,
         };
         m.agents.insert("ag-root".into(), make_agent("ag-root"));
         let mut wt_agents = IndexMap::new();
