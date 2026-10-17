@@ -54,6 +54,41 @@ pub(super) fn prepare(
     })
 }
 
+// Match the native registry namespace, not merely the operating-system name.
+// The direct PTY child inherits this daemon's PID namespace. In particular the
+// Linux native format includes both the machine ID and PID-namespace link.
+async fn native_pid_domain() -> Option<&'static str> {
+    static DOMAIN: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    DOMAIN
+        .get_or_try_init(|| async {
+            #[cfg(target_os = "macos")]
+            {
+                Ok::<String, ()>("darwin".into())
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let (machine, namespace) = tokio::join!(
+                    tokio::fs::read_to_string("/etc/machine-id"),
+                    tokio::fs::read_link("/proc/self/ns/pid")
+                );
+                let machine = machine.map_err(|_| ())?;
+                let namespace = namespace.map_err(|_| ())?;
+                let machine = machine.trim();
+                if machine.is_empty() {
+                    return Err(());
+                }
+                Ok::<String, ()>(format!("linux:{machine}:{}", namespace.to_str().ok_or(())?))
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            {
+                Err::<String, ()>(())
+            }
+        })
+        .await
+        .ok()
+        .map(String::as_str)
+}
+
 impl Observer {
     async fn output(&self, cwd: &str, args: &[&str]) -> Option<Vec<u8>> {
         use tokio::io::AsyncReadExt;
@@ -83,30 +118,46 @@ impl Observer {
     }
 
     async fn row(&self, cwd: &str, pid: u32, session: &str) -> Option<Value> {
-        let data = self.output(cwd, &["agents", "--json"]).await?;
-        let rows: Value = serde_json::from_slice(&data).ok()?;
-        let matching: Vec<_> = rows
-            .as_array()?
-            .iter()
-            .filter(|r| {
-                r["pid"].as_u64() == Some(u64::from(pid))
-                    && r["cwd"].as_str() == Some(cwd)
-                    && r["sessionId"].as_str() == Some(session)
-                    && r["kind"] == "interactive"
-            })
-            .collect();
-        if matching.len() != 1 {
+        use tokio::io::AsyncReadExt;
+        // The native interactive registry is stored per process.
+        // Read only the owned PID: no list subprocesses or all-agent scans per
+        // observer, and no cross-profile shared cache that can mix identities.
+        let root =
+            crate::read_source::native_root(pu_core::read::Runtime::Claude, &self.env).ok()?;
+        let file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(root.join("sessions").join(format!("{pid}.json")))
+            .await
+            .ok()?;
+        let meta = file.metadata().await.ok()?;
+        if !meta.is_file()
+            || meta.uid() != unsafe { libc::geteuid() }
+            || meta.mode() & 0o022 != 0
+            || meta.len() > 16 * 1024
+        {
             return None;
         }
-        let row = matching[0];
-        if row["cwd"].as_str() != Some(cwd)
+        let mut data = Vec::new();
+        file.take(16 * 1024 + 1).read_to_end(&mut data).await.ok()?;
+        if data.len() > 16 * 1024 {
+            return None;
+        }
+        let row: Value = serde_json::from_slice(&data).ok()?;
+        let domain = native_pid_domain().await?;
+        if row["pid"].as_u64() != Some(u64::from(pid))
+            || row["cwd"].as_str() != Some(cwd)
             || row["sessionId"].as_str() != Some(session)
             || row["kind"] != "interactive"
+            || row["version"] != "2.1.300"
+            || row["peerProtocol"] != 1
+            || row["entrypoint"] != "cli"
+            || row["pidDomain"] != domain
             || row["startedAt"].as_i64().is_none()
         {
             return None;
         }
-        Some(row.clone())
+        Some(row)
     }
 
     pub(super) fn activate(
@@ -793,51 +844,82 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn native_registry_selection_ignores_children_sharing_the_parent_pid() {
-        use std::os::unix::fs::PermissionsExt;
+    async fn native_registry_reads_only_owned_pid_without_launching_list_processes() {
         let root = tempfile::tempdir().unwrap();
-        let data = root.path().join("rows.json");
-        let command = root.path().join("claude");
-        let row = json!({"pid":123,"cwd":root.path().to_str().unwrap(),"sessionId":"native","kind":"interactive","startedAt":1,"status":"busy"});
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let row = json!({"pid":123,"cwd":"/owned","sessionId":"native","kind":"interactive","startedAt":1,"status":"busy","version":"2.1.300","peerProtocol":1,"entrypoint":"cli","pidDomain":native_pid_domain().await.unwrap()});
+        std::fs::write(sessions.join("123.json"), serde_json::to_vec(&row).unwrap()).unwrap();
         let mut child = row.clone();
         child["sessionId"] = json!("child");
         child["kind"] = json!("background");
         std::fs::write(
-            &data,
-            serde_json::to_vec(&json!([row.clone(), child])).unwrap(),
+            sessions.join("child.json"),
+            serde_json::to_vec(&child).unwrap(),
         )
         .unwrap();
-        std::fs::write(
-            &command,
-            format!(
-                "#!/bin/sh\nexec /bin/cat '{}'\n",
-                data.to_string_lossy().replace('\'', "'\"'\"'")
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
         let observer = Observer {
-            command: command.to_string_lossy().into_owned(),
-            env: vec![],
+            command: "/usr/bin/false".into(),
+            env: vec![
+                ("HOME".into(), root.path().to_string_lossy().into_owned()),
+                (
+                    "CLAUDE_CONFIG_DIR".into(),
+                    root.path().to_string_lossy().into_owned(),
+                ),
+            ],
         };
-        assert_eq!(
-            observer
-                .row(root.path().to_str().unwrap(), 123, "native")
-                .await
-                .unwrap(),
-            row
-        );
+        for _ in 0..3 {
+            assert_eq!(observer.row("/owned", 123, "native").await.unwrap(), row);
+        }
+        for field in [
+            "pid",
+            "cwd",
+            "sessionId",
+            "kind",
+            "startedAt",
+            "version",
+            "peerProtocol",
+            "entrypoint",
+            "pidDomain",
+        ] {
+            let mut bad = row.clone();
+            bad[field] = Value::Null;
+            std::fs::write(sessions.join("123.json"), serde_json::to_vec(&bad).unwrap()).unwrap();
+            assert!(
+                observer.row("/owned", 123, "native").await.is_none(),
+                "{field}"
+            );
+        }
+        std::fs::write(sessions.join("123.json"), serde_json::to_vec(&row).unwrap()).unwrap();
+        let mut oversized = row.clone();
+        oversized["padding"] = json!("x".repeat(16 * 1024));
         std::fs::write(
-            &data,
-            serde_json::to_vec(&json!([row.clone(), row])).unwrap(),
+            sessions.join("123.json"),
+            serde_json::to_vec(&oversized).unwrap(),
         )
         .unwrap();
-        assert!(
-            observer
-                .row(root.path().to_str().unwrap(), 123, "native")
-                .await
-                .is_none()
-        );
+        assert!(observer.row("/owned", 123, "native").await.is_none());
+        std::fs::write(sessions.join("123.json"), serde_json::to_vec(&row).unwrap()).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            sessions.join("123.json"),
+            std::fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+        assert!(observer.row("/owned", 123, "native").await.is_none());
+        std::fs::set_permissions(
+            sessions.join("123.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        std::fs::remove_file(sessions.join("123.json")).unwrap();
+        std::fs::write(
+            sessions.join("child.json"),
+            serde_json::to_vec(&row).unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(sessions.join("child.json"), sessions.join("123.json")).unwrap();
+        assert!(observer.row("/owned", 123, "native").await.is_none());
     }
 
     #[test]

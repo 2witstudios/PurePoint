@@ -62,12 +62,9 @@ try:
  print('RUNNER_EXIT',code,flush=True)
  print((root/'runner.log').read_text()[-3000:],flush=True)
  assert code==0,root
- if args.scenario=='permission_deny' and args.tool in ['claude','opencode']:
-  assert not (repo/'native-file.txt').exists(), 'Denied native write was actually executed'
- if args.scenario in ['permission_deny','question_cancel']:
+ if args.scenario in ['permission','question','permission_deny','question_cancel']:
   if args.tool=='opencode':
-   results=json.loads((root/'native-tool-results.json').read_text())
-   assert any('reject' in str(r).lower() or 'aborted' in str(r).lower() for r in results), 'No native rejection result'
+   results=[{'output':r,'is_error':False} for r in json.loads((root/'native-tool-results.json').read_text())]
   else:
    results=[]
    directory=config/('projects' if args.tool=='claude' else 'sessions')
@@ -77,12 +74,31 @@ try:
      if args.tool=='codex':
       payload=item.get('payload',{})
       if payload.get('type')=='function_call_output' and payload.get('call_id')=='call_native_'+mode:
-       results.append(payload.get('output',''))
+       results.append({'output':payload.get('output',''),'is_error':False})
      else:
       content=item.get('message',{}).get('content',[])
       if isinstance(content,list):
-       results.extend(c.get('content','') for c in content if isinstance(c,dict) and c.get('type')=='tool_result' and c.get('tool_use_id')=='toolu_native_question' and c.get('is_error') is True)
-   assert any('reject' in str(r).lower() or 'aborted' in str(r).lower() for r in results), 'No exact native tool rejection result'
+       results.extend({'output':c.get('content',''),'is_error':c.get('is_error',False)} for c in content if isinstance(c,dict) and c.get('type')=='tool_result' and c.get('tool_use_id')=='toolu_native_question')
+  if args.scenario in ['permission_deny','question_cancel']:
+   assert any('reject' in str(r['output']).lower() or 'aborted' in str(r['output']).lower() for r in results), 'No exact native tool rejection result'
+   if args.scenario=='permission_deny' and args.tool in ['claude','opencode']:
+    assert not (repo/'native-file.txt').exists(), 'Denied native write was actually executed'
+  elif args.scenario=='permission':
+   if args.tool in ['claude','opencode']:
+    expected='sandbox permission proof' if args.tool=='claude' else 'native permission proof'
+    assert (repo/'native-file.txt').read_text()==expected, 'Approved native write did not execute correctly'
+   else:
+    assert any('Process exited with code 0' in r['output'] and 'native-proof' in r['output'] for r in results), 'Approved command did not execute'
+  elif args.tool=='codex':
+   answers=[]
+   for r in results:
+    try:value=json.loads(r['output'])
+    except json.JSONDecodeError:continue
+    if isinstance(value,dict):answers.append(value.get('answers',{}).get('probe',{}).get('answers'))
+   assert ['First'] in answers, 'Expected native question answer missing'
+  else:
+   assert any(not r['is_error'] and '"First"' in str(r['output']) for r in results), 'Expected native question answer missing'
+  (root/'native-response-checks.json').write_text(json.dumps({'passed':True,'scenario':args.scenario,'exact_results':results},indent=2))
  print('NATIVE_RESPONSE_SEMANTICS_PASS',flush=True)
  pid_path=root/'owned-pid.txt'
  if pid_path.exists():
