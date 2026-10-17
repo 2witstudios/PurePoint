@@ -71,6 +71,16 @@ qualification withdrawal and disconnection still publish immediately. Unbound
 Codex discovery retries wait at least 2 seconds; a native Working transition
 allows an immediate retry so a newly started turn need not wait for idle backoff.
 
+Codex checks the executable's exact version once before launch with a 500ms
+deadline and bounded output, using a disposable HOME/CODEX_HOME because native
+`--version` can create PATH aliases. No user profile is passed to that check.
+On resume, the exact root file's inode and complete-line EOF are captured before
+the new process starts (500ms preparation deadline). Only subsequently appended
+records can establish that launch's work or requests; the new owned PID must
+independently hold the same root file. This prevents an interrupted historical
+turn from appearing Working while the resumed terminal is idle. An unavailable,
+partial or replaced source disables observation without preventing native resume.
+
 ## Checks and reproduction
 
 ```
@@ -82,7 +92,7 @@ python3 crates/pu-engine/tests/agent_signals_pi_harness.py \
 ```
 
 For the public Engine route, compile a standalone runner from exact Cargo artifact
-paths, then select one native tool and scenario (question, permission, error, interrupt, permission_deny, question_cancel, resume, worktree or question_hold):
+paths, then select one native tool and scenario (question, permission, error, interrupt, permission_deny, question_cancel, resume, worktree or question_hold; Codex also supports resume_pending):
 
 ```sh
 python3 crates/pu-engine/verification/build-engine-signals-probe.py /tmp/pp-signals-proof
@@ -95,7 +105,9 @@ subscription heartbeats keep the last delivered snapshot current before answerin
 The provenance guard includes tracked and untracked source/workspace inputs, and
 refuses a build whose source changes during compilation. Resume has a 200-second
 wrapper budget; cleanup escalates a stuck runner without skipping native-service
-and fixture-server teardown.
+and fixture-server teardown. Codex `resume_pending` suspends at an actual pending
+permission, checks the resumed idle state before new input, then verifies a fresh
+turn completes without inheriting the previous process's work or request.
 
 Use `claude` or `opencode` with its pinned absolute binary path for the other
 adapters. The driver verifies runner provenance, uses fresh private HOME/config
@@ -103,7 +115,7 @@ and a local fake provider, then invokes public Engine Spawn/Input/Status/Invento
 and captures status events. OpenCode waits for its actual input UI before typing.
 It retains captures under the printed private `/tmp/ppqa-*` directory, kills the
 exact owned agent, and stops only its isolated native OpenCode service. No app or
-system daemon is installed. This root-session proof does not cover child/resume,
+system daemon is installed. This root-session proof does not cover child sessions,
 OS notification taps, or a real provider's model behavior.
 
 The optional native harness requires an already installed pinned binary; it does

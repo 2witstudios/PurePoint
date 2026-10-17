@@ -441,6 +441,7 @@ impl Engine {
         );
         let observation = crate::signals::prepare(
             project_root,
+            &cwd,
             agent_id,
             worktree_id.clone(),
             &agent_entry.agent_type,

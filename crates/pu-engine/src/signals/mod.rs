@@ -139,6 +139,7 @@ fn helper(env: &[(String, String)]) -> Option<PathBuf> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare(
     project: &str,
+    cwd: &str,
     agent: &str,
     worktree: Option<String>,
     tool: &str,
@@ -155,7 +156,8 @@ pub(crate) async fn prepare(
         return Some(prepared);
     }
     if tool == "codex" && Path::new(command).file_name()?.to_str()? == tool {
-        let mut prepared = codex::prepare(project, agent, worktree, session)?;
+        let mut prepared =
+            codex::prepare_launch(project, agent, worktree, session, cwd, command, env).await?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
             qualification::load(project, tool, "0.163.0", "2", args).await;
         return Some(prepared);
@@ -796,6 +798,7 @@ mod tests {
         ];
         let prepared = prepare(
             tmp.path().to_str().unwrap(),
+            tmp.path().to_str().unwrap(),
             "agent",
             None,
             "pi",
@@ -823,6 +826,7 @@ mod tests {
         let original = args.clone();
         let mut env = Vec::new();
         let prepared = prepare(
+            tmp.path().to_str().unwrap(),
             tmp.path().to_str().unwrap(),
             "agent",
             None,

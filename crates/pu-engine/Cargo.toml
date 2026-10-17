@@ -21,6 +21,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 base64 = { workspace = true }
 notify = "8"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tempfile = "3"
 
 [[bin]]
 name = "pu-engine"
@@ -28,4 +29,3 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-tempfile = "3"

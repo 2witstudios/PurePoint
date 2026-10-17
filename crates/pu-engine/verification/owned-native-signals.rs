@@ -170,6 +170,9 @@ async fn stages(
                             })
                             .await,
                         )?;
+                        if scenario == "permission_suspend" {
+                            return Ok(());
+                        }
                         if scenario == "question_hold" {
                             let mut receiver = e.subscribe_status(project).await;
                             let began = Instant::now();
@@ -198,7 +201,7 @@ async fn stages(
                                 }
                                 if notifications > 6 {
                                     return Err(
-                                        "unchanged native state flooded status subscribers".into()
+                                        "unchanged native state flooded status subscribers".into(),
                                     );
                                 }
                             }
@@ -394,7 +397,7 @@ fn main() {
             return Err(format!("spawn failed: {response:?}"));
         };
         let result = async {
-            stages(&e, &project, &id, dir, tool, scenario).await?;
+            stages(&e, &project, &id, dir, tool, if scenario == "resume_pending" { "permission_suspend" } else { scenario }).await?;
             if scenario == "worktree" {
                 let signal = capture(&e, &project, dir, "worktree", &id)
                     .await?
@@ -404,7 +407,7 @@ fn main() {
                 }
             }
 
-            if scenario == "resume" {
+            if matches!(scenario, "resume" | "resume_pending") {
                 let before = capture(&e, &project, dir, "before-suspend", &id)
                     .await?
                     .ok_or("no initial signal")?;
@@ -440,6 +443,14 @@ fn main() {
                 save(dir, "resumed.json", &resumed)?;
                 if !matches!(resumed, Response::ResumeResult { .. }) {
                     return Err(format!("resume failed: {resumed:?}"));
+                }
+                if scenario == "resume_pending" {
+                    tokio::time::sleep(Duration::from_secs(6)).await;
+                    let startup = capture(&e, &project, dir, "resume-before-submit", &id).await?.ok_or("resumed native idle unavailable")?;
+                    save(dir, "resume-startup-logs.json", &e.handle_request(Request::Logs { agent_id: id.clone(), tail: 65536 }).await)?;
+                    if !startup.is_current(chrono::Utc::now().timestamp_millis()) || startup.activity != SignalActivity::Idle || !startup.pending_attention.is_empty() || startup.outcome.is_some() {
+                        return Err("resumed launch revived historical work/request/outcome before new input".into());
+                    }
                 }
                 stages(&e, &project, &id, dir, tool, scenario).await?;
                 let after = capture(&e, &project, dir, "after-resume", &id)

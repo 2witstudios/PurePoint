@@ -5,11 +5,13 @@ from pathlib import Path
 from signal_probe_support import source_state_sha256, stop_process
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('tool', choices=['claude', 'codex', 'opencode'])
-parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'worktree', 'question_hold'])
+parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'worktree', 'question_hold'])
 parser.add_argument('cli')
 parser.add_argument('--runner', required=True, help='Exact candidate owned-native-signals.rs executable; compile against cargo compiler-artifact paths')
 args = parser.parse_args()
-mode = {'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
+if args.scenario == 'resume_pending' and args.tool != 'codex':
+    parser.error('resume_pending checks the Codex interrupted-history regression')
+mode = {'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
 runner_path = Path(args.runner).resolve()
 provenance = json.loads((runner_path.parent / 'provenance.json').read_text())
 assert provenance['runner_sha256'] == hashlib.sha256(runner_path.read_bytes()).hexdigest(), 'Runner differs from recorded compiler artifacts'
@@ -62,7 +64,7 @@ log = open(root / 'runner.log', 'w')
 process = None
 try:
     process = subprocess.Popen([args.runner, str(root), args.tool, args.cli, args.scenario], env=env, stdout=log, stderr=subprocess.STDOUT)
-    code = process.wait(timeout=200 if args.scenario == 'resume' else 100)
+    code = process.wait(timeout=200 if args.scenario.startswith('resume') else 100)
     log.close()
     print('RUNNER_EXIT', code, flush=True)
     print((root / 'runner.log').read_text()[-3000:], flush=True)

@@ -15,6 +15,95 @@ use std::time::Duration;
 
 pub(super) struct Observer {
     expected: Option<String>,
+    initial_cursor: Cursor,
+    initial_session: Option<String>,
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn prepare_launch(
+    project: &str,
+    agent: &str,
+    worktree: Option<String>,
+    session: Option<&str>,
+    cwd: &str,
+    command: &str,
+    env: &[(String, String)],
+) -> Option<Prepared> {
+    use tokio::io::AsyncReadExt;
+    // A rollout's cli_version names its creator, not the executable resuming it.
+    // Probe once before launch in a disposable profile: even --version can write
+    // PATH aliases, so it must never receive the real CODEX_HOME/configuration.
+    let profile = tempfile::Builder::new()
+        .prefix("pu-codex-version-")
+        .tempdir()
+        .ok()?;
+    let path = env
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "PATH")
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("");
+    let supported = async {
+        let mut child = tokio::process::Command::new(command)
+            .args(["--no-daemon", "--version"])
+            .env_clear()
+            .env("HOME", profile.path())
+            .env("CODEX_HOME", profile.path())
+            .env("XDG_CONFIG_HOME", profile.path())
+            .env("TMPDIR", profile.path())
+            .env("PATH", path)
+            .current_dir(profile.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .ok()?;
+        let mut bytes = Vec::new();
+        child
+            .stdout
+            .take()?
+            .take(65)
+            .read_to_end(&mut bytes)
+            .await
+            .ok()?;
+        if bytes.len() > 64 || !child.wait().await.ok()?.success() {
+            return None;
+        }
+        (std::str::from_utf8(&bytes).ok()?.trim() == "codex-cli 0.163.0").then_some(())
+    };
+    tokio::time::timeout(Duration::from_millis(500), supported)
+        .await
+        .ok()??;
+    let mut prepared = prepare(project, agent, worktree, session)?;
+    if let Some(session) = session {
+        let (session, cwd, env) = (session.to_owned(), cwd.to_owned(), env.to_vec());
+        let cursor = tokio::time::timeout(
+            Duration::from_millis(500),
+            tokio::task::spawn_blocking(move || {
+                let binding = crate::read_source::resolve_exact(
+                    pu_core::read::Runtime::Codex,
+                    &session,
+                    &cwd,
+                    &env,
+                )
+                .ok()?;
+                // Revalidate a root CLI header before seeding the cursor; ownership
+                // of this same inode is independently proved after native spawn.
+                crate::read_source::select_codex_source(std::slice::from_ref(&binding.path), &cwd)
+                    .ok()?;
+                Cursor::at_end(&binding.path)
+            }),
+        )
+        .await
+        .ok()?
+        .ok()??;
+        let Some(NativeObserver::Codex(observer)) = prepared.observer.as_mut() else {
+            return None;
+        };
+        observer.initial_cursor = cursor;
+        observer.initial_session = observer.expected.clone();
+    }
+    Some(prepared)
 }
 pub(super) fn prepare(
     project: &str,
@@ -49,6 +138,8 @@ pub(super) fn prepare(
         }),
         observer: Some(NativeObserver::Codex(Observer {
             expected: session.map(str::to_owned),
+            initial_cursor: Cursor::default(),
+            initial_session: None,
         })),
     })
 }
@@ -61,6 +152,28 @@ struct Cursor {
     poisoned: bool,
 }
 impl Cursor {
+    fn at_end(path: &Path) -> Option<Self> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .ok()?;
+        let meta = file.metadata().ok()?;
+        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.len() == 0 {
+            return None;
+        }
+        file.seek(SeekFrom::End(-1)).ok()?;
+        let mut last = [0];
+        file.read_exact(&mut last).ok()?;
+        if last != [b'\n'] || file.metadata().ok()?.len() != meta.len() {
+            return None;
+        }
+        Some(Self {
+            offset: meta.len(),
+            inode: Some((meta.dev(), meta.ino())),
+            ..Self::default()
+        })
+    }
     fn read(&mut self, path: &Path, history: &mut History, cwd: &str) -> Option<()> {
         if self.poisoned {
             return None;
@@ -127,8 +240,11 @@ impl Observer {
     ) {
         tokio::spawn(async move {
             let mut protocol = Protocol::default();
-            let mut history = History::default();
-            let mut cursor = Cursor::default();
+            let mut history = History {
+                session: self.initial_session,
+                ..History::default()
+            };
+            let mut cursor = self.initial_cursor;
             let mut offset = 0;
             let mut lost = false;
             let mut binding: Option<Binding> = None;
@@ -276,7 +392,7 @@ fn snapshot(
     Some(SignalSnapshot {
         schema_version: 1,
         identity: identity.clone(),
-        activity: if active {
+        activity: if active && status != Status::Idle {
             SignalActivity::Working
         } else {
             SignalActivity::Idle
@@ -569,6 +685,148 @@ mod tests {
         assert_eq!(p.status, Some(Status::Blocked));
         p.feed(b"\x1b]7501;state=idle:app=codex\x1b\\");
         assert_eq!(p.status, Some(Status::Idle));
+    }
+    #[test]
+    fn given_idle_native_ui_and_unfinished_history_should_not_claim_working() {
+        let mut history = History::default();
+        history.record(&meta(), "/owned").unwrap();
+        history
+            .record(&event("task_started", "previous-process"), "/owned")
+            .unwrap();
+        let mut protocol = Protocol::default();
+        protocol.feed(b"\x1b]7501;state=idle:app=codex\x1b\\");
+        let identity = SignalIdentity {
+            agent_id: "agent".into(),
+            worktree_id: None,
+            launch_id: "new-launch".into(),
+            generation: 1,
+            native_session_id: "native".into(),
+        };
+        let observed = snapshot(&identity, &protocol, &history, 100).unwrap();
+        assert_eq!(observed.activity, SignalActivity::Idle);
+        assert!(observed.pending_attention.is_empty());
+        assert!(observed.outcome.is_none());
+    }
+    #[tokio::test]
+    async fn given_incompatible_running_cli_should_not_use_historical_creator_version() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("codex");
+        std::fs::write(&executable, b"#!/bin/sh\nprintf 'codex-cli 0.164.0\\n'\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            prepare_launch(
+                root.path().to_str().unwrap(),
+                "agent",
+                None,
+                None,
+                root.path().to_str().unwrap(),
+                executable.to_str().unwrap(),
+                &[]
+            )
+            .await
+            .is_none()
+        );
+    }
+    #[tokio::test]
+    async fn given_resumed_history_should_only_accept_records_after_the_owned_launch_boundary() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let path = sessions.join("rollout-native.jsonl");
+        let mut historical_meta = meta();
+        historical_meta["payload"]["cwd"] = json!(cwd);
+        historical_meta["payload"]["cli_version"] = json!("older-creator");
+        std::fs::write(&path, format!("{historical_meta}\n{}\n{}\n", event("task_started", "old"),
+            json!({"type":"response_item","payload":{"type":"function_call","call_id":"old-request","name":"request_user_input"}}))).unwrap();
+        let marker = root.path().join("version-profile");
+        let executable = root.path().join("codex");
+        std::fs::write(&executable, format!("#!/bin/sh\nprintf '%s' \"$HOME\" > '{}'\nprintf alias > \"$CODEX_HOME/probe-alias\"\nprintf 'codex-cli 0.163.0\\n'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = vec![
+            ("CODEX_HOME".into(), cwd.into()),
+            ("HOME".into(), cwd.into()),
+        ];
+        let prepared = prepare_launch(
+            cwd,
+            "agent",
+            None,
+            Some("native"),
+            cwd,
+            executable.to_str().unwrap(),
+            &env,
+        )
+        .await
+        .unwrap();
+        let Some(NativeObserver::Codex(mut observer)) = prepared.observer else {
+            panic!("missing observer");
+        };
+        assert_eq!(
+            observer.initial_cursor.offset,
+            std::fs::metadata(&path).unwrap().len()
+        );
+        let mut history = History {
+            session: observer.initial_session,
+            ..History::default()
+        };
+        observer
+            .initial_cursor
+            .read(&path, &mut history, cwd)
+            .unwrap();
+        assert!(history.turn.is_none());
+        assert!(history.tools.is_empty());
+        let profile = std::fs::read_to_string(marker).unwrap();
+        assert_ne!(profile, cwd);
+        assert!(!Path::new(&profile).exists());
+        assert!(!root.path().join("probe-alias").exists());
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "{}", event("task_started", "new")).unwrap();
+        writeln!(file, "{}", json!({"type":"response_item","payload":{"type":"function_call","call_id":"new-request","name":"request_user_input"}})).unwrap();
+        observer
+            .initial_cursor
+            .read(&path, &mut history, cwd)
+            .unwrap();
+        assert_eq!(history.turn.as_deref(), Some("new"));
+        assert_eq!(history.tools.len(), 1);
+        assert_eq!(
+            history.tools.get("new-request"),
+            Some(&Some(AttentionKind::Question))
+        );
+        writeln!(file, "{}", event("task_complete", "old")).unwrap();
+        observer
+            .initial_cursor
+            .read(&path, &mut history, cwd)
+            .unwrap();
+        assert!(history.outcome.is_none());
+        writeln!(file, "{}", event("task_complete", "new")).unwrap();
+        observer
+            .initial_cursor
+            .read(&path, &mut history, cwd)
+            .unwrap();
+        assert_eq!(history.outcome.unwrap().kind, OutcomeKind::Completed);
+    }
+    #[test]
+    fn given_partial_or_replaced_resume_file_should_not_accept_a_new_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("history");
+        std::fs::write(&path, b"{}\npartial").unwrap();
+        assert!(Cursor::at_end(&path).is_none());
+        std::fs::write(&path, b"{}\n").unwrap();
+        let mut cursor = Cursor::at_end(&path).unwrap();
+        std::fs::rename(&path, root.path().join("old")).unwrap();
+        std::fs::write(&path, b"{}\n").unwrap();
+        assert!(
+            cursor
+                .read(&path, &mut History::default(), "/owned")
+                .is_none()
+        );
+        assert!(cursor.poisoned);
     }
     #[test]
     fn native_turns_requests_results_and_terminal_errors_keep_exact_ids() {
