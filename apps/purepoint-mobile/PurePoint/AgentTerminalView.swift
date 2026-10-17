@@ -247,13 +247,19 @@ struct AgentTerminalView: UIViewRepresentable {
             return pinch.numberOfTouches < 2 && pinch.state != .began && pinch.state != .changed
         }
 
-        @objc private func scrollAgent(_ pan: UIPanGestureRecognizer) {
+        @objc func scrollAgent(_ pan: UIPanGestureRecognizer) {
+            guard canForwardScroll(pan) else {
+                // Simultaneous pinch updates still accumulate pan translation. Drop it
+                // so lifting the second finger cannot replay zoom motion as wheel input.
+                pan.setTranslation(.zero, in: pan.view)
+                return
+            }
             guard let terminal, let model else { return }
             if pan.state == .began {
                 scrollScreen = model.screenToken
                 scrollEpoch = epoch
             }
-            guard pan.state == .changed, canForwardScroll(pan), scrollEpoch == epoch,
+            guard pan.state == .changed, scrollEpoch == epoch,
                   scrollScreen == model.screenToken, model.controlEnabled else { return }
             let term = terminal.getTerminal()
             guard term.isCurrentBufferAlternate, term.mouseMode != .off else { return }

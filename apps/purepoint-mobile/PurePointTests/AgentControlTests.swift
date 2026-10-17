@@ -205,7 +205,15 @@ extension AgentControlTests {
 
 @MainActor private final class TerminalGesturePan: UIPanGestureRecognizer {
     var touchCount = 1
+    var phase: UIGestureRecognizer.State = .changed
+    var movement = CGPoint.zero
     override var numberOfTouches: Int { touchCount }
+    override var state: UIGestureRecognizer.State {
+        get { phase }
+        set { phase = newValue }
+    }
+    override func translation(in view: UIView?) -> CGPoint { movement }
+    override func setTranslation(_ translation: CGPoint, in view: UIView?) { movement = translation }
 }
 
 @MainActor private final class TerminalGesturePinch: UIPinchGestureRecognizer {
@@ -253,5 +261,29 @@ extension AgentControlTests {
         XCTAssertFalse(coordinator.canForwardScroll(pan))
         pan.touchCount = 1
         XCTAssertTrue(coordinator.canForwardScroll(pan))
+    }
+}
+
+
+extension AgentControlTests {
+    @MainActor func testGivenPinchDuringWheelPanShouldDiscardTranslationBeforePanResumes() {
+        let coordinator = AgentTerminalView.Coordinator()
+        let scroll = TerminalGestureScroll()
+        coordinator.scroll = scroll
+        let pan = TerminalGesturePan()
+        scroll.testPinch.touchCount = 2
+        pan.movement = CGPoint(x: 24, y: 120)
+        coordinator.scrollAgent(pan)
+        XCTAssertEqual(pan.movement, .zero)
+        // A continuing pinch can still be active after its touch count drops.
+        scroll.testPinch.touchCount = 1
+        scroll.testPinch.phase = .changed
+        pan.movement = CGPoint(x: 6, y: 60)
+        coordinator.scrollAgent(pan)
+        XCTAssertEqual(pan.movement, .zero)
+        scroll.testPinch.phase = .ended
+        pan.movement = CGPoint(x: 0, y: 12)
+        XCTAssertTrue(coordinator.canForwardScroll(pan))
+        XCTAssertEqual(pan.translation(in: nil).y, 12, "Only subsequent pan movement remains")
     }
 }
