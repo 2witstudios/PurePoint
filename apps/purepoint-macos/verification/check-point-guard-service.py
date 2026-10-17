@@ -14,6 +14,9 @@ with tempfile.TemporaryDirectory(prefix='pointguard-service-', dir='/tmp') as fo
 subprocess.run(['swiftc', '-typecheck', '-strict-concurrency=complete', '-warnings-as-errors',
                 *[str(source / path) for path in ['Models/PiChatDomain.swift', 'Models/PointGuardRuntime.swift',
                 'Services/PiPairingSecret.swift', 'Services/PointGuardTailnet.swift',
+                'Models/AgentSignalPolicy.swift', 'Models/AgentSignalSnapshot.swift',
+                'Models/AgentSignalRouting.swift', 'Models/AgentSignalPendingTaps.swift',
+                'Services/AgentSignalNotifications.swift',
                 'State/PiChatModel.swift', 'State/PointGuardServiceModel.swift', 'Services/PointGuardApplicationDelegate.swift',
                 'Views/Chat/PointGuardSetupView.swift']]], check=True)
 

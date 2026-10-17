@@ -13,7 +13,8 @@ pub fn read_manifest(project_root: &Path) -> Result<Manifest, PuError> {
             PuError::Io(e)
         }
     })?;
-    let manifest: Manifest = serde_json::from_str(&content)?;
+    let mut manifest: Manifest = serde_json::from_str(&content)?;
+    clear_persisted_signals(&mut manifest);
     Ok(manifest)
 }
 
@@ -21,7 +22,10 @@ pub fn write_manifest(project_root: &Path, manifest: &Manifest) -> Result<(), Pu
     use std::io::Write;
 
     let path = paths::manifest_path(project_root);
-    let content = serde_json::to_string_pretty(manifest)? + "\n";
+    // AgentEntry is also live wire data; strip only the persistence copy.
+    let mut persisted = manifest.clone();
+    clear_persisted_signals(&mut persisted);
+    let content = serde_json::to_string_pretty(&persisted)? + "\n";
 
     // Atomic write: write to a temp file unique to this writer, fsync, then
     // rename. A shared temp path would let two writers interleave into it.
@@ -44,6 +48,17 @@ pub fn write_manifest(project_root: &Path, manifest: &Manifest) -> Result<(), Pu
         let _ = std::fs::remove_file(&tmp_path);
     })?;
     Ok(())
+}
+
+fn clear_persisted_signals(manifest: &mut Manifest) {
+    for agent in manifest.agents.values_mut() {
+        agent.signal = None;
+    }
+    for worktree in manifest.worktrees.values_mut() {
+        for agent in worktree.agents.values_mut() {
+            agent.signal = None;
+        }
+    }
 }
 
 pub fn update_manifest(
@@ -219,5 +234,89 @@ mod tests {
         }
 
         assert_eq!(read_manifest(tmp.path()).unwrap().agents.len(), 200);
+    }
+    fn manifest_with_live_signals() -> Manifest {
+        let value: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/signals-status-v1.json")).unwrap();
+        let worktree: crate::types::WorktreeEntry =
+            serde_json::from_value(value["worktrees"][0].clone()).unwrap();
+        let mut root = worktree.agents["ag-worker"].clone();
+        root.id = "ag-root".into();
+        root.signal = Some(serde_json::from_value(value["agents"][0]["signal"].clone()).unwrap());
+        let mut manifest = Manifest::new("/fixture/project".into());
+        manifest.agents.insert(root.id.clone(), root);
+        manifest.worktrees.insert(worktree.id.clone(), worktree);
+        manifest
+    }
+    #[test]
+    fn given_persisted_root_and_worktree_signals_should_clear_them_on_load_before_original_expiry()
+    {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(paths::pu_dir(tmp.path())).unwrap();
+        let manifest = manifest_with_live_signals();
+        let now = 1792195200001;
+        assert!(
+            manifest
+                .all_agents()
+                .iter()
+                .all(|a| a.signal.as_ref().unwrap().is_current(now))
+        );
+        // Simulate older writers which persisted a still-current snapshot.
+        std::fs::write(
+            paths::manifest_path(tmp.path()),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        let loaded = read_manifest(tmp.path()).unwrap();
+        assert_eq!(loaded.all_agents().len(), 2);
+        assert!(loaded.all_agents().iter().all(|a| a.signal.is_none()));
+        // The same serde types are also live status wire and must retain signals.
+        let wire: Manifest =
+            serde_json::from_str(&serde_json::to_string(&manifest).unwrap()).unwrap();
+        assert!(
+            wire.all_agents()
+                .iter()
+                .all(|a| a.signal.as_ref().unwrap().is_current(now))
+        );
+    }
+    #[test]
+    fn given_live_manifest_signals_should_omit_them_on_disk_without_mutating_the_caller() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(paths::pu_dir(tmp.path())).unwrap();
+        let manifest = manifest_with_live_signals();
+        write_manifest(tmp.path(), &manifest).unwrap();
+        let disk: Manifest = serde_json::from_str(
+            &std::fs::read_to_string(paths::manifest_path(tmp.path())).unwrap(),
+        )
+        .unwrap();
+        assert!(disk.all_agents().iter().all(|a| a.signal.is_none()));
+        assert!(manifest.all_agents().iter().all(|a| a.signal.is_some()));
+    }
+    #[test]
+    fn given_legacy_manifest_without_signal_should_preserve_all_persistent_fields() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(paths::pu_dir(tmp.path())).unwrap();
+        let mut legacy = serde_json::to_value(manifest_with_live_signals()).unwrap();
+        legacy["agents"]["ag-root"]
+            .as_object_mut()
+            .unwrap()
+            .remove("signal");
+        legacy["worktrees"]["wt-1"]["agents"]["ag-worker"]
+            .as_object_mut()
+            .unwrap()
+            .remove("signal");
+        std::fs::write(
+            paths::manifest_path(tmp.path()),
+            serde_json::to_string(&legacy).unwrap(),
+        )
+        .unwrap();
+        let loaded = read_manifest(tmp.path()).unwrap();
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), legacy);
+        write_manifest(tmp.path(), &loaded).unwrap();
+        let stored: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(paths::manifest_path(tmp.path())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored, legacy);
     }
 }

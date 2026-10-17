@@ -23,6 +23,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
     let sessionId: String?
     let suspended: Bool
     let command: String?
+    var signal: AgentSignalSnapshot? = nil
 
     var displayName: String {
         name.isEmpty ? id : name
@@ -30,7 +31,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
 
     init(
         id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String,
-        sessionId: String? = nil, suspended: Bool = false, command: String? = nil
+        sessionId: String? = nil, suspended: Bool = false, command: String? = nil, signal: AgentSignalSnapshot? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +42,7 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
         self.sessionId = sessionId
         self.suspended = suspended
         self.command = command
+        self.signal = signal
     }
 
     init(from entry: AgentEntry) {
@@ -55,5 +57,6 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
             suspended: entry.suspended ?? false,
             command: entry.command
         )
+        signal = entry.signal
     }
 }

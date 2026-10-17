@@ -94,6 +94,9 @@ pub struct AgentEntry {
     /// Set at spawn time so the sequence is stable across ticks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_name: Option<String>,
+    /// Live observation snapshot; never use persisted observations without reconciliation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<crate::signals::SignalSnapshot>,
 }
 
 impl<'de> Deserialize<'de> for AgentEntry {
@@ -131,6 +134,8 @@ impl<'de> Deserialize<'de> for AgentEntry {
             no_trigger: bool,
             #[serde(default)]
             trigger_name: Option<String>,
+            #[serde(default)]
+            signal: Option<crate::signals::SignalSnapshot>,
         }
         let raw = Raw::deserialize(deserializer)?;
         // Backward compat: old manifests have suspended_at set but no suspended field.
@@ -158,6 +163,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             gate_attempts: raw.gate_attempts,
             no_trigger: raw.no_trigger,
             trigger_name: raw.trigger_name,
+            signal: raw.signal,
         })
     }
 }
@@ -258,6 +264,7 @@ mod tests {
             gate_attempts: None,
             no_trigger: false,
             trigger_name: None,
+            signal: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -332,6 +339,7 @@ mod tests {
             gate_attempts: None,
             no_trigger: false,
             trigger_name: None,
+            signal: None,
         };
 
         // when

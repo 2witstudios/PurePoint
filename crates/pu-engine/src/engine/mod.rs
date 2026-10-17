@@ -70,6 +70,7 @@ pub(super) struct SaveTriggerParams {
 
 pub struct Engine {
     sizes: Mutex<HashMap<String, pty_operations::SizeState>>,
+    signal_states: crate::signals::SignalStates,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
     start_time: Instant,
@@ -176,6 +177,7 @@ impl Engine {
     pub fn new() -> Self {
         Self {
             sizes: Mutex::new(HashMap::new()),
+            signal_states: Arc::new(std::sync::Mutex::new(HashMap::new())),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
             start_time: Instant::now(),
@@ -198,6 +200,7 @@ impl Engine {
     /// with no subscribers. Without this, HashMap entries leak.
     pub fn start_session_reaper(self: &Arc<Self>) {
         let sessions = self.sessions.clone();
+        let signal_states = self.signal_states.clone();
         let pending_initial_inputs = self.pending_initial_inputs.clone();
         let grid_channels = self.grid_channels.clone();
         let status_channels = self.status_channels.clone();
@@ -223,6 +226,7 @@ impl Engine {
                 if !dead_ids.is_empty() {
                     let mut pending_initial_inputs = pending_initial_inputs.lock().await;
                     for id in &dead_ids {
+                        signal_states.lock().unwrap().remove(id);
                         pending_initial_inputs.remove(id);
                     }
                     tracing::debug!(count = dead_ids.len(), "reaped dead session handles");
@@ -269,6 +273,10 @@ impl Engine {
             // Fallback: use the daemon's own env
             _ => std::env::vars().collect(),
         }
+    }
+
+    pub(super) fn signal_snapshot(&self, id: &str) -> Option<pu_core::signals::SignalSnapshot> {
+        self.signal_states.lock().ok()?.get(id)?.snapshot()
     }
 
     pub fn registered_projects(&self) -> Vec<String> {
