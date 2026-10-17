@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import PurePoint
 
 final class AgentControlTests: XCTestCase {
@@ -199,5 +200,58 @@ extension AgentControlTests {
         for operation in ["workspace.catalog", "workspace.operation", "workspace.unrecognized", "sync"] {
             XCTAssertEqual(MobileRPCTiming.timeoutNanoseconds(for: operation), 35_000_000_000)
         }
+    }
+}
+
+@MainActor private final class TerminalGesturePan: UIPanGestureRecognizer {
+    var touchCount = 1
+    override var numberOfTouches: Int { touchCount }
+}
+
+@MainActor private final class TerminalGesturePinch: UIPinchGestureRecognizer {
+    var touchCount = 0
+    var phase: UIGestureRecognizer.State = .possible
+    override var numberOfTouches: Int { touchCount }
+    override var state: UIGestureRecognizer.State {
+        get { phase }
+        set { phase = newValue }
+    }
+}
+
+@MainActor private final class TerminalGestureScroll: UIScrollView {
+    let testPinch = TerminalGesturePinch()
+    override var pinchGestureRecognizer: UIPinchGestureRecognizer? { testPinch }
+}
+
+extension AgentControlTests {
+    @MainActor func testGivenWheelPanAlreadyRecognizedShouldStillAllowViewportPinch() {
+        let coordinator = AgentTerminalView.Coordinator()
+        let scroll = TerminalGestureScroll()
+        coordinator.scroll = scroll
+        let pan = TerminalGesturePan()
+        XCTAssertTrue(coordinator.gestureRecognizer(pan, shouldRecognizeSimultaneouslyWith: scroll.testPinch))
+        XCTAssertFalse(coordinator.gestureRecognizer(pan, shouldRecognizeSimultaneouslyWith: scroll.panGestureRecognizer))
+        XCTAssertFalse(coordinator.gestureRecognizer(pan, shouldRecognizeSimultaneouslyWith: UIPinchGestureRecognizer()))
+    }
+
+    @MainActor func testGivenSecondTouchAfterWheelPanBeganShouldStopWheelForwardingDuringPinch() {
+        let coordinator = AgentTerminalView.Coordinator()
+        let scroll = TerminalGestureScroll()
+        coordinator.scroll = scroll
+        let pan = TerminalGesturePan()
+        XCTAssertTrue(coordinator.canForwardScroll(pan))
+        // The pan may still report one tracked touch after a second finger arrives.
+        scroll.testPinch.touchCount = 2
+        XCTAssertFalse(coordinator.canForwardScroll(pan))
+        scroll.testPinch.touchCount = 1
+        scroll.testPinch.phase = .changed
+        XCTAssertFalse(coordinator.canForwardScroll(pan))
+        scroll.testPinch.phase = .ended
+        pan.touchCount = 2
+        XCTAssertFalse(coordinator.canForwardScroll(pan))
+        pan.touchCount = 0
+        XCTAssertFalse(coordinator.canForwardScroll(pan))
+        pan.touchCount = 1
+        XCTAssertTrue(coordinator.canForwardScroll(pan))
     }
 }

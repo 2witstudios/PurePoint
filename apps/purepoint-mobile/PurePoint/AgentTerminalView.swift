@@ -233,13 +233,27 @@ struct AgentTerminalView: UIViewRepresentable {
             return term.isCurrentBufferAlternate && term.mouseMode != .off && abs(velocity.y) > abs(velocity.x)
         }
 
+        // The wheel pan can already be recognized when a second finger arrives.
+        // Keep the viewport pinch eligible instead of relying on the pan's touch limit.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            otherGestureRecognizer === scroll?.pinchGestureRecognizer
+        }
+
+        func canForwardScroll(_ pan: UIPanGestureRecognizer) -> Bool {
+            guard pan.numberOfTouches == 1, let pinch = scroll?.pinchGestureRecognizer else { return false }
+            return pinch.numberOfTouches < 2 && pinch.state != .began && pinch.state != .changed
+        }
+
         @objc private func scrollAgent(_ pan: UIPanGestureRecognizer) {
             guard let terminal, let model else { return }
             if pan.state == .began {
                 scrollScreen = model.screenToken
                 scrollEpoch = epoch
             }
-            guard pan.state == .changed, scrollEpoch == epoch,
+            guard pan.state == .changed, canForwardScroll(pan), scrollEpoch == epoch,
                   scrollScreen == model.screenToken, model.controlEnabled else { return }
             let term = terminal.getTerminal()
             guard term.isCurrentBufferAlternate, term.mouseMode != .off else { return }
