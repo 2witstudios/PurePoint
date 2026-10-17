@@ -31,6 +31,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         tool_results = [m.get('content') for m in request.get('messages', []) if m.get('role') == 'tool']
         if tool_results:
             (root / 'native-tool-results.json').write_text(json.dumps(tool_results))
+            if (root / 'hold-native-continuation').exists():
+                (root / 'continuation-pending').write_text('Real native model request with tool result awaiting provider')
+                deadline = time.monotonic() + 50
+                while not (root / 'release-provider').exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
         (root / 'request-metadata.json').write_text(json.dumps({'path': self.path, 'model': request.get('model'), 'tools': [x.get('function', {}).get('name') for x in request.get('tools', [])]}))
         time.sleep(2)
         if mode == 'error' and not (root / 'resume-provider-success').exists():

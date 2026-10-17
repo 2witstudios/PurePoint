@@ -403,7 +403,7 @@ fn main() {
                 &id,
                 dir,
                 tool,
-                if scenario == "resume_pending" {
+                if matches!(scenario.as_str(), "resume_pending" | "resume_live_work") {
                     "permission_suspend"
                 } else if scenario == "resume_error" {
                     "error"
@@ -433,11 +433,15 @@ fn main() {
                 // Native /new first opens an empty draft. It does not create a
                 // new root rollout until the next prompt; intent alone cannot
                 // invalidate the still-owned root or establish a new identity.
-                if after
-                    .as_ref()
-                    .is_some_and(|s| s.identity != before.identity)
+                let after =
+                    after.ok_or("still-owned native root unavailable during empty draft")?;
+                if !after.is_current(chrono::Utc::now().timestamp_millis())
+                    || after.identity != before.identity
                 {
-                    return Err("native draft intent silently rebound ownership".into());
+                    return Err(
+                        "empty draft intent withdrew the still-owned root or rebound ownership"
+                            .into(),
+                    );
                 }
                 raw(&e, &id, b"Native next session test").await?;
                 tokio::time::sleep(Duration::from_millis(350)).await;
@@ -455,7 +459,7 @@ fn main() {
             }
             if matches!(
                 scenario.as_str(),
-                "resume" | "resume_pending" | "resume_error"
+                "resume" | "resume_pending" | "resume_error" | "resume_live_work"
             ) {
                 let before = capture(&e, &project, dir, "before-suspend", &id)
                     .await?
@@ -506,21 +510,64 @@ fn main() {
                     })
                     .await,
                 )?;
-                if !startup.is_current(chrono::Utc::now().timestamp_millis())
-                    || startup.activity != SignalActivity::Idle
-                    || !startup.pending_attention.is_empty()
-                    || startup.outcome.is_some()
-                {
-                    return Err(
+                if scenario == "resume_live_work" {
+                    if !startup.is_current(chrono::Utc::now().timestamp_millis())
+                        || startup.activity != SignalActivity::Working
+                        || !startup.pending_attention.is_empty()
+                        || startup.outcome.is_some()
+                        || !dir.join("continuation-pending").is_file()
+                    {
+                        return Err(
+                            "no real native-service continuation observed after resume".into()
+                        );
+                    }
+                    capture(&e, &project, dir, "working", &id).await?;
+                    std::fs::write(
+                        dir.join("release-provider"),
+                        b"release real existing native work",
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let until = Instant::now() + Duration::from_secs(30);
+                    loop {
+                        if let Some(signal) = capture(&e, &project, dir, "resolved", &id).await? {
+                            if signal.is_current(chrono::Utc::now().timestamp_millis())
+                                && signal.pending_attention.is_empty()
+                                && signal
+                                    .outcome
+                                    .as_ref()
+                                    .is_some_and(|o| o.kind == OutcomeKind::Completed)
+                            {
+                                break;
+                            }
+                        }
+                        if Instant::now() > until {
+                            return Err(
+                                "real existing native work did not complete after provider release"
+                                    .into(),
+                            );
+                        }
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    if Path::new(&project).join("native-file.txt").exists() {
+                        return Err("suspended native permission was unexpectedly approved".into());
+                    }
+                } else {
+                    if !startup.is_current(chrono::Utc::now().timestamp_millis())
+                        || startup.activity != SignalActivity::Idle
+                        || !startup.pending_attention.is_empty()
+                        || startup.outcome.is_some()
+                    {
+                        return Err(
                         "resumed launch revived historical work/request/outcome before new input"
                             .into(),
                     );
+                    }
+                    if scenario == "resume_error" {
+                        std::fs::write(dir.join("resume-provider-success"), b"fixture recovery")
+                            .map_err(|error| error.to_string())?;
+                    }
+                    stages(&e, &project, &id, dir, tool, scenario).await?;
                 }
-                if scenario == "resume_error" {
-                    std::fs::write(dir.join("resume-provider-success"), b"fixture recovery")
-                        .map_err(|error| error.to_string())?;
-                }
-                stages(&e, &project, &id, dir, tool, scenario).await?;
                 let after = capture(&e, &project, dir, "after-resume", &id)
                     .await?
                     .ok_or("no resumed signal")?;

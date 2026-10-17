@@ -5,7 +5,7 @@ from pathlib import Path
 from signal_probe_support import source_state_sha256, stop_process
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('tool', choices=['claude', 'codex', 'opencode'])
-parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'resume_error', 'session_switch', 'worktree', 'question_hold', 'image'])
+parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'resume_error', 'resume_live_work', 'session_switch', 'worktree', 'question_hold', 'image'])
 parser.add_argument('cli')
 parser.add_argument('--runner', required=True, help='Exact candidate owned-native-signals.rs executable; compile against cargo compiler-artifact paths')
 args = parser.parse_args()
@@ -13,7 +13,9 @@ if args.scenario in ['resume_pending', 'session_switch'] and args.tool != 'codex
     parser.error('resume_pending/session_switch check Codex history/ownership regressions')
 if args.scenario == 'image' and args.tool == 'opencode':
     parser.error('image checks the Claude/Codex native JSONL record regression')
-mode = {'resume_error': 'error', 'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
+if args.scenario == 'resume_live_work' and args.tool != 'opencode':
+    parser.error('resume_live_work checks the existing OpenCode managed-service execution model')
+mode = {'resume_live_work': 'permission', 'resume_error': 'error', 'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
 runner_path = Path(args.runner).resolve()
 provenance = json.loads((runner_path.parent / 'provenance.json').read_text())
 assert provenance['runner_sha256'] == hashlib.sha256(runner_path.read_bytes()).hexdigest(), 'Runner differs from recorded compiler artifacts'
@@ -27,6 +29,8 @@ state = root / 'state'
 data = root / 'data'
 for directory in [home, config, repo, state, data, root / 'tmp', root / 'cache']:
     directory.mkdir()
+if args.scenario == 'resume_live_work':
+    (root / 'hold-native-continuation').write_text('Hold real native model continuation, not an observer signal')
 helper = Path.cwd() / f'crates/pu-engine/verification/check-{args.tool}-signals.py'
 node = next((n for n in ast.parse(helper.read_text()).body if isinstance(n, ast.ClassDef) and n.name == 'Handler'))
 fixture_globals = dict(globals())

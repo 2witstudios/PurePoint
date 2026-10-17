@@ -100,6 +100,10 @@ rollback. Unchanged prior outcomes are suppressed; a new active execution raises
 the minimum terminal revision, so its predecessor cannot reappear when active
 clears. If the prelaunch service view is unavailable, the first complete native
 view establishes the baseline rather than claiming an old outcome as new work.
+Activity and pending requests are different: the managed service reports current
+execution and live pending conditions of that same native session. A resumed TUI
+can observe work still executing in that service without submitting a new prompt.
+Do not hide real current work/requests or restart the service to force a new epoch.
 
 ## Checks and reproduction
 
@@ -131,10 +135,15 @@ turn completes without inheriting the previous process's work or request.
 The `image` case reads a real noisy PNG through native Read/view_image, requires
 actual image content in native JSONL and completion through the public Engine;
 Claude additionally requires a native record larger than the former 1MiB limit.
-Every resume case checks idle/Unknown with no inherited outcome before new input;
+Quiescent resume cases check idle/Unknown with no inherited outcome before new input;
 `resume_error` checks a prior API error followed by resume and a successful turn.
 Codex `session_switch` exercises actual `/new`, requires a distinct native root
 and verifies old facts are unavailable without changing PurePoint session ownership.
+OpenCode `resume_live_work` is the explicit exception to idle-resume setup: the
+native service continues a real model request after its old TUI exits. The local
+provider holds that request, the resumed TUI/source must show Working without new
+input, and releasing the provider must produce Finished. Static past outcomes
+remain suppressed; live session conditions are freshly observed, not replayed.
 
 Use `claude` or `opencode` with its pinned absolute binary path for the other
 adapters. The driver verifies runner provenance, uses fresh private HOME/config

@@ -55,6 +55,10 @@ impl OutcomeFence {
             self.initialized = true;
         }
         let mut snapshot = value.snapshot;
+        // This is a fresh, authenticated full view of the same native session.
+        // The managed service can keep executing after its TUI is suspended;
+        // live activity/requests therefore remain valid when that TUI resumes.
+        // They are current conditions, unlike a persisted past terminal event.
         if snapshot.activity == SignalActivity::Working {
             self.minimum_idle = self.minimum_idle.max(value.idle_revision);
         }
@@ -502,6 +506,37 @@ mod tests {
             fresh.apply(observed(2, false)).unwrap().outcome.is_some(),
             "new root sessions have no inherited outcome"
         );
+    }
+    #[test]
+    fn given_resumed_native_session_still_live_should_preserve_current_work_and_requests() {
+        let mut fence = OutcomeFence::resumed(Some(2), true);
+        let current = NativeObservation {
+            snapshot: snapshot(
+                &identity(),
+                "/owned",
+                &info(),
+                &json!({"data":{"ses_owned":{"type":"running"}}}),
+                &json!({"data":[{"id":"per_live","sessionID":"ses_owned"}]}),
+                &json!({"data":[]}),
+                100,
+            )
+            .unwrap(),
+            idle_revision: Some(2),
+        };
+        let current = fence.apply(current).unwrap();
+        assert_eq!(current.activity, SignalActivity::Working);
+        assert_eq!(current.pending_attention[0].request_id, "per_live");
+        assert_eq!(
+            current.pending_attention[0].confidence,
+            SignalConfidence::Authoritative
+        );
+        assert!(current.outcome.is_none());
+        // Once the live service clears those conditions, do not retain them or
+        // resurrect the unchanged terminal from before this observer launch.
+        let ended = fence.apply(observed(2, false)).unwrap();
+        assert_eq!(ended.activity, SignalActivity::Idle);
+        assert!(ended.pending_attention.is_empty());
+        assert!(ended.outcome.is_none());
     }
     fn write_registration(path: &Path, url: &str, version: &str) {
         use std::os::unix::fs::PermissionsExt;
