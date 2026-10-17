@@ -2,7 +2,7 @@
 use super::{LaunchState, NativeObserver, Prepared, install, now_ms};
 use pu_core::signals::*;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
@@ -205,6 +205,10 @@ struct Transcript {
     inode: Option<(u64, u64)>,
     partial: Vec<u8>,
     turn: Option<String>,
+    settled: bool,
+    working_seen: bool,
+    lineage: HashSet<String>,
+    closed_turns: HashSet<String>,
     tools: BTreeMap<String, bool>,
     outcome: Option<SignalOutcome>,
 }
@@ -268,9 +272,7 @@ impl Transcript {
     }
 
     fn record(&mut self, v: &Value, identity: &SignalIdentity, cwd: &str) -> Option<()> {
-        if !matches!(v["type"].as_str(), Some("user" | "assistant")) {
-            return Some(());
-        }
+        let content_record = matches!(v["type"].as_str(), Some("user" | "assistant"));
         if v["isSidechain"] == true {
             return Some(());
         }
@@ -278,31 +280,66 @@ impl Transcript {
             || v["cwd"].as_str() != Some(cwd)
             || v["version"] != "2.1.300"
         {
+            return if content_record { None } else { Some(()) };
+        }
+        let Some(uuid) = v["uuid"]
+            .as_str()
+            .filter(|s| crate::read_source::valid_session_id(s))
+        else {
+            return if content_record { None } else { Some(()) };
+        };
+        let message = &v["message"];
+        let results: Vec<_> = message["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["type"] == "tool_result")
+            .collect();
+        if v["type"] == "user"
+            && results.is_empty()
+            && v["isMeta"] != true
+            && v["isCompactSummary"] != true
+        {
+            if self.turn.as_deref() == Some(uuid) || self.closed_turns.contains(uuid) {
+                return Some(());
+            }
+            if let Some(previous) = self.turn.clone() {
+                if !self.closed_turns.contains(&previous) && self.closed_turns.len() >= 512 {
+                    return None;
+                }
+                self.closed_turns.insert(previous);
+            }
+            // The real native CLI writes this root user record only after its
+            // rejectable submit hooks accept. A busy registry alone is intent.
+            self.turn = Some(uuid.into());
+            self.settled = false;
+            self.working_seen = false;
+            self.tools.clear();
+            self.outcome = None;
+            self.lineage.clear();
+            self.lineage.insert(uuid.into());
+            return Some(());
+        }
+        if self.lineage.contains(uuid) {
+            return Some(());
+        }
+        if !v["parentUuid"]
+            .as_str()
+            .is_some_and(|parent| self.lineage.contains(parent))
+        {
+            return Some(());
+        }
+        if self.lineage.len() >= 4096 {
             return None;
         }
-        let uuid = v["uuid"]
-            .as_str()
-            .filter(|s| crate::read_source::valid_session_id(s))?;
-        let message = &v["message"];
+        self.lineage.insert(uuid.into());
         if v["type"] == "user" {
-            let results: Vec<_> = message["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|c| c["type"] == "tool_result")
-                .collect();
-            if !results.is_empty() {
-                for result in results {
-                    self.tools.remove(result["tool_use_id"].as_str()?);
-                }
-            } else if v["isMeta"] != true {
-                self.turn = Some(uuid.into());
-                self.tools.clear();
-                self.outcome = None;
+            for result in results {
+                self.tools.remove(result["tool_use_id"].as_str()?);
             }
-        } else {
+        } else if v["type"] == "assistant" {
             for content in message["content"].as_array().into_iter().flatten() {
-                if content["type"] == "tool_use" {
+                if content["type"] == "tool_use" && !self.settled {
                     let id = content["id"]
                         .as_str()
                         .filter(|s| crate::read_source::valid_session_id(s))?;
@@ -321,7 +358,9 @@ impl Transcript {
             } else {
                 None
             };
-            if let Some(kind) = kind {
+            if let Some(kind) = kind
+                && (!self.settled || self.outcome.is_none())
+            {
                 self.outcome = Some(SignalOutcome {
                     kind,
                     event_id: format!("claude-message:{uuid}"),
@@ -333,12 +372,29 @@ impl Transcript {
         Some(())
     }
 
-    fn snapshot(&self, identity: &SignalIdentity, row: &Value, now: i64) -> Option<SignalSnapshot> {
+    fn snapshot(
+        &mut self,
+        identity: &SignalIdentity,
+        row: &Value,
+        now: i64,
+    ) -> Option<SignalSnapshot> {
         let status = row["status"].as_str()?;
         let mut pending_attention = Vec::new();
         let activity = match status {
-            "busy" => SignalActivity::Working,
-            "idle" => SignalActivity::Idle,
+            "busy" => {
+                if self.turn.is_none() || self.settled {
+                    return None;
+                }
+                self.working_seen = true;
+                SignalActivity::Working
+            }
+            "idle" => {
+                if self.working_seen || self.outcome.is_some() {
+                    self.settled = true;
+                    self.tools.clear();
+                }
+                SignalActivity::Idle
+            }
             "waiting" => {
                 let question = match row["waitingFor"].as_str()? {
                     "input needed" => true,
@@ -415,7 +471,17 @@ mod tests {
         }
     }
     fn record(kind: &str, id: &str, message: Value) -> Value {
-        json!({"type":kind,"uuid":id,"sessionId":"native","cwd":"/owned","version":"2.1.300","isSidechain":false,"message":message})
+        let parent = if kind == "assistant" {
+            json!("turn")
+        } else if message["content"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|c| c["type"] == "tool_result"))
+        {
+            json!("a")
+        } else {
+            Value::Null
+        };
+        json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":"native","cwd":"/owned","version":"2.1.300","isSidechain":false,"message":message})
     }
     #[test]
     fn exact_root_request_identity_and_response_are_retained() {
@@ -468,16 +534,13 @@ mod tests {
         )
         .unwrap();
         assert!(t.outcome.is_none());
-        t.record(
-            &record(
-                "assistant",
-                "done",
-                json!({"content":[],"stop_reason":"end_turn"}),
-            ),
-            &id,
-            "/owned",
-        )
-        .unwrap();
+        let mut done = record(
+            "assistant",
+            "done",
+            json!({"content":[],"stop_reason":"end_turn"}),
+        );
+        done["parentUuid"] = json!("next");
+        t.record(&done, &id, "/owned").unwrap();
         assert_eq!(t.outcome.as_ref().unwrap().kind, OutcomeKind::Completed);
     }
     #[test]
@@ -500,6 +563,12 @@ mod tests {
     fn native_wait_category_requires_one_exact_root_request() {
         let mut t = Transcript::default();
         let id = identity();
+        t.record(
+            &record("user", "turn", json!({"content":"accepted"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
         t.tools.insert("question".into(), true);
         let waiting = json!({"status":"waiting","waitingFor":"input needed"});
         let snapshot = t.snapshot(&id, &waiting, 100).unwrap();
@@ -555,6 +624,68 @@ mod tests {
         assert!(t.read(&path, &id, "/owned").is_none());
         std::fs::write(&path, [bytes.as_slice(), b"\n"].concat()).unwrap();
         assert!(t.read(&path, &id, "/owned").is_none());
+    }
+
+    #[test]
+    fn rejectable_busy_cannot_start_or_revive_a_settled_turn() {
+        let mut t = Transcript::default();
+        let id = identity();
+        let busy = json!({"status":"busy"});
+        let idle = json!({"status":"idle"});
+        assert!(t.snapshot(&id, &busy, 100).is_none());
+        t.record(
+            &record("user", "turn", json!({"content":"accepted"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        let mut completed = record(
+            "assistant",
+            "done",
+            json!({"content":[],"stop_reason":"end_turn"}),
+        );
+        completed["parentUuid"] = json!("turn");
+        t.record(&completed, &id, "/owned").unwrap();
+        assert!(t.snapshot(&id, &idle, 100).unwrap().outcome.is_some());
+        assert!(t.snapshot(&id, &busy, 101).is_none());
+        assert_eq!(
+            t.snapshot(&id, &idle, 102)
+                .unwrap()
+                .outcome
+                .unwrap()
+                .event_id,
+            "claude-message:done"
+        );
+    }
+    #[test]
+    fn delayed_old_branch_error_cannot_close_the_new_accepted_turn() {
+        let mut t = Transcript::default();
+        let id = identity();
+        t.record(
+            &record("user", "turn", json!({"content":"first"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        t.record(
+            &record("user", "next", json!({"content":"second"})),
+            &id,
+            "/owned",
+        )
+        .unwrap();
+        let mut old = record("assistant", "late-error", json!({"content":[]}));
+        old["parentUuid"] = json!("turn");
+        old["isApiErrorMessage"] = json!(true);
+        t.record(&old, &id, "/owned").unwrap();
+        assert!(t.outcome.is_none());
+        let mut current = record(
+            "assistant",
+            "new-done",
+            json!({"content":[],"stop_reason":"end_turn"}),
+        );
+        current["parentUuid"] = json!("next");
+        t.record(&current, &id, "/owned").unwrap();
+        assert_eq!(t.outcome.as_ref().unwrap().turn_id.as_deref(), Some("next"));
     }
 
     /// Driven only by an isolated native CLI fixture; never reads real user config.
@@ -615,13 +746,37 @@ mod tests {
             serde_json::to_vec(&captures).unwrap(),
         )
         .unwrap();
-        assert!(
-            captures
-                .iter()
-                .any(|s| s.activity == SignalActivity::Working
-                    && s.is_current(s.observation.last_received_at_ms.unwrap()))
-        );
         let expected = context["expected"].as_str().unwrap();
+        let current: Vec<_> = captures
+            .iter()
+            .filter(|s| s.is_current(s.observation.last_received_at_ms.unwrap()))
+            .collect();
+        if expected == "reject" {
+            assert!(current.iter().all(|s| s.activity != SignalActivity::Working
+                && s.outcome.is_none()
+                && s.pending_attention.is_empty()));
+            return;
+        }
+        assert!(
+            current
+                .iter()
+                .any(|s| s.activity == SignalActivity::Working)
+        );
+        if expected == "reject_after_complete" {
+            let mut completed = false;
+            let mut outcomes = HashSet::new();
+            for s in current {
+                if let Some(outcome) = &s.outcome {
+                    assert_eq!(outcome.kind, OutcomeKind::Completed);
+                    outcomes.insert(outcome.event_id.clone());
+                    completed = true;
+                }
+                assert!(!completed || s.activity != SignalActivity::Working);
+            }
+            assert!(completed);
+            assert_eq!(outcomes.len(), 1);
+            return;
+        }
         if expected == "error" {
             assert!(captures.iter().any(|s| {
                 s.outcome
