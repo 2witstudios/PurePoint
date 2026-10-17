@@ -4,20 +4,22 @@ use serde::Deserialize;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 pub(super) struct Grant {
     qualified_at_ms: i64,
     expires_at_ms: i64,
     invalidated: AtomicBool,
+    observed_at_ms: AtomicI64,
 }
 impl Grant {
     pub fn current(&self, now: i64) -> bool {
         // Once this launch observes expiration/rollback, authorization cannot
         // revive under a later clock correction. A new owner-qualified launch
         // must load a current grant explicitly.
-        if now < self.qualified_at_ms || now >= self.expires_at_ms {
+        let previous = self.observed_at_ms.fetch_max(now, Ordering::AcqRel);
+        if now < previous || now < self.qualified_at_ms || now >= self.expires_at_ms {
             self.invalidated.store(true, Ordering::Release);
         }
         !self.invalidated.load(Ordering::Acquire)
@@ -121,6 +123,7 @@ fn load_sync(
             qualified_at_ms: r.qualified_at_ms,
             expires_at_ms: r.expires_at_ms,
             invalidated: AtomicBool::new(false),
+            observed_at_ms: AtomicI64::new(now),
         };
         (r.tool == tool
             && r.tool_version == version
@@ -171,6 +174,19 @@ mod tests {
         assert!(grant.current(5000));
         assert!(!grant.current(10000));
         assert!(!grant.current(5000));
+    }
+    #[test]
+    fn given_clock_rollback_inside_live_window_should_latch_at_the_load_high_water() {
+        let tmp = tempfile::tempdir().unwrap();
+        config(tmp.path(), entry());
+        let grant = load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap();
+        assert!(grant.current(8000));
+        assert!(grant.current(8000));
+        assert!(!grant.current(5000));
+        assert!(!grant.current(9000));
+        let loaded = load_sync(tmp.path(), "pi", "1.3.0", true, 5000).unwrap();
+        assert!(!loaded.current(4999));
+        assert!(!loaded.current(5000));
     }
     #[test]
     fn given_owner_only_executable_file_should_reject_nonexact_private_mode() {

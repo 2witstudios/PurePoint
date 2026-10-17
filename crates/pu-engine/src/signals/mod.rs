@@ -941,6 +941,46 @@ mod tests {
             SignalActivity::Working
         );
     }
+    #[tokio::test]
+    async fn given_projection_clock_rollback_should_latch_denied_without_resolving_native_attention()
+     {
+        use std::os::unix::fs::PermissionsExt;
+        let (mut prepared, tmp) = fixture("pi", None);
+        let now = now_ms();
+        let path = tmp.path().join(".pu/agent-signals/qualifications.json");
+        std::fs::write(&path,serde_json::to_vec(&json!({"schema_version":1,"qualifications":[{"tool":"pi","tool_version":"1.3.0","adapter_version":"1","platform":"macos","execution_mode":"interactive_pty","owner_confirmed":true,"proof_record_url":"https://pagespace.ai/dashboard/drive/fixture-only","qualified_at_ms":now-1000,"expires_at_ms":now+60000}]})).unwrap()).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        Arc::get_mut(&mut prepared.state)
+            .unwrap()
+            .macos_qualification =
+            qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", &[]).await;
+        let mut adapter = intake("pi");
+        adapter.version = "1.3.0".into();
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"observer_bound","session_id":"root","native_pid":123,"sequence":1,"occurred_at_ms":now_ms()}),
+        );
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"ui_prompt_start","kind":"input","request_id":"ui-1","session_id":"root","native_pid":123,"sequence":2,"occurred_at_ms":now_ms()}),
+        );
+        assert!(
+            prepared.state.snapshot().unwrap().pending_attention[0]
+                .actionability
+                .macos
+        );
+        let grant = prepared.state.macos_qualification.as_ref().unwrap();
+        assert!(grant.current(now + 30000));
+        let snapshot = prepared.state.snapshot().unwrap();
+        assert_eq!(snapshot.pending_attention.len(), 1);
+        assert_eq!(snapshot.pending_attention[0].request_id, "ui-1");
+        assert!(!snapshot.pending_attention[0].actionability.macos);
+        assert!(!snapshot.pending_attention[0].actionability.ios);
+        assert!(!grant.current(now + 40000));
+        assert!(snapshot.outcome.is_none());
+    }
     #[test]
     fn given_private_token_should_compare_entire_equal_length_input() {
         assert!(token_matches(b"private", b"private"));
