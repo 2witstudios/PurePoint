@@ -117,6 +117,7 @@ struct PiPointGuardChatView: View {
     let model: PiChatModel
     @Binding var showSidebar: Bool
     let isFocused: Bool
+    var tabBar: AnyView = AnyView(EmptyView())
     var body: some View { EmptyView() }
 }
 extension Notification.Name {
