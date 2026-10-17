@@ -459,7 +459,7 @@ struct Cursor {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes).iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn prefix_digest(records: &[ReadRecord]) -> String {
