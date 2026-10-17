@@ -471,13 +471,16 @@ impl Engine {
         };
 
         if let Some(observation) = observation {
-            observation.activate(
-                &self.signal_states,
-                project_root,
-                handle.pid,
-                handle.exit_rx.clone(),
-                self.status_channels.clone(),
-            );
+            observation
+                .with_output(handle.output_buffer.clone())
+                .activate(
+                    &self.signal_states,
+                    project_root,
+                    &handle.cwd,
+                    handle.pid,
+                    handle.exit_rx.clone(),
+                    self.status_channels.clone(),
+                );
         }
         handle.screen_aware = agent_entry.agent_type == "claude";
         handle.project_root = Some(project_root.to_string());

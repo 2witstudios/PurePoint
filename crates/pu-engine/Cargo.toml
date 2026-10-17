@@ -20,6 +20,7 @@ vt100 = "0.16.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 base64 = { workspace = true }
 notify = "8"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [[bin]]
 name = "pu-engine"
