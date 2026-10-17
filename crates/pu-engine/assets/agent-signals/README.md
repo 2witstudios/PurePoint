@@ -7,7 +7,7 @@ and `research_notes/Agent state signal discovery/`.
 
 | Runtime | Activation | Facts and qualification limits |
 | --- | --- | --- |
-| Claude Code 2.1.300 | Launch-only `--settings`; exact preassigned native session; skip if user already supplied `--settings` | Submit is source-confirmed entry only and cannot establish Working or clear an outcome. StopFailure is an API-failure boundary, authoritative only with its own native prompt/turn identity and a matching independently confirmed active turn. No authoritative Claude activity source is enabled; hook-only evidence therefore remains Unknown. Stop and permission/question/MCP intent do not establish completion or displayed pending input. Actual isolated print-JSON SessionStart/UserPromptSubmit captured with exact session via this CLI relay; other native scenarios not run. |
+| Claude Code 2.1.300 | Read-only `claude agents --json` plus incremental exact root transcript; no injected hooks/settings | Exact owned PID/session/cwd/interactive kind/start epoch, exact CLI/transcript version. Positive native busy means Working; native waiting category is joined to a single unresolved native tool-use ID for Question or Permission. Native idle plus structural assistant end_turn/API-error metadata means Completed/Errored. Ambiguous/missing IDs, future versions, child/foreign records and incomplete/mixed views withdraw observation. Real interactive CLI plus local fake Anthropic provider passed question→answer→completion, manual Write approval→completion, and API400→error through the production observer; no real credentials or config copied. Interrupt outcome classification, concurrent dialogs, MCP elicitation and full Engine/native-app route qualification remain open. |
 | pi 1.3.0 | Launch-only `--extension`; first private frame must match owned PTY PID before exact native session binding | Native agent_start, final settled outcome, UI prompt pairs. Generic confirm means question, never permission. RPC confirm/select/input pairs observed with this extension/helper, no model credentials; model lifecycle/terminal notification routes not qualified. Native session changes within a process are not silently rebound. |
 | OpenCode v2.0.28 | Read-only authenticated queries of the existing managed service; exact launch-assigned root session | Discovers only its private owner-mode0600 XDG state registration. Validates loopback URL, exact service version/PID, session ID, root parent and directory; GET-only active/session/permission/form snapshots project Working, terminal outcomes and pending requests. Checks execution state around the snapshot to reject mixed transitions. No plugin injection, service start/restart, --standalone, ownership migration or user configuration changes. Native registration/session/form payloads captured with real2.0.28 in an isolated HOME; complete model-turn and native terminal interaction qualification is still in progress. Explicit custom --server/--standalone routes are not yet observed. |
 | Gemini 0.64.0 | Fixture-only normalizer | Pin 4a0749aceac5643e6f85a36d7420314d85e13b52. Start/end boundaries and ToolPermission subtype intents; no proved launch-only settings/exact root session installation or universal resolution/error hooks. |
@@ -32,8 +32,7 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   275–350ms **before helper entry**. Launch preparation preflights the helper with
   a 500ms timeout and disables observation for old/incompatible helpers. This
   warms normal hook use but cannot guarantee an OS scheduling/cold-start bound.
-  The proposed universal 100ms wall-clock hook budget is **not proved**. Independent review also observed a first cold helper test exceeding 500ms (warm rerun passed); this remains a recorded qualification failure. Native
-  Claude registration also sets a one-second hook timeout.
+  The proposed universal 100ms wall-clock hook budget is **not proved**. Independent review also observed a first cold helper test exceeding 500ms (warm rerun passed); this remains a recorded qualification failure. The new Claude adapter installs no hooks.
 * pi relay is nonawaited FIFO, at most 64 queued events/one child, 100ms child timer. Every pi frame must retain the owned PID, exact session, finite monotonic source sequence and current timestamp; only observer_bound sequence 1 can register it.
   Overflow/timer loss reports an explicit loss marker when possible; sequence gaps
   invalidate observation. Final dropped events cannot always be recovered; no
@@ -52,6 +51,16 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   A failed snapshot withdraws observation; a subsequent complete native snapshot
   can reconcile it. Owned PTY exit irreversibly withdraws that launch's observer.
   Each snapshot holds at most64 pending IDs and refers only to the assigned root.
+
+* Claude observation runs outside the PTY and issues only native version/list queries.
+  A native poll has a5s overall deadline and at most1MiB of JSON output per command.
+  Transcript reads are incremental, at most8MiB per poll/1MiB per record, and retain
+  only IDs, tool categories and structural outcomes. Native registry is sampled on
+  both sides, and transcript inode/length must still match afterward. Truncation,
+  replacement or invalid root history latches observation unavailable for the launch.
+  Up to64 unresolved tool IDs are retained. Queries do not change user settings,
+  input, resume, process/session ownership or permission policy. No hook/helper is
+  needed for Claude. Initial idle without a terminal result does not invent Finished.
 
 ## Checks and reproduction
 
@@ -122,3 +131,21 @@ remove the native release gate; remove/expire the producer grant and relaunch
 workers to withdraw producer capability. No new UI or APNs/service infrastructure
 is involved. Gating/configuration capability alone is **not delivered native
 attention notification acceptance**; real owner terminal/device proof remains open.
+
+### Claude native observer reproduction
+
+Build the engine lib test executable with `cargo test -p pu-engine --lib --no-run`.
+Then run each scenario with its emitted `target/debug/deps/pu_engine-…` path:
+
+```sh
+python3 crates/pu-engine/verification/check-claude-signals.py \
+  target/debug/deps/pu_engine-… /absolute/path/to/claude question
+# Repeat with permission and error.
+```
+
+This harness creates a fresh HOME/config/project, local fake provider and real
+interactive PTY. It uses dummy credentials only, drives native input, invokes the
+production observer probe, checks exact pending/outcome states and exit withdrawal,
+and terminates only its owned CLI/mock server. Captures remain in its printed
+sandbox path for inspection. It does not build/install native apps or prove OS
+notification routing, real-provider behavior, child/resume or interrupt outcomes.

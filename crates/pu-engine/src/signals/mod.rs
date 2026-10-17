@@ -1,4 +1,5 @@
 //! Observation-only, launch-scoped native adapters. No process or input ownership.
+mod claude;
 mod install;
 mod normalize;
 mod opencode;
@@ -48,7 +49,12 @@ pub(crate) struct Prepared {
     tool: String,
     version: String,
     state: Arc<LaunchState>,
-    opencode: Option<opencode::Observer>,
+    observer: Option<NativeObserver>,
+}
+
+enum NativeObserver {
+    OpenCode(opencode::Observer),
+    Claude(claude::Observer),
 }
 
 fn now_ms() -> i64 {
@@ -75,6 +81,7 @@ fn helper(env: &[(String, String)]) -> Option<PathBuf> {
 
 /// Add launch-only observation artifacts. Failure never prevents the native launch.
 /// OpenCode observes its existing service without changing launch options.
+/// Claude reads its native interactive registry and transcript.
 /// Gemini/Codex/Cursor still require production source connections.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare(
@@ -91,15 +98,10 @@ pub(crate) async fn prepare(
     if tool == "opencode" && Path::new(command).file_name()?.to_str()? == tool {
         return opencode::prepare(project, agent, worktree, session?, args, env);
     }
-    if !matches!(tool, "claude" | "pi") || Path::new(command).file_name()?.to_str()? != tool {
-        return None;
+    if tool == "claude" && Path::new(command).file_name()?.to_str()? == tool {
+        return claude::prepare(project, agent, worktree, session?, command, env);
     }
-    if tool == "claude"
-        && (session.is_none()
-            || args
-                .iter()
-                .any(|arg| arg == "--settings" || arg.starts_with("--settings=")))
-    {
+    if tool != "pi" || Path::new(command).file_name()?.to_str()? != tool {
         return None;
     }
     let helper = helper(env)?;
@@ -132,7 +134,7 @@ pub(crate) async fn prepare(
     {
         return None;
     }
-    let version = if tool == "claude" { "2.1.300" } else { "1.3.0" };
+    let version = "1.3.0";
     let probe = async {
         use tokio::io::AsyncReadExt;
         let mut child = tokio::process::Command::new(command)
@@ -184,20 +186,13 @@ pub(crate) async fn prepare(
         None
     };
     let macos_qualification = qualification::load(project, tool, version, args).await;
-    let config = if tool == "claude" {
-        let p = artifacts
-            .write("claude-settings.json", install::claude_settings(&helper))
-            .ok()?;
-        vec!["--settings".into(), p.to_string_lossy().into_owned()]
-    } else {
-        let p = artifacts
-            .write(
-                "pi.mjs",
-                include_bytes!("../../assets/agent-signals/pi.mjs").to_vec(),
-            )
-            .ok()?;
-        vec!["--extension".into(), p.to_string_lossy().into_owned()]
-    };
+    let p = artifacts
+        .write(
+            "pi.mjs",
+            include_bytes!("../../assets/agent-signals/pi.mjs").to_vec(),
+        )
+        .ok()?;
+    let config = vec!["--extension".into(), p.to_string_lossy().into_owned()];
     args.extend(config);
     env.extend([
         ("PU_SIGNAL_TOKEN".into(), token.clone()),
@@ -226,7 +221,7 @@ pub(crate) async fn prepare(
             macos_qualification,
             _artifacts: artifacts,
         }),
-        opencode: None,
+        observer: None,
     })
 }
 
@@ -244,8 +239,15 @@ impl Prepared {
         states.lock().unwrap().insert(id, self.state.clone());
         let weak = Arc::downgrade(&self.state);
         let project = project.to_string();
-        if let Some(observer) = self.opencode {
-            observer.activate(weak, project, cwd.to_owned(), exit, channels);
+        if let Some(observer) = self.observer {
+            match observer {
+                NativeObserver::OpenCode(observer) => {
+                    observer.activate(weak, project, cwd.to_owned(), exit, channels)
+                }
+                NativeObserver::Claude(observer) => {
+                    observer.activate(weak, project, cwd.to_owned(), pid, exit, channels)
+                }
+            }
             return;
         }
         let Self {
@@ -254,7 +256,7 @@ impl Prepared {
             tool,
             version,
             state: _,
-            opencode: _,
+            observer: _,
         } = self;
         tokio::spawn(async move {
             let mut data = vec![0_u8; 256 * 1024 + 1];
@@ -484,7 +486,7 @@ mod tests {
                     macos_qualification: None,
                     _artifacts: artifacts,
                 }),
-                opencode: None,
+                observer: None,
             },
             tmp,
         )
@@ -635,7 +637,7 @@ mod tests {
         std::fs::create_dir(&bin).unwrap();
         for (name, body) in [
             ("pu", "#!/bin/sh\nprintf unsupported\nexit 2\n"),
-            ("claude", "#!/bin/sh\nprintf '2.1.300\\n'\n"),
+            ("pi", "#!/bin/sh\nprintf '1.3.0\\n'\n"),
         ] {
             let path = bin.join(name);
             std::fs::write(&path, body).unwrap();
@@ -652,9 +654,9 @@ mod tests {
             tmp.path().to_str().unwrap(),
             "agent",
             None,
-            "claude",
+            "pi",
             Some("native-exact"),
-            bin.join("claude").to_str().unwrap(),
+            bin.join("pi").to_str().unwrap(),
             &mut args,
             &mut env,
         )
@@ -676,23 +678,21 @@ mod tests {
         let mut args = vec!["--settings".into(), "user-settings.json".into()];
         let original = args.clone();
         let mut env = Vec::new();
-        assert!(
-            prepare(
-                tmp.path().to_str().unwrap(),
-                "agent",
-                None,
-                "claude",
-                Some("native"),
-                "claude",
-                &mut args,
-                &mut env
-            )
-            .await
-            .is_none()
-        );
+        let prepared = prepare(
+            tmp.path().to_str().unwrap(),
+            "agent",
+            None,
+            "claude",
+            Some("native"),
+            "claude",
+            &mut args,
+            &mut env,
+        )
+        .await;
+        assert!(prepared.is_some());
+        drop(prepared);
         assert_eq!(args, original);
-        assert!(!tmp.path().join(".pu").exists());
-        std::fs::create_dir(tmp.path().join(".pu")).unwrap();
+        std::fs::remove_dir_all(tmp.path().join(".pu/agent-signals")).unwrap();
         std::fs::write(tmp.path().join(".pu/agent-signals"), b"unavailable storage").unwrap();
         assert!(install::Artifacts::new(tmp.path(), "launch").is_err());
         assert_eq!(
