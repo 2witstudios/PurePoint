@@ -407,7 +407,7 @@ fn main() {
                 }
             }
 
-            if matches!(scenario, "resume" | "resume_pending") {
+            if matches!(scenario.as_str(), "resume" | "resume_pending") {
                 let before = capture(&e, &project, dir, "before-suspend", &id)
                     .await?
                     .ok_or("no initial signal")?;
