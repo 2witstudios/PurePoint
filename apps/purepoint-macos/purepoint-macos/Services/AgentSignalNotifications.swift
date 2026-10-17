@@ -50,7 +50,7 @@ import UserNotifications
             guard let eventKey = agent.eventKey else { continue }
             let kind = agent.presentation.label
             let key = kind == "Finished" ? "completion" : kind.lowercased()
-            guard agent.qualificationKey.map(qualified.contains) == true,
+            guard agent.destination != nil, agent.qualificationKey.map(qualified.contains) == true,
                 defaults.bool(forKey: "PP_signal_\(key)Notifications"),
                 agent.identity != foregroundIdentity else { continue }
             routes[eventKey] = agent

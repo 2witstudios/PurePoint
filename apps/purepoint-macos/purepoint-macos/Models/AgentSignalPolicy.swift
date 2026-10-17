@@ -17,10 +17,11 @@ nonisolated struct AgentSignalAlertPolicy {
         let presentation: AgentSignalPresentation
         var qualificationKey: String? = nil
         var macOSActionable = false
+        var destination: AgentSignalDestination? = nil
         var eventKey: String? {
             presentation.eventID.map { event in
                 // Components are opaque and may contain separators.
-                (try? JSONEncoder().encode([identity, launch, event]).base64EncodedString()) ?? ""
+                (try? JSONEncoder().encode([identity, launch, String(destination?.generation ?? 0), destination?.nativeSessionID ?? "", event]).base64EncodedString()) ?? ""
             }
         }
     }

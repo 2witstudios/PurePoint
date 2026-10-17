@@ -1,6 +1,6 @@
 # Agent signal consumer verification
 
-Producer: `f9a91c595d175d7ba3fc214fec8c6527d0d1a305` (CORE), fixtures unchanged from early contract `9216ac5e82b545de34399237de0b8e8b40ef6c19`.
+Producer: `e9d8b6c4ea2f36682e23ec46c7b41c082b5d873a` (CORE), fixtures unchanged from early contract `9216ac5e82b545de34399237de0b8e8b40ef6c19`.
 
 Run from the repository root:
 
@@ -30,3 +30,9 @@ Owner Xcode/device checks NOT RUN here: complete app typecheck/link and XCTest; 
 ## Foundation dependency
 
 Present: macOS DaemonLifecycle and ProjectState status subscription; app-owned daemon shutdown in AppState; mobile ChatModel WebSocket, AgentControlModel foreground inventory and existing terminal controls. Missing: independent shared service acceptance, APNs registration/token lifecycle/entitlements, authenticated push transport/device revocation, durable service outbox/APNs provider and signing/device proof. None is implemented here. iOS badges reconcile only while the app runs in foreground; suspension clears the locally projected badge as stale. Locked/backgrounded/terminated iOS push remains unsupported and scope-gated. A desktop/foreground-phone consumer PR is partial delivery, not full plan acceptance.
+
+## Independent review corrections
+
+The initial snapshot review requested changes for scope loss in notification navigation and false presence behind Settings. Notifications now retain project (including machine), worktree, agent, launch, generation, native session and event through current-status revalidation and existing tab/leaf selection. Routing requires exactly one scoped surface and an unambiguous global workspace identity; duplicate adopted workspace IDs fail closed. Existing spawn selection remains unchanged. Error acknowledgment/foreground suppression requires the actual visible selected workspace, focused agent, active app/key window and Settings closed; library navigation does not count as terminal presence.
+
+`SignalRoutingChecks.swift` covers same agent ID on local/remote roots, absent/duplicate targets, cross-project and same-project/worktree workspace ID collisions, launch generation/session/worktree/expiry revalidation, hidden Settings/library presence and unchanged unseen Error badge. Owner acceptance must also exercise these cases through the built app; source tests do not satisfy that device gate.

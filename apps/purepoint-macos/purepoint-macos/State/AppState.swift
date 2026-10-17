@@ -52,6 +52,7 @@ final class AppState {
     var pendingSelectWorktreeId: String?
     /// Workspace to select once the sidebar has it — used to restore the last session.
     var pendingSelectWorkspaceId: String?
+    var pendingSignalDestination: AgentSignalDestination?
     var pendingFocusAgentId: String?
 
     @ObservationIgnored lazy var pointGuardChat = PiChatModel()
@@ -88,56 +89,96 @@ final class AppState {
     var signalClock = Date()
     @ObservationIgnored private lazy var signalNotifications = AgentSignalNotifications()
 
-    private func signalIdentity(projectID: String, agentID: String) -> String {
-        let data = (try? JSONEncoder().encode([projectID, agentID])) ?? Data()
+    var signalRoutingTargets: [AgentSignalRouting.Target] {
+        guard let registry else { return [] }
+        return registry.workspacesByProject.flatMap { projectID, workspaces in
+            workspaces.enumerated().flatMap { ordinal, workspace in
+                workspace.surfaces.map { entry in
+                    AgentSignalRouting.Target(projectID: projectID, worktreeID: workspace.container.worktreeId,
+                        workspaceID: workspace.id, agentID: entry.surface.content.agentId,
+                        leafID: entry.leafId, surfaceID: entry.surface.id, workspaceOrdinal: ordinal)
+                }
+            }
+        }
+    }
+
+    private var visibleSignalWorkspaceID: String? {
+        switch activeSidebarSelection {
+        case .workspace(let id): return id
+        case .nav(.dashboard) where registry?.activeWorkspace?.isPointGuard == true:
+            return registry?.activeWorkspaceId
+        default: return nil
+        }
+    }
+
+    private func signalIdentity(projectID: String, worktreeID: String?, agentID: String) -> String {
+        let data = (try? JSONEncoder().encode([projectID, worktreeID, agentID])) ?? Data()
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     func updateAgentSignals() {
         signalClock = Date()
         var foreground: String?
+        let targets = signalRoutingTargets
         let agents = managedProjects.flatMap { project in
             project.allAgents.map { agent -> AgentSignalAlertPolicy.Agent in
-                let identity = self.signalIdentity(projectID: project.projectId, agentID: agent.id)
-                if NSApplication.shared.isActive, NSApplication.shared.keyWindow != nil, activeProjectRoot == project.projectId,
-                    focusedAgentId == agent.id { foreground = identity }
+                let worktreeID = project.worktreeId(forAgentId: agent.id)
+                let identity = self.signalIdentity(projectID: project.projectId, worktreeID: worktreeID, agentID: agent.id)
+                let presentation = agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
+                    available: !project.isUnavailable && agent.status.isAlive && !agent.suspended,
+                    now: signalClock) ?? .unknown
+                let destination = agent.signal.flatMap { signal -> AgentSignalDestination? in
+                    guard let event = presentation.eventID else { return nil }
+                    let destination = AgentSignalDestination(projectID: project.projectId, worktreeID: worktreeID,
+                        agentID: agent.id, launchID: signal.identity.launch_id, generation: signal.identity.generation,
+                        nativeSessionID: signal.identity.native_session_id, eventID: event)
+                    return destination.matches(signal, now: signalClock)
+                        && AgentSignalRouting.target(for: destination, among: targets) != nil ? destination : nil
+                }
+                if let destination, let target = AgentSignalRouting.target(for: destination, among: targets),
+                    target.workspaceID == visibleSignalWorkspaceID,
+                    AgentSignalPresence.isVisible(appActive: NSApplication.shared.isActive,
+                        keyWindow: NSApplication.shared.keyWindow != nil, settingsVisible: showSettings,
+                        selectedWorkspaceID: visibleSignalWorkspaceID, activeWorkspaceID: registry?.activeWorkspaceId,
+                        focusedAgentID: focusedAgentId, activeProjectID: activeProjectRoot, destination: destination) {
+                    foreground = identity
+                }
                 return .init(identity: identity, launch: agent.signal?.identity.launch_id ?? "",
-                    presentation: agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
-                        available: !project.isUnavailable && agent.status.isAlive && !agent.suspended, now: signalClock) ?? .unknown,
-                    qualificationKey: agent.signal?.qualificationKey,
+                    presentation: presentation, qualificationKey: agent.signal?.qualificationKey,
                     macOSActionable: agent.signal?.pending_attention.contains {
-                        $0.event_id == agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
-                            available: !project.isUnavailable && agent.status.isAlive && !agent.suspended, now: signalClock).eventID && $0.actionability?.macos == true
-                    } ?? false)
+                        $0.event_id == presentation.eventID && $0.actionability?.macos == true
+                    } ?? false, destination: destination)
             }
         }
-        signalNotifications.open = { [weak self] destination in
-            guard let self,
-                let match = self.managedProjects.lazy.compactMap({ project -> (ProjectState, AgentModel)? in
-                    guard let agent = project.allAgents.first(where: {
-                        self.signalIdentity(projectID: project.projectId, agentID: $0.id) == destination.identity
-                    }) else { return nil }
-                    return (project, agent)
-                }).first else { return }
-            let (project, agent) = match
-            guard
-                agent.signal?.identity.launch_id == destination.launch,
-                agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
-                    available: !project.isUnavailable && agent.status.isAlive && !agent.suspended).eventID == destination.presentation.eventID
+        signalNotifications.open = { [weak self] notification in
+            guard let self, let destination = notification.destination,
+                let project = self.managedProjects.first(where: { $0.projectId == destination.projectID }),
+                let agent = project.agent(byId: destination.agentID),
+                destination.matches(agent.signal), agent.status.isAlive, !agent.suspended, !project.isUnavailable,
+                AgentSignalRouting.target(for: destination, among: self.signalRoutingTargets) != nil
             else { return }
             Task { [weak self, weak project] in
                 guard let self, let project,
                     let response = try? await project.client.send(.status(projectRoot: project.projectRoot)),
                     case .statusReport(let worktrees, let roots) = response else { return }
-                let current = roots.first(where: { $0.id == agent.id })?.signal
-                    ?? worktrees.lazy.compactMap { $0.agents[agent.id]?.signal }.first
-                guard current?.identity.launch_id == destination.launch,
-                    current?.presentation(agentID: agent.id, sessionID: agent.sessionId).eventID == destination.presentation.eventID,
-                    self.managedProjects.contains(where: { $0 === project }), !project.isUnavailable else { return }
-                // Navigation uses existing workspace/tab routing, never an input command.
+                let current: AgentSignalSnapshot?
+                if let worktreeID = destination.worktreeID {
+                    let matching = worktrees.filter { $0.id == worktreeID }
+                    guard matching.count == 1 else { return }
+                    guard let entry = matching[0].agents[destination.agentID], entry.status.isAlive,
+                        entry.suspended != true else { return }
+                    current = entry.signal
+                } else {
+                    let matching = roots.filter { $0.id == destination.agentID }
+                    guard matching.count == 1 else { return }
+                    guard matching[0].status == "running", !matching[0].suspended else { return }
+                    current = matching[0].signal
+                }
+                guard destination.matches(current),
+                    self.managedProjects.contains(where: { $0 === project }), !project.isUnavailable,
+                    AgentSignalRouting.target(for: destination, among: self.signalRoutingTargets) != nil else { return }
                 project.refresh()
-                self.activeProjectRoot = project.projectId
-                self.pendingSelectAgentId = agent.id
+                self.pendingSignalDestination = destination
                 NSApplication.shared.activate(ignoringOtherApps: true)
             }
         }

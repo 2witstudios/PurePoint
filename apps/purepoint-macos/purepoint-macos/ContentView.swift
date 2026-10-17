@@ -70,6 +70,9 @@ struct ContentView: View {
                 appState.activatePointGuardWorkspace()
             }
         }
+        .onChange(of: appState.pendingSignalDestination) { _, _ in
+            selectSignalDestination()
+        }
         .onChange(of: appState.pendingSelectAgentId) { _, agentId in
             guard agentId != nil else { return }
             selectPendingAgentIfReady()
@@ -115,6 +118,22 @@ struct ContentView: View {
         guard let workspaceId = appState.resolvePendingWorkspaceSelection() else { return }
         selection =
             registry.workspace(id: workspaceId)?.isPointGuard == true ? .nav(.dashboard) : .workspace(workspaceId)
+    }
+
+    private func selectSignalDestination() {
+        guard let destination = appState.pendingSignalDestination else { return }
+        // Consume once. Ambiguous or expired destinations never fall back to global ID lookup.
+        appState.pendingSignalDestination = nil
+        guard let project = appState.projectState(forRoot: destination.projectID),
+            let agent = project.agent(byId: destination.agentID),
+            destination.matches(agent.signal), agent.status.isAlive, !agent.suspended, !project.isUnavailable,
+            let target = AgentSignalRouting.target(for: destination, among: appState.signalRoutingTargets)
+        else { return }
+        appState.activeProjectRoot = destination.projectID
+        registry.selectTab(workspaceId: target.workspaceID, surfaceId: target.surfaceID)
+        registry.setFocus(workspaceId: target.workspaceID, leafId: target.leafID)
+        selection = registry.workspace(id: target.workspaceID)?.isPointGuard == true
+            ? .nav(.dashboard) : .workspace(target.workspaceID)
     }
 
     /// Resolve a just-spawned agent to the workspace that now holds it.
