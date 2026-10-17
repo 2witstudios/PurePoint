@@ -1,6 +1,5 @@
 //! Passive launch-bound observations. These facts never control a process or answer a request.
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 
 pub const SIGNAL_SCHEMA_VERSION: u32 = 1;
 
@@ -181,7 +180,7 @@ pub struct SignalReducer {
     snapshot: SignalSnapshot,
     limits: SignalLimits,
     sequence: Option<u64>,
-    event_ids: VecDeque<String>,
+    event_ids: Vec<String>,
     turn_id: Option<String>,
     resolved_request_ids: Vec<String>,
     closed_turn_ids: Vec<String>,
@@ -213,7 +212,7 @@ impl SignalReducer {
             },
             limits,
             sequence: None,
-            event_ids: VecDeque::new(),
+            event_ids: Vec::new(),
             turn_id: None,
             resolved_request_ids: Vec::new(),
             closed_turn_ids: Vec::new(),
@@ -275,6 +274,19 @@ impl SignalReducer {
                 ))
         {
             return ApplyResult::Ignored;
+        }
+        // Replay IDs are safety history, not a rolling cache. Once full, no new
+        // authoritative fact may mutate the snapshot without retaining its ID.
+        if self.event_ids.len() == self.limits.max_event_ids
+            && !matches!(
+                event.kind,
+                SignalEventKind::StopAttempt
+                    | SignalEventKind::AttentionIntent { .. }
+                    | SignalEventKind::RecoverableError
+            )
+        {
+            self.invalidate(ObservationState::Lost);
+            return ApplyResult::CapacityExceeded;
         }
         match &event.kind {
             SignalEventKind::Start => {
@@ -398,10 +410,7 @@ impl SignalReducer {
             SignalEventKind::Unknown => return ApplyResult::Invalid,
         }
         self.sequence = Some(event.sequence);
-        if self.event_ids.len() == self.limits.max_event_ids {
-            self.event_ids.pop_front();
-        }
-        self.event_ids.push_back(event.event_id.clone());
+        self.event_ids.push(event.event_id.clone());
         if !matches!(
             event.kind,
             SignalEventKind::Disconnected | SignalEventKind::Loss
@@ -525,7 +534,7 @@ mod tests {
             SignalLimits {
                 freshness_ms: 1000,
                 max_pending: 2,
-                max_event_ids: 4,
+                max_event_ids: 16,
             },
         )
         .unwrap()
@@ -907,7 +916,15 @@ mod tests {
     }
     #[test]
     fn given_replay_safety_capacity_exhaustion_should_require_new_launch_instead_of_eviction() {
-        let mut r = reducer();
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 4,
+            },
+        )
+        .unwrap();
         for seq in 1..=4 {
             assert_eq!(
                 r.apply(
@@ -1145,6 +1162,138 @@ mod tests {
         assert_eq!(snap.observation.state, ObservationState::Lost);
         assert_eq!(snap.activity, SignalActivity::Working);
         assert_eq!(snap.outcome, None);
+    }
+    #[test]
+    fn given_full_event_id_history_should_fail_closed_before_erasing_a_completed_outcome() {
+        // given: some hook sources expose no native turn ID, so event IDs are essential.
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 2,
+            },
+        )
+        .unwrap();
+        let mut start = event(1, SignalEventKind::Start);
+        start.turn_id = None;
+        let mut finish = event(
+            2,
+            SignalEventKind::Outcome {
+                kind: OutcomeKind::Completed,
+            },
+        );
+        finish.turn_id = None;
+        assert_eq!(r.apply(start.clone(), 100), ApplyResult::Applied);
+        assert_eq!(r.apply(finish, 101), ApplyResult::Applied);
+        let before = r.snapshot(102);
+        // when: a third distinct event would previously evict the original Start ID.
+        let mut resolution = event(
+            3,
+            SignalEventKind::AttentionResolved {
+                request_id: "request".into(),
+            },
+        );
+        resolution.turn_id = None;
+        assert_eq!(r.apply(resolution, 102), ApplyResult::CapacityExceeded);
+        // then: retained facts stay intact and unavailable, not silently replayable.
+        let lost = r.snapshot(102);
+        assert_eq!(lost.observation.state, ObservationState::Lost);
+        assert_eq!(lost.activity, before.activity);
+        assert_eq!(lost.outcome, before.outcome);
+        start.sequence = 4;
+        assert_eq!(r.apply(start, 103), ApplyResult::Ignored);
+        let after = r.snapshot(103);
+        assert_eq!(after.outcome, before.outcome);
+        assert_eq!(after.activity, SignalActivity::Idle);
+        assert_eq!(after.observation.state, ObservationState::Lost);
+    }
+    #[test]
+    fn given_full_event_id_history_should_ignore_duplicates_intent_and_invalid_input_without_losing_freshness()
+     {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 2,
+            },
+        )
+        .unwrap();
+        let mut start = event(1, SignalEventKind::Start);
+        start.turn_id = None;
+        let mut finish = event(
+            2,
+            SignalEventKind::Outcome {
+                kind: OutcomeKind::Completed,
+            },
+        );
+        finish.turn_id = None;
+        r.apply(start.clone(), 100);
+        r.apply(finish, 101);
+        let before = r.snapshot(102);
+        assert_eq!(
+            r.apply(event(3, SignalEventKind::StopAttempt), 102),
+            ApplyResult::Ignored
+        );
+        let mut weak = event(4, SignalEventKind::Start);
+        weak.confidence = SignalConfidence::Heuristic;
+        assert_eq!(r.apply(weak, 102), ApplyResult::Ignored);
+        start.sequence = 5;
+        assert_eq!(r.apply(start, 102), ApplyResult::Ignored);
+        assert_eq!(
+            r.apply(
+                event(
+                    100,
+                    SignalEventKind::AttentionResolved {
+                        request_id: String::new()
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Invalid
+        );
+        assert_eq!(r.snapshot(102), before);
+    }
+    #[test]
+    fn given_exhausted_event_id_history_should_not_regain_current_via_reconciliation() {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 1,
+            },
+        )
+        .unwrap();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        let before = r.snapshot(101);
+        let reconciled = event(
+            2,
+            SignalEventKind::Reconciled {
+                activity: SignalActivity::Idle,
+                pending_attention: vec![],
+                outcome: None,
+            },
+        );
+        assert_eq!(r.apply(reconciled, 101), ApplyResult::CapacityExceeded);
+        let retry = event(
+            3,
+            SignalEventKind::Reconciled {
+                activity: SignalActivity::Working,
+                pending_attention: vec![],
+                outcome: None,
+            },
+        );
+        assert_eq!(r.apply(retry, 102), ApplyResult::CapacityExceeded);
+        let after = r.snapshot(102);
+        assert_eq!(after.observation.state, ObservationState::Lost);
+        assert_eq!(after.activity, before.activity);
+        assert_eq!(after.outcome, before.outcome);
+        assert_eq!(
+            after.observation.last_received_at_ms,
+            before.observation.last_received_at_ms
+        );
     }
 }
 
