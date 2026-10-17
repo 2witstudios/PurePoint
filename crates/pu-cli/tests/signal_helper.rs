@@ -43,6 +43,20 @@ fn given_isolated_observer_should_relay_without_daemon_or_stdout() {
 #[test]
 fn given_dead_listener_or_open_stdin_should_exit_success_within_budget() {
     let home = tempfile::tempdir().unwrap();
+    // Match production readiness preflight; cold OS validation is recorded as
+    // an unproved invocation budget, not hidden inside a warm relay assertion.
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pu"))
+            .arg("__agent-signal")
+            .env_clear()
+            .env("HOME", home.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    );
     for open in [false, true] {
         let start = Instant::now();
         let mut child = Command::new(env!("CARGO_BIN_EXE_pu"))

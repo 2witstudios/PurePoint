@@ -294,15 +294,40 @@ impl Intake {
         let Some(session) = normalize::session(&self.tool, payload) else {
             return;
         };
+        let pi_sequence = if self.tool == "pi" {
+            if payload["native_pid"].as_u64() != Some(u64::from(self.pid)) {
+                return;
+            }
+            let Some(sequence) = payload["sequence"]
+                .as_u64()
+                .filter(|n| (1..=(1_u64 << 53) - 1).contains(n))
+            else {
+                return;
+            };
+            let Some(time) = payload["occurred_at_ms"].as_i64() else {
+                return;
+            };
+            let now = now_ms();
+            if time > now || now.saturating_sub(time) >= i64::from(limits().freshness_ms) {
+                return;
+            }
+            Some(sequence)
+        } else {
+            None
+        };
         let mut identity = state.identity.lock().unwrap();
         let mut reducer = state.reducer.lock().unwrap();
-        if reducer.is_none()
-            && self.tool == "pi"
-            && payload["native_pid"].as_u64() == Some(u64::from(self.pid))
-            && crate::read_source::valid_session_id(session)
-        {
+        if self.tool == "pi" && reducer.is_none() {
+            if payload["type"] != "observer_bound"
+                || pi_sequence != Some(1)
+                || !crate::read_source::valid_session_id(session)
+            {
+                return;
+            }
             identity.native_session_id = session.into();
             *reducer = SignalReducer::new(identity.clone(), limits()).ok();
+            self.previous_native = Some(1);
+            return;
         }
         if identity.native_session_id != session {
             return;
@@ -310,24 +335,47 @@ impl Intake {
         let Some(reducer) = reducer.as_mut() else {
             return;
         };
-        if let Some(native) = payload["sequence"].as_u64() {
+        if self.tool == "pi" {
+            // Unknown or malformed native events cannot poison the sequence watermark.
+            if normalize::kind(&self.tool, payload).is_none() {
+                return;
+            }
+            let native = pi_sequence.unwrap();
             if self.previous_native.is_some_and(|old| native <= old) {
                 return;
             }
-            if self.previous_native.is_some_and(|old| native != old + 1)
-                || (self.previous_native.is_none() && native != 1)
-            {
+            if self.previous_native.is_none_or(|old| native != old + 1) {
                 reducer.invalidate(ObservationState::Lost);
             }
             self.previous_native = Some(native);
         }
         if let Some((mut kind, confidence)) = normalize::kind(&self.tool, payload) {
             self.sequence += 1;
-            let event_id = payload["id"]
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("{}-{}", identity.launch_id, self.sequence));
-            let turn_id = payload["turn_id"].as_str().map(str::to_owned);
+            let event_id = if self.tool == "claude" {
+                format!(
+                    "{}:{}",
+                    identity.launch_id,
+                    normalize::claude_event_id(payload)
+                )
+            } else if self.tool == "pi" {
+                format!("{}-{}", identity.launch_id, pi_sequence.unwrap())
+            } else {
+                payload["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{}-{}",
+                            identity.launch_id,
+                            pi_sequence.unwrap_or(self.sequence)
+                        )
+                    })
+            };
+            let turn_id = if self.tool == "claude" {
+                normalize::native_turn(payload)
+            } else {
+                payload["turn_id"].as_str().map(str::to_owned)
+            };
             if let SignalEventKind::AttentionPending { request } = &mut kind {
                 request.event_id = event_id.clone();
                 request.turn_id = turn_id.clone();
@@ -397,7 +445,17 @@ mod tests {
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
-    fn send(socket: &std::os::unix::net::UnixDatagram, path: &Path, token: &str, payload: Value) {
+    fn send(
+        socket: &std::os::unix::net::UnixDatagram,
+        path: &Path,
+        token: &str,
+        mut payload: Value,
+    ) {
+        payload
+            .as_object_mut()
+            .unwrap()
+            .entry("occurred_at_ms")
+            .or_insert_with(|| now_ms().into());
         socket
             .send_to(
                 &serde_json::to_vec(&json!({"token":token,"payload":payload})).unwrap(),
@@ -450,7 +508,7 @@ mod tests {
         );
         settle().await;
         let state = states.lock().unwrap()["ag-test"].clone();
-        assert_eq!(state.snapshot().unwrap().activity, SignalActivity::Working);
+        assert_eq!(state.snapshot().unwrap().activity, SignalActivity::Unknown);
         assert!(updates.try_recv().is_ok());
         send(
             &socket,
@@ -594,6 +652,182 @@ mod tests {
             std::fs::read(tmp.path().join(".pu/agent-signals")).unwrap(),
             b"unavailable storage"
         );
+    }
+    fn intake(tool: &str) -> Intake {
+        Intake {
+            tool: tool.into(),
+            version: "fixture".into(),
+            pid: 123,
+            sequence: 0,
+            previous_native: None,
+        }
+    }
+    fn receive(intake: &mut Intake, state: &LaunchState, payload: Value) {
+        intake.receive(
+            state,
+            &serde_json::to_vec(&json!({"token":"private-fixture-token","payload":payload}))
+                .unwrap(),
+            "private-fixture-token",
+        );
+    }
+    #[tokio::test]
+    async fn given_rejectable_submit_after_completion_should_not_clear_confirmed_outcome() {
+        let (prepared, _tmp) = fixture("claude", Some("root"));
+        let identity = prepared.state.identity.lock().unwrap().clone();
+        let make = |sequence, kind| SignalEvent {
+            schema_version: 1,
+            tool: "qualified-fixture".into(),
+            tool_version: "1".into(),
+            adapter_version: "1".into(),
+            identity: identity.clone(),
+            parent_session_id: None,
+            turn_id: Some("A".into()),
+            event_id: format!("seed-{sequence}"),
+            sequence,
+            occurred_at_ms: now_ms(),
+            confidence: SignalConfidence::Authoritative,
+            kind,
+        };
+        {
+            let mut r = prepared.state.reducer.lock().unwrap();
+            let r = r.as_mut().unwrap();
+            r.apply(make(1, SignalEventKind::Start), now_ms());
+            r.apply(
+                make(
+                    2,
+                    SignalEventKind::Outcome {
+                        kind: OutcomeKind::Completed,
+                    },
+                ),
+                now_ms(),
+            );
+        }
+        let before = prepared.state.snapshot().unwrap();
+        let mut adapter = intake("claude");
+        adapter.sequence = 2;
+        for id in ["B", "B", "C"] {
+            receive(
+                &mut adapter,
+                &prepared.state,
+                json!({"session_id":"root","hook_event_name":"UserPromptSubmit","prompt_id":id}),
+            );
+        }
+        assert_eq!(prepared.state.snapshot().unwrap(), before);
+    }
+    #[tokio::test]
+    async fn given_native_claude_prompt_identity_should_reject_delayed_failure_and_deduplicate_raw_replay()
+     {
+        let (prepared, _tmp) = fixture("claude", Some("root"));
+        let mut adapter = intake("claude");
+        // Submission itself is weak; seed a separately confirmed current turn B.
+        let identity = prepared.state.identity.lock().unwrap().clone();
+        prepared
+            .state
+            .reducer
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .apply(
+                SignalEvent {
+                    schema_version: 1,
+                    tool: "qualified-fixture".into(),
+                    tool_version: "1".into(),
+                    adapter_version: "1".into(),
+                    identity,
+                    parent_session_id: None,
+                    turn_id: Some("B".into()),
+                    event_id: "real-start-B".into(),
+                    sequence: 1,
+                    occurred_at_ms: now_ms(),
+                    confidence: SignalConfidence::Authoritative,
+                    kind: SignalEventKind::Start,
+                },
+                now_ms(),
+            );
+        adapter.sequence = 1;
+        for prompt in [Some("A"), Some("A"), None] {
+            let mut payload = json!({"session_id":"root","hook_event_name":"StopFailure"});
+            if let Some(id) = prompt {
+                payload["prompt_id"] = id.into();
+            }
+            receive(&mut adapter, &prepared.state, payload);
+        }
+        let snapshot = prepared.state.snapshot().unwrap();
+        assert_eq!(snapshot.activity, SignalActivity::Working);
+        assert!(snapshot.outcome.is_none());
+        let raw = json!({"session_id":"root","hook_event_name":"StopFailure","prompt_id":"B"});
+        receive(&mut adapter, &prepared.state, raw.clone());
+        let first = prepared.state.snapshot().unwrap();
+        assert_eq!(
+            first.outcome.as_ref().unwrap().turn_id.as_deref(),
+            Some("B")
+        );
+        receive(&mut adapter, &prepared.state, raw);
+        assert_eq!(prepared.state.snapshot().unwrap(), first);
+    }
+    #[tokio::test]
+    async fn given_pi_frames_should_validate_registration_and_every_pid_sequence_timestamp_before_state_changes()
+     {
+        let (prepared, _tmp) = fixture("pi", None);
+        let mut adapter = intake("pi");
+        for ty in ["agent_start", "unknown", "observer_bound"] {
+            let mut payload = json!({"type":ty,"session_id":"root","native_pid":123,"sequence":1,"occurred_at_ms":now_ms()});
+            if ty == "observer_bound" {
+                payload.as_object_mut().unwrap().remove("sequence");
+            }
+            receive(&mut adapter, &prepared.state, payload);
+            assert!(prepared.state.snapshot().is_none());
+        }
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"observer_bound","session_id":"child","agent_id":"child","native_pid":123,"sequence":1,"occurred_at_ms":now_ms()}),
+        );
+        assert!(prepared.state.snapshot().is_none());
+        receive(
+            &mut adapter,
+            &prepared.state,
+            json!({"type":"observer_bound","session_id":"root","native_pid":123,"sequence":1,"occurred_at_ms":now_ms()}),
+        );
+        assert!(prepared.state.snapshot().is_some());
+        for (pid, sequence, time) in [
+            (Some(999), Some(2), Some(now_ms())),
+            (None, Some(2), Some(now_ms())),
+            (Some(123), None, Some(now_ms())),
+            (Some(123), Some(2), None),
+        ] {
+            let mut frame = json!({"type":"agent_start","session_id":"root"});
+            if let Some(v) = pid {
+                frame["native_pid"] = v.into();
+            }
+            if let Some(v) = sequence {
+                frame["sequence"] = v.into();
+            }
+            if let Some(v) = time {
+                frame["occurred_at_ms"] = v.into();
+            }
+            receive(&mut adapter, &prepared.state, frame);
+            assert_eq!(
+                prepared.state.snapshot().unwrap().observation.state,
+                ObservationState::Unavailable
+            );
+            assert_eq!(adapter.previous_native, Some(1));
+        }
+        for payload in [
+            json!({"type":"agent_start","session_id":"root","native_pid":123,"sequence":u64::MAX,"occurred_at_ms":now_ms()}),
+            json!({"type":"ui_prompt_start","kind":"input","request_id":"","session_id":"root","native_pid":123,"sequence":9,"occurred_at_ms":now_ms()}),
+            json!({"type":"agent_settled","outcome":"completed","session_id":"root","native_pid":123,"sequence":9,"occurred_at_ms":now_ms()}),
+        ] {
+            receive(&mut adapter, &prepared.state, payload);
+            assert_eq!(adapter.previous_native, Some(1));
+        }
+        let valid = json!({"type":"agent_start","session_id":"root","native_pid":123,"sequence":2,"occurred_at_ms":now_ms()});
+        receive(&mut adapter, &prepared.state, valid.clone());
+        let snapshot = prepared.state.snapshot().unwrap();
+        assert_eq!(snapshot.activity, SignalActivity::Working);
+        receive(&mut adapter, &prepared.state, valid);
+        assert_eq!(prepared.state.snapshot().unwrap(), snapshot);
     }
     #[test]
     fn given_private_token_should_compare_entire_equal_length_input() {

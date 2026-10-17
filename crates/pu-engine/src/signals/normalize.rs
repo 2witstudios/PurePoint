@@ -9,15 +9,30 @@ pub(super) fn kind(tool: &str, payload: &Value) -> Option<(SignalEventKind, Sign
         kind,
         request_id: payload["tool_use_id"].as_str().map(str::to_owned),
     };
+    if tool == "pi"
+        && matches!(
+            payload["type"].as_str(),
+            Some("ui_prompt_start" | "ui_prompt_end")
+        )
+        && !payload["request_id"]
+            .as_str()
+            .is_some_and(crate::read_source::valid_session_id)
+    {
+        return None;
+    }
     Some(match tool {
         "claude" => match hook {
-            "UserPromptSubmit" => (K::Start, C::Authoritative),
+            "UserPromptSubmit" => (K::Start, C::SourceConfirmed),
             "Stop" => (K::StopAttempt, C::SourceConfirmed),
             "StopFailure" => (
                 K::Outcome {
                     kind: OutcomeKind::Errored,
                 },
-                C::Authoritative,
+                if native_turn(payload).is_some() {
+                    C::Authoritative
+                } else {
+                    C::SourceConfirmed
+                },
             ),
             "PermissionRequest" => (intent(AttentionKind::Permission), C::SourceConfirmed),
             "PreToolUse" if payload["tool_name"] == "AskUserQuestion" => {
@@ -84,7 +99,8 @@ pub(super) fn kind(tool: &str, payload: &Value) -> Option<(SignalEventKind, Sign
             "observer_loss" => (K::Loss, C::Authoritative),
             "agent_start" => (K::Start, C::Authoritative),
             "agent_settled" => {
-                let outcome = if payload["aborted"] == true {
+                let aborted = payload["aborted"].as_bool()?;
+                let outcome = if aborted {
                     OutcomeKind::Interrupted
                 } else {
                     match payload["outcome"].as_str()? {
@@ -95,22 +111,36 @@ pub(super) fn kind(tool: &str, payload: &Value) -> Option<(SignalEventKind, Sign
                 };
                 (K::Outcome { kind: outcome }, C::Authoritative)
             }
-            "ui_prompt_start" => (
-                K::AttentionPending {
-                    request: pending(
-                        payload["request_id"].as_str()?,
-                        AttentionKind::Question,
-                        payload,
-                    ),
-                },
-                C::Authoritative,
-            ),
-            "ui_prompt_end" => (
-                K::AttentionResolved {
-                    request_id: payload["request_id"].as_str()?.into(),
-                },
-                C::Authoritative,
-            ),
+            "ui_prompt_start"
+                if matches!(
+                    payload["kind"].as_str(),
+                    Some("select" | "confirm" | "input" | "editor" | "custom")
+                ) =>
+            {
+                (
+                    K::AttentionPending {
+                        request: pending(
+                            payload["request_id"].as_str()?,
+                            AttentionKind::Question,
+                            payload,
+                        ),
+                    },
+                    C::Authoritative,
+                )
+            }
+            "ui_prompt_end"
+                if matches!(
+                    payload["kind"].as_str(),
+                    Some("select" | "confirm" | "input" | "editor" | "custom")
+                ) =>
+            {
+                (
+                    K::AttentionResolved {
+                        request_id: payload["request_id"].as_str()?.into(),
+                    },
+                    C::Authoritative,
+                )
+            }
             _ => return None,
         },
         "gemini" => match hook {
@@ -141,6 +171,28 @@ pub(super) fn kind(tool: &str, payload: &Value) -> Option<(SignalEventKind, Sign
         "cursor" if hook == "stop" => (K::StopAttempt, C::SourceConfirmed),
         _ => return None,
     })
+}
+
+/// Never attribute an uncorrelated outcome to the adapter's most recent turn.
+pub(super) fn native_turn(payload: &Value) -> Option<String> {
+    let turn = payload["turn_id"].as_str();
+    let prompt = payload["prompt_id"].as_str();
+    if matches!((turn,prompt),(Some(a),Some(b)) if a!=b) {
+        return None;
+    }
+    turn.or(prompt)
+        .filter(|id| crate::read_source::valid_session_id(id))
+        .map(str::to_owned)
+}
+pub(super) fn claude_event_id(payload: &Value) -> String {
+    // These hooks are one boundary per native prompt/request. Duplicate raw
+    // deliveries keep their identity; receipt order is not event identity.
+    serde_json::to_string(&serde_json::json!([
+        payload["hook_event_name"].as_str(),
+        native_turn(payload),
+        payload["tool_use_id"].as_str()
+    ]))
+    .unwrap()
 }
 
 fn pending(id: &str, kind: AttentionKind, payload: &Value) -> PendingAttention {

@@ -7,7 +7,7 @@ and `research_notes/Agent state signal discovery/`.
 
 | Runtime | Activation | Facts and qualification limits |
 | --- | --- | --- |
-| Claude Code 2.1.300 | Launch-only `--settings`; exact preassigned native session; skip if user already supplied `--settings` | Submit enters activity; StopFailure is API turn failure. Stop and permission/question/MCP intent do not establish completion or displayed pending input. Actual isolated print-JSON SessionStart/UserPromptSubmit captured with exact session via this CLI relay; other native scenarios not run. |
+| Claude Code 2.1.300 | Launch-only `--settings`; exact preassigned native session; skip if user already supplied `--settings` | Submit is source-confirmed entry only and cannot establish Working or clear an outcome. StopFailure is an API-failure boundary, authoritative only with its own native prompt/turn identity and a matching independently confirmed active turn. No authoritative Claude activity source is enabled; hook-only evidence therefore remains Unknown. Stop and permission/question/MCP intent do not establish completion or displayed pending input. Actual isolated print-JSON SessionStart/UserPromptSubmit captured with exact session via this CLI relay; other native scenarios not run. |
 | pi 1.3.0 | Launch-only `--extension`; first private frame must match owned PTY PID before exact native session binding | Native agent_start, final settled outcome, UI prompt pairs. Generic confirm means question, never permission. RPC confirm/select/input pairs observed with this extension/helper, no model credentials; model lifecycle/terminal notification routes not qualified. Native session changes within a process are not silently rebound. |
 | OpenCode v2.0.28 | **Unavailable in production**; passive plugin artifact/normalizer fixtures only | Pin 026b106bc5d41b679ffc413264229c340871e4d3. `packages/cli/src/services/server-connection.ts` reuses managed service; `server-process.ts` consumes OPENCODE_CONFIG_CONTENT only at server startup. Existing launch exposes no proved authenticated endpoint/root association for per-launch intake. No --standalone, server restart, global config mutation or private server added. Plugin setup uses existing `context.event.subscribe`; forms need not block work. |
 | Gemini 0.64.0 | Fixture-only normalizer | Pin 4a0749aceac5643e6f85a36d7420314d85e13b52. Start/end boundaries and ToolPermission subtype intents; no proved launch-only settings/exact root session installation or universal resolution/error hooks. |
@@ -32,9 +32,9 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   275–350ms **before helper entry**. Launch preparation preflights the helper with
   a 500ms timeout and disables observation for old/incompatible helpers. This
   warms normal hook use but cannot guarantee an OS scheduling/cold-start bound.
-  The proposed universal 100ms wall-clock hook budget is **not proved**. Native
+  The proposed universal 100ms wall-clock hook budget is **not proved**. Independent review also observed a first cold helper test exceeding 500ms (warm rerun passed); this remains a recorded qualification failure. Native
   Claude registration also sets a one-second hook timeout.
-* pi relay is nonawaited FIFO, at most 64 queued events/one child, 100ms child timer.
+* pi relay is nonawaited FIFO, at most 64 queued events/one child, 100ms child timer. Every pi frame must retain the owned PID, exact session, finite monotonic source sequence and current timestamp; only observer_bound sequence 1 can register it.
   Overflow/timer loss reports an explicit loss marker when possible; sequence gaps
   invalidate observation. Final dropped events cannot always be recovered; no
   heartbeat silently restores safety records. Freshness expires after 30s.

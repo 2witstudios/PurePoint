@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory(prefix='pu-pi-proof-', dir='/tmp') as directory
            'PI_CODING_AGENT_DIR': str(home / 'agent'),
            'PU_SIGNAL_SOCKET': str(root / 's'), 'PU_SIGNAL_TOKEN': 'isolated-proof',
            'PU_SIGNAL_HELPER': str(Path(args.pu).resolve())}
+    # Match launch readiness; this does not establish an OS scheduling bound.
+    subprocess.run([str(Path(args.pu).resolve()), "__agent-signal"], env=env, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=.5)
     version = subprocess.check_output([args.pi, '--version'], env=env, cwd=root, timeout=3).decode().strip()
     assert version == '1.3.0', version
     probe = root / 'probe.mjs'
