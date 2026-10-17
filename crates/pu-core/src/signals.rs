@@ -243,9 +243,11 @@ impl SignalReducer {
         if self.snapshot.observation.state == ObservationState::ProcessDead {
             return ApplyResult::Ignored;
         }
-        if matches!(event.kind, SignalEventKind::Unknown) {
+        // Validate the entire payload before committing any replay watermark or state.
+        if !valid_event_payload(&event, self.limits) {
             return ApplyResult::Invalid;
         }
+        // Known, valid but weak/intent observations consume ordering without renewing facts.
         self.sequence = Some(event.sequence);
         if event.confidence != SignalConfidence::Authoritative {
             return ApplyResult::Ignored;
@@ -317,12 +319,6 @@ impl SignalReducer {
                 });
             }
             SignalEventKind::AttentionPending { request } => {
-                if !valid_request(request)
-                    || request.event_id != event.event_id
-                    || request.turn_id != event.turn_id
-                {
-                    return ApplyResult::Invalid;
-                }
                 if self.resolved_request_ids.contains(&request.request_id) {
                     return ApplyResult::Ignored;
                 }
@@ -341,9 +337,6 @@ impl SignalReducer {
                 self.snapshot.pending_attention.push(request.clone());
             }
             SignalEventKind::AttentionResolved { request_id } => {
-                if !valid_text(request_id) {
-                    return ApplyResult::Invalid;
-                }
                 if !self.resolved_request_ids.contains(request_id) {
                     if self.resolved_request_ids.len() >= self.limits.max_event_ids {
                         self.invalidate(ObservationState::Lost);
@@ -362,23 +355,34 @@ impl SignalReducer {
                 pending_attention,
                 outcome,
             } => {
-                if pending_attention.len() > self.limits.max_pending
-                    || pending_attention.iter().any(|r| !valid_request(r))
-                    || pending_attention.iter().enumerate().any(|(i, r)| {
-                        pending_attention[..i]
-                            .iter()
-                            .any(|p| p.request_id == r.request_id)
-                    })
-                    || outcome.as_ref().is_some_and(|o| {
-                        o.kind == OutcomeKind::Unknown
-                            || !valid_text(&o.event_id)
-                            || o.confidence != SignalConfidence::Authoritative
-                            || o.turn_id != event.turn_id
-                    })
-                    || (*activity == SignalActivity::Working && outcome.is_some())
+                if (*activity == SignalActivity::Working || self.turn_id != event.turn_id)
+                    && event
+                        .turn_id
+                        .as_ref()
+                        .is_some_and(|id| self.closed_turn_ids.contains(id))
                 {
-                    return ApplyResult::Invalid;
+                    return ApplyResult::Ignored;
                 }
+                let mut to_close = Vec::new();
+                if self.turn_id != event.turn_id
+                    && let Some(id) = &self.turn_id
+                {
+                    to_close.push(id.clone());
+                }
+                if outcome.is_some()
+                    && let Some(id) = &event.turn_id
+                {
+                    to_close.push(id.clone());
+                }
+                let to_close: Vec<_> = to_close
+                    .into_iter()
+                    .filter(|id| !self.closed_turn_ids.contains(id))
+                    .collect();
+                if self.closed_turn_ids.len() + to_close.len() > self.limits.max_event_ids {
+                    self.invalidate(ObservationState::Lost);
+                    return ApplyResult::CapacityExceeded;
+                }
+                self.closed_turn_ids.extend(to_close);
                 self.turn_id = event.turn_id.clone();
                 self.snapshot.activity = *activity;
                 self.resolved_request_ids
@@ -464,6 +468,43 @@ fn valid_request(r: &PendingAttention) -> bool {
         && r.kind != AttentionKind::Unknown
         && r.confidence == SignalConfidence::Authoritative
         && r.turn_id.as_ref().is_none_or(|s| valid_text(s))
+}
+
+fn valid_event_payload(event: &SignalEvent, limits: SignalLimits) -> bool {
+    match &event.kind {
+        SignalEventKind::Unknown => false,
+        SignalEventKind::AttentionPending { request } => {
+            valid_request(request)
+                && request.event_id == event.event_id
+                && request.turn_id == event.turn_id
+        }
+        SignalEventKind::AttentionResolved { request_id } => valid_text(request_id),
+        SignalEventKind::AttentionIntent { kind, request_id } => {
+            *kind != AttentionKind::Unknown && request_id.as_ref().is_none_or(|s| valid_text(s))
+        }
+        SignalEventKind::Outcome { kind } => *kind != OutcomeKind::Unknown,
+        SignalEventKind::Reconciled {
+            activity,
+            pending_attention,
+            outcome,
+        } => {
+            pending_attention.len() <= limits.max_pending
+                && pending_attention.iter().all(valid_request)
+                && !pending_attention.iter().enumerate().any(|(i, r)| {
+                    pending_attention[..i]
+                        .iter()
+                        .any(|p| p.request_id == r.request_id)
+                })
+                && outcome.as_ref().is_none_or(|o| {
+                    o.kind != OutcomeKind::Unknown
+                        && valid_text(&o.event_id)
+                        && o.confidence == SignalConfidence::Authoritative
+                        && o.turn_id == event.turn_id
+                        && *activity == SignalActivity::Idle
+                })
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -894,6 +935,216 @@ mod tests {
             ApplyResult::CapacityExceeded
         );
         assert_eq!(r.snapshot(100).observation.state, ObservationState::Lost);
+    }
+    #[test]
+    fn given_reconciled_new_turn_should_reject_delayed_superseded_start_and_outcome() {
+        // given
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        let mut reconcile = event(
+            2,
+            SignalEventKind::Reconciled {
+                activity: SignalActivity::Working,
+                pending_attention: vec![],
+                outcome: None,
+            },
+        );
+        reconcile.turn_id = Some("turn-2".into());
+        // when
+        assert_eq!(r.apply(reconcile, 101), ApplyResult::Applied);
+        let before = r.snapshot(102);
+        // then
+        assert_eq!(
+            r.apply(event(3, SignalEventKind::Start), 102),
+            ApplyResult::Ignored
+        );
+        assert_eq!(
+            r.apply(
+                event(
+                    4,
+                    SignalEventKind::Outcome {
+                        kind: OutcomeKind::Completed
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(102), before);
+    }
+    #[test]
+    fn given_closed_turn_should_reject_reconciliation_reviving_it_as_working() {
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        r.apply(
+            event(
+                2,
+                SignalEventKind::Outcome {
+                    kind: OutcomeKind::Completed,
+                },
+            ),
+            101,
+        );
+        let before = r.snapshot(102);
+        assert_eq!(
+            r.apply(
+                event(
+                    3,
+                    SignalEventKind::Reconciled {
+                        activity: SignalActivity::Working,
+                        pending_attention: vec![],
+                        outcome: None
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(102), before);
+    }
+    #[test]
+    fn given_invalid_high_sequence_payload_should_preserve_watermark_for_later_valid_completion() {
+        // given
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        let before = r.snapshot(101);
+        // when
+        assert_eq!(
+            r.apply(
+                event(
+                    100,
+                    SignalEventKind::AttentionResolved {
+                        request_id: String::new()
+                    }
+                ),
+                101
+            ),
+            ApplyResult::Invalid
+        );
+        // then
+        assert_eq!(r.snapshot(101), before);
+        assert_eq!(
+            r.apply(
+                event(
+                    2,
+                    SignalEventKind::Outcome {
+                        kind: OutcomeKind::Completed
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Applied
+        );
+        assert_eq!(
+            r.snapshot(102).outcome.unwrap().kind,
+            OutcomeKind::Completed
+        );
+    }
+    #[test]
+    fn given_closed_superseded_turn_should_reject_terminal_reconciliation_for_it() {
+        let mut r = reducer();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        let mut next = event(2, SignalEventKind::Start);
+        next.turn_id = Some("turn-2".into());
+        r.apply(next, 101);
+        let before = r.snapshot(102);
+        let outcome = SignalOutcome {
+            kind: OutcomeKind::Completed,
+            event_id: "old-terminal".into(),
+            turn_id: Some("turn-1".into()),
+            confidence: SignalConfidence::Authoritative,
+        };
+        assert_eq!(
+            r.apply(
+                event(
+                    3,
+                    SignalEventKind::Reconciled {
+                        activity: SignalActivity::Idle,
+                        pending_attention: vec![],
+                        outcome: Some(outcome)
+                    }
+                ),
+                102
+            ),
+            ApplyResult::Ignored
+        );
+        assert_eq!(r.snapshot(102), before);
+    }
+    #[test]
+    fn given_invalid_pending_or_reconciliation_payload_should_not_consume_sequence() {
+        let mut malformed = request(100, "request", AttentionKind::Question);
+        if let SignalEventKind::AttentionPending { request } = &mut malformed.kind {
+            request.event_id = "mismatch".into();
+        }
+        let bad_outcome = SignalOutcome {
+            kind: OutcomeKind::Completed,
+            event_id: "terminal".into(),
+            turn_id: Some("other-turn".into()),
+            confidence: SignalConfidence::Authoritative,
+        };
+        let invalid = [
+            malformed,
+            event(
+                100,
+                SignalEventKind::Reconciled {
+                    activity: SignalActivity::Idle,
+                    pending_attention: vec![],
+                    outcome: Some(bad_outcome),
+                },
+            ),
+        ];
+        for bad in invalid {
+            let mut r = reducer();
+            r.apply(event(1, SignalEventKind::Start), 100);
+            let before = r.snapshot(101);
+            assert_eq!(r.apply(bad, 101), ApplyResult::Invalid);
+            assert_eq!(r.snapshot(101), before);
+            assert_eq!(
+                r.apply(
+                    event(
+                        2,
+                        SignalEventKind::Outcome {
+                            kind: OutcomeKind::Completed
+                        }
+                    ),
+                    102
+                ),
+                ApplyResult::Applied
+            );
+        }
+    }
+    #[test]
+    fn given_reconciliation_exhausting_closed_turn_capacity_should_fail_closed_without_replacing_facts()
+     {
+        let mut r = SignalReducer::new(
+            identity(),
+            SignalLimits {
+                freshness_ms: 1000,
+                max_pending: 2,
+                max_event_ids: 1,
+            },
+        )
+        .unwrap();
+        r.apply(event(1, SignalEventKind::Start), 100);
+        let mut e = event(
+            2,
+            SignalEventKind::Reconciled {
+                activity: SignalActivity::Idle,
+                pending_attention: vec![],
+                outcome: Some(SignalOutcome {
+                    kind: OutcomeKind::Completed,
+                    event_id: "end-2".into(),
+                    turn_id: Some("turn-2".into()),
+                    confidence: SignalConfidence::Authoritative,
+                }),
+            },
+        );
+        e.turn_id = Some("turn-2".into());
+        assert_eq!(r.apply(e, 101), ApplyResult::CapacityExceeded);
+        let snap = r.snapshot(101);
+        assert_eq!(snap.observation.state, ObservationState::Lost);
+        assert_eq!(snap.activity, SignalActivity::Working);
+        assert_eq!(snap.outcome, None);
     }
 }
 
