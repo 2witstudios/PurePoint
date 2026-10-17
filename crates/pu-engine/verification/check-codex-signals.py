@@ -30,7 +30,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request = json.loads(body)
         (root / 'request-metadata.json').write_text(json.dumps({'tools': [t.get('name') for t in request.get('tools', [])]}))
         time.sleep(2)
-        if mode == 'error':
+        if mode == 'error' and not (root / 'resume-provider-success').exists():
             self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()

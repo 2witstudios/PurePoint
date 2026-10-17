@@ -326,6 +326,7 @@ impl Engine {
             worktree_id.clone(),
             &agent_type,
             session_id.as_deref(),
+            false,
             &command,
             &mut args,
             &mut env,

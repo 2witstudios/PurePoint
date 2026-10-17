@@ -20,6 +20,35 @@ pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 // per-poll I/O budget separate from this finite record-assembly limit.
 const MAX_NATIVE_RECORD_BYTES: usize = 32 * 1024 * 1024;
 
+struct NativeFileBoundary {
+    offset: u64,
+    inode: (u64, u64),
+}
+
+fn native_file_boundary(path: &Path) -> Option<NativeFileBoundary> {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let before = file.metadata().ok()?;
+    if !before.is_file() || before.uid() != unsafe { libc::geteuid() } || before.len() == 0 {
+        return None;
+    }
+    file.seek(SeekFrom::End(-1)).ok()?;
+    let mut last = [0];
+    file.read_exact(&mut last).ok()?;
+    if last != [b'\n'] || file.metadata().ok()?.len() != before.len() {
+        return None;
+    }
+    Some(NativeFileBoundary {
+        offset: before.len(),
+        inode: (before.dev(), before.ino()),
+    })
+}
+
 pub(crate) struct LaunchState {
     reducer: Mutex<Option<SignalReducer>>,
     identity: Mutex<SignalIdentity>,
@@ -148,13 +177,16 @@ pub(crate) async fn prepare(
     worktree: Option<String>,
     tool: &str,
     session: Option<&str>,
+    resuming: bool,
     command: &str,
     args: &mut Vec<String>,
     env: &mut Vec<(String, String)>,
 ) -> Option<Prepared> {
     env.retain(|(key, _)| !key.starts_with("PU_SIGNAL_"));
     if tool == "opencode" && Path::new(command).file_name()?.to_str()? == tool {
-        let mut prepared = opencode::prepare(project, agent, worktree, session?, args, env)?;
+        let mut prepared =
+            opencode::prepare_launch(project, cwd, agent, worktree, session?, args, env, resuming)
+                .await?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
             qualification::load(project, tool, "2.0.28", "1", args).await;
         return Some(prepared);
@@ -167,7 +199,8 @@ pub(crate) async fn prepare(
         return Some(prepared);
     }
     if tool == "claude" && Path::new(command).file_name()?.to_str()? == tool {
-        let mut prepared = claude::prepare(project, agent, worktree, session?, env)?;
+        let mut prepared =
+            claude::prepare_launch(project, cwd, agent, worktree, session?, env, resuming).await?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
             qualification::load(project, tool, "2.1.300", "2", args).await;
         return Some(prepared);
@@ -807,6 +840,7 @@ mod tests {
             None,
             "pi",
             Some("native-exact"),
+            false,
             bin.join("pi").to_str().unwrap(),
             &mut args,
             &mut env,
@@ -836,6 +870,7 @@ mod tests {
             None,
             "claude",
             Some("native"),
+            false,
             "claude",
             &mut args,
             &mut env,

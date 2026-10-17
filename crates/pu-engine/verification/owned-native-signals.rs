@@ -397,7 +397,7 @@ fn main() {
             return Err(format!("spawn failed: {response:?}"));
         };
         let result = async {
-            stages(&e, &project, &id, dir, tool, if scenario == "resume_pending" { "permission_suspend" } else { scenario }).await?;
+            stages(&e, &project, &id, dir, tool, if scenario == "resume_pending" { "permission_suspend" } else if scenario == "resume_error" { "error" } else { scenario }).await?;
             if scenario == "worktree" {
                 let signal = capture(&e, &project, dir, "worktree", &id)
                     .await?
@@ -407,7 +407,26 @@ fn main() {
                 }
             }
 
-            if matches!(scenario.as_str(), "resume" | "resume_pending") {
+            if scenario == "session_switch" {
+                let before = capture(&e, &project, dir, "before-native-new", &id).await?.ok_or("missing original root")?;
+                raw(&e, &id, b"/new").await?;
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                raw(&e, &id, b"\r").await?;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let after = capture(&e, &project, dir, "after-native-new", &id).await?;
+                if after.as_ref().is_some_and(|s| s.is_current(chrono::Utc::now().timestamp_millis()) || s.identity != before.identity) {
+                    return Err("native session switch retained current old facts or silently rebound ownership".into());
+                }
+                raw(&e, &id, b"Native next session test").await?;
+                tokio::time::sleep(Duration::from_millis(350)).await;
+                raw(&e, &id, b"\r").await?;
+                tokio::time::sleep(Duration::from_secs(7)).await;
+                let after = capture(&e, &project, dir, "new-session-outcome", &id).await?;
+                if after.as_ref().is_some_and(|s| s.is_current(chrono::Utc::now().timestamp_millis()) || s.identity != before.identity) {
+                    return Err("new native root outcome was attributed to the old owned launch".into());
+                }
+            }
+            if matches!(scenario.as_str(), "resume" | "resume_pending" | "resume_error") {
                 let before = capture(&e, &project, dir, "before-suspend", &id)
                     .await?
                     .ok_or("no initial signal")?;
@@ -444,13 +463,14 @@ fn main() {
                 if !matches!(resumed, Response::ResumeResult { .. }) {
                     return Err(format!("resume failed: {resumed:?}"));
                 }
-                if scenario == "resume_pending" {
-                    tokio::time::sleep(Duration::from_secs(6)).await;
-                    let startup = capture(&e, &project, dir, "resume-before-submit", &id).await?.ok_or("resumed native idle unavailable")?;
-                    save(dir, "resume-startup-logs.json", &e.handle_request(Request::Logs { agent_id: id.clone(), tail: 65536 }).await)?;
-                    if !startup.is_current(chrono::Utc::now().timestamp_millis()) || startup.activity != SignalActivity::Idle || !startup.pending_attention.is_empty() || startup.outcome.is_some() {
-                        return Err("resumed launch revived historical work/request/outcome before new input".into());
-                    }
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                let startup = capture(&e, &project, dir, "resume-before-submit", &id).await?.ok_or("resumed native idle unavailable")?;
+                save(dir, "resume-startup-logs.json", &e.handle_request(Request::Logs { agent_id: id.clone(), tail: 65536 }).await)?;
+                if !startup.is_current(chrono::Utc::now().timestamp_millis()) || startup.activity != SignalActivity::Idle || !startup.pending_attention.is_empty() || startup.outcome.is_some() {
+                    return Err("resumed launch revived historical work/request/outcome before new input".into());
+                }
+                if scenario == "resume_error" {
+                    std::fs::write(dir.join("resume-provider-success"), b"fixture recovery").map_err(|error|error.to_string())?;
                 }
                 stages(&e, &project, &id, dir, tool, scenario).await?;
                 let after = capture(&e, &project, dir, "after-resume", &id)

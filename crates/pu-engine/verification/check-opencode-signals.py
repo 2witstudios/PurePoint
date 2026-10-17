@@ -33,7 +33,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             (root / 'native-tool-results.json').write_text(json.dumps(tool_results))
         (root / 'request-metadata.json').write_text(json.dumps({'path': self.path, 'model': request.get('model'), 'tools': [x.get('function', {}).get('name') for x in request.get('tools', [])]}))
         time.sleep(2)
-        if mode == 'error':
+        if mode == 'error' and not (root / 'resume-provider-success').exists():
             self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()

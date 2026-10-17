@@ -42,7 +42,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 question = {'file_path': str(repo / 'noise.png')}
             events = [events[0], ('content_block_start', {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'tool_use', 'id': 'toolu_native_question', 'name': tool_name, 'input': {}}}), ('content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(question)}}), ('content_block_stop', {'type': 'content_block_stop', 'index': 0}), ('message_delta', {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use', 'stop_sequence': None}, 'usage': {'output_tokens': 50}}), ('message_stop', {'type': 'message_stop'})]
         time.sleep(2)
-        if args.scenario == 'error':
+        if args.scenario == 'error' and not (root / 'resume-provider-success').exists():
             self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()

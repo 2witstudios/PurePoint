@@ -5,15 +5,15 @@ from pathlib import Path
 from signal_probe_support import source_state_sha256, stop_process
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('tool', choices=['claude', 'codex', 'opencode'])
-parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'worktree', 'question_hold', 'image'])
+parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'resume_error', 'session_switch', 'worktree', 'question_hold', 'image'])
 parser.add_argument('cli')
 parser.add_argument('--runner', required=True, help='Exact candidate owned-native-signals.rs executable; compile against cargo compiler-artifact paths')
 args = parser.parse_args()
-if args.scenario == 'resume_pending' and args.tool != 'codex':
-    parser.error('resume_pending checks the Codex interrupted-history regression')
+if args.scenario in ['resume_pending', 'session_switch'] and args.tool != 'codex':
+    parser.error('resume_pending/session_switch check Codex history/ownership regressions')
 if args.scenario == 'image' and args.tool == 'opencode':
     parser.error('image checks the Claude/Codex native JSONL record regression')
-mode = {'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
+mode = {'resume_error': 'error', 'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
 runner_path = Path(args.runner).resolve()
 provenance = json.loads((runner_path.parent / 'provenance.json').read_text())
 assert provenance['runner_sha256'] == hashlib.sha256(runner_path.read_bytes()).hexdigest(), 'Runner differs from recorded compiler artifacts'
@@ -78,6 +78,10 @@ try:
     print('RUNNER_EXIT', code, flush=True)
     print((root / 'runner.log').read_text()[-3000:], flush=True)
     assert code == 0, root
+    if args.scenario == 'session_switch':
+        sessions = {value['payload']['id'] for path in (config / 'sessions').rglob('*.jsonl') for value in [json.loads(path.read_text().splitlines()[0])] if value.get('type') == 'session_meta' and value['payload'].get('source') == 'cli' and value['payload'].get('cwd') == str(repo)}
+        assert len(sessions) == 2, 'Native /new did not actually create a distinct root session'
+        (root / 'native-session-switch-checks.json').write_text(json.dumps({'passed': True, 'native_root_ids': sorted(sessions)}, indent=2))
     if args.scenario == 'image':
         directory = config / ('projects' if args.tool == 'claude' else 'sessions')
         records = [line for path in directory.rglob('*.jsonl') for line in path.read_text().splitlines()]

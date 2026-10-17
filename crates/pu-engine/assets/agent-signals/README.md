@@ -73,8 +73,12 @@ Mac/iOS acceptance. All production attention notifications remain gated.
 Native observers publish semantic changes immediately. Timestamp-only refreshes
 are coalesced into a 10-second heartbeat, below the consumer's 30-second lease;
 qualification withdrawal and disconnection still publish immediately. Unbound
-Codex discovery retries wait at least 2 seconds; a native Working transition
+Codex source discovery/ownership checks wait at least 2 seconds; a native Working transition
 allows an immediate retry so a newly started turn need not wait for idle backoff.
+Bound Codex launches recheck that the owned process still holds the same root,
+not merely that the old file still exists. A different root latches observation
+lost without rebinding the native session; a temporarily unavailable check
+withdraws observation until the original root is proved again.
 
 Codex checks the executable's exact version once before launch with a 500ms
 deadline and bounded output, using a disposable HOME/CODEX_HOME because native
@@ -85,6 +89,17 @@ records can establish that launch's work or requests; the new owned PID must
 independently hold the same root file. This prevents an interrupted historical
 turn from appearing Working while the resumed terminal is idle. An unavailable,
 partial or replaced source disables observation without preventing native resume.
+
+Claude resume uses the same pre-spawn inode/complete-line EOF boundary, with no
+accepted turn, pending requests, replay history or terminal outcome inherited.
+This also avoids exhausting the new launch's bounded history on old sessions.
+OpenCode resume samples its existing service before spawn (500ms preparation
+deadline) and captures the native `time.idle` terminal revision. Native v2.0.28
+advances this revision strictly, even for same-millisecond terminals and clock
+rollback. Unchanged prior outcomes are suppressed; a new active execution raises
+the minimum terminal revision, so its predecessor cannot reappear when active
+clears. If the prelaunch service view is unavailable, the first complete native
+view establishes the baseline rather than claiming an old outcome as new work.
 
 ## Checks and reproduction
 
@@ -116,6 +131,10 @@ turn completes without inheriting the previous process's work or request.
 The `image` case reads a real noisy PNG through native Read/view_image, requires
 actual image content in native JSONL and completion through the public Engine;
 Claude additionally requires a native record larger than the former 1MiB limit.
+Every resume case checks idle/Unknown with no inherited outcome before new input;
+`resume_error` checks a prior API error followed by resume and a successful turn.
+Codex `session_switch` exercises actual `/new`, requires a distinct native root
+and verifies old facts are unavailable without changing PurePoint session ownership.
 
 Use `claude` or `opencode` with its pinned absolute binary path for the other
 adapters. The driver verifies runner provenance, uses fresh private HOME/config
@@ -221,7 +240,7 @@ No real credentials/config are copied, and no diagnostic logging is enabled.
 The native OSC state is consumed in order; buffer eviction permanently loses that
 launch's observation. All tool-call candidates count toward ambiguity, even unknown
 tool kinds. Rollout identity/history loss is latched, with at most 64 pending calls,
-512 closed/superseded turn IDs, 8MiB read per poll and1MiB per record. Native event IDs
+512 closed/superseded turn IDs, 8MiB read per poll and 32MiB per assembled record. Native event IDs
 come from the ordered stream offset/turn/call IDs, never receipt time. Observation
 samples the existing buffer every 250ms without writing input or adding a PTY reader.
 

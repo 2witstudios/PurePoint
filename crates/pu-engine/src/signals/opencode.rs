@@ -12,6 +12,104 @@ use std::time::Duration;
 
 pub(super) struct Observer {
     registration: PathBuf,
+    outcome_fence: OutcomeFence,
+}
+
+struct NativeObservation {
+    snapshot: SignalSnapshot,
+    idle_revision: Option<i64>,
+}
+
+struct OutcomeFence {
+    minimum_idle: Option<i64>,
+    high_water: Option<i64>,
+    initialized: bool,
+}
+impl Default for OutcomeFence {
+    fn default() -> Self {
+        Self {
+            minimum_idle: None,
+            high_water: None,
+            initialized: true,
+        }
+    }
+}
+impl OutcomeFence {
+    fn resumed(revision: Option<i64>, initialized: bool) -> Self {
+        Self {
+            minimum_idle: revision,
+            high_water: revision,
+            initialized,
+        }
+    }
+    fn apply(&mut self, value: NativeObservation) -> Option<SignalSnapshot> {
+        // Native projector.ts advances time.idle strictly on every terminal,
+        // including same-millisecond completion and wall-clock rollback. It is
+        // a native revision, not our receipt timestamp or metadata updated time.
+        if value.idle_revision < self.high_water {
+            return None;
+        }
+        self.high_water = value.idle_revision;
+        if !self.initialized {
+            self.minimum_idle = value.idle_revision;
+            self.initialized = true;
+        }
+        let mut snapshot = value.snapshot;
+        if snapshot.activity == SignalActivity::Working {
+            self.minimum_idle = self.minimum_idle.max(value.idle_revision);
+        }
+        if snapshot.outcome.is_some() && value.idle_revision <= self.minimum_idle {
+            snapshot.outcome = None;
+            if let Some(evidence) = snapshot.evidence.as_mut() {
+                evidence.event_id = format!(
+                    "opencode-state:{}:idle:{}",
+                    snapshot.identity.native_session_id, value.idle_revision?
+                );
+            }
+        }
+        Some(snapshot)
+    }
+}
+
+fn client() -> Option<reqwest::Client> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_millis(300))
+        .timeout(Duration::from_secs(1))
+        .build()
+        .ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn prepare_launch(
+    project: &str,
+    cwd: &str,
+    agent: &str,
+    worktree: Option<String>,
+    session: &str,
+    args: &[String],
+    env: &[(String, String)],
+    resuming: bool,
+) -> Option<Prepared> {
+    let mut prepared = prepare(project, agent, worktree, session, args, env)?;
+    if resuming {
+        let identity = prepared.state.identity.lock().unwrap().clone();
+        let Some(super::NativeObserver::OpenCode(observer)) = prepared.observer.as_mut() else {
+            return None;
+        };
+        let baseline = tokio::time::timeout(Duration::from_millis(500), async {
+            poll(&client()?, &observer.registration, &identity, cwd).await
+        })
+        .await
+        .ok()
+        .flatten();
+        observer.outcome_fence = match baseline {
+            Some(value) => OutcomeFence::resumed(value.idle_revision, true),
+            None => OutcomeFence::resumed(None, false),
+        };
+    }
+    Some(prepared)
 }
 
 pub(super) fn prepare(
@@ -62,6 +160,7 @@ pub(super) fn prepare(
         output: None,
         observer: Some(super::NativeObserver::OpenCode(Observer {
             registration: state_home.join("opencode/service.json"),
+            outcome_fence: OutcomeFence::default(),
         })),
     })
 }
@@ -135,7 +234,7 @@ async fn poll(
     path: &Path,
     identity: &SignalIdentity,
     cwd: &str,
-) -> Option<SignalSnapshot> {
+) -> Option<NativeObservation> {
     let path = path.to_owned();
     let r = tokio::task::spawn_blocking(move || registration(&path))
         .await
@@ -158,7 +257,10 @@ async fn poll(
     {
         return None;
     }
-    snapshot(identity, cwd, &info, &after, &permissions, &forms, now_ms())
+    Some(NativeObservation {
+        snapshot: snapshot(identity, cwd, &info, &after, &permissions, &forms, now_ms())?,
+        idle_revision: info["data"]["time"]["idle"].as_i64(),
+    })
 }
 
 impl Observer {
@@ -171,13 +273,8 @@ impl Observer {
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
     ) {
         tokio::spawn(async move {
-            let Ok(client) = reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(Duration::from_millis(300))
-                .timeout(Duration::from_secs(1))
-                .build()
-            else {
+            let mut outcome_fence = self.outcome_fence;
+            let Some(client) = client() else {
                 return;
             };
             let mut interval = tokio::time::interval(Duration::from_millis(500));
@@ -200,6 +297,7 @@ impl Observer {
                     .await
                     .ok()
                     .flatten()
+                    .and_then(|value| outcome_fence.apply(value))
                 };
                 let dead = dead || exit.borrow().is_some() || exit.has_changed().is_err();
                 {
@@ -343,6 +441,68 @@ mod tests {
     fn info() -> Value {
         json!({"data":{"id":"ses_owned","location":{"directory":"/owned"},"time":{"created":1,"updated":2,"idle":2},"outcome":"succeeded"}})
     }
+    fn observed(idle: i64, running: bool) -> NativeObservation {
+        let mut native = info();
+        native["data"]["time"]["idle"] = json!(idle);
+        NativeObservation {
+            snapshot: snapshot(
+                &identity(),
+                "/owned",
+                &native,
+                &if running {
+                    json!({"data":{"ses_owned":{"type":"running"}}})
+                } else {
+                    json!({"data":{}})
+                },
+                &json!({"data":[]}),
+                &json!({"data":[]}),
+                100,
+            )
+            .unwrap(),
+            idle_revision: Some(idle),
+        }
+    }
+    #[test]
+    fn given_resumed_opencode_should_require_a_new_native_terminal_revision() {
+        let mut fence = OutcomeFence::resumed(Some(2), true);
+        assert!(fence.apply(observed(2, false)).unwrap().outcome.is_none());
+        // The native projector advances time.idle strictly on every terminal,
+        // even same-millisecond completions and wall-clock rollback.
+        assert_eq!(
+            fence
+                .apply(observed(3, false))
+                .unwrap()
+                .outcome
+                .unwrap()
+                .kind,
+            OutcomeKind::Completed
+        );
+        assert_eq!(
+            fence.apply(observed(3, true)).unwrap().activity,
+            SignalActivity::Working
+        );
+        assert!(
+            fence.apply(observed(3, false)).unwrap().outcome.is_none(),
+            "prior outcome must not reappear after a new execution"
+        );
+        assert!(fence.apply(observed(4, false)).unwrap().outcome.is_some());
+        assert!(
+            fence.apply(observed(2, false)).is_none(),
+            "reverted native counter is unavailable, not a new terminal"
+        );
+    }
+    #[test]
+    fn given_missing_prelaunch_opencode_view_should_baseline_the_first_complete_observation() {
+        let mut fence = OutcomeFence::resumed(None, false);
+        assert!(fence.apply(observed(50, false)).unwrap().outcome.is_none());
+        assert!(fence.apply(observed(50, false)).unwrap().outcome.is_none());
+        assert!(fence.apply(observed(51, false)).unwrap().outcome.is_some());
+        let mut fresh = OutcomeFence::default();
+        assert!(
+            fresh.apply(observed(2, false)).unwrap().outcome.is_some(),
+            "new root sessions have no inherited outcome"
+        );
+    }
     fn write_registration(path: &Path, url: &str, version: &str) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::write(
@@ -445,8 +605,11 @@ mod tests {
             .build()
             .unwrap();
         let current = poll(&client, &path, &identity(), "/owned").await.unwrap();
-        assert_eq!(current.pending_attention.len(), 2);
-        assert_eq!(current.outcome.unwrap().kind, OutcomeKind::Completed);
+        assert_eq!(current.snapshot.pending_attention.len(), 2);
+        assert_eq!(
+            current.snapshot.outcome.unwrap().kind,
+            OutcomeKind::Completed
+        );
         assert_eq!(observed.lock().unwrap().len(), 8);
         native.lock().unwrap()["data"]["location"]["directory"] = "/foreign".into();
         assert!(poll(&client, &path, &identity(), "/owned").await.is_none());

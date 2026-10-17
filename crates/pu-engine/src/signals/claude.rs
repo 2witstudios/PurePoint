@@ -13,6 +13,47 @@ use std::time::Duration;
 pub(super) struct Observer {
     not_before_ms: i64,
     env: Vec<(String, String)>,
+    initial_transcript: Box<Transcript>,
+}
+
+pub(super) async fn prepare_launch(
+    project: &str,
+    cwd: &str,
+    agent: &str,
+    worktree: Option<String>,
+    session: &str,
+    env: &[(String, String)],
+    resuming: bool,
+) -> Option<Prepared> {
+    let mut prepared = prepare(project, agent, worktree, session, env)?;
+    if resuming {
+        let (cwd, session, env) = (cwd.to_owned(), session.to_owned(), env.to_vec());
+        let boundary = tokio::time::timeout(
+            Duration::from_millis(500),
+            tokio::task::spawn_blocking(move || {
+                let binding = crate::read_source::resolve_exact(
+                    pu_core::read::Runtime::Claude,
+                    &session,
+                    &cwd,
+                    &env,
+                )
+                .ok()?;
+                super::native_file_boundary(&binding.path)
+            }),
+        )
+        .await
+        .ok()?
+        .ok()??;
+        let Some(NativeObserver::Claude(observer)) = prepared.observer.as_mut() else {
+            return None;
+        };
+        observer.initial_transcript = Box::new(Transcript {
+            offset: boundary.offset,
+            inode: Some(boundary.inode),
+            ..Transcript::default()
+        });
+    }
+    Some(prepared)
 }
 
 pub(super) fn prepare(
@@ -50,6 +91,7 @@ pub(super) fn prepare(
         observer: Some(NativeObserver::Claude(Observer {
             not_before_ms: now_ms(),
             env: env.to_vec(),
+            initial_transcript: Box::default(),
         })),
     })
 }
@@ -136,7 +178,7 @@ impl Observer {
     }
 
     pub(super) fn activate(
-        self,
+        mut self,
         state: Weak<LaunchState>,
         project: String,
         cwd: String,
@@ -145,7 +187,7 @@ impl Observer {
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
     ) {
         tokio::spawn(async move {
-            let mut transcript = Transcript::default();
+            let mut transcript = *std::mem::take(&mut self.initial_transcript);
             let mut pending_read: Option<tokio::task::JoinHandle<(Transcript, bool)>> = None;
             let mut started = None;
             let mut publication = super::NativePublication::default();
@@ -708,6 +750,94 @@ mod tests {
         assert!(reader.unchanged(&path));
     }
 
+    #[tokio::test]
+    async fn given_resumed_claude_history_should_not_replay_outcomes_or_exhaust_new_launch_history()
+    {
+        use std::io::Write;
+        for (turns, errored) in [(1, false), (1, true), (600, false)] {
+            let root = tempfile::tempdir().unwrap();
+            let folder = root.path().join("projects/-owned");
+            std::fs::create_dir_all(&folder).unwrap();
+            let path = folder.join("native.jsonl");
+            let mut file = std::fs::File::create(&path).unwrap();
+            for index in 0..turns {
+                let id = format!("old{index}");
+                writeln!(
+                    file,
+                    "{}",
+                    record("user", &id, json!({"content":"old prompt"}))
+                )
+                .unwrap();
+                let mut end = record(
+                    "assistant",
+                    &format!("end{index}"),
+                    json!({"stop_reason":"end_turn","content":[]}),
+                );
+                end["parentUuid"] = json!(id);
+                end["isApiErrorMessage"] = json!(errored);
+                writeln!(file, "{end}").unwrap();
+            }
+            let env = vec![
+                ("HOME".into(), root.path().to_string_lossy().into_owned()),
+                (
+                    "CLAUDE_CONFIG_DIR".into(),
+                    root.path().to_string_lossy().into_owned(),
+                ),
+            ];
+            let prepared = prepare_launch(
+                root.path().to_str().unwrap(),
+                "/owned",
+                "agent",
+                None,
+                "native",
+                &env,
+                true,
+            )
+            .await
+            .unwrap();
+            let identity = prepared.state.identity.lock().unwrap().clone();
+            let Some(NativeObserver::Claude(mut observer)) = prepared.observer else {
+                panic!("missing Claude observer");
+            };
+            observer
+                .initial_transcript
+                .read(&path, &identity, "/owned")
+                .unwrap();
+            let idle = observer
+                .initial_transcript
+                .snapshot(&identity, &json!({"status":"idle"}), 100)
+                .unwrap();
+            assert!(
+                idle.outcome.is_none(),
+                "old completion must not move into a new launch"
+            );
+            assert!(observer.initial_transcript.turn.is_none());
+            assert!(observer.initial_transcript.closed_turns.is_empty());
+            writeln!(
+                file,
+                "{}",
+                record("user", "new", json!({"content":"current prompt"}))
+            )
+            .unwrap();
+            let mut end = record(
+                "assistant",
+                "current-end",
+                json!({"stop_reason":"end_turn","content":[]}),
+            );
+            end["parentUuid"] = json!("new");
+            writeln!(file, "{end}").unwrap();
+            observer
+                .initial_transcript
+                .read(&path, &identity, "/owned")
+                .unwrap();
+            let current = observer
+                .initial_transcript
+                .snapshot(&identity, &json!({"status":"idle"}), 101)
+                .unwrap();
+            assert_eq!(current.outcome.unwrap().turn_id.as_deref(), Some("new"));
+        }
+    }
+
     #[test]
     fn exact_root_request_identity_and_response_are_retained() {
         let mut t = Transcript::default();
@@ -1001,6 +1131,7 @@ mod tests {
         .unwrap();
         let observer = Observer {
             not_before_ms: 0,
+            initial_transcript: Box::default(),
             env: vec![
                 ("HOME".into(), root.path().to_string_lossy().into_owned()),
                 (

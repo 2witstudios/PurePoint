@@ -18,6 +18,14 @@ pub(super) struct Observer {
     initial_cursor: Cursor,
     initial_session: Option<String>,
 }
+
+fn same_native_root(bound: &Binding, current: &Binding) -> bool {
+    bound.version == current.version
+        && bound.runtime == current.runtime
+        && bound.session_id == current.session_id
+        && bound.path == current.path
+        && bound.cwd == current.cwd
+}
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn prepare_launch(
     project: &str,
@@ -153,24 +161,10 @@ struct Cursor {
 }
 impl Cursor {
     fn at_end(path: &Path) -> Option<Self> {
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-            .ok()?;
-        let meta = file.metadata().ok()?;
-        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.len() == 0 {
-            return None;
-        }
-        file.seek(SeekFrom::End(-1)).ok()?;
-        let mut last = [0];
-        file.read_exact(&mut last).ok()?;
-        if last != [b'\n'] || file.metadata().ok()?.len() != meta.len() {
-            return None;
-        }
+        let boundary = super::native_file_boundary(path)?;
         Some(Self {
-            offset: meta.len(),
-            inode: Some((meta.dev(), meta.ino())),
+            offset: boundary.offset,
+            inode: Some(boundary.inode),
             ..Self::default()
         })
     }
@@ -248,6 +242,7 @@ impl Observer {
             let mut offset = 0;
             let mut lost = false;
             let mut binding: Option<Binding> = None;
+            let mut binding_current = false;
             let mut next_discovery = tokio::time::Instant::now();
             let mut publication = super::NativePublication::default();
             let mut tick = tokio::time::interval(Duration::from_millis(250));
@@ -270,8 +265,8 @@ impl Observer {
                 let result = if dead || lost {
                     None
                 } else {
-                    if binding.is_none() && tokio::time::Instant::now() >= next_discovery {
-                        binding = tokio::time::timeout(
+                    if tokio::time::Instant::now() >= next_discovery {
+                        let observed = tokio::time::timeout(
                             Duration::from_secs(2),
                             crate::read_source::discover_codex(pid, &cwd),
                         )
@@ -279,13 +274,24 @@ impl Observer {
                         .ok()
                         .and_then(Result::ok);
                         next_discovery = tokio::time::Instant::now() + Duration::from_secs(2);
-                        if binding.as_ref().is_some_and(|b| {
-                            self.expected.as_ref().is_some_and(|id| id != &b.session_id)
-                        }) {
-                            lost = true;
+                        binding_current = false;
+                        if let Some(observed) = observed {
+                            if binding
+                                .as_ref()
+                                .is_some_and(|bound| !same_native_root(bound, &observed))
+                                || self
+                                    .expected
+                                    .as_ref()
+                                    .is_some_and(|id| id != &observed.session_id)
+                            {
+                                lost = true;
+                            } else {
+                                binding = Some(observed);
+                                binding_current = true;
+                            }
                         }
                     }
-                    if let Some(binding) = binding.as_ref().filter(|_| !lost) {
+                    if let Some(binding) = binding.as_ref().filter(|_| !lost && binding_current) {
                         let path = binding.path.clone();
                         let dir = cwd.clone();
                         let old = std::mem::take(&mut cursor);
@@ -650,6 +656,26 @@ mod tests {
     use serde_json::json;
     fn meta() -> Value {
         json!({"type":"session_meta","payload":{"id":"native","cwd":"/owned","source":"cli","cli_version":"0.163.0"}})
+    }
+    #[test]
+    fn given_owned_cli_switches_native_session_should_not_keep_the_old_root_binding() {
+        let bound = Binding {
+            version: 1,
+            runtime: pu_core::read::Runtime::Codex,
+            session_id: "old".into(),
+            path: "/owned/rollout-old.jsonl".into(),
+            cwd: "/owned".into(),
+        };
+        assert!(same_native_root(&bound, &bound));
+        let current = Binding {
+            session_id: "new".into(),
+            path: "/owned/rollout-new.jsonl".into(),
+            ..bound.clone()
+        };
+        assert!(
+            !same_native_root(&bound, &current),
+            "an owned process may hold a different root after native /new; never silently rebind or retain old facts"
+        );
     }
     fn event(kind: &str, turn: &str) -> Value {
         json!({"type":"event_msg","payload":{"type":kind,"turn_id":turn,"root_turn_id":turn}})
