@@ -1,0 +1,108 @@
+{
+  "type": "status_report",
+  "agents": [
+    {
+      "id": "ag-root",
+      "name": "Root",
+      "agent_type": "fixture",
+      "status": "running",
+      "pid": 42,
+      "exit_code": null,
+      "idle_seconds": 0,
+      "worktree_id": null,
+      "started_at": "2026-10-17T00:00:00Z",
+      "session_id": "native-root",
+      "suspended": false,
+      "signal": {
+        "schema_version": 1,
+        "identity": {
+          "agent_id": "ag-root",
+          "worktree_id": null,
+          "launch_id": "launch-root-1",
+          "generation": 1,
+          "native_session_id": "native-root"
+        },
+        "activity": "working",
+        "pending_attention": [
+          {
+            "request_id": "request-1",
+            "kind": "permission",
+            "event_id": "event-permission-1",
+            "turn_id": "turn-1",
+            "confidence": "authoritative",
+            "actionability": {
+              "macos": false,
+              "ios": false
+            }
+          }
+        ],
+        "outcome": null,
+        "observation": {
+          "state": "current",
+          "last_received_at_ms": 1792195200000,
+          "expires_at_ms": 1792195230000
+        },
+        "evidence": {
+          "tool": "fixture",
+          "tool_version": "1.0",
+          "adapter_version": "1",
+          "confidence": "authoritative",
+          "event_id": "event-permission-1"
+        }
+      }
+    }
+  ],
+  "worktrees": [
+    {
+      "id": "wt-1",
+      "name": "Worktree",
+      "path": "/fixture/project/.pu/worktrees/wt-1",
+      "branch": "pu/fixture",
+      "baseBranch": "main",
+      "status": "active",
+      "agents": {
+        "ag-worker": {
+          "id": "ag-worker",
+          "name": "Worker",
+          "agentType": "fixture",
+          "status": "running",
+          "prompt": null,
+          "startedAt": "2026-10-17T00:00:00Z",
+          "sessionId": "native-worker",
+          "suspended": false,
+          "signal": {
+            "schema_version": 1,
+            "identity": {
+              "agent_id": "ag-worker",
+              "worktree_id": "wt-1",
+              "launch_id": "launch-worker-1",
+              "generation": 1,
+              "native_session_id": "native-worker"
+            },
+            "activity": "idle",
+            "pending_attention": [],
+            "outcome": {
+              "kind": "completed",
+              "event_id": "event-completed-1",
+              "turn_id": "turn-1",
+              "confidence": "authoritative"
+            },
+            "observation": {
+              "state": "current",
+              "last_received_at_ms": 1792195200000,
+              "expires_at_ms": 1792195230000
+            },
+            "evidence": {
+              "tool": "fixture",
+              "tool_version": "1.0",
+              "adapter_version": "1",
+              "confidence": "authoritative",
+              "event_id": "event-completed-1"
+            }
+          }
+        }
+      },
+      "createdAt": "2026-10-17T00:00:00Z"
+    }
+  ]
+}
