@@ -246,7 +246,9 @@ struct AgentTerminalView: UIViewRepresentable {
             let delta = pan.translation(in: terminal).y
             let ticks = min(8, Int(abs(delta) / 12))
             guard ticks > 0 else { return }
-            pan.setTranslation(CGPoint(x: 0, y: delta.truncatingRemainder(dividingBy: 12)), in: terminal)
+            // Keep movement beyond this batch's cap for the next update.
+            let consumed = CGFloat(ticks) * 12 * (delta > 0 ? 1 : -1)
+            pan.setTranslation(CGPoint(x: 0, y: delta - consumed), in: terminal)
             let point = pan.location(in: terminal)
             let x = max(0, min(term.cols - 1, Int(point.x / terminal.bounds.width * CGFloat(term.cols))))
             let y = max(0, min(term.rows - 1, Int((point.y - terminal.contentOffset.y) / terminal.bounds.height * CGFloat(term.rows))))
