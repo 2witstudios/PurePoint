@@ -286,8 +286,15 @@ extension AgentControlScenarios {
         let wheel = "\u{1b}[<64;1;1M"
         model.sendScroll(Array(wheel.utf8)[...], screen: model.screenToken)
         try await wait { bridge.operations.contains { $0.0 == "terminal.raw" } }
-        try check(bridge.operations.last(where: { $0.0 == "terminal.raw" })?.1["data"] as? String == wheel,
+        try check(bridge.operations.last(where: { $0.0 == "terminal.raw" })?.1["data"] as? String == Data(wheel.utf8).base64EncodedString(),
                   "Control scroll must forward the wheel sequence without enabling raw typing")
+        let legacyWheel: [UInt8] = [0x1b, 0x5b, 0x4d, 0x60, 0xa0, 0x80]
+        model.sendScroll(legacyWheel[...], screen: model.screenToken)
+        try await wait { bridge.operations.filter { $0.0 == "terminal.raw" }.count == 2 }
+        let raw = bridge.operations.last(where: { $0.0 == "terminal.raw" })!.1
+        try check(raw["encoding"] as? String == "base64" &&
+                  Data(base64Encoded: raw["data"] as? String ?? "") == Data(legacyWheel),
+                  "Legacy mouse bytes above ASCII must reach the bridge unchanged")
         bridge.holdInventory = true
         let held = Task { await model.refresh() }
         try await wait { bridge.inventories.count == 1 }

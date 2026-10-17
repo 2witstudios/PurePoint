@@ -160,14 +160,26 @@ struct DaemonClientParseTests {
         // Dragging over a URL selects text without launching it.
         view.handleMouseEvent(event(.leftMouseDown))
         view.handleMouseEvent(event(.leftMouseDragged))
-        view.handleMouseEvent(event(.leftMouseUp))
+        #expect(!view.handleMouseEvent(event(.leftMouseUp)))
         #expect(opened.count == 2)
+
+        // SwiftTerm's Command-mouseUp callback must not open a dragged OSC link.
+        view.terminalView.feed(text: "\u{1b}[H\u{1b}]8;;https://example.com/target\u{1b}\\Link label\u{1b}]8;;\u{1b}\\")
+        view.handleMouseEvent(event(.leftMouseDown, flags: .command))
+        view.handleMouseEvent(event(.leftMouseDragged, flags: .command))
+        #expect(!view.handleMouseEvent(event(.leftMouseUp, flags: .command)))
+        view.requestOpenLink(source: view.terminalView, link: "https://example.com/target", params: [:])
+        #expect(opened.count == 2)
+        view.handleMouseEvent(event(.leftMouseDown, flags: .command))
+        #expect(view.handleMouseEvent(event(.leftMouseUp, flags: .command)))
+        #expect(opened.last?.absoluteString == "https://example.com/target")
+        #expect(opened.count == 3)
 
         // Option explicitly restores the remote TUI's mouse handling.
         view.handleMouseEvent(event(.leftMouseDown, flags: .option))
         #expect(view.terminalView.allowMouseReporting)
         view.handleMouseEvent(event(.leftMouseUp, flags: .option))
-        #expect(opened.count == 2)
+        #expect(opened.count == 3)
 
         // A local fullscreen TUI keeps its existing selection behavior.
         view.usesRemoteHost = false

@@ -15,6 +15,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
     private var clickedLink: URL?
     private var linkDragStarted = false
+    private var suppressDraggedLink = false
     private(set) var localGridSize = (cols: 120, rows: 40)
     private var reportedGridSize: (cols: Int, rows: Int)?
     private var lastPhysicalFont: NSFont?
@@ -154,7 +155,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         NSPasteboard.general.setData(content, forType: .string)
     }
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        guard let url = URL(string: link), url.scheme != nil else { return }
+        guard !suppressDraggedLink, let url = URL(string: link), url.scheme != nil else { return }
         openLink(url)
     }
 
@@ -288,6 +289,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             nativeDragActive = false
             clickedLink = nil
             linkDragStarted = false
+            suppressDraggedLink = false
             guard let window = event.window,
                 let hit = window.contentView?.hitTest(event.locationInWindow),
                 hit === terminalView || hit.isDescendant(of: terminalView)
@@ -307,18 +309,22 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             guard nativeDragActive else { return false }
             updateDragAutoscroll(for: event)
         case .leftMouseUp:
-            let handledLink = clickedLink != nil
+            // SwiftTerm must finish selection on mouse-up, but its Command-click
+            // callback does not distinguish a completed drag from a click.
+            suppressDraggedLink = nativeDragActive && linkDragStarted
+            var handledLink = false
             if let clickedLink, event.window === terminalView.window,
                 !linkDragStarted,
                 clickedLink == link(at: terminalView.convert(event.locationInWindow, from: nil))
             {
                 openLink(clickedLink)
+                handledLink = true
             }
             clickedLink = nil
             nativeDragActive = false
             stopDragAutoscroll()
             // SwiftTerm also opens OSC links on Command-mouseUp. Consume a
-            // locally handled link gesture so it cannot launch twice (or after a drag).
+            // opened link so it cannot launch twice. Drags must finish in SwiftTerm.
             return handledLink
         default:
             break
