@@ -181,6 +181,7 @@ impl Observer {
                 return;
             };
             let mut interval = tokio::time::interval(Duration::from_millis(500));
+            let mut publication = super::NativePublication::default();
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {_=interval.tick()=>{},_=exit.changed()=>{}}
@@ -213,7 +214,9 @@ impl Observer {
                         };
                     }
                 }
-                if let Some(tx) = channels.lock().await.get(&project) {
+                if publication.should_publish(state.snapshot(), tokio::time::Instant::now())
+                    && let Some(tx) = channels.lock().await.get(&project)
+                {
                     let _ = tx.send(());
                 }
                 if dead {

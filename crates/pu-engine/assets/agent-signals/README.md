@@ -47,23 +47,29 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   settings/auth copies, user-home config writes, daemon binary installs, app builds,
   new outbox/gateway/APNs or execution-mode changes.
 * OpenCode polling runs independently of the PTY and never replies to requests.
-  Native HTTP requests disable proxies/redirects, cap each response at1MiB,
-  have a1s request timeout and2s overall snapshot deadline, and poll at500ms.
+  Native HTTP requests disable proxies/redirects, cap each response at 1MiB,
+  have a 1s request timeout and 2s overall snapshot deadline, and poll at 500ms.
   A failed snapshot withdraws observation; a subsequent complete native snapshot
   can reconcile it. Owned PTY exit irreversibly withdraws that launch's observer.
-  Each snapshot holds at most64 pending IDs and refers only to the assigned root.
+  Each snapshot holds at most 64 pending IDs and refers only to the assigned root.
 
 * Claude observation runs outside the PTY. It issues one native version query at launch, then reads only that owned PID's registry record; it never launches list subprocesses or scans all agents per poll.
-  A native poll has a5s overall deadline. Registry reads reject symlinks, nonregular/foreign-owned or group/world-writable files and data over16KiB; exact PID/domain/session/cwd/kind/entrypoint/protocol/version/start epoch are required. The one-shot version command is bounded to1MiB.
-  Transcript reads are incremental, at most8MiB per poll/1MiB per record, and retain
+  A native poll has a 5s overall deadline. Registry reads reject symlinks, nonregular/foreign-owned or group/world-writable files and data over 16KiB; exact PID/domain/session/cwd/kind/entrypoint/protocol/version/start epoch are required. The one-shot version command is bounded to 1MiB.
+  Transcript reads are incremental, at most 8MiB per poll/1MiB per record, and retain
   only IDs, tool categories and structural outcomes. Existing histories larger than
   the per-poll budget are caught up incrementally. A timed-out Claude poll retains
   its single in-flight reader and private replay/settlement state. Native registry is sampled on
   both sides, and transcript inode/length must still match afterward. Truncation,
   replacement or invalid root history latches observation unavailable for the launch.
-  Up to64 unresolved tool IDs are retained. Queries do not change user settings,
+  Up to 64 unresolved tool IDs are retained. Queries do not change user settings,
   input, resume, process/session ownership or permission policy. No hook/helper is
   needed for Claude. Initial idle without a terminal result does not invent Finished.
+
+Native observers publish semantic changes immediately. Timestamp-only refreshes
+are coalesced into a 10-second heartbeat, below the consumer's 30-second lease;
+qualification withdrawal and disconnection still publish immediately. Unbound
+Codex discovery retries wait at least 2 seconds; a native Working transition
+allows an immediate retry so a newly started turn need not wait for idle backoff.
 
 ## Checks and reproduction
 
@@ -76,13 +82,20 @@ python3 crates/pu-engine/tests/agent_signals_pi_harness.py \
 ```
 
 For the public Engine route, compile a standalone runner from exact Cargo artifact
-paths, then select one native tool and scenario (question, permission, error, interrupt, permission_deny, question_cancel, resume or worktree):
+paths, then select one native tool and scenario (question, permission, error, interrupt, permission_deny, question_cancel, resume, worktree or question_hold):
 
 ```sh
 python3 crates/pu-engine/verification/build-engine-signals-probe.py /tmp/pp-signals-proof
 python3 crates/pu-engine/verification/check-engine-signals.py codex question \
   /absolute/path/to/codex --runner /tmp/pp-signals-proof/owned-native-signals
 ```
+
+`question_hold` retains an actual question for 35 seconds and verifies bounded
+subscription heartbeats keep the last delivered snapshot current before answering.
+The provenance guard includes tracked and untracked source/workspace inputs, and
+refuses a build whose source changes during compilation. Resume has a 200-second
+wrapper budget; cleanup escalates a stuck runner without skipping native-service
+and fixture-server teardown.
 
 Use `claude` or `opencode` with its pinned absolute binary path for the other
 adapters. The driver verifies runner provenance, uses fresh private HOME/config
@@ -187,10 +200,10 @@ stream-mirroring test seam is not a public Engine Spawn/PTY-host or app-route pr
 No real credentials/config are copied, and no diagnostic logging is enabled.
 The native OSC state is consumed in order; buffer eviction permanently loses that
 launch's observation. All tool-call candidates count toward ambiguity, even unknown
-tool kinds. Rollout identity/history loss is latched, with at most64 pending calls,
-512 closed/superseded turn IDs,8MiB read per poll and1MiB per record. Native event IDs
+tool kinds. Rollout identity/history loss is latched, with at most 64 pending calls,
+512 closed/superseded turn IDs, 8MiB read per poll and1MiB per record. Native event IDs
 come from the ordered stream offset/turn/call IDs, never receipt time. Observation
-samples the existing buffer every250ms without writing input or adding a PTY reader.
+samples the existing buffer every 250ms without writing input or adding a PTY reader.
 
 ### OpenCode native observer reproduction
 
@@ -229,7 +242,7 @@ provisional assistant end_turn, and correlates subsequent records through the
 current native parent chain. Root replay, delayed older-branch error and closed-turn
 busy regressions pass. The isolated native rejection probes prove no new Working,
 no invented outcome, and no revival/replacement of a previously completed event.
-Parent lineage is bounded4096 IDs per turn;512 superseded roots are tombstoned,
+Parent lineage is bounded 4096 IDs per turn; 512 superseded roots are tombstoned,
 without eviction. Exceeding a source history bound withdraws observation.
 
 The default-environment Claude question probe also passes without

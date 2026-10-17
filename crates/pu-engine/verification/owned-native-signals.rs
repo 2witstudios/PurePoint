@@ -170,6 +170,42 @@ async fn stages(
                             })
                             .await,
                         )?;
+                        if scenario == "question_hold" {
+                            let mut receiver = e.subscribe_status(project).await;
+                            let began = Instant::now();
+                            let mut delivered = s.clone();
+                            let mut notifications = 0;
+                            while began.elapsed() < Duration::from_secs(35) {
+                                if let Ok(Ok(())) =
+                                    tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+                                        .await
+                                {
+                                    notifications += 1;
+                                    delivered = capture(e, project, dir, "held-delivered", id)
+                                        .await?
+                                        .ok_or("missing held snapshot")?;
+                                }
+                                save(
+                                    dir,
+                                    "status-heartbeat.json",
+                                    &json!({"elapsed_ms":began.elapsed().as_millis(),"notifications":notifications,"last_delivered":delivered.observation}),
+                                )?;
+                                if !delivered.is_current(chrono::Utc::now().timestamp_millis()) {
+                                    return Err(
+                                        "subscribed question lease expired without heartbeat"
+                                            .into(),
+                                    );
+                                }
+                                if notifications > 6 {
+                                    return Err(
+                                        "unchanged native state flooded status subscribers".into()
+                                    );
+                                }
+                            }
+                            if notifications < 2 {
+                                return Err("no recurring lease renewal delivered".into());
+                            }
+                        }
                         if negative {
                             if scenario == "permission_deny" && tool == "claude" {
                                 raw(e, id, b"\x1b[B\x1b[B").await?;

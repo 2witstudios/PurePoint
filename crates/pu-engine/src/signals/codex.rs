@@ -132,6 +132,8 @@ impl Observer {
             let mut offset = 0;
             let mut lost = false;
             let mut binding: Option<Binding> = None;
+            let mut next_discovery = tokio::time::Instant::now();
+            let mut publication = super::NativePublication::default();
             let mut tick = tokio::time::interval(Duration::from_millis(250));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -143,11 +145,16 @@ impl Observer {
                 if gap {
                     lost = true;
                 }
+                let previous_status = protocol.status;
                 protocol.feed(&bytes);
+                // A real native turn start should not wait for an idle retry.
+                if protocol.status == Some(Status::Working) && previous_status != protocol.status {
+                    next_discovery = tokio::time::Instant::now();
+                }
                 let result = if dead || lost {
                     None
                 } else {
-                    if binding.is_none() {
+                    if binding.is_none() && tokio::time::Instant::now() >= next_discovery {
                         binding = tokio::time::timeout(
                             Duration::from_secs(2),
                             crate::read_source::discover_codex(pid, &cwd),
@@ -155,6 +162,7 @@ impl Observer {
                         .await
                         .ok()
                         .and_then(Result::ok);
+                        next_discovery = tokio::time::Instant::now() + Duration::from_secs(2);
                         if binding.as_ref().is_some_and(|b| {
                             self.expected.as_ref().is_some_and(|id| id != &b.session_id)
                         }) {
@@ -216,7 +224,9 @@ impl Observer {
                         };
                     }
                 }
-                if let Some(tx) = channels.lock().await.get(&project) {
+                if publication.should_publish(state.snapshot(), tokio::time::Instant::now())
+                    && let Some(tx) = channels.lock().await.get(&project)
+                {
                     let _ = tx.send(());
                 }
                 if dead {

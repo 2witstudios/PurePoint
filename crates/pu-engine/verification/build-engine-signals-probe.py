@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+from signal_probe_support import source_state_sha256
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('output_directory', type=Path)
@@ -17,6 +18,8 @@ repo = Path(__file__).resolve().parents[3]
 output = args.output_directory.resolve()
 output.mkdir(parents=True, exist_ok=True)
 source = Path(__file__).with_name('owned-native-signals.rs').resolve()
+before_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
+before_state = source_state_sha256(repo)
 result = subprocess.run(
     ['cargo', 'build', '-p', 'pu-engine', '--lib', '--message-format=json'],
     cwd=repo, capture_output=True, text=True,
@@ -49,9 +52,12 @@ def digest(path):
             value.update(chunk)
     return value.hexdigest()
 
+if source_state_sha256(repo) != before_state or subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip() != before_sha:
+    raise RuntimeError('Source changed while building the probe')
+
 provenance = {
     'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip(),
-    'source_diff_sha256': hashlib.sha256(subprocess.check_output(['git', 'diff', 'HEAD', '--', 'crates'], cwd=repo)).hexdigest(),
+    'source_diff_sha256': before_state,
     'runner_source_sha256': digest(source),
     'runner': str(binary),
     'runner_sha256': digest(binary),

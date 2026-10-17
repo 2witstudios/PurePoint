@@ -73,6 +73,42 @@ enum NativeObserver {
     Codex(codex::Observer),
 }
 
+/// Publish semantic changes immediately while renewing a subscribed consumer's
+/// 30-second observation lease with a bounded heartbeat. Comparing raw snapshots
+/// would broadcast every poll; ignoring timestamps forever would make live UI stale.
+#[derive(Default)]
+struct NativePublication {
+    previous: Option<Option<SignalSnapshot>>,
+    sent_at: Option<tokio::time::Instant>,
+}
+
+impl NativePublication {
+    fn should_publish(
+        &mut self,
+        mut snapshot: Option<SignalSnapshot>,
+        now: tokio::time::Instant,
+    ) -> bool {
+        let current = snapshot
+            .as_ref()
+            .is_some_and(|s| s.observation.state == ObservationState::Current);
+        if let Some(snapshot) = snapshot.as_mut() {
+            snapshot.observation.last_received_at_ms = None;
+            snapshot.observation.expires_at_ms = None;
+        }
+        let changed = self.previous.as_ref() != Some(&snapshot);
+        let heartbeat = current
+            && self
+                .sent_at
+                .is_some_and(|last| now.saturating_duration_since(last) >= Duration::from_secs(10));
+        if !changed && !heartbeat {
+            return false;
+        }
+        self.previous = Some(snapshot);
+        self.sent_at = Some(now);
+        true
+    }
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -561,6 +597,65 @@ mod tests {
             )
             .unwrap();
     }
+    #[tokio::test]
+    async fn native_publication_preserves_semantics_and_renews_live_consumer_leases() {
+        let (prepared, _root) = fixture("claude", Some("native"));
+        let mut snapshot = prepared
+            .state
+            .reducer
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .snapshot(1000);
+        snapshot.observation.state = ObservationState::Current;
+        snapshot.observation.last_received_at_ms = Some(1000);
+        snapshot.observation.expires_at_ms = Some(31000);
+        let mut publication = NativePublication::default();
+        let start = tokio::time::Instant::now();
+        assert!(publication.should_publish(Some(snapshot.clone()), start));
+        for second in 1..10 {
+            snapshot.observation.last_received_at_ms = Some(1000 + second * 1000);
+            snapshot.observation.expires_at_ms = Some(31000 + second * 1000);
+            assert!(!publication.should_publish(
+                Some(snapshot.clone()),
+                start + Duration::from_secs(second as u64)
+            ));
+        }
+        assert!(
+            publication.should_publish(Some(snapshot.clone()), start + Duration::from_secs(10))
+        );
+        snapshot.observation.state = ObservationState::Disconnected;
+        assert!(
+            publication
+                .should_publish(Some(snapshot.clone()), start + Duration::from_millis(10001))
+        );
+        assert!(
+            !publication.should_publish(Some(snapshot.clone()), start + Duration::from_secs(30))
+        );
+        snapshot.observation.state = ObservationState::Current;
+        snapshot.pending_attention.push(PendingAttention {
+            request_id: "request".into(),
+            event_id: "event".into(),
+            turn_id: Some("turn".into()),
+            kind: AttentionKind::Question,
+            confidence: SignalConfidence::Authoritative,
+            actionability: AttentionActionability::default(),
+        });
+        assert!(
+            publication.should_publish(Some(snapshot.clone()), start + Duration::from_secs(31))
+        );
+        snapshot.pending_attention[0].actionability.macos = true;
+        assert!(
+            publication
+                .should_publish(Some(snapshot.clone()), start + Duration::from_millis(31001))
+        );
+        snapshot.pending_attention.clear();
+        assert!(publication.should_publish(Some(snapshot), start + Duration::from_millis(31002)));
+        assert!(publication.should_publish(None, start + Duration::from_secs(32)));
+        assert!(!publication.should_publish(None, start + Duration::from_secs(100)));
+    }
+
     #[tokio::test]
     async fn given_private_launch_intake_should_reject_foreign_session_child_and_token_then_invalidate_on_exit()
      {

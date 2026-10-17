@@ -181,6 +181,7 @@ impl Observer {
             let mut transcript = Transcript::default();
             let mut pending_read: Option<tokio::task::JoinHandle<(Transcript, bool)>> = None;
             let mut started = None;
+            let mut publication = super::NativePublication::default();
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -256,7 +257,9 @@ impl Observer {
                         };
                     }
                 }
-                if let Some(tx) = channels.lock().await.get(&project) {
+                if publication.should_publish(state.snapshot(), tokio::time::Instant::now())
+                    && let Some(tx) = channels.lock().await.get(&project)
+                {
                     let _ = tx.send(());
                 }
                 if dead {
