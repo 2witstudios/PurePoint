@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 pub(super) struct Observer {
-    command: String,
+    not_before_ms: i64,
     env: Vec<(String, String)>,
 }
 
@@ -19,7 +19,6 @@ pub(super) fn prepare(
     agent: &str,
     worktree: Option<String>,
     session: &str,
-    command: &str,
     env: &[(String, String)],
 ) -> Option<Prepared> {
     if !crate::read_source::valid_session_id(session) {
@@ -48,7 +47,7 @@ pub(super) fn prepare(
         }),
         output: None,
         observer: Some(NativeObserver::Claude(Observer {
-            command: command.into(),
+            not_before_ms: now_ms(),
             env: env.to_vec(),
         })),
     })
@@ -90,33 +89,6 @@ async fn native_pid_domain() -> Option<&'static str> {
 }
 
 impl Observer {
-    async fn output(&self, cwd: &str, args: &[&str]) -> Option<Vec<u8>> {
-        use tokio::io::AsyncReadExt;
-        let mut child = tokio::process::Command::new(&self.command)
-            .args(args)
-            .env_clear()
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .current_dir(cwd)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .ok()?;
-        let mut data = Vec::new();
-        child
-            .stdout
-            .take()?
-            .take(1024 * 1024 + 1)
-            .read_to_end(&mut data)
-            .await
-            .ok()?;
-        if data.len() > 1024 * 1024 || !child.wait().await.ok()?.success() {
-            return None;
-        }
-        Some(data)
-    }
-
     async fn row(&self, cwd: &str, pid: u32, session: &str) -> Option<Value> {
         use tokio::io::AsyncReadExt;
         // The native interactive registry is stored per process.
@@ -153,7 +125,9 @@ impl Observer {
             || row["peerProtocol"] != 1
             || row["entrypoint"] != "cli"
             || row["pidDomain"] != domain
-            || row["startedAt"].as_i64().is_none()
+            || row["startedAt"]
+                .as_i64()
+                .is_none_or(|started| started < self.not_before_ms)
         {
             return None;
         }
@@ -170,14 +144,6 @@ impl Observer {
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
     ) {
         tokio::spawn(async move {
-            let version =
-                tokio::time::timeout(Duration::from_secs(3), self.output(&cwd, &["--version"]))
-                    .await;
-            if !version.ok().flatten().is_some_and(|bytes| {
-                String::from_utf8_lossy(&bytes).split_whitespace().next() == Some("2.1.300")
-            }) {
-                return;
-            }
             let mut transcript = Transcript::default();
             let mut pending_read: Option<tokio::task::JoinHandle<(Transcript, bool)>> = None;
             let mut started = None;
@@ -862,7 +828,7 @@ mod tests {
         )
         .unwrap();
         let observer = Observer {
-            command: "/usr/bin/false".into(),
+            not_before_ms: 0,
             env: vec![
                 ("HOME".into(), root.path().to_string_lossy().into_owned()),
                 (
@@ -925,6 +891,31 @@ mod tests {
         assert!(observer.row("/owned", 123, "native").await.is_none());
     }
 
+    #[tokio::test]
+    async fn stale_prior_launch_registry_epoch_cannot_bind_a_reused_owned_pid() {
+        let root = tempfile::tempdir().unwrap();
+        let env = vec![
+            ("HOME".into(), root.path().to_string_lossy().into_owned()),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                root.path().to_string_lossy().into_owned(),
+            ),
+        ];
+        let prepared =
+            prepare(root.path().to_str().unwrap(), "agent", None, "native", &env).unwrap();
+        let Some(NativeObserver::Claude(observer)) = prepared.observer else {
+            panic!("wrong observer")
+        };
+        let path = root.path().join("sessions/123.json");
+        std::fs::create_dir(path.parent().unwrap()).unwrap();
+        let mut row = json!({"pid":123,"cwd":"/owned","sessionId":"native","kind":"interactive","startedAt":1,"status":"busy","version":"2.1.300","peerProtocol":1,"entrypoint":"cli","pidDomain":native_pid_domain().await.unwrap()});
+        std::fs::write(&path, serde_json::to_vec(&row).unwrap()).unwrap();
+        assert!(observer.row("/owned", 123, "native").await.is_none());
+        row["startedAt"] = json!(now_ms());
+        std::fs::write(path, serde_json::to_vec(&row).unwrap()).unwrap();
+        assert_eq!(observer.row("/owned", 123, "native").await.unwrap(), row);
+    }
+
     #[test]
     fn repeated_native_tool_ids_in_new_roots_do_not_reuse_attention_events() {
         let mut t = Transcript::default();
@@ -966,15 +957,22 @@ mod tests {
         let context: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let cwd = context["cwd"].as_str().unwrap();
         let env: Vec<(String, String)> = serde_json::from_value(context["env"].clone()).unwrap();
-        let prepared = prepare(
+        let mut prepared = prepare(
             cwd,
             "probe",
             None,
             context["session"].as_str().unwrap(),
-            context["command"].as_str().unwrap(),
             &env,
         )
         .unwrap();
+        // The fixture launches the owned CLI before starting this observer.
+        // Use its recorded pre-spawn lower bound, just as production prepare does.
+        let Some(NativeObserver::Claude(observer)) = prepared.observer.as_mut() else {
+            panic!("wrong observer")
+        };
+        observer.not_before_ms = context["not_before_ms"]
+            .as_i64()
+            .expect("recorded fixture launch bound");
         let states = Arc::new(Mutex::new(HashMap::new()));
         let (exit_tx, exit_rx) = tokio::sync::watch::channel(None);
         prepared.activate(

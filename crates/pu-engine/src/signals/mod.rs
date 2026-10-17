@@ -161,7 +161,7 @@ pub(crate) async fn prepare(
         return Some(prepared);
     }
     if tool == "claude" && Path::new(command).file_name()?.to_str()? == tool {
-        let mut prepared = claude::prepare(project, agent, worktree, session?, command, env)?;
+        let mut prepared = claude::prepare(project, agent, worktree, session?, env)?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
             qualification::load(project, tool, "2.1.300", "2", args).await;
         return Some(prepared);

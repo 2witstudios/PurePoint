@@ -53,8 +53,8 @@ Mac/iOS acceptance. All production attention notifications remain gated.
   can reconcile it. Owned PTY exit irreversibly withdraws that launch's observer.
   Each snapshot holds at most 64 pending IDs and refers only to the assigned root.
 
-* Claude observation runs outside the PTY. It issues one native version query at launch, then reads only that owned PID's registry record; it never launches list subprocesses or scans all agents per poll.
-  A native poll has a 5s overall deadline. Registry reads reject symlinks, nonregular/foreign-owned or group/world-writable files and data over 16KiB; exact PID/domain/session/cwd/kind/entrypoint/protocol/version/start epoch are required. The one-shot version command is bounded to 1MiB.
+* Claude observation runs outside the PTY. It reads only that owned PID's registry record and exact root transcript; it never launches list subprocesses or scans all agents per poll.
+  A native poll has a 5s overall deadline. Registry reads reject symlinks, nonregular/foreign-owned or group/world-writable files and data over 16KiB; exact PID/domain/session/cwd/kind/entrypoint/protocol/version/start epoch are required. Native registry and transcript versions are checked directly; no helper CLI process is launched. Registry start time must postdate the recorded pre-spawn lower bound, so a crashed predecessor's record cannot bind a reused PID.
   Transcript reads are incremental, at most 8MiB per poll/1MiB per record, and retain
   only IDs, tool categories and structural outcomes. Existing histories larger than
   the per-poll budget are caught up incrementally. A timed-out Claude poll retains

@@ -69,11 +69,12 @@ env = {'HOME': str(home), 'CLAUDE_CONFIG_DIR': str(config), 'ANTHROPIC_API_KEY':
 sid = str(uuid.uuid4())
 (a, b) = pty.openpty()
 fcntl.ioctl(b, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+not_before_ms = int(time.time() * 1000)
 p = subprocess.Popen([args.claude, '--session-id', sid, '--setting-sources', '', '--model', 'claude-sonnet-4-6'] + (['--permission-mode', 'manual'] if args.scenario == 'permission' else []) + (['--settings',str(hook)] if args.scenario.startswith('reject') else []), cwd=repo, env=env, stdin=b, stdout=b, stderr=b, start_new_session=True)
 os.close(b)
 output = bytearray()
 context = root / 'observer-context.json'
-context.write_text(json.dumps({'command': args.claude, 'env': list(env.items()), 'cwd': str(repo), 'session': sid, 'pid': p.pid, 'expected': args.scenario}))
+context.write_text(json.dumps({'command': args.claude, 'env': list(env.items()), 'cwd': str(repo), 'session': sid, 'pid': p.pid, 'expected': args.scenario, 'not_before_ms': not_before_ms}))
 observer_log = open(root / 'observer-test.log', 'w')
 observer = subprocess.Popen([args.test_binary, '--exact', 'signals::claude::tests::native_interactive_observer_probe', '--ignored', '--nocapture'], env={**os.environ, 'PUREPOINT_CLAUDE_PROBE_CONTEXT': str(context)}, stdout=observer_log, stderr=subprocess.STDOUT)
 try:
