@@ -16,6 +16,9 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
     @State private var preferredWidth: CGFloat = 210
     @State private var resizeStart: CGFloat?
 
+    /// Matches `PaneTabBar.height`. Not referenced directly so this file compiles without the pane grid.
+    private static let headerHeight: CGFloat = 30
+
     var body: some View {
         if compact {
             compactLayout
@@ -87,7 +90,7 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     .padding(.horizontal, headerPadding)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     // Same height and color as the tab strip, so the header joins it.
-                    .frame(height: PaneTabBar.height)
+                    .frame(height: Self.headerHeight)
                     .background(Color(nsColor: Theme.tabBarBackground))
                     .overlay(alignment: .bottom) { Divider() }
                     .environment(\.colorScheme, .dark)
