@@ -128,6 +128,7 @@ impl Observer {
                 return;
             }
             let mut transcript = Transcript::default();
+            let mut pending_read: Option<tokio::task::JoinHandle<(Transcript, bool)>> = None;
             let mut started = None;
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -153,14 +154,26 @@ impl Observer {
                     let transcript_path = binding.path.clone();
                     let id = identity.clone();
                     let dir = cwd.clone();
-                    let old = std::mem::take(&mut transcript);
-                    let (next, valid) = tokio::task::spawn_blocking(move || {
-                        let mut next = old;
-                        let valid = next.read(&binding.path, &id, &dir).is_some();
-                        (next, valid)
-                    })
-                    .await
-                    .ok()?;
+                    // Keep ownership of an in-flight blocking read across poll timeouts.
+                    // Dropping its handle would lose settled/replay state and allow a
+                    // second reader to replay the file from the beginning.
+                    if pending_read.is_none() {
+                        let old = std::mem::take(&mut transcript);
+                        pending_read = Some(tokio::task::spawn_blocking(move || {
+                            let mut next = old;
+                            let valid = next.read(&binding.path, &id, &dir).is_some();
+                            (next, valid)
+                        }));
+                    }
+                    let read = pending_read.as_mut()?.await;
+                    pending_read = None;
+                    let (next, valid) = match read {
+                        Ok(result) => result,
+                        Err(_) => {
+                            transcript.poisoned = true;
+                            return None;
+                        }
+                    };
                     transcript = next;
                     if !valid {
                         return None;
@@ -241,12 +254,7 @@ impl Transcript {
         self.inode = Some(inode);
         file.seek(SeekFrom::Start(self.offset)).ok()?;
         let mut bytes = Vec::new();
-        file.take(8 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return None;
-        }
+        file.take(8 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
         self.offset += bytes.len() as u64;
         self.partial.extend(bytes);
         let end = self
@@ -422,7 +430,10 @@ impl Transcript {
                     } else {
                         AttentionKind::Permission
                     },
-                    event_id: format!("claude-request:{id}"),
+                    event_id: format!(
+                        "claude-request:{}:{id}",
+                        self.turn.as_deref().unwrap_or("ui")
+                    ),
                     turn_id: self.turn.clone(),
                     confidence: SignalConfidence::Authoritative,
                     actionability: AttentionActionability::default(),
@@ -488,6 +499,23 @@ mod tests {
         };
         json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":"native","cwd":"/owned","version":"2.1.300","isSidechain":false,"message":message})
     }
+    #[test]
+    fn existing_large_history_is_consumed_in_bounded_batches() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("history");
+        let line = format!(
+            "{{\"type\":\"metadata\",\"padding\":\"{}\"}}\n",
+            "x".repeat(1024)
+        );
+        std::fs::write(&path, line.repeat(9000)).unwrap();
+        let mut reader = Transcript::default();
+        reader.read(&path, &identity(), "/owned").unwrap();
+        assert!(!reader.poisoned);
+        assert!(!reader.unchanged(&path));
+        reader.read(&path, &identity(), "/owned").unwrap();
+        assert!(reader.unchanged(&path));
+    }
+
     #[test]
     fn exact_root_request_identity_and_response_are_retained() {
         let mut t = Transcript::default();
@@ -810,6 +838,38 @@ mod tests {
                 .await
                 .is_none()
         );
+    }
+
+    #[test]
+    fn repeated_native_tool_ids_in_new_roots_do_not_reuse_attention_events() {
+        let mut t = Transcript::default();
+        let id = identity();
+        let waiting = json!({"status":"waiting","waitingFor":"input needed"});
+        let mut events = Vec::new();
+        for root in ["turn", "next"] {
+            t.record(
+                &record("user", root, json!({"content":"accepted"})),
+                &id,
+                "/owned",
+            )
+            .unwrap();
+            let mut ask = record(
+                "assistant",
+                &format!("ask-{root}"),
+                json!({"content":[{"type":"tool_use","id":"reused","name":"AskUserQuestion"}],"stop_reason":"tool_use"}),
+            );
+            ask["parentUuid"] = json!(root);
+            t.record(&ask, &id, "/owned").unwrap();
+            let pending = t
+                .snapshot(&id, &waiting, 100)
+                .unwrap()
+                .pending_attention
+                .remove(0);
+            assert_eq!(pending.request_id, "reused");
+            assert_eq!(pending.turn_id.as_deref(), Some(root));
+            events.push(pending.event_id);
+        }
+        assert_ne!(events[0], events[1]);
     }
 
     /// Driven only by an isolated native CLI fixture; never reads real user config.

@@ -83,12 +83,7 @@ impl Cursor {
         self.inode = Some(inode);
         file.seek(SeekFrom::Start(self.offset)).ok()?;
         let mut bytes = Vec::new();
-        file.take(8 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return None;
-        }
+        file.take(8 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
         self.offset += bytes.len() as u64;
         self.partial.extend(bytes);
         let end = self
@@ -243,7 +238,14 @@ fn snapshot(
         return None;
     }
     let mut pending_attention = Vec::new();
+    let active = history.turn.is_some() && history.outcome.is_none();
+    if status == Status::Working && !active && history.outcome.is_none() {
+        return None;
+    }
     if status == Status::Blocked {
+        if !active {
+            return None;
+        }
         if history.tools.len() != 1 {
             return None;
         }
@@ -255,7 +257,7 @@ fn snapshot(
         pending_attention.push(PendingAttention {
             request_id: id.clone(),
             kind,
-            event_id: format!("codex-request:{id}"),
+            event_id: format!("codex-request:{}:{id}", history.turn.as_deref()?),
             turn_id: history.turn.clone(),
             confidence: SignalConfidence::Authoritative,
             actionability: AttentionActionability::default(),
@@ -264,17 +266,13 @@ fn snapshot(
     Some(SignalSnapshot {
         schema_version: 1,
         identity: identity.clone(),
-        activity: if status == Status::Idle {
-            SignalActivity::Idle
-        } else {
+        activity: if active {
             SignalActivity::Working
+        } else {
+            SignalActivity::Idle
         },
         pending_attention,
-        outcome: if status == Status::Idle {
-            history.outcome.clone()
-        } else {
-            None
-        },
+        outcome: history.outcome.clone(),
         observation: SignalObservation {
             state: ObservationState::Current,
             last_received_at_ms: Some(now),
@@ -285,7 +283,16 @@ fn snapshot(
             tool_version: "0.163.0".into(),
             adapter_version: "2".into(),
             confidence: SignalConfidence::Authoritative,
-            event_id: format!("codex-pty:{}:{}", identity.launch_id, protocol.event_offset),
+            event_id: history
+                .outcome
+                .as_ref()
+                .map(|o| o.event_id.clone())
+                .unwrap_or_else(|| {
+                    format!(
+                        "codex-turn:{}:task_started",
+                        history.turn.as_deref().unwrap_or("unstarted")
+                    )
+                }),
         }),
     })
 }
@@ -510,6 +517,24 @@ mod tests {
         json!({"type":"event_msg","payload":{"type":kind,"turn_id":turn,"root_turn_id":turn}})
     }
     #[test]
+    fn existing_large_history_is_consumed_in_bounded_batches() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("history");
+        let line = format!(
+            "{{\"type\":\"metadata\",\"padding\":\"{}\"}}\n",
+            "x".repeat(1024)
+        );
+        std::fs::write(&path, format!("{}\n{}", meta(), line.repeat(9000))).unwrap();
+        let mut history = History::default();
+        let mut reader = Cursor::default();
+        reader.read(&path, &mut history, "/owned").unwrap();
+        assert!(!reader.poisoned);
+        assert!(!reader.unchanged(&path));
+        reader.read(&path, &mut history, "/owned").unwrap();
+        assert!(reader.unchanged(&path));
+    }
+
+    #[test]
     fn real_native_osc_packets_survive_chunk_splits_and_require_codex_app() {
         let mut p = Protocol::default();
         for b in b"\x1b]7501;state=working:app=codex\x1b\\" {
@@ -630,6 +655,60 @@ mod tests {
         assert_eq!(h.outcome.as_ref().unwrap().turn_id.as_deref(), Some("B"));
         h.record(&event("task_started", "B"), "/owned").unwrap();
         assert_eq!(h.outcome.as_ref().unwrap().kind, OutcomeKind::Completed);
+    }
+
+    #[test]
+    fn ui_working_needs_a_live_native_turn_and_cannot_revive_settled_work() {
+        let mut h = History::default();
+        h.record(&meta(), "/owned").unwrap();
+        let id = SignalIdentity {
+            agent_id: "agent".into(),
+            worktree_id: None,
+            launch_id: "launch".into(),
+            generation: 1,
+            native_session_id: "native".into(),
+        };
+        let mut p = Protocol::default();
+        p.feed(b"\x1b]7501;state=working:app=codex\x1b\\");
+        assert!(snapshot(&id, &p, &h, 100).is_none());
+        h.record(&event("task_started", "turn"), "/owned").unwrap();
+        assert!(snapshot(&id, &p, &h, 101).is_some());
+        h.record(&event("task_complete", "turn"), "/owned").unwrap();
+        p.feed(b"\x1b]7501;state=idle:app=codex\x1b\\");
+        snapshot(&id, &p, &h, 102).unwrap();
+        p.feed(b"\x1b]7501;state=working:app=codex\x1b\\");
+        let retained = snapshot(&id, &p, &h, 103).unwrap();
+        assert_eq!(retained.activity, SignalActivity::Idle);
+        assert_eq!(retained.outcome.unwrap().kind, OutcomeKind::Completed);
+    }
+
+    #[test]
+    fn repeated_native_call_ids_in_new_turns_have_distinct_attention_events() {
+        let mut h = History::default();
+        h.record(&meta(), "/owned").unwrap();
+        let id = SignalIdentity {
+            agent_id: "agent".into(),
+            worktree_id: None,
+            launch_id: "launch".into(),
+            generation: 1,
+            native_session_id: "native".into(),
+        };
+        let mut p = Protocol::default();
+        p.feed(b"\x1b]7501;state=blocked:app=codex\x1b\\");
+        let mut events = Vec::new();
+        for turn in ["first", "second"] {
+            h.record(&event("task_started", turn), "/owned").unwrap();
+            h.record(&json!({"type":"response_item","payload":{"type":"function_call","call_id":"reused","name":"request_user_input","arguments":"{}"}}),"/owned").unwrap();
+            let pending = snapshot(&id, &p, &h, 100)
+                .unwrap()
+                .pending_attention
+                .remove(0);
+            assert_eq!(pending.request_id, "reused");
+            assert_eq!(pending.turn_id.as_deref(), Some(turn));
+            events.push(pending.event_id);
+            h.record(&event("task_complete", turn), "/owned").unwrap();
+        }
+        assert_ne!(events[0], events[1]);
     }
 
     #[tokio::test]
