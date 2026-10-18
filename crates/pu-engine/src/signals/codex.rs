@@ -212,10 +212,25 @@ impl Cursor {
         self.poisoned = false;
         Some(())
     }
+    #[cfg(test)]
     fn unchanged(&self, path: &Path) -> bool {
         self.partial.is_empty()
             && std::fs::symlink_metadata(path).is_ok_and(|m| {
                 m.is_file() && Some((m.dev(), m.ino())) == self.inode && m.len() == self.offset
+            })
+    }
+
+    fn observation_ready(&self, path: &Path) -> bool {
+        // Native activity is a level signal; JSONL facts come only from complete
+        // records. A writer may append between reads without invalidating that
+        // prefix. Preserve inode/owner/length checks, and never publish a failed
+        // parse or any fact from the incomplete suffix.
+        !self.poisoned
+            && std::fs::symlink_metadata(path).is_ok_and(|m| {
+                m.is_file()
+                    && m.uid() == unsafe { libc::geteuid() }
+                    && Some((m.dev(), m.ino())) == self.inode
+                    && m.len() >= self.offset
             })
     }
 }
@@ -301,7 +316,8 @@ impl Observer {
                         let read = tokio::task::spawn_blocking(move || {
                             let mut c = old;
                             let mut h = old_history;
-                            let valid = c.read(&path, &mut h, &dir).is_some() && c.unchanged(&path);
+                            let valid =
+                                c.read(&path, &mut h, &dir).is_some() && c.observation_ready(&path);
                             (c, h, valid)
                         })
                         .await;
@@ -326,6 +342,9 @@ impl Observer {
                                 None
                             }
                         }
+                    } else if !lost && binding.is_none() && self.expected.is_none() {
+                        let identity = state.identity.lock().unwrap();
+                        unbound_snapshot(&identity, &protocol, now_ms())
                     } else {
                         None
                     }
@@ -359,6 +378,19 @@ impl Observer {
             }
         });
     }
+}
+
+fn unbound_snapshot(
+    identity: &SignalIdentity,
+    protocol: &Protocol,
+    now: i64,
+) -> Option<SignalSnapshot> {
+    // A blank native TUI emits idle before creating a thread. This is only an
+    // owned-launch activity fact: no thread, request or outcome is invented.
+    if !identity.native_session_id.is_empty() || protocol.status != Some(Status::Idle) {
+        return None;
+    }
+    snapshot(identity, protocol, &History::default(), now)
 }
 
 fn snapshot(
@@ -422,9 +454,9 @@ fn snapshot(
                 .as_ref()
                 .map(|o| o.event_id.clone())
                 .unwrap_or_else(|| {
-                    format!(
-                        "codex-turn:{}:task_started",
-                        history.turn.as_deref().unwrap_or("unstarted")
+                    history.turn.as_ref().map_or_else(
+                        || format!("codex-launch:{}:idle", identity.launch_id),
+                        |turn| format!("codex-turn:{turn}:task_started"),
                     )
                 }),
         }),
@@ -635,7 +667,7 @@ impl Protocol {
         }
         self.kind = None;
         self.status = match fields.as_slice() {
-            ["state=idle", "app=codex"] => Some(Status::Idle),
+            ["state=idle" | "state=done" | "state=error", "app=codex"] => Some(Status::Idle),
             ["state=working", "app=codex"] => Some(Status::Working),
             ["state=blocked", "app=codex"] => Some(Status::Blocked),
             ["state=blocked", "app=codex", kind] => {
@@ -656,6 +688,37 @@ impl Protocol {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn given_append_in_progress_should_keep_complete_native_prefix_observable() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout.jsonl");
+        let prefix = format!("{}\n{}\n", meta(), event("task_started", "turn"));
+        std::fs::write(
+            &path,
+            format!("{prefix}{{\"type\":\"response_item\",\"payload\":"),
+        )
+        .unwrap();
+        let mut cursor = Cursor::default();
+        let mut history = History::default();
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(
+            cursor.observation_ready(&path),
+            "An incomplete append must not disconnect a verified native source"
+        );
+        assert_eq!(history.turn.as_deref(), Some("turn"));
+        assert!(history.tools.is_empty() && history.outcome.is_none());
+        // A partial record cannot create a request or terminal outcome. Once
+        // complete, the ordinary parser consumes it; replacement still fails.
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"type\":\"function_call\",\"call_id\":\"request\",\"name\":\"request_user_input\"}}\n").unwrap();
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(cursor.observation_ready(&path));
+        assert_eq!(history.tools.len(), 1);
+        let replacement = root.path().join("replacement");
+        std::fs::write(&replacement, prefix).unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        assert!(!cursor.observation_ready(&path));
+    }
     fn meta() -> Value {
         json!({"type":"session_meta","payload":{"id":"native","cwd":"/owned","source":"cli","cli_version":"0.163.0"}})
     }
@@ -737,6 +800,38 @@ mod tests {
         assert_eq!(p.status, Some(Status::Blocked));
         p.feed(b"\x1b]7501;state=idle:app=codex\x1b\\");
         assert_eq!(p.status, Some(Status::Idle));
+        for packet in [
+            b"\x1b]7501;state=done:app=codex\x1b\\".as_slice(),
+            b"\x1b]7501;state=error:app=codex\x1b\\",
+        ] {
+            p.feed(packet);
+            assert_eq!(p.status, Some(Status::Idle));
+        }
+    }
+    #[test]
+    fn given_native_idle_before_thread_creation_should_publish_only_launch_idle() {
+        let mut protocol = Protocol::default();
+        protocol.feed(b"\x1b]7501;state=idle:app=codex\x1b\\");
+        let identity = SignalIdentity {
+            agent_id: "agent".into(),
+            worktree_id: None,
+            launch_id: "launch".into(),
+            generation: 1,
+            native_session_id: String::new(),
+        };
+        let idle =
+            unbound_snapshot(&identity, &protocol, 100).expect("native idle needs no thread file");
+        assert_eq!(idle.activity, SignalActivity::Idle);
+        assert!(idle.outcome.is_none() && idle.pending_attention.is_empty());
+        assert_eq!(idle.evidence.unwrap().event_id, "codex-launch:launch:idle");
+        for packet in [
+            b"\x1b]7501;state=working:app=codex\x1b\\".as_slice(),
+            b"\x1b]7501;state=blocked:app=codex:kind=question\x1b\\",
+            b"\x1b]7501;state=clear\x1b\\",
+        ] {
+            protocol.feed(packet);
+            assert!(unbound_snapshot(&identity, &protocol, 100).is_none());
+        }
     }
     #[test]
     fn given_idle_native_ui_and_unfinished_history_should_not_claim_working() {

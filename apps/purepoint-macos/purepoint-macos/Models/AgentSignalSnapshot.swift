@@ -54,8 +54,11 @@ nonisolated struct AgentSignalSnapshot: Codable, Equatable, Sendable {
 
     func presentation(agentID: String, sessionID: String? = nil, available: Bool = true, now: Date = Date()) -> AgentSignalPresentation {
         let milliseconds = now.timeIntervalSince1970 * 1000
+        let launchIdle = identity.native_session_id.isEmpty && sessionID == nil
+            && activity == "idle" && pending_attention.isEmpty && outcome == nil
+            && evidence?.confidence == "authoritative"
         guard available, schema_version == 1, identity.agent_id == agentID,
-            !identity.launch_id.isEmpty, !identity.native_session_id.isEmpty,
+            !identity.launch_id.isEmpty, !identity.native_session_id.isEmpty || launchIdle,
             sessionID == nil || sessionID == identity.native_session_id,
             observation.state == "current", let received = observation.last_received_at_ms,
             let expires = observation.expires_at_ms,
@@ -66,6 +69,9 @@ nonisolated struct AgentSignalSnapshot: Codable, Equatable, Sendable {
             return .init(label: request.kind == "permission" ? "Permission" : "Question", eventID: request.event_id, needsAttention: true, detail: "\(pending.count) pending requests: " + pending.map { "\($0.kind) \($0.request_id)" }.joined(separator: ", "))
         }
         if activity == "working" { return .init(label: "Working", eventID: nil, needsAttention: false) }
+        if activity == "idle" && outcome == nil {
+            return .init(label: "Idle", eventID: nil, needsAttention: false)
+        }
         guard activity == "idle" || activity == "unknown", let outcome,
             outcome.confidence == "authoritative", !outcome.event_id.isEmpty else { return .unknown }
         switch outcome.kind {

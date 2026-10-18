@@ -29,6 +29,12 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
         name.isEmpty ? id : name
     }
 
+    func signalPresentation(available: Bool = true, now: Date = Date()) -> AgentSignalPresentation {
+        guard available else { return .unknown }
+        if suspended { return .init(label: "Suspended", eventID: nil, needsAttention: false) }
+        return signal?.presentation(agentID: id, sessionID: sessionId, available: status.isAlive, now: now) ?? .unknown
+    }
+
     init(
         id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String,
         sessionId: String? = nil, suspended: Bool = false, command: String? = nil, signal: AgentSignalSnapshot? = nil

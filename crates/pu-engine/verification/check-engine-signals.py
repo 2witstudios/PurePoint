@@ -5,17 +5,19 @@ from pathlib import Path
 from signal_probe_support import source_state_sha256, stop_process
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('tool', choices=['claude', 'codex', 'opencode'])
-parser.add_argument('scenario', choices=['question', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'resume_error', 'resume_live_work', 'session_switch', 'worktree', 'question_hold', 'image'])
+parser.add_argument('scenario', choices=['question', 'question_idle_hold', 'permission', 'error', 'interrupt', 'permission_deny', 'question_cancel', 'resume', 'resume_pending', 'resume_error', 'resume_live_work', 'session_switch', 'worktree', 'question_hold', 'image'])
 parser.add_argument('cli')
 parser.add_argument('--runner', required=True, help='Exact candidate owned-native-signals.rs executable; compile against cargo compiler-artifact paths')
 args = parser.parse_args()
 if args.scenario in ['resume_pending', 'session_switch'] and args.tool != 'codex':
     parser.error('resume_pending/session_switch check Codex history/ownership regressions')
+if args.scenario == 'question_idle_hold' and args.tool != 'codex':
+    parser.error('question_idle_hold checks Codex pre-thread idle and quiet settled refresh')
 if args.scenario == 'image' and args.tool == 'opencode':
     parser.error('image checks the Claude/Codex native JSONL record regression')
 if args.scenario == 'resume_live_work' and args.tool != 'opencode':
     parser.error('resume_live_work checks the existing OpenCode managed-service execution model')
-mode = {'resume_live_work': 'permission', 'resume_error': 'error', 'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
+mode = {'question_idle_hold': 'question', 'resume_live_work': 'permission', 'resume_error': 'error', 'resume_pending': 'permission', 'permission_deny': 'permission', 'question_cancel': 'question', 'question_hold': 'question'}.get(args.scenario, args.scenario)
 runner_path = Path(args.runner).resolve()
 provenance = json.loads((runner_path.parent / 'provenance.json').read_text())
 assert provenance['runner_sha256'] == hashlib.sha256(runner_path.read_bytes()).hexdigest(), 'Runner differs from recorded compiler artifacts'
@@ -40,6 +42,15 @@ Handler = fixture_globals['Handler']
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 env = {'HOME': str(home), 'TMPDIR': str(root / 'tmp'), 'PATH': '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin', 'SHELL': '/bin/sh', 'TERM': 'xterm-256color', 'LANG': 'en_US.UTF-8'}
+if args.scenario == 'question_idle_hold':
+    # Simulate slow reverse DNS without changing host DNS or faking descriptors.
+    # Numeric queries execute the real native lsof on the actual owned CLI.
+    tools = root / 'tools'
+    tools.mkdir()
+    wrapper = tools / 'lsof'
+    wrapper.write_text('#!/bin/sh\ncase " $* " in\n *" -nP "*) exec /usr/sbin/lsof "$@" ;;\n *) exec /bin/sleep 5 ;;\nesac\n')
+    wrapper.chmod(0o700)
+    env['PATH'] = str(tools) + ':' + env['PATH']
 if args.tool == 'claude':
     seed = {'hasCompletedOnboarding': True, 'customApiKeyResponses': {'approved': ['sandbox-fixture'], 'rejected': []}, 'projects': {str(repo): {'hasTrustDialogAccepted': True, 'hasCompletedProjectOnboarding': True}}}
     for path in [home / '.claude.json', config / '.claude.json']:
@@ -77,7 +88,7 @@ log = open(root / 'runner.log', 'w')
 process = None
 try:
     process = subprocess.Popen([args.runner, str(root), args.tool, args.cli, args.scenario], env=env, stdout=log, stderr=subprocess.STDOUT)
-    code = process.wait(timeout=200 if args.scenario.startswith('resume') else 100)
+    code = process.wait(timeout=200 if args.scenario.startswith('resume') else 180 if args.scenario == 'question_idle_hold' else 100)
     log.close()
     print('RUNNER_EXIT', code, flush=True)
     print((root / 'runner.log').read_text()[-3000:], flush=True)

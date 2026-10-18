@@ -118,6 +118,21 @@ independently hold the same root file. This prevents an interrupted historical
 turn from appearing Working while the resumed terminal is idle. An unavailable,
 partial or replaced source disables observation without preventing native resume.
 
+Codex's native idle packet also establishes launch-only Idle before its first
+thread file exists. That snapshot has no native session ID, requests or outcome;
+clients accept only this narrow current, authoritative idle condition until the
+exact root binds. Native done/error packets are idle activity, with terminal
+outcomes still requiring typed rollout records. Descriptor queries use `lsof
+-nP`, so reverse DNS/service resolution cannot stall the shared local scan.
+An in-progress append does not disconnect an otherwise verified root: only
+complete JSONL records establish facts, joined to the native terminal's current
+state. Inode/owner changes, truncation, invalid complete records and terminal
+byte loss still invalidate observation; an incomplete suffix establishes nothing.
+`question_idle_hold` exercises 35 seconds of unprompted idle, a real question and
+answer, then 35 seconds of settled idle with automatic status heartbeats. Its
+private resolver fixture delays nonnumeric queries but delegates numeric queries
+to real lsof; it changes neither host DNS nor native descriptor ownership.
+
 Claude resume uses the same pre-spawn inode/complete-line EOF boundary, with no
 accepted turn, pending requests, replay history or terminal outcome inherited.
 This also avoids exhausting the new launch's bounded history on old sessions.
