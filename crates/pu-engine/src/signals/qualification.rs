@@ -8,6 +8,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 pub(super) struct Grant {
+    tool: String,
+    tool_version: String,
+    adapter_version: String,
     qualified_at_ms: i64,
     expires_at_ms: i64,
     clock: Mutex<GrantClock>,
@@ -17,6 +20,13 @@ struct GrantClock {
     observed_at_ms: i64,
 }
 impl Grant {
+    pub fn matches(&self, evidence: &pu_core::signals::SignalEvidence) -> bool {
+        self.tool == evidence.tool
+            && self.tool_version == evidence.tool_version
+            && self.adapter_version == evidence.adapter_version
+            && evidence.confidence == pu_core::signals::SignalConfidence::Authoritative
+    }
+
     pub fn current_now(&self) -> bool {
         self.current_with_clock(|| chrono::Utc::now().timestamp_millis())
     }
@@ -67,6 +77,7 @@ pub(super) async fn load(
     project: &str,
     tool: &str,
     version: &str,
+    adapter: &str,
     args: &[String],
 ) -> Option<Grant> {
     // Any explicit alternate output/print mode remains unqualified; no RPC proof
@@ -77,6 +88,7 @@ pub(super) async fn load(
     let project = project.to_owned();
     let tool = tool.to_owned();
     let version = version.to_owned();
+    let adapter = adapter.to_owned();
     tokio::time::timeout(
         Duration::from_millis(50),
         tokio::task::spawn_blocking(move || {
@@ -84,6 +96,7 @@ pub(super) async fn load(
                 Path::new(&project),
                 &tool,
                 &version,
+                &adapter,
                 interactive,
                 chrono::Utc::now().timestamp_millis(),
             )
@@ -98,6 +111,7 @@ fn load_sync(
     project: &Path,
     tool: &str,
     version: &str,
+    adapter: &str,
     interactive: bool,
     now: i64,
 ) -> Option<Grant> {
@@ -138,6 +152,9 @@ fn load_sync(
                 .chars()
                 .any(|c| c.is_whitespace() || c.is_control() || c == '?' || c == '@');
         let grant = Grant {
+            tool: r.tool.clone(),
+            tool_version: r.tool_version.clone(),
+            adapter_version: r.adapter_version.clone(),
             qualified_at_ms: r.qualified_at_ms,
             expires_at_ms: r.expires_at_ms,
             clock: Mutex::new(GrantClock {
@@ -147,7 +164,7 @@ fn load_sync(
         };
         (r.tool == tool
             && r.tool_version == version
-            && r.adapter_version == "1"
+            && r.adapter_version == adapter
             && r.platform == "macos"
             && r.execution_mode == "interactive_pty"
             && r.owner_confirmed
@@ -178,7 +195,7 @@ mod tests {
         use std::sync::{Arc, mpsc};
         let tmp = tempfile::tempdir().unwrap();
         config(tmp.path(), entry());
-        let grant = Arc::new(load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap());
+        let grant = Arc::new(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).unwrap());
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let (second_read_tx, second_read_rx) = mpsc::channel();
@@ -217,21 +234,21 @@ mod tests {
     #[test]
     fn given_explicit_owner_proof_should_enable_only_exact_current_interactive_mac_tuple() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 200).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).is_none());
         config(tmp.path(), entry());
-        let grant = load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap();
+        let grant = load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).unwrap();
         assert!(grant.current(200));
         assert!(!grant.current(10000));
         assert!(!grant.current(99));
-        assert!(load_sync(tmp.path(), "pi", "1.3.1", true, 200).is_none());
-        assert!(load_sync(tmp.path(), "pi", "1.3.0", false, 200).is_none());
-        assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 10000).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.1", "1", true, 200).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", false, 200).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 10000).is_none());
     }
     #[test]
     fn given_observed_expiry_should_never_reauthorize_the_same_grant_after_clock_rollback() {
         let tmp = tempfile::tempdir().unwrap();
         config(tmp.path(), entry());
-        let grant = load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap();
+        let grant = load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).unwrap();
         assert!(grant.current(5000));
         assert!(!grant.current(10000));
         assert!(!grant.current(5000));
@@ -240,12 +257,12 @@ mod tests {
     fn given_clock_rollback_inside_live_window_should_latch_at_the_load_high_water() {
         let tmp = tempfile::tempdir().unwrap();
         config(tmp.path(), entry());
-        let grant = load_sync(tmp.path(), "pi", "1.3.0", true, 200).unwrap();
+        let grant = load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).unwrap();
         assert!(grant.current(8000));
         assert!(grant.current(8000));
         assert!(!grant.current(5000));
         assert!(!grant.current(9000));
-        let loaded = load_sync(tmp.path(), "pi", "1.3.0", true, 5000).unwrap();
+        let loaded = load_sync(tmp.path(), "pi", "1.3.0", "1", true, 5000).unwrap();
         assert!(!loaded.current(4999));
         assert!(!loaded.current(5000));
     }
@@ -258,7 +275,7 @@ mod tests {
             std::fs::Permissions::from_mode(0o700),
         )
         .unwrap();
-        assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 200).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).is_none());
     }
     #[test]
     fn given_missing_proof_or_untrusted_file_should_keep_actionability_false() {
@@ -276,14 +293,14 @@ mod tests {
                 .unwrap()
                 .remove(field);
             config(tmp.path(), value);
-            assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 200).is_none());
+            assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).is_none());
         }
         config(tmp.path(), entry());
         let path = tmp.path().join(".pu/agent-signals/qualifications.json");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 200).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).is_none());
         std::fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink("/dev/null", &path).unwrap();
-        assert!(load_sync(tmp.path(), "pi", "1.3.0", true, 200).is_none());
+        assert!(load_sync(tmp.path(), "pi", "1.3.0", "1", true, 200).is_none());
     }
 }

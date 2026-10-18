@@ -441,10 +441,12 @@ impl Engine {
         );
         let observation = crate::signals::prepare(
             project_root,
+            &cwd,
             agent_id,
             worktree_id.clone(),
             &agent_entry.agent_type,
             session_id.as_deref(),
+            true,
             &command,
             &mut args,
             &mut env,
@@ -471,13 +473,17 @@ impl Engine {
         };
 
         if let Some(observation) = observation {
-            observation.activate(
-                &self.signal_states,
-                project_root,
-                handle.pid,
-                handle.exit_rx.clone(),
-                self.status_channels.clone(),
-            );
+            observation
+                .with_output(handle.output_buffer.clone())
+                .activate_with_sources(
+                    &self.signal_states,
+                    project_root,
+                    &handle.cwd,
+                    handle.pid,
+                    handle.exit_rx.clone(),
+                    self.status_channels.clone(),
+                    self.native_sources.clone(),
+                );
         }
         handle.screen_aware = agent_entry.agent_type == "claude";
         handle.project_root = Some(project_root.to_string());

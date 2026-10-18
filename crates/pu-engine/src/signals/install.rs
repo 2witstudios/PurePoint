@@ -71,33 +71,6 @@ impl Drop for Artifacts {
     }
 }
 
-pub(super) fn claude_settings(helper: &Path) -> Vec<u8> {
-    let command = format!(
-        "'{}' __agent-signal",
-        helper.to_string_lossy().replace('\'', "'\"'\"'")
-    );
-    let mut hooks = serde_json::Map::new();
-    for event in [
-        "SessionStart",
-        "UserPromptSubmit",
-        "Stop",
-        "StopFailure",
-        "PermissionRequest",
-        "PreToolUse",
-        "Elicitation",
-        "ElicitationResult",
-        "SessionEnd",
-    ] {
-        let mut entry =
-            serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":1}]});
-        if event == "PreToolUse" {
-            entry["matcher"] = "AskUserQuestion".into();
-        }
-        hooks.insert(event.into(), serde_json::json!([entry]));
-    }
-    serde_json::to_vec(&serde_json::json!({"hooks":hooks})).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
