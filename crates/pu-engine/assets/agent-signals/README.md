@@ -83,9 +83,13 @@ the observer's exact PID/cwd launch registration, rather than repeating its old
 100ms ps/lsof loop. Its existing guarded manifest commit and ambiguous-source
 failure are preserved. Without telemetry support it registers its own bounded
 reader; exited owned handles stop unbound discovery. An unbound reader reuses a
-positive cached view immediately but retries misses with the shared 250ms floor,
-rather than waiting two seconds for a newly opened rollout. Read binding remains
-owned by the existing engine path, never by the passive telemetry observer.
+positive cached view immediately. For its first two seconds it retries misses
+at the shared250ms floor, so an early rollout is not hidden by a cached miss.
+After that startup window it uses the ordinary two-second shared idle cadence;
+blank sessions cannot force scans forever. Genuine native Working transitions
+still refresh through the observer and successful views are immediately reusable
+by the reader. Read binding remains owned by the existing engine path, never by
+the passive telemetry observer.
 Bound Codex launches recheck that the owned process still holds the same root,
 not merely that the old file still exists. A different root latches observation
 lost without rebinding the native session; a temporarily unavailable check

@@ -35,6 +35,7 @@ impl Default for NativeSources {
 pub(crate) struct CodexReader {
     sampler: Arc<batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
     id: String,
+    startup_until: tokio::time::Instant,
     _registration: batch::Registration<(u32, String), crate::read_source::CodexCandidate>,
 }
 impl NativeSources {
@@ -57,6 +58,7 @@ impl NativeSources {
         Some(CodexReader {
             sampler: self.codex.clone(),
             id,
+            startup_until: tokio::time::Instant::now() + Duration::from_secs(2),
             _registration: registration,
         })
     }
@@ -65,15 +67,33 @@ impl CodexReader {
     pub(crate) async fn discover(
         &self,
     ) -> Result<crate::read_source::Binding, crate::read_source::SourceError> {
+        self.discover_with(refresh_codex).await
+    }
+    async fn discover_with<F, Fut>(
+        &self,
+        mut refresh: F,
+    ) -> Result<crate::read_source::Binding, crate::read_source::SourceError>
+    where
+        F: FnMut(Vec<(String, (u32, String))>) -> Fut,
+        Fut: std::future::Future<
+                Output = HashMap<String, Option<crate::read_source::CodexCandidate>>,
+            >,
+    {
         // Reuse a positive view immediately; forcing another scan could lose
         // an already observed descriptor when a short-lived process exits.
-        if let Some(candidate) = self.sampler.sample(&self.id, false, refresh_codex).await {
+        if let Some(candidate) = self.sampler.sample(&self.id, false, &mut refresh).await {
             return candidate.into_binding();
         }
-        // An unbound startup reader must not sit on a two-second cached miss.
+        // Only burst during initial launch. A blank session can remain unbound
+        // indefinitely: afterward share the ordinary two-second idle cadence.
+        // Real native Working edges still refresh through the observer itself.
+        if tokio::time::Instant::now() >= self.startup_until {
+            return Err(crate::read_source::SourceError::IdentityUnavailable);
+        }
+        // A startup reader must not sit on a two-second cached miss.
         // Urgent requests still coalesce at the sampler's shared 250ms floor.
         self.sampler
-            .sample(&self.id, true, refresh_codex)
+            .sample(&self.id, true, refresh)
             .await
             .ok_or(crate::read_source::SourceError::IdentityUnavailable)?
             .into_binding()
@@ -738,6 +758,62 @@ mod tests {
             )
             .unwrap();
     }
+    #[tokio::test(start_paused = true)]
+    async fn given_long_idle_unbound_reader_should_not_force_scans_after_startup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let sources = NativeSources::default();
+        let reader = sources.codex_reader(None, 123, "/owned").unwrap();
+        tokio::time::advance(Duration::from_secs(3)).await;
+        let calls = AtomicUsize::new(0);
+        for _ in 0..100 {
+            assert!(
+                reader
+                    .discover_with(|_| {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        async { HashMap::new() }
+                    })
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "Idle probes must reuse the bounded shared miss, not force250ms scans forever"
+        );
+        // The native observer can still force a real Working transition, and
+        // the idle reader must immediately reuse that successful source view.
+        sources
+            .codex
+            .sample(&reader.id, true, |roots| async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                roots
+                    .into_iter()
+                    .map(|(id, _)| {
+                        (
+                            id,
+                            Some(crate::read_source::CodexCandidate::Bound(
+                                crate::read_source::Binding {
+                                    version: 1,
+                                    runtime: pu_core::read::Runtime::Codex,
+                                    session_id: "started-root".into(),
+                                    path: "/owned/rollout.jsonl".into(),
+                                    cwd: "/owned".into(),
+                                },
+                            )),
+                        )
+                    })
+                    .collect()
+            })
+            .await;
+        let binding = reader
+            .discover_with(|_| async { panic!("Positive cache must not force another scan") })
+            .await
+            .unwrap();
+        assert_eq!(binding.session_id, "started-root");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
     #[tokio::test]
     async fn given_unbound_reader_with_cached_miss_should_retry_newly_opened_owned_rollout() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
