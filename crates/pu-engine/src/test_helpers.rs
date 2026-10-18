@@ -6,6 +6,11 @@ use crate::engine::Engine;
 /// Shared test helper: initialise a project and spawn a root agent.
 /// Returns (engine, agent_id, _tmp).
 pub(crate) async fn init_and_spawn() -> (Engine, String, TempDir) {
+    init_and_spawn_command(None).await
+}
+
+/// Use a controlled PTY command when a test requires deterministic output.
+pub(crate) async fn init_and_spawn_command(command: Option<&str>) -> (Engine, String, TempDir) {
     let tmp = TempDir::new().unwrap();
     let project_root = tmp.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
@@ -30,7 +35,7 @@ pub(crate) async fn init_and_spawn() -> (Engine, String, TempDir) {
             base: None,
             root: true,
             worktree: None,
-            command: None,
+            command: command.map(str::to_owned),
             no_auto: false,
             extra_args: vec![],
             plan_mode: false,

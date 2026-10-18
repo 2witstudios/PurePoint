@@ -150,16 +150,44 @@ async fn setup_with_agent() -> (
 
 #[tokio::test(flavor = "current_thread")]
 async fn given_attach_request_should_stream_output_continuously() {
-    let (sock_path, agent_id, server_handle, _tmp) = setup_with_agent().await;
-
-    // Wait for the agent to produce some output
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // Connect a new client and attach
+    let (engine, agent_id, tmp) =
+        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let engine = server.engine().clone();
+    let buffer = engine.get_attach_handles(&agent_id).await.unwrap().0;
+    let replay = b"controlled-replay-marker";
+    let mut seed = replay.to_vec();
+    seed.push(b'\n');
+    assert!(matches!(
+        engine
+            .handle_request(Request::Input {
+                agent_id: agent_id.clone(),
+                data: seed,
+                submit: false,
+                cancel_on_disconnect: false,
+            })
+            .await,
+        Response::Ok
+    ));
+    // A real PTY must have produced the expected bytes before testing replay.
+    // A shell prompt and a fixed startup sleep cannot establish this condition.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !buffer
+            .read_from(0)
+            .0
+            .windows(replay.len())
+            .any(|w| w == replay)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("controlled PTY did not produce replay bytes");
+    let server_handle = tokio::spawn(async move { server.run().await });
     let stream = UnixStream::connect(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-
     let req = serde_json::to_string(&Request::Attach {
         agent_id: agent_id.clone(),
         replay: None,
@@ -170,33 +198,57 @@ async fn given_attach_request_should_stream_output_continuously() {
         .write_all(format!("{req}\n").as_bytes())
         .await
         .unwrap();
-
-    // Should get AttachReady first
     let mut line = String::new();
     reader.read_line(&mut line).await.unwrap();
-    let resp: Response = serde_json::from_str(line.trim()).unwrap();
+    let ready: Response = serde_json::from_str(line.trim()).unwrap();
     assert!(
-        matches!(resp, Response::AttachReady { .. }),
-        "expected AttachReady, got {resp:?}"
+        matches!(ready, Response::AttachReady { buffered_bytes } if buffered_bytes >= replay.len())
     );
 
-    // Should get at least one Output message with buffered data
-    line.clear();
-    let read_result = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        reader.read_line(&mut line),
-    )
-    .await;
-    assert!(read_result.is_ok(), "timed out waiting for Output");
-    let resp: Response = serde_json::from_str(line.trim()).unwrap();
-    match resp {
-        Response::Output { agent_id: id, data } => {
-            assert_eq!(id, agent_id);
-            assert!(!data.is_empty(), "expected non-empty output data");
-        }
-        other => panic!("expected Output, got {other:?}"),
+    async fn expect_marker(reader: &mut IpcReader, agent: &str, marker: &[u8]) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut received = Vec::new();
+            loop {
+                let mut line = String::new();
+                assert!(
+                    reader.read_line(&mut line).await.unwrap() > 0,
+                    "attach stream closed"
+                );
+                match serde_json::from_str::<Response>(line.trim()).unwrap() {
+                    Response::Output { agent_id, data } => {
+                        assert_eq!(agent_id, agent);
+                        received.extend(data);
+                        if received.windows(marker.len()).any(|w| w == marker) {
+                            break;
+                        }
+                    }
+                    other => panic!("expected Output, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("controlled marker missing from attach output");
     }
-
+    expect_marker(&mut reader, &agent_id, b"controlled-replay-marker").await;
+    let input = serde_json::to_string(&Request::Input {
+        agent_id: agent_id.clone(),
+        data: b"controlled-live-marker\n".to_vec(),
+        submit: false,
+        cancel_on_disconnect: false,
+    })
+    .unwrap();
+    writer
+        .write_all(format!("{input}\n").as_bytes())
+        .await
+        .unwrap();
+    expect_marker(&mut reader, &agent_id, b"controlled-live-marker").await;
+    engine
+        .handle_request(Request::Kill {
+            project_root: tmp.path().join("project").to_string_lossy().into_owned(),
+            target: KillTarget::Agent(agent_id),
+            exclude: vec![],
+        })
+        .await;
     server_handle.abort();
 }
 
