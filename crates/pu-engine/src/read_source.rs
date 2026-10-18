@@ -359,12 +359,26 @@ pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError>
     select_codex_source(&filter_codex_rollouts(paths), cwd)
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum CodexCandidate {
+    Bound(Binding),
+    Ambiguous,
+}
+impl CodexCandidate {
+    pub(crate) fn into_binding(self) -> Result<Binding, SourceError> {
+        match self {
+            Self::Bound(binding) => Ok(binding),
+            Self::Ambiguous => Err(SourceError::Ambiguous),
+        }
+    }
+}
+
 /// One process-tree snapshot and one owned-descriptor query for all observed
 /// launches. PID-tagged lsof output preserves ownership even for identical cwds.
 /// Limits fail closed; no directory scan, service, or process ownership changes.
 pub(crate) async fn discover_codex_roots(
     roots: Vec<(String, u32, String)>,
-) -> std::collections::HashMap<String, Option<Binding>> {
+) -> std::collections::HashMap<String, Option<CodexCandidate>> {
     use std::collections::{HashMap, HashSet};
     use tokio::io::AsyncReadExt;
     if roots.is_empty() || roots.len() > 256 {
@@ -470,10 +484,12 @@ pub(crate) async fn discover_codex_roots(
                     .flatten()
                     .cloned()
                     .collect();
-                (
-                    id,
-                    select_codex_source(&filter_codex_rollouts(paths), &cwd).ok(),
-                )
+                let candidate = match select_codex_source(&filter_codex_rollouts(paths), &cwd) {
+                    Ok(binding) => Some(CodexCandidate::Bound(binding)),
+                    Err(SourceError::Ambiguous) => Some(CodexCandidate::Ambiguous),
+                    Err(_) => None,
+                };
+                (id, candidate)
             })
             .collect()
     })
@@ -1043,6 +1059,46 @@ mod batched_discovery_tests {
     }
 
     #[tokio::test]
+    async fn given_two_owned_root_files_should_preserve_ambiguous_binding_failure() {
+        use tokio::io::AsyncReadExt;
+        let temp = tempfile::tempdir().unwrap();
+        let paths: Vec<_> = (0..2).map(|n| {
+            let path = temp.path().join(format!("rollout-{n}.jsonl"));
+            std::fs::write(&path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"source\":\"cli\",\"id\":\"root-{n}\",\"cwd\":\"/same\"}}}}\n")).unwrap();
+            path
+        }).collect();
+        let mut child = tokio::process::Command::new("sh")
+            .args([
+                "-c",
+                "exec 3< \"$1\"; exec 4< \"$2\"; printf x; exec sleep 30",
+                "probe",
+            ])
+            .args(&paths)
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut ready = [0];
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_exact(&mut ready)
+            .await
+            .unwrap();
+        let result =
+            discover_codex_roots(vec![("launch".into(), child.id().unwrap(), "/same".into())])
+                .await;
+        let candidate = result["launch"].clone().unwrap();
+        assert!(matches!(
+            candidate.into_binding(),
+            Err(SourceError::Ambiguous)
+        ));
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn given_owned_roots_in_same_directory_should_not_borrow_each_others_rollouts() {
         use tokio::io::AsyncReadExt;
         let temp = tempfile::tempdir().unwrap();
@@ -1070,8 +1126,24 @@ mod batched_discovery_tests {
             children.push(child);
         }
         let results = discover_codex_roots(roots).await;
-        assert_eq!(results["0"].as_ref().unwrap().session_id, "root-0");
-        assert_eq!(results["1"].as_ref().unwrap().session_id, "root-1");
+        assert_eq!(
+            results["0"]
+                .clone()
+                .unwrap()
+                .into_binding()
+                .unwrap()
+                .session_id,
+            "root-0"
+        );
+        assert_eq!(
+            results["1"]
+                .clone()
+                .unwrap()
+                .into_binding()
+                .unwrap()
+                .session_id,
+            "root-1"
+        );
         for mut child in children {
             child.kill().await.unwrap();
             child.wait().await.unwrap();

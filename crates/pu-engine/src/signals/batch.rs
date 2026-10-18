@@ -11,7 +11,7 @@ use tokio::time::Instant;
 const MAX_ROOTS: usize = 256;
 
 pub(super) struct Sampler<K, V> {
-    roots: Mutex<HashMap<String, (u64, K)>>,
+    roots: Mutex<HashMap<String, (u64, K, usize)>>,
     next: AtomicU64,
     cache: tokio::sync::Mutex<Cache<V>>,
     period: Duration,
@@ -29,10 +29,16 @@ pub(super) struct Registration<K, V> {
 impl<K, V> Drop for Registration<K, V> {
     fn drop(&mut self) {
         let mut roots = self.sampler.roots.lock().unwrap();
-        if roots
-            .get(&self.id)
-            .is_some_and(|(epoch, _)| *epoch == self.epoch)
-        {
+        let remove = roots
+            .get_mut(&self.id)
+            .is_some_and(|(epoch, _, references)| {
+                if *epoch != self.epoch {
+                    return false;
+                }
+                *references -= 1;
+                *references == 0
+            });
+        if remove {
             roots.remove(&self.id);
         }
     }
@@ -59,11 +65,28 @@ impl<K: Clone, V: Clone> Sampler<K, V> {
             .next
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .ok()?;
-        roots.insert(id.clone(), (epoch, key));
+        roots.insert(id.clone(), (epoch, key, 1));
         Some(Registration {
             sampler: self.clone(),
             id,
             epoch,
+        })
+    }
+    /// Share an existing registration only for its exact owned-source key.
+    pub(super) fn attach(self: &Arc<Self>, id: &str, key: &K) -> Option<Registration<K, V>>
+    where
+        K: PartialEq,
+    {
+        let mut roots = self.roots.lock().unwrap();
+        let (epoch, existing, references) = roots.get_mut(id)?;
+        if existing != key {
+            return None;
+        }
+        *references = references.checked_add(1)?;
+        Some(Registration {
+            sampler: self.clone(),
+            id: id.into(),
+            epoch: *epoch,
         })
     }
     // Callers share one bounded refresh. A native edge can request a newer view,
@@ -97,7 +120,7 @@ impl<K: Clone, V: Clone> Sampler<K, V> {
                 .lock()
                 .unwrap()
                 .iter()
-                .map(|(id, key)| (id.clone(), key.clone()))
+                .map(|(id, (epoch, key, _))| (id.clone(), (*epoch, key.clone())))
                 .collect();
             let roots = registered
                 .iter()
@@ -122,7 +145,7 @@ impl<K: Clone, V: Clone> Sampler<K, V> {
             .lock()
             .unwrap()
             .get(id)
-            .is_none_or(|(current, _)| *current != epoch)
+            .is_none_or(|(current, _, _)| *current != epoch)
         {
             return None;
         }
@@ -138,6 +161,27 @@ impl<K: Clone, V: Clone> Sampler<K, V> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(start_paused = true)]
+    async fn given_binding_reader_and_observer_should_share_registration_without_borrowing_another_key()
+     {
+        let sampler = Arc::new(Sampler::<usize, usize>::new(Duration::from_secs(2)));
+        let observer = sampler.register("launch".into(), 7).unwrap();
+        let reader = sampler.attach("launch", &7).unwrap();
+        assert!(sampler.attach("launch", &8).is_none());
+        assert_eq!(sampler.roots.lock().unwrap().len(), 1);
+        drop(observer);
+        assert_eq!(
+            sampler
+                .sample("launch", false, |roots| async {
+                    roots.into_iter().map(|(id, key)| (id, Some(key))).collect()
+                })
+                .await,
+            Some(7)
+        );
+        drop(reader);
+        assert_eq!(sampler.roots.lock().unwrap().len(), 0);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn given_failed_source_should_cache_failure_and_bound_urgent_edge_retries() {

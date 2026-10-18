@@ -231,7 +231,7 @@ impl Observer {
         mut exit: tokio::sync::watch::Receiver<Option<i32>>,
         channels: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
         output: Arc<OutputBuffer>,
-        discovery: Arc<super::batch::Sampler<(u32, String), Binding>>,
+        discovery: Arc<super::batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
     ) {
         let Some(launch) = state
             .upgrade()
@@ -275,20 +275,9 @@ impl Observer {
                 } else {
                     let mut binding_current = false;
                     let observed = discovery
-                        .sample(&launch, urgent, |roots| async move {
-                            tokio::time::timeout(
-                                Duration::from_secs(2),
-                                crate::read_source::discover_codex_roots(
-                                    roots
-                                        .into_iter()
-                                        .map(|(id, (pid, cwd))| (id, pid, cwd))
-                                        .collect(),
-                                ),
-                            )
-                            .await
-                            .unwrap_or_default()
-                        })
-                        .await;
+                        .sample(&launch, urgent, super::refresh_codex)
+                        .await
+                        .and_then(|candidate| candidate.into_binding().ok());
                     if let Some(observed) = observed {
                         if binding
                             .as_ref()

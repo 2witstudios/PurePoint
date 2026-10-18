@@ -78,6 +78,12 @@ launches every 2 seconds. Native Working edges request a newer view with shared
 single-flight coalescing and a 250ms global retry floor. At most 128 owned PIDs
 per root, 4096 PIDs per batch and 8MiB of lsof output are accepted; overflow fails
 closed. Roots in the same directory cannot borrow each other's descriptors.
+The existing startup native-read/session binder uses this sampler too: it shares
+the observer's exact PID/cwd launch registration, rather than repeating its old
+100ms ps/lsof loop. Its existing guarded manifest commit and ambiguous-source
+failure are preserved. Without telemetry support it registers its own bounded
+reader; exited owned handles stop unbound discovery. Read binding remains owned
+by the existing engine path, never by the passive telemetry observer.
 Bound Codex launches recheck that the owned process still holds the same root,
 not merely that the old file still exists. A different root latches observation
 lost without rebinding the native session; a temporarily unavailable check

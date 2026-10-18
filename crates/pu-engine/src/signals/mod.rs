@@ -19,7 +19,7 @@ pub(crate) type SignalStates = Arc<Mutex<HashMap<String, Arc<LaunchState>>>>;
 
 /// Read-only samplers live with this Engine, never in a global/service singleton.
 pub(crate) struct NativeSources {
-    codex: Arc<batch::Sampler<(u32, String), crate::read_source::Binding>>,
+    codex: Arc<batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
     opencode: opencode::Services,
 }
 impl Default for NativeSources {
@@ -29,6 +29,63 @@ impl Default for NativeSources {
             opencode: opencode::Services::default(),
         }
     }
+}
+
+/// Existing native-read binding and telemetry share discovery, not ownership.
+pub(crate) struct CodexReader {
+    sampler: Arc<batch::Sampler<(u32, String), crate::read_source::CodexCandidate>>,
+    id: String,
+    _registration: batch::Registration<(u32, String), crate::read_source::CodexCandidate>,
+}
+impl NativeSources {
+    pub(crate) fn codex_reader(
+        &self,
+        launch: Option<&str>,
+        pid: u32,
+        cwd: &str,
+    ) -> Option<CodexReader> {
+        let key = (pid, cwd.to_owned());
+        let (id, registration) =
+            match launch.and_then(|id| self.codex.attach(id, &key).map(|r| (id.to_owned(), r))) {
+                Some(existing) => existing,
+                None => {
+                    let id = format!("read:{}", pu_core::id::session_id());
+                    let registration = self.codex.register(id.clone(), key)?;
+                    (id, registration)
+                }
+            };
+        Some(CodexReader {
+            sampler: self.codex.clone(),
+            id,
+            _registration: registration,
+        })
+    }
+}
+impl CodexReader {
+    pub(crate) async fn discover(
+        &self,
+    ) -> Result<crate::read_source::Binding, crate::read_source::SourceError> {
+        self.sampler
+            .sample(&self.id, false, refresh_codex)
+            .await
+            .ok_or(crate::read_source::SourceError::IdentityUnavailable)?
+            .into_binding()
+    }
+}
+async fn refresh_codex(
+    roots: Vec<(String, (u32, String))>,
+) -> HashMap<String, Option<crate::read_source::CodexCandidate>> {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::read_source::discover_codex_roots(
+            roots
+                .into_iter()
+                .map(|(id, (pid, cwd))| (id, pid, cwd))
+                .collect(),
+        ),
+    )
+    .await
+    .unwrap_or_default()
 }
 
 // Native image/PDF tool results can exceed 1MiB in one JSONL record. Keep the
@@ -74,6 +131,9 @@ pub(crate) struct LaunchState {
 }
 
 impl LaunchState {
+    pub(crate) fn launch_id(&self) -> String {
+        self.identity.lock().unwrap().launch_id.clone()
+    }
     pub(crate) fn snapshot(&self) -> Option<SignalSnapshot> {
         let native = self.native_snapshot.lock().ok()?.clone();
         let is_native = native.is_some();
