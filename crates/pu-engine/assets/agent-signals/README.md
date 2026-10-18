@@ -108,8 +108,8 @@ and registration epochs prevent cache reuse after replacement. Samplers belong t
 the Engine, not a global singleton or new service; they do not start processes,
 change PTYs, write native config or migrate native session ownership.
 
-Codex checks the executable's exact version once before launch with a 500ms
-deadline and bounded output, using a disposable HOME/CODEX_HOME because native
+Codex checks the executable's exact version before launch with bounded output
+and up to three 500ms attempts (only timeouts retry), using a disposable HOME/CODEX_HOME because native
 `--version` can create PATH aliases. No user profile is passed to that check.
 On resume, the exact root file's inode and complete-line EOF are captured before
 the new process starts (500ms preparation deadline). Only subsequently appended
@@ -128,10 +128,26 @@ An in-progress append does not disconnect an otherwise verified root: only
 complete JSONL records establish facts, joined to the native terminal's current
 state. Inode/owner changes, truncation, invalid complete records and terminal
 byte loss still invalidate observation; an incomplete suffix establishes nothing.
-`question_idle_hold` exercises 35 seconds of unprompted idle, a real question and
-answer, then 35 seconds of settled idle with automatic status heartbeats. Its
-private resolver fixture delays nonnumeric queries but delegates numeric queries
-to real lsof; it changes neither host DNS nor native descriptor ownership.
+`question_idle_hold` exercises all three tools with 35 seconds of unprompted
+idle, a real question and answer, then 35 seconds of settled idle with automatic
+status heartbeats. It rejects any loss of observation during the ordinary turn.
+For Codex it uses the default alternate-screen TUI and a private resolver fixture
+that delays nonnumeric queries but delegates numeric queries to real lsof; it
+changes neither host DNS nor native descriptor ownership.
+
+Claude's strictly bound PID registry can report initial Idle before its first
+transcript exists. This requires an unchanged idle registry bracket, no prior
+transcript inode/read in flight, and a missing file; a lost, replaced or invalid
+transcript never uses this fallback. Claude and Codex parse complete prefixes
+while appends are in progress and retain the greatest observed file length so
+even truncation of unread data invalidates observation.
+
+OpenCode's empty landing session is not yet materialized in the native service.
+Only matching native SessionNotFoundError responses for the exact assigned root,
+permissions and forms, a stable absent root execution, and a verified service
+PID/version establish initial Idle. Authentication, timeout, arbitrary 404,
+mixed views and malformed responses do not establish Idle. After any complete
+root view, or on resume, disappearance cannot fall back to initial Idle.
 
 Claude resume uses the same pre-spawn inode/complete-line EOF boundary, with no
 accepted turn, pending requests, replay history or terminal outcome inherited.

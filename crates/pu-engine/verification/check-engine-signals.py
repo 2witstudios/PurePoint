@@ -11,8 +11,6 @@ parser.add_argument('--runner', required=True, help='Exact candidate owned-nativ
 args = parser.parse_args()
 if args.scenario in ['resume_pending', 'session_switch'] and args.tool != 'codex':
     parser.error('resume_pending/session_switch check Codex history/ownership regressions')
-if args.scenario == 'question_idle_hold' and args.tool != 'codex':
-    parser.error('question_idle_hold checks Codex pre-thread idle and quiet settled refresh')
 if args.scenario == 'image' and args.tool == 'opencode':
     parser.error('image checks the Claude/Codex native JSONL record regression')
 if args.scenario == 'resume_live_work' and args.tool != 'opencode':
@@ -42,7 +40,7 @@ Handler = fixture_globals['Handler']
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 env = {'HOME': str(home), 'TMPDIR': str(root / 'tmp'), 'PATH': '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin', 'SHELL': '/bin/sh', 'TERM': 'xterm-256color', 'LANG': 'en_US.UTF-8'}
-if args.scenario == 'question_idle_hold':
+if args.scenario == 'question_idle_hold' and args.tool == 'codex':
     # Simulate slow reverse DNS without changing host DNS or faking descriptors.
     # Numeric queries execute the real native lsof on the actual owned CLI.
     tools = root / 'tools'

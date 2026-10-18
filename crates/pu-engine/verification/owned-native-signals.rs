@@ -163,7 +163,7 @@ async fn stages(
     scenario: &str,
 ) -> Result<(), String> {
     tokio::time::sleep(Duration::from_secs(3)).await;
-    if tool == "codex" {
+    {
         idle_period(
             e,
             project,
@@ -220,6 +220,14 @@ async fn stages(
     let mut recovery_working = false;
     loop {
         if let Some(s) = capture(e, project, dir, "latest", id).await? {
+            if scenario == "question_idle_hold"
+                && !s.is_current(chrono::Utc::now().timestamp_millis())
+            {
+                return Err(format!(
+                    "normal turn lost observation: {:?}",
+                    s.observation.state
+                ));
+            }
             if s.is_current(chrono::Utc::now().timestamp_millis()) {
                 if s.activity == SignalActivity::Working
                     && s.pending_attention.is_empty()

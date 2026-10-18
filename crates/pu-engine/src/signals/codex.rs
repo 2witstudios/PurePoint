@@ -50,7 +50,7 @@ pub(super) async fn prepare_launch(
         .find(|(key, _)| key == "PATH")
         .map(|(_, value)| value.as_str())
         .unwrap_or("");
-    let supported = async {
+    let supported = || async {
         let mut child = tokio::process::Command::new(command)
             .args(["--no-daemon", "--version"])
             .env_clear()
@@ -79,9 +79,23 @@ pub(super) async fn prepare_launch(
         }
         (std::str::from_utf8(&bytes).ok()?.trim() == "codex-cli 0.163.0").then_some(())
     };
-    tokio::time::timeout(Duration::from_millis(500), supported)
-        .await
-        .ok()??;
+    let mut verified = false;
+    for _ in 0..3 {
+        match tokio::time::timeout(Duration::from_millis(500), supported()).await {
+            Ok(Some(())) => {
+                verified = true;
+                break;
+            }
+            Ok(None) => return None,
+            // Cold executable validation can use the first budget before main.
+            // Retry only timeouts, in the same disposable profile; a genuine
+            // unsupported version or failed executable is never accepted.
+            Err(_) => {}
+        }
+    }
+    if !verified {
+        return None;
+    }
     let mut prepared = prepare(project, agent, worktree, session)?;
     if let Some(session) = session {
         let (session, cwd, env) = (session.to_owned(), cwd.to_owned(), env.to_vec());
@@ -155,6 +169,7 @@ pub(super) fn prepare(
 #[derive(Default)]
 struct Cursor {
     offset: u64,
+    observed_length: u64,
     inode: Option<(u64, u64)>,
     partial: Vec<u8>,
     poisoned: bool,
@@ -164,6 +179,7 @@ impl Cursor {
         let boundary = super::native_file_boundary(path)?;
         Some(Self {
             offset: boundary.offset,
+            observed_length: boundary.offset,
             inode: Some(boundary.inode),
             ..Self::default()
         })
@@ -183,11 +199,13 @@ impl Cursor {
         if !meta.is_file()
             || meta.uid() != unsafe { libc::geteuid() }
             || meta.len() < self.offset
+            || meta.len() < self.observed_length
             || self.inode.is_some_and(|old| old != inode)
         {
             return None;
         }
         self.inode = Some(inode);
+        self.observed_length = meta.len();
         file.seek(SeekFrom::Start(self.offset)).ok()?;
         let mut bytes = Vec::new();
         file.take(8 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
@@ -220,18 +238,21 @@ impl Cursor {
             })
     }
 
-    fn observation_ready(&self, path: &Path) -> bool {
+    fn observation_ready(&mut self, path: &Path) -> bool {
         // Native activity is a level signal; JSONL facts come only from complete
         // records. A writer may append between reads without invalidating that
         // prefix. Preserve inode/owner/length checks, and never publish a failed
         // parse or any fact from the incomplete suffix.
-        !self.poisoned
-            && std::fs::symlink_metadata(path).is_ok_and(|m| {
-                m.is_file()
-                    && m.uid() == unsafe { libc::geteuid() }
-                    && Some((m.dev(), m.ino())) == self.inode
-                    && m.len() >= self.offset
-            })
+        if self.poisoned {
+            return false;
+        }
+        let Some(length) =
+            super::native_prefix_length(path, self.inode, self.offset, self.observed_length)
+        else {
+            return false;
+        };
+        self.observed_length = length;
+        true
     }
 }
 
@@ -719,6 +740,40 @@ mod tests {
         std::fs::rename(replacement, &path).unwrap();
         assert!(!cursor.observation_ready(&path));
     }
+    #[test]
+    fn given_unread_tail_is_truncated_should_not_publish_the_retained_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout.jsonl");
+        let padding = format!(
+            "{{\"type\":\"metadata\",\"padding\":\"{}\"}}\n",
+            "x".repeat(64 * 1024)
+        );
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}",
+                meta(),
+                event("task_started", "turn"),
+                padding.repeat(160)
+            ),
+        )
+        .unwrap();
+        let mut cursor = Cursor::default();
+        cursor
+            .read(&path, &mut History::default(), "/owned")
+            .unwrap();
+        assert!(cursor.observation_ready(&path));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(9 * 1024 * 1024)
+            .unwrap();
+        assert!(
+            !cursor.observation_ready(&path),
+            "Truncating previously observed but unread data is still loss"
+        );
+    }
     fn meta() -> Value {
         json!({"type":"session_meta","payload":{"id":"native","cwd":"/owned","source":"cli","cli_version":"0.163.0"}})
     }
@@ -832,6 +887,33 @@ mod tests {
             protocol.feed(packet);
             assert!(unbound_snapshot(&identity, &protocol, 100).is_none());
         }
+    }
+    #[tokio::test]
+    async fn given_cold_version_probe_should_retry_without_disabling_supported_observation() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("codex");
+        std::fs::write(&executable, "#!/bin/sh\nif [ ! -f \"$HOME/validated\" ]; then printf warm > \"$HOME/validated\"; exec /bin/sleep 2; fi\nprintf 'codex-cli 0.163.0\\n'\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let cwd = root.path().to_str().unwrap();
+        let env = vec![("HOME".into(), cwd.into())];
+        assert!(
+            prepare_launch(
+                cwd,
+                "agent",
+                None,
+                None,
+                cwd,
+                executable.to_str().unwrap(),
+                &env
+            )
+            .await
+            .is_some()
+        );
+        assert!(
+            !root.path().join("validated").exists(),
+            "Even retried version probes must keep the real profile untouched"
+        );
     }
     #[test]
     fn given_idle_native_ui_and_unfinished_history_should_not_claim_working() {
