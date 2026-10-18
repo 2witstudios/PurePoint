@@ -223,7 +223,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             ? nil : agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
         return WorkspaceRenderState(
             id: workspace.id, title: title, paneCount: workspace.paneCount, tabCount: workspace.tabCount,
-            status: status, signal: agents.first.map { $0.signal?.presentation(agentID: $0.id, sessionID: $0.sessionId, available: !project.isUnavailable && $0.status.isAlive && !$0.suspended) ?? .unknown })
+            status: status, signal: agents.first.map { $0.signalPresentation(available: !project.isUnavailable) })
     }
 
     private func makeRenderState(projects: [ProjectState], machines: [MachineState]) -> SidebarRenderState {

@@ -1,7 +1,7 @@
 use pu_core::protocol::{InventoryKind, KillTarget, Request, Response, SuspendTarget};
 use pu_core::signals::{AttentionKind, OutcomeKind, SignalActivity, SignalSnapshot};
 use pu_engine::engine::Engine;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     path::Path,
     sync::Arc,
@@ -58,7 +58,13 @@ async fn capture(
     }
     let snapshot: SignalSnapshot =
         serde_json::from_value(agent["signal"].clone()).map_err(|e| e.to_string())?;
-    if snapshot.identity.agent_id != id || snapshot.identity.native_session_id.is_empty() {
+    let launch_idle = snapshot.identity.native_session_id.is_empty()
+        && snapshot.activity == SignalActivity::Idle
+        && snapshot.outcome.is_none()
+        && snapshot.pending_attention.is_empty();
+    if snapshot.identity.agent_id != id
+        || (snapshot.identity.native_session_id.is_empty() && !launch_idle)
+    {
         return Err("native identity mismatch".into());
     }
     if snapshot
@@ -84,6 +90,71 @@ async fn raw(e: &Engine, id: &str, data: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
+
+async fn idle_period(
+    e: &Engine,
+    project: &str,
+    id: &str,
+    dir: &Path,
+    tag: &str,
+    completed: bool,
+    seconds: u64,
+) -> Result<(), String> {
+    let mut events = e.subscribe_status(project).await;
+    let ready_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(s) = capture(e, project, dir, tag, id).await?
+            && s.is_current(chrono::Utc::now().timestamp_millis())
+            && s.activity == SignalActivity::Idle
+        {
+            break;
+        }
+        if Instant::now() >= ready_deadline {
+            return Err(format!("{tag}: native idle never became available"));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let end = Instant::now() + Duration::from_secs(seconds);
+    let mut frames = Vec::new();
+    loop {
+        let s = capture(e, project, dir, tag, id)
+            .await?
+            .ok_or("idle observation disappeared")?;
+        if !s.is_current(chrono::Utc::now().timestamp_millis())
+            || s.activity != SignalActivity::Idle
+            || !s.pending_attention.is_empty()
+            || if completed {
+                !s.outcome
+                    .as_ref()
+                    .is_some_and(|o| o.kind == OutcomeKind::Completed)
+            } else {
+                s.outcome.is_some()
+            }
+        {
+            return Err(format!(
+                "{tag}: quiet native state became unavailable or changed"
+            ));
+        }
+        frames.push(
+            serde_json::from_slice::<Value>(
+                &std::fs::read(dir.join(format!("{tag}.json"))).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?,
+        );
+        if Instant::now() >= end {
+            break;
+        }
+        let wait = Duration::from_secs(12).min(end.saturating_duration_since(Instant::now()));
+        match tokio::time::timeout(wait, events.recv()).await {
+            // Lagging behind a burst of publications still proves they continue.
+            Ok(Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            Err(_) if Instant::now() >= end => {}
+            _ => return Err(format!("{tag}: automatic status publication stopped")),
+        }
+    }
+    save(dir, &format!("{tag}-timeline.json"), &frames)
+}
+
 async fn stages(
     e: &Engine,
     project: &str,
@@ -93,6 +164,22 @@ async fn stages(
     scenario: &str,
 ) -> Result<(), String> {
     tokio::time::sleep(Duration::from_secs(3)).await;
+    {
+        idle_period(
+            e,
+            project,
+            id,
+            dir,
+            "startup-idle",
+            false,
+            if scenario == "question_idle_hold" {
+                35
+            } else {
+                0
+            },
+        )
+        .await?;
+    }
     if tool == "opencode" {
         let until = Instant::now() + Duration::from_secs(25);
         loop {
@@ -134,6 +221,14 @@ async fn stages(
     let mut recovery_working = false;
     loop {
         if let Some(s) = capture(e, project, dir, "latest", id).await? {
+            if scenario == "question_idle_hold"
+                && !s.is_current(chrono::Utc::now().timestamp_millis())
+            {
+                return Err(format!(
+                    "normal turn lost observation: {:?}",
+                    s.observation.state
+                ));
+            }
             if s.is_current(chrono::Utc::now().timestamp_millis()) {
                 if s.activity == SignalActivity::Working
                     && s.pending_attention.is_empty()
@@ -296,6 +391,9 @@ async fn stages(
                         return Err("native request retained after terminal outcome".into());
                     }
                     capture(e, project, dir, "resolved", id).await?;
+                    if scenario == "question_idle_hold" {
+                        idle_period(e, project, id, dir, "settled-idle", true, 35).await?;
+                    }
                     save(
                         dir,
                         "resolved-logs.json",
@@ -370,7 +468,7 @@ fn main() {
                 extra.extend(["--permission-mode".into(), "manual".into()]);
             }
         }
-        if tool == "codex" {
+        if tool == "codex" && scenario != "question_idle_hold" {
             extra.push("--no-alt-screen".into());
         }
         let response = e

@@ -119,6 +119,25 @@ async fn refresh_codex(
 // per-poll I/O budget separate from this finite record-assembly limit.
 const MAX_NATIVE_RECORD_BYTES: usize = 32 * 1024 * 1024;
 
+// A JSONL append may be incomplete while its already parsed prefix remains
+// valid. Track the greatest observed length so even an unread-tail truncation
+// invalidates that prefix; never follow replacement links or another inode.
+fn native_prefix_length(
+    path: &Path,
+    inode: Option<(u64, u64)>,
+    offset: u64,
+    observed_length: u64,
+) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    (m.is_file()
+        && m.uid() == unsafe { libc::geteuid() }
+        && Some((m.dev(), m.ino())) == inode
+        && m.len() >= offset
+        && m.len() >= observed_length)
+        .then_some(m.len())
+}
+
 struct NativeFileBoundary {
     offset: u64,
     inode: (u64, u64),

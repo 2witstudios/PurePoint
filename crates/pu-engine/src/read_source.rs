@@ -312,6 +312,14 @@ pub fn commit_binding(
     result
 }
 
+// Descriptor ownership is local metadata. DNS/service lookups can otherwise
+// stall the shared scan and withdraw every launch at the two-second deadline.
+fn codex_lsof_command(pids: &str, fields: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("lsof");
+    command.args(["-nP", "-a", "-p", pids, fields]);
+    command
+}
+
 /// Only descriptors held by the owned process tree are discovery candidates.
 pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError> {
     use tokio::io::AsyncReadExt;
@@ -333,8 +341,7 @@ pub async fn discover_codex(pid: u32, cwd: &str) -> Result<Binding, SourceError>
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
-    let mut child = tokio::process::Command::new("lsof")
-        .args(["-a", "-p", &pids, "-Fn"])
+    let mut child = codex_lsof_command(&pids, "-Fn")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -436,8 +443,7 @@ pub(crate) async fn discover_codex_roots(
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",");
-            let Ok(mut child) = tokio::process::Command::new("lsof")
-                .args(["-a", "-p", &pid_list, "-Fpn"])
+            let Ok(mut child) = codex_lsof_command(&pid_list, "-Fpn")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .kill_on_drop(true)
@@ -1034,6 +1040,36 @@ mod tests {
 #[cfg(test)]
 mod batched_discovery_tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn given_slow_network_name_resolution_should_still_find_owned_rollouts() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let rollout = temp.path().join("rollout-owned.jsonl");
+        let held = std::fs::File::create(&rollout).unwrap();
+        let rollout = rollout.canonicalize().unwrap();
+        let wrapper = temp.path().join("lsof-resolution-probe");
+        // Reproduce a slow resolver without touching this machine's DNS. The
+        // numeric path delegates to the real lsof and real owned descriptor.
+        std::fs::write(&wrapper, "#!/bin/sh\ncase \" $* \" in\n *' -nP '*) exec /usr/sbin/lsof \"$@\" ;;\n *) exec /bin/sleep 5 ;;\nesac\n").unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for fields in ["-Fn", "-Fpn"] {
+            let command = codex_lsof_command(&std::process::id().to_string(), fields);
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                tokio::process::Command::new(&wrapper)
+                    .args(command.as_std().get_args())
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await;
+            let output = result
+                .expect("Native descriptor discovery must not wait for name resolution")
+                .unwrap();
+            assert!(String::from_utf8_lossy(&output.stdout).contains(rollout.to_str().unwrap()));
+        }
+        drop(held);
+    }
     #[test]
     fn given_symlink_rollout_should_not_follow_it_during_shared_discovery() {
         let temp = tempfile::tempdir().unwrap();

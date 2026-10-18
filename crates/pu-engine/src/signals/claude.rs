@@ -48,7 +48,9 @@ pub(super) async fn prepare_launch(
             return None;
         };
         observer.initial_transcript = Box::new(Transcript {
+            materialized: true,
             offset: boundary.offset,
+            observed_length: boundary.offset,
             inode: Some(boundary.inode),
             ..Transcript::default()
         });
@@ -212,6 +214,16 @@ impl Observer {
                         &self.env,
                     )
                     .ok()?;
+                    if pending_read.is_none()
+                        && transcript.initial_idle_without_transcript(&binding.path, &before)
+                    {
+                        let after = self.row(&cwd, pid, &identity.native_session_id).await?;
+                        return if before == after {
+                            transcript.snapshot(&identity, &after, now_ms())
+                        } else {
+                            None
+                        };
+                    }
                     let transcript_path = binding.path.clone();
                     let id = identity.clone();
                     let dir = cwd.clone();
@@ -240,7 +252,7 @@ impl Observer {
                         return None;
                     }
                     let after = self.row(&cwd, pid, &identity.native_session_id).await?;
-                    if before != after || !transcript.unchanged(&transcript_path) {
+                    if before != after || !transcript.observation_ready(&transcript_path) {
                         return None;
                     }
                     transcript.snapshot(&identity, &after, now_ms())
@@ -282,7 +294,9 @@ impl Observer {
 #[derive(Default)]
 struct Transcript {
     poisoned: bool,
+    materialized: bool,
     offset: u64,
+    observed_length: u64,
     inode: Option<(u64, u64)>,
     partial: Vec<u8>,
     turn: Option<String>,
@@ -382,6 +396,7 @@ impl RecordFacts {
 
 impl Transcript {
     fn read(&mut self, path: &Path, identity: &SignalIdentity, cwd: &str) -> Option<()> {
+        self.materialized |= std::fs::symlink_metadata(path).is_ok();
         if self.poisoned {
             return None;
         }
@@ -396,11 +411,13 @@ impl Transcript {
         if !meta.is_file()
             || meta.uid() != unsafe { libc::geteuid() }
             || meta.len() < self.offset
+            || meta.len() < self.observed_length
             || self.inode.is_some_and(|old| old != inode)
         {
             return None;
         }
         self.inode = Some(inode);
+        self.observed_length = meta.len();
         file.seek(SeekFrom::Start(self.offset)).ok()?;
         let mut bytes = Vec::new();
         file.take(8 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
@@ -426,6 +443,30 @@ impl Transcript {
         Some(())
     }
 
+    fn initial_idle_without_transcript(&self, path: &Path, row: &Value) -> bool {
+        !self.materialized
+            && self.inode.is_none()
+            && !self.poisoned
+            && row["status"] == "idle"
+            && std::fs::symlink_metadata(path)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    }
+
+    fn observation_ready(&mut self, path: &Path) -> bool {
+        // A read capped by the per-poll budget leaves complete records unread.
+        if self.poisoned || self.offset < self.observed_length {
+            return false;
+        }
+        let Some(length) =
+            super::native_prefix_length(path, self.inode, self.offset, self.observed_length)
+        else {
+            return false;
+        };
+        self.observed_length = length;
+        true
+    }
+
+    #[cfg(test)]
     fn unchanged(&self, path: &Path) -> bool {
         self.partial.is_empty()
             && std::fs::symlink_metadata(path).is_ok_and(|m| {
@@ -618,8 +659,9 @@ impl Transcript {
                     _ => return None,
                 };
                 // The native registry exposes a category, not a request ID. Only
-                // join when exactly one outstanding root tool can own that UI.
-                if self.tools.len() != 1 {
+                // join when exactly one outstanding root tool can own that UI,
+                // and not while a record that may resolve it is still arriving.
+                if self.tools.len() != 1 || !self.partial.is_empty() {
                     return None;
                 }
                 let (id, is_question) = self.tools.iter().next()?;
@@ -680,6 +722,72 @@ impl Transcript {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn initial_registry_idle_does_not_require_a_transcript_or_hide_a_lost_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("not-yet-created.jsonl");
+        let mut transcript = Transcript::default();
+        assert!(transcript.initial_idle_without_transcript(&missing, &json!({"status":"idle"})));
+        for status in ["busy", "waiting", "future"] {
+            assert!(
+                !transcript.initial_idle_without_transcript(&missing, &json!({"status":status}))
+            );
+        }
+        transcript.inode = Some((1, 2));
+        assert!(!transcript.initial_idle_without_transcript(&missing, &json!({"status":"idle"})));
+        transcript.inode = None;
+        transcript.poisoned = true;
+        assert!(!transcript.initial_idle_without_transcript(&missing, &json!({"status":"idle"})));
+        transcript.poisoned = false;
+        std::fs::write(&missing, "").unwrap();
+        assert!(!transcript.initial_idle_without_transcript(&missing, &json!({"status":"idle"})));
+        std::fs::remove_file(&missing).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("absent-target"), &missing).unwrap();
+        assert!(transcript.read(&missing, &identity(), "/owned").is_none());
+        std::fs::remove_file(&missing).unwrap();
+        assert!(
+            !transcript.initial_idle_without_transcript(&missing, &json!({"status":"idle"})),
+            "An invalid source that disappears must not become initial idle"
+        );
+    }
+    #[test]
+    fn waiting_request_is_not_joined_while_a_record_is_still_arriving() {
+        let mut transcript = Transcript {
+            turn: Some("turn".into()),
+            ..Transcript::default()
+        };
+        transcript.tools.insert("request".into(), true);
+        let waiting = json!({"status":"waiting","waitingFor":"input needed"});
+        transcript.partial = b"{\"type\":\"user\"".to_vec();
+        assert!(transcript.snapshot(&identity(), &waiting, 100).is_none());
+        transcript.partial.clear();
+        assert_eq!(
+            transcript
+                .snapshot(&identity(), &waiting, 100)
+                .unwrap()
+                .pending_attention
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn backlog_beyond_read_budget_is_not_an_observation() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("transcript.jsonl");
+        let line = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(64 * 1024));
+        std::fs::write(&path, line.repeat(160)).unwrap();
+        // Simulate the read cursor after one capped read.
+        let meta = std::fs::metadata(&path).unwrap();
+        let mut transcript = Transcript {
+            inode: Some((meta.dev(), meta.ino())),
+            observed_length: meta.len(),
+            offset: 8 * 1024 * 1024,
+            ..Transcript::default()
+        };
+        assert!(!transcript.observation_ready(&path));
+        transcript.offset = meta.len();
+        assert!(transcript.observation_ready(&path));
+    }
     fn identity() -> SignalIdentity {
         SignalIdentity {
             agent_id: "agent".into(),

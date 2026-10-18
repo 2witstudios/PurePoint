@@ -19,6 +19,7 @@ pub(super) struct Observer {
 struct NativeObservation {
     snapshot: SignalSnapshot,
     idle_revision: Option<i64>,
+    materialized: bool,
 }
 
 #[derive(Clone)]
@@ -57,6 +58,7 @@ struct OutcomeFence {
     minimum_idle: Option<i64>,
     high_water: Option<i64>,
     initialized: bool,
+    materialized: bool,
 }
 impl Default for OutcomeFence {
     fn default() -> Self {
@@ -64,6 +66,7 @@ impl Default for OutcomeFence {
             minimum_idle: None,
             high_water: None,
             initialized: true,
+            materialized: false,
         }
     }
 }
@@ -73,9 +76,13 @@ impl OutcomeFence {
             minimum_idle: revision,
             high_water: revision,
             initialized,
+            materialized: true,
         }
     }
     fn apply(&mut self, value: NativeObservation) -> Option<SignalSnapshot> {
+        if self.materialized && !value.materialized {
+            return None;
+        }
         // Native projector.ts advances time.idle strictly on every terminal,
         // including same-millisecond completion and wall-clock rollback. It is
         // a native revision, not our receipt timestamp or metadata updated time.
@@ -83,6 +90,7 @@ impl OutcomeFence {
             return None;
         }
         self.high_water = value.idle_revision;
+        self.materialized |= value.materialized;
         if !self.initialized {
             self.minimum_idle = value.idle_revision;
             self.initialized = true;
@@ -246,13 +254,18 @@ fn registration(path: &Path) -> Option<Registration> {
     Some(r)
 }
 
-async fn get(client: &reqwest::Client, r: &Registration, path: &str) -> Option<Value> {
+async fn fetch_json(
+    client: &reqwest::Client,
+    r: &Registration,
+    path: &str,
+) -> Option<(reqwest::StatusCode, Value)> {
     let url = reqwest::Url::parse(&r.url).ok()?.join(path).ok()?;
     let mut request = client.get(url);
     if let Some(password) = &r.password {
         request = request.basic_auth("opencode", Some(password));
     }
-    let mut response = request.send().await.ok()?.error_for_status().ok()?;
+    let mut response = request.send().await.ok()?;
+    let status = response.status();
     if response.content_length().is_some_and(|n| n > 1024 * 1024) {
         return None;
     }
@@ -263,7 +276,39 @@ async fn get(client: &reqwest::Client, r: &Registration, path: &str) -> Option<V
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).ok()
+    Some((status, serde_json::from_slice(&bytes).ok()?))
+}
+
+async fn get(client: &reqwest::Client, r: &Registration, path: &str) -> Option<Value> {
+    let (status, value) = fetch_json(client, r, path).await?;
+    status.is_success().then_some(value)
+}
+
+async fn get_session(
+    client: &reqwest::Client,
+    r: &Registration,
+    path: &str,
+    session: &str,
+) -> Option<Option<Value>> {
+    let (status, value) = fetch_json(client, r, path).await?;
+    session_response(status, value, session)
+}
+
+fn session_response(
+    status: reqwest::StatusCode,
+    value: Value,
+    session: &str,
+) -> Option<Option<Value>> {
+    if status.is_success() {
+        return Some(Some(value));
+    }
+    if status == reqwest::StatusCode::NOT_FOUND
+        && value["_tag"] == "SessionNotFoundError"
+        && value["sessionID"].as_str() == Some(session)
+    {
+        return Some(None);
+    }
+    None
 }
 
 async fn poll(
@@ -297,6 +342,7 @@ async fn poll(
     Some(NativeObservation {
         snapshot: snapshot(identity, cwd, &info, &after, &permissions, &forms, now_ms())?,
         idle_revision: info["data"]["time"]["idle"].as_i64(),
+        materialized: true,
     })
 }
 
@@ -322,6 +368,7 @@ async fn poll_batch(
             return None;
         }
         let before = get(client, &r, "/api/session/active").await?;
+        before["data"].as_object()?;
         let r = Arc::new(r);
         let mut pending = roots.into_iter();
         let mut tasks = tokio::task::JoinSet::new();
@@ -335,10 +382,12 @@ async fn poll_batch(
                 tasks.spawn(async move {
                     let value = async {
                         let session = format!("/api/session/{}", root.identity.native_session_id);
-                        let info = get(&client, &r, &session).await?;
+                        let sid = &root.identity.native_session_id;
+                        let info = get_session(&client, &r, &session, sid).await?;
                         let permissions =
-                            get(&client, &r, &format!("{session}/permission")).await?;
-                        let forms = get(&client, &r, &format!("{session}/form")).await?;
+                            get_session(&client, &r, &format!("{session}/permission"), sid).await?;
+                        let forms =
+                            get_session(&client, &r, &format!("{session}/form"), sid).await?;
                         Some((info, permissions, forms))
                     }
                     .await;
@@ -351,6 +400,7 @@ async fn poll_batch(
             observed.push(tasks.join_next().await?.ok()?);
         }
         let after = get(client, &r, "/api/session/active").await?;
+        after["data"].as_object()?;
         let mut tasks = tokio::task::JoinSet::new();
         let mut pending = observed.into_iter();
         let mut observed = Vec::new();
@@ -364,7 +414,10 @@ async fn poll_batch(
                     let value = async {
                         let (info, permissions, forms) = value?;
                         let session = format!("/api/session/{}", root.identity.native_session_id);
-                        if get(&client, &r, &session).await? != info {
+                        if get_session(&client, &r, &session, &root.identity.native_session_id)
+                            .await?
+                            != info
+                        {
                             return None;
                         }
                         Some((info, permissions, forms))
@@ -392,18 +445,15 @@ async fn poll_batch(
                         if before["data"][sid] != after["data"][sid] {
                             return None;
                         }
-                        Some(NativeObservation {
-                            snapshot: snapshot(
-                                &root.identity,
-                                &root.cwd,
-                                &info,
-                                &after,
-                                &permissions,
-                                &forms,
-                                now,
-                            )?,
-                            idle_revision: info["data"]["time"]["idle"].as_i64(),
-                        })
+                        observation(
+                            &root.identity,
+                            &root.cwd,
+                            info.as_ref(),
+                            &after,
+                            permissions.as_ref(),
+                            forms.as_ref(),
+                            now,
+                        )
                     });
                     (id, value)
                 })
@@ -492,6 +542,47 @@ impl Observer {
     }
 }
 
+fn observation(
+    identity: &SignalIdentity,
+    cwd: &str,
+    info: Option<&Value>,
+    active: &Value,
+    permissions: Option<&Value>,
+    forms: Option<&Value>,
+    now: i64,
+) -> Option<NativeObservation> {
+    match (info, permissions, forms) {
+        (Some(info), Some(permissions), Some(forms)) => Some(NativeObservation {
+            snapshot: snapshot(identity, cwd, info, active, permissions, forms, now)?,
+            idle_revision: info["data"]["time"]["idle"].as_i64(),
+            materialized: true,
+        }),
+        (None, None, None)
+            if !active["data"]
+                .as_object()?
+                .contains_key(&identity.native_session_id) =>
+        {
+            // Before the first prompt, all three native endpoints report the
+            // assigned session as not found and the service has no execution.
+            // This establishes only initial idle; disappearance of an observed
+            // or resumed root is rejected by the per-launch outcome fence.
+            Some(NativeObservation {
+                materialized: false,
+                idle_revision: None,
+                snapshot: current_snapshot(
+                    identity,
+                    SignalActivity::Idle,
+                    Vec::new(),
+                    None,
+                    format!("opencode-draft:{}", identity.native_session_id),
+                    now,
+                ),
+            })
+        }
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn snapshot(
     identity: &SignalIdentity,
@@ -566,14 +657,35 @@ fn snapshot(
                 identity.native_session_id, info["time"]["updated"]
             )
         });
-    Some(SignalSnapshot {
+    let activity = if running.is_some() {
+        SignalActivity::Working
+    } else {
+        SignalActivity::Idle
+    };
+    Some(current_snapshot(
+        identity,
+        activity,
+        pending_attention,
+        outcome,
+        event_id,
+        now,
+    ))
+}
+
+// Every published OpenCode observation, draft or materialized, shares one
+// qualification key and lease.
+fn current_snapshot(
+    identity: &SignalIdentity,
+    activity: SignalActivity,
+    pending_attention: Vec<PendingAttention>,
+    outcome: Option<SignalOutcome>,
+    event_id: String,
+    now: i64,
+) -> SignalSnapshot {
+    SignalSnapshot {
         schema_version: 1,
         identity: identity.clone(),
-        activity: if running.is_some() {
-            SignalActivity::Working
-        } else {
-            SignalActivity::Idle
-        },
+        activity,
         pending_attention,
         outcome,
         observation: SignalObservation {
@@ -588,13 +700,96 @@ fn snapshot(
             confidence: SignalConfidence::Authoritative,
             event_id,
         }),
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_exact_native_session_not_found_is_an_initial_draft_observation() {
+        let missing = json!({"_tag":"SessionNotFoundError","sessionID":"ses_owned"});
+        assert_eq!(
+            session_response(reqwest::StatusCode::NOT_FOUND, missing.clone(), "ses_owned"),
+            Some(None)
+        );
+        assert!(
+            session_response(
+                reqwest::StatusCode::NOT_FOUND,
+                missing.clone(),
+                "ses_foreign"
+            )
+            .is_none()
+        );
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(session_response(status, missing.clone(), "ses_owned").is_none());
+        }
+        assert!(
+            session_response(
+                reqwest::StatusCode::NOT_FOUND,
+                json!({"message":"Not found"}),
+                "ses_owned"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn missing_initial_root_is_idle_but_disappearing_or_resumed_root_is_unavailable() {
+        let inactive = json!({"data":{}});
+        let draft = observation(&identity(), "/owned", None, &inactive, None, None, 100).unwrap();
+        assert_eq!(draft.snapshot.activity, SignalActivity::Idle);
+        assert!(draft.snapshot.outcome.is_none() && draft.snapshot.pending_attention.is_empty());
+        assert!(
+            observation(
+                &identity(),
+                "/owned",
+                None,
+                &json!({"data":{"ses_owned":{"type":"running"}}}),
+                None,
+                None,
+                100
+            )
+            .is_none()
+        );
+        assert!(
+            observation(
+                &identity(),
+                "/owned",
+                None,
+                &inactive,
+                Some(&json!({"data":[]})),
+                None,
+                100
+            )
+            .is_none()
+        );
+        assert!(observation(&identity(), "/owned", None, &json!({}), None, None, 100).is_none());
+        let mut fence = OutcomeFence::default();
+        assert!(fence.apply(draft.clone()).is_some());
+        let mut root = info();
+        root["data"]["outcome"] = Value::Null;
+        root["data"]["time"]["idle"] = Value::Null;
+        let empty = json!({"data":[]});
+        let existing = observation(
+            &identity(),
+            "/owned",
+            Some(&root),
+            &inactive,
+            Some(&empty),
+            Some(&empty),
+            200,
+        )
+        .unwrap();
+        assert!(fence.apply(existing).is_some());
+        assert!(fence.apply(draft.clone()).is_none());
+        assert!(OutcomeFence::resumed(None, false).apply(draft).is_none());
+    }
 
     fn identity() -> SignalIdentity {
         SignalIdentity {
@@ -627,6 +822,7 @@ mod tests {
             )
             .unwrap(),
             idle_revision: Some(idle),
+            materialized: true,
         }
     }
     #[test]
@@ -685,6 +881,7 @@ mod tests {
             )
             .unwrap(),
             idle_revision: Some(2),
+            materialized: true,
         };
         let current = fence.apply(current).unwrap();
         assert_eq!(current.activity, SignalActivity::Working);
