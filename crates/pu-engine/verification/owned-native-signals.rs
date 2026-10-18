@@ -146,7 +146,8 @@ async fn idle_period(
         }
         let wait = Duration::from_secs(12).min(end.saturating_duration_since(Instant::now()));
         match tokio::time::timeout(wait, events.recv()).await {
-            Ok(Ok(())) => {}
+            // Lagging behind a burst of publications still proves they continue.
+            Ok(Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
             Err(_) if Instant::now() >= end => {}
             _ => return Err(format!("{tag}: automatic status publication stopped")),
         }

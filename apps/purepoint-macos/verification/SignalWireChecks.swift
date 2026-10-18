@@ -34,6 +34,12 @@ import Foundation
         precondition(idle.presentation(agentID: "ag-root", now: now).label == "Idle",
             "A confirmed idle session with no completed turn must show Idle, not Unknown or Finished")
         precondition(!idle.presentation(agentID: "ag-root", now: now).needsAttention)
+        let inferredIdle = try snapshot(["activity": "idle", "pending_attention": [], "outcome": NSNull(),
+            "evidence": ["tool": "pi", "tool_version": "1.3.0", "adapter_version": "1", "confidence": "inferred", "event_id": "e"]])
+        precondition(inferredIdle.presentation(agentID: "ag-root", now: now) == .unknown,
+            "Idle is claimed only from authoritative evidence")
+        let noEvidenceIdle = try snapshot(["activity": "idle", "pending_attention": [], "outcome": NSNull(), "evidence": NSNull()])
+        precondition(noEvidenceIdle.presentation(agentID: "ag-root", now: now) == .unknown)
         let unknownActivity = try snapshot(["activity": "unknown", "pending_attention": [], "outcome": NSNull()])
         precondition(unknownActivity.presentation(agentID: "ag-root", now: now) == .unknown)
         var unboundIdentity = wire["identity"] as! [String: Any]

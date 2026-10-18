@@ -79,17 +79,18 @@ pub(super) async fn prepare_launch(
         }
         (std::str::from_utf8(&bytes).ok()?.trim() == "codex-cli 0.163.0").then_some(())
     };
+    // Cold executable validation can use the first attempt's budget before
+    // main. Retry a timeout once, so a hung binary costs at most one second.
     let mut verified = false;
-    for _ in 0..3 {
+    for _ in 0..2 {
         match tokio::time::timeout(Duration::from_millis(500), supported()).await {
             Ok(Some(())) => {
                 verified = true;
                 break;
             }
+            // A genuine unsupported version or failed executable is never
+            // accepted; retries reuse the same disposable profile.
             Ok(None) => return None,
-            // Cold executable validation can use the first budget before main.
-            // Retry only timeouts, in the same disposable profile; a genuine
-            // unsupported version or failed executable is never accepted.
             Err(_) => {}
         }
     }
@@ -242,8 +243,9 @@ impl Cursor {
         // Native activity is a level signal; JSONL facts come only from complete
         // records. A writer may append between reads without invalidating that
         // prefix. Preserve inode/owner/length checks, and never publish a failed
-        // parse or any fact from the incomplete suffix.
-        if self.poisoned {
+        // parse or any fact from the incomplete suffix. A read capped by the
+        // per-poll budget leaves complete records unread, so it is not current.
+        if self.poisoned || self.offset < self.observed_length {
             return false;
         }
         let Some(length) =
@@ -426,6 +428,9 @@ fn snapshot(
     }
     let mut pending_attention = Vec::new();
     let active = history.turn.is_some() && history.outcome.is_none();
+    if status == Status::Ended && active {
+        return None;
+    }
     if status == Status::Working && !active && history.outcome.is_none() {
         return None;
     }
@@ -453,7 +458,7 @@ fn snapshot(
     Some(SignalSnapshot {
         schema_version: 1,
         identity: identity.clone(),
-        activity: if active && status != Status::Idle {
+        activity: if active && !matches!(status, Status::Idle | Status::Ended) {
             SignalActivity::Working
         } else {
             SignalActivity::Idle
@@ -611,6 +616,9 @@ impl History {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Status {
     Idle,
+    // A native done/error packet: idle once the rollout has recorded the turn's
+    // terminal record, never a plain idle while that outcome is still unwritten.
+    Ended,
     Working,
     Blocked,
     Clear,
@@ -688,7 +696,8 @@ impl Protocol {
         }
         self.kind = None;
         self.status = match fields.as_slice() {
-            ["state=idle" | "state=done" | "state=error", "app=codex"] => Some(Status::Idle),
+            ["state=idle", "app=codex"] => Some(Status::Idle),
+            ["state=done" | "state=error", "app=codex"] => Some(Status::Ended),
             ["state=working", "app=codex"] => Some(Status::Working),
             ["state=blocked", "app=codex"] => Some(Status::Blocked),
             ["state=blocked", "app=codex", kind] => {
@@ -741,6 +750,68 @@ mod tests {
         assert!(!cursor.observation_ready(&path));
     }
     #[test]
+    fn given_backlog_beyond_read_budget_should_not_be_current_until_consumed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout.jsonl");
+        let padding = format!(
+            "{{\"type\":\"metadata\",\"padding\":\"{}\"}}\n",
+            "x".repeat(64 * 1024)
+        );
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}",
+                meta(),
+                event("task_started", "turn"),
+                padding.repeat(160)
+            ),
+        )
+        .unwrap();
+        let mut cursor = Cursor::default();
+        let mut history = History::default();
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(
+            !cursor.observation_ready(&path),
+            "Complete records beyond the per-poll budget are still unread"
+        );
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(cursor.observation_ready(&path));
+    }
+    #[test]
+    fn given_native_done_or_error_before_terminal_record_should_not_publish_idle() {
+        let mut history = History {
+            turn: Some("turn".into()),
+            ..History::default()
+        };
+        let identity = SignalIdentity {
+            agent_id: "agent".into(),
+            worktree_id: None,
+            launch_id: "launch".into(),
+            generation: 1,
+            native_session_id: "native".into(),
+        };
+        for packet in [
+            b"\x1b]7501;state=done:app=codex\x1b\\".as_slice(),
+            b"\x1b]7501;state=error:app=codex\x1b\\",
+        ] {
+            let mut protocol = Protocol::default();
+            protocol.feed(packet);
+            assert_eq!(protocol.status, Some(Status::Ended));
+            assert!(snapshot(&identity, &protocol, &history, 100).is_none());
+        }
+        let mut protocol = Protocol::default();
+        protocol.feed(b"\x1b]7501;state=error:app=codex\x1b\\");
+        history.outcome = Some(SignalOutcome {
+            kind: OutcomeKind::Errored,
+            event_id: "codex-outcome".into(),
+            turn_id: Some("turn".into()),
+            confidence: SignalConfidence::Authoritative,
+        });
+        let settled = snapshot(&identity, &protocol, &history, 100).unwrap();
+        assert_eq!(settled.activity, SignalActivity::Idle);
+        assert!(settled.outcome.is_some());
+    }
+    #[test]
     fn given_unread_tail_is_truncated_should_not_publish_the_retained_prefix() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("rollout.jsonl");
@@ -759,10 +830,9 @@ mod tests {
         )
         .unwrap();
         let mut cursor = Cursor::default();
-        cursor
-            .read(&path, &mut History::default(), "/owned")
-            .unwrap();
-        assert!(cursor.observation_ready(&path));
+        let mut history = History::default();
+        cursor.read(&path, &mut history, "/owned").unwrap();
+        assert!(!cursor.observation_ready(&path));
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -770,7 +840,7 @@ mod tests {
             .set_len(9 * 1024 * 1024)
             .unwrap();
         assert!(
-            !cursor.observation_ready(&path),
+            cursor.read(&path, &mut history, "/owned").is_none(),
             "Truncating previously observed but unread data is still loss"
         );
     }
@@ -860,7 +930,7 @@ mod tests {
             b"\x1b]7501;state=error:app=codex\x1b\\",
         ] {
             p.feed(packet);
-            assert_eq!(p.status, Some(Status::Idle));
+            assert_eq!(p.status, Some(Status::Ended));
         }
     }
     #[test]

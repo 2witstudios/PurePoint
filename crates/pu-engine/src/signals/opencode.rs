@@ -569,25 +569,14 @@ fn observation(
             Some(NativeObservation {
                 materialized: false,
                 idle_revision: None,
-                snapshot: SignalSnapshot {
-                    schema_version: 1,
-                    identity: identity.clone(),
-                    activity: SignalActivity::Idle,
-                    pending_attention: Vec::new(),
-                    outcome: None,
-                    observation: SignalObservation {
-                        state: ObservationState::Current,
-                        last_received_at_ms: Some(now),
-                        expires_at_ms: Some(now + 30_000),
-                    },
-                    evidence: Some(SignalEvidence {
-                        tool: "opencode".into(),
-                        tool_version: "2.0.28".into(),
-                        adapter_version: "1".into(),
-                        confidence: SignalConfidence::Authoritative,
-                        event_id: format!("opencode-draft:{}", identity.native_session_id),
-                    }),
-                },
+                snapshot: current_snapshot(
+                    identity,
+                    SignalActivity::Idle,
+                    Vec::new(),
+                    None,
+                    format!("opencode-draft:{}", identity.native_session_id),
+                    now,
+                ),
             })
         }
         _ => None,
@@ -668,14 +657,35 @@ fn snapshot(
                 identity.native_session_id, info["time"]["updated"]
             )
         });
-    Some(SignalSnapshot {
+    let activity = if running.is_some() {
+        SignalActivity::Working
+    } else {
+        SignalActivity::Idle
+    };
+    Some(current_snapshot(
+        identity,
+        activity,
+        pending_attention,
+        outcome,
+        event_id,
+        now,
+    ))
+}
+
+// Every published OpenCode observation, draft or materialized, shares one
+// qualification key and lease.
+fn current_snapshot(
+    identity: &SignalIdentity,
+    activity: SignalActivity,
+    pending_attention: Vec<PendingAttention>,
+    outcome: Option<SignalOutcome>,
+    event_id: String,
+    now: i64,
+) -> SignalSnapshot {
+    SignalSnapshot {
         schema_version: 1,
         identity: identity.clone(),
-        activity: if running.is_some() {
-            SignalActivity::Working
-        } else {
-            SignalActivity::Idle
-        },
+        activity,
         pending_attention,
         outcome,
         observation: SignalObservation {
@@ -690,7 +700,7 @@ fn snapshot(
             confidence: SignalConfidence::Authoritative,
             event_id,
         }),
-    })
+    }
 }
 
 #[cfg(test)]

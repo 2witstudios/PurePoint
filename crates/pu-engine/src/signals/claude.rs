@@ -453,7 +453,8 @@ impl Transcript {
     }
 
     fn observation_ready(&mut self, path: &Path) -> bool {
-        if self.poisoned {
+        // A read capped by the per-poll budget leaves complete records unread.
+        if self.poisoned || self.offset < self.observed_length {
             return false;
         }
         let Some(length) =
@@ -658,8 +659,9 @@ impl Transcript {
                     _ => return None,
                 };
                 // The native registry exposes a category, not a request ID. Only
-                // join when exactly one outstanding root tool can own that UI.
-                if self.tools.len() != 1 {
+                // join when exactly one outstanding root tool can own that UI,
+                // and not while a record that may resolve it is still arriving.
+                if self.tools.len() != 1 || !self.partial.is_empty() {
                     return None;
                 }
                 let (id, is_question) = self.tools.iter().next()?;
@@ -747,6 +749,44 @@ mod tests {
             !transcript.initial_idle_without_transcript(&missing, &json!({"status":"idle"})),
             "An invalid source that disappears must not become initial idle"
         );
+    }
+    #[test]
+    fn waiting_request_is_not_joined_while_a_record_is_still_arriving() {
+        let mut transcript = Transcript {
+            turn: Some("turn".into()),
+            ..Transcript::default()
+        };
+        transcript.tools.insert("request".into(), true);
+        let waiting = json!({"status":"waiting","waitingFor":"input needed"});
+        transcript.partial = b"{\"type\":\"user\"".to_vec();
+        assert!(transcript.snapshot(&identity(), &waiting, 100).is_none());
+        transcript.partial.clear();
+        assert_eq!(
+            transcript
+                .snapshot(&identity(), &waiting, 100)
+                .unwrap()
+                .pending_attention
+                .len(),
+            1
+        );
+    }
+    #[test]
+    fn backlog_beyond_read_budget_is_not_an_observation() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("transcript.jsonl");
+        let line = format!("{{\"padding\":\"{}\"}}\n", "x".repeat(64 * 1024));
+        std::fs::write(&path, line.repeat(160)).unwrap();
+        // Simulate the read cursor after one capped read.
+        let meta = std::fs::metadata(&path).unwrap();
+        let mut transcript = Transcript {
+            inode: Some((meta.dev(), meta.ino())),
+            observed_length: meta.len(),
+            offset: 8 * 1024 * 1024,
+            ..Transcript::default()
+        };
+        assert!(!transcript.observation_ready(&path));
+        transcript.offset = meta.len();
+        assert!(transcript.observation_ready(&path));
     }
     fn identity() -> SignalIdentity {
         SignalIdentity {

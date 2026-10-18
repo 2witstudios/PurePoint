@@ -109,7 +109,7 @@ the Engine, not a global singleton or new service; they do not start processes,
 change PTYs, write native config or migrate native session ownership.
 
 Codex checks the executable's exact version before launch with bounded output
-and up to three 500ms attempts (only timeouts retry), using a disposable HOME/CODEX_HOME because native
+and up to two 500ms attempts (only timeouts retry), using a disposable HOME/CODEX_HOME because native
 `--version` can create PATH aliases. No user profile is passed to that check.
 On resume, the exact root file's inode and complete-line EOF are captured before
 the new process starts (500ms preparation deadline). Only subsequently appended
@@ -121,13 +121,16 @@ partial or replaced source disables observation without preventing native resume
 Codex's native idle packet also establishes launch-only Idle before its first
 thread file exists. That snapshot has no native session ID, requests or outcome;
 clients accept only this narrow current, authoritative idle condition until the
-exact root binds. Native done/error packets are idle activity, with terminal
-outcomes still requiring typed rollout records. Descriptor queries use `lsof
+exact root binds. Native done/error packets publish Idle only once the typed
+rollout terminal record exists; before that they publish nothing. Descriptor queries use `lsof
 -nP`, so reverse DNS/service resolution cannot stall the shared local scan.
 An in-progress append does not disconnect an otherwise verified root: only
 complete JSONL records establish facts, joined to the native terminal's current
 state. Inode/owner changes, truncation, invalid complete records and terminal
-byte loss still invalidate observation; an incomplete suffix establishes nothing.
+byte loss still invalidate observation; an incomplete suffix establishes nothing,
+and a backlog beyond the per-poll read budget is not current until consumed.
+Claude does not join a waiting registry state to a request while a record is
+still arriving.
 `question_idle_hold` exercises all three tools with 35 seconds of unprompted
 idle, a real question and answer, then 35 seconds of settled idle with automatic
 status heartbeats. It rejects any loss of observation during the ordinary turn.

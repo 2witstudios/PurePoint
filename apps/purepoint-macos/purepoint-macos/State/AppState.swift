@@ -124,9 +124,7 @@ final class AppState {
             project.allAgents.map { agent -> AgentSignalAlertPolicy.Agent in
                 let worktreeID = project.worktreeId(forAgentId: agent.id)
                 let identity = self.signalIdentity(projectID: project.projectId, worktreeID: worktreeID, agentID: agent.id)
-                let presentation = agent.signal?.presentation(agentID: agent.id, sessionID: agent.sessionId,
-                    available: !project.isUnavailable && agent.status.isAlive && !agent.suspended,
-                    now: signalClock) ?? .unknown
+                let presentation = agent.signalPresentation(available: !project.isUnavailable, now: signalClock)
                 let destination = agent.signal.flatMap { signal -> AgentSignalDestination? in
                     guard let event = presentation.eventID else { return nil }
                     let destination = AgentSignalDestination(projectID: project.projectId, worktreeID: worktreeID,

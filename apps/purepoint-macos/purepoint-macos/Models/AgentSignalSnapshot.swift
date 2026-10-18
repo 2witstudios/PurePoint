@@ -69,7 +69,7 @@ nonisolated struct AgentSignalSnapshot: Codable, Equatable, Sendable {
             return .init(label: request.kind == "permission" ? "Permission" : "Question", eventID: request.event_id, needsAttention: true, detail: "\(pending.count) pending requests: " + pending.map { "\($0.kind) \($0.request_id)" }.joined(separator: ", "))
         }
         if activity == "working" { return .init(label: "Working", eventID: nil, needsAttention: false) }
-        if activity == "idle" && outcome == nil {
+        if activity == "idle" && outcome == nil && evidence?.confidence == "authoritative" {
             return .init(label: "Idle", eventID: nil, needsAttention: false)
         }
         guard activity == "idle" || activity == "unknown", let outcome,
