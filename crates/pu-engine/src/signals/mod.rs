@@ -65,8 +65,15 @@ impl CodexReader {
     pub(crate) async fn discover(
         &self,
     ) -> Result<crate::read_source::Binding, crate::read_source::SourceError> {
+        // Reuse a positive view immediately; forcing another scan could lose
+        // an already observed descriptor when a short-lived process exits.
+        if let Some(candidate) = self.sampler.sample(&self.id, false, refresh_codex).await {
+            return candidate.into_binding();
+        }
+        // An unbound startup reader must not sit on a two-second cached miss.
+        // Urgent requests still coalesce at the sampler's shared 250ms floor.
         self.sampler
-            .sample(&self.id, false, refresh_codex)
+            .sample(&self.id, true, refresh_codex)
             .await
             .ok_or(crate::read_source::SourceError::IdentityUnavailable)?
             .into_binding()
@@ -731,6 +738,55 @@ mod tests {
             )
             .unwrap();
     }
+    #[tokio::test]
+    async fn given_unbound_reader_with_cached_miss_should_retry_newly_opened_owned_rollout() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rollout-late.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"session_meta","payload":{"source":"cli","id":"late-root","cwd":"/owned"}}
+"#,
+        )
+        .unwrap();
+        let mut child = tokio::process::Command::new("sh")
+            .args([
+                "-c",
+                "read signal; exec 3< \"$1\"; printf x; exec sleep 30",
+                "probe",
+            ])
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let sources = NativeSources::default();
+        let reader = sources
+            .codex_reader(None, child.id().unwrap(), "/owned")
+            .unwrap();
+        assert!(reader.discover().await.is_err(), "No rollout is held yet");
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"open\n")
+            .await
+            .unwrap();
+        let mut ready = [0];
+        child
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut ready)
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), reader.discover()).await;
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+        assert_eq!(result.unwrap().unwrap().session_id, "late-root");
+    }
+
     #[tokio::test]
     async fn native_publication_preserves_semantics_and_renews_live_consumer_leases() {
         let (prepared, _root) = fixture("claude", Some("native"));
