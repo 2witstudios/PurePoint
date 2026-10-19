@@ -57,7 +57,8 @@ struct purepoint_macosApp: App {
             width: PurePointTheme.windowDefaultWidth,
             height: PurePointTheme.windowDefaultHeight
         )
-        .windowToolbarStyle(.unified(showsTitle: true))
+        // No title bar band: the sidebar and the pane tab strip both start at the top edge.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Agent\u{2026}") {
@@ -75,6 +76,15 @@ struct purepoint_macosApp: App {
                     keyBindingState.keyEquivalent(for: .openProject),
                     modifiers: keyBindingState.eventModifiers(for: .openProject)
                 )
+            }
+
+            // The workspace files sidebar's toolbar toggle is hidden with the title bar, so this is its control.
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Workspace Sidebar") {
+                    let defaults = UserDefaults.standard
+                    let isShown = defaults.object(forKey: "showWorkspaceFilesSidebar") as? Bool ?? true
+                    defaults.set(!isShown, forKey: "showWorkspaceFilesSidebar")
+                }
             }
 
             CommandGroup(replacing: .appSettings) {

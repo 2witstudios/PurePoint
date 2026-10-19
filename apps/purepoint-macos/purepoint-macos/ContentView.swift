@@ -6,29 +6,50 @@ struct ContentView: View {
     @Environment(WorkspaceRegistry.self) private var registry
     @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var sidebarVisible = true
     @State private var sidebarOutlineView: NSOutlineView?
+    /// A focus request that arrived while the sidebar was hidden, waiting for its outline view to join a window.
+    @State private var sidebarFocusPending = false
+
+    /// Clears the traffic-light buttons, which sit over the top of the sidebar.
+    private let trafficLightInset: CGFloat = 28
+    /// Clears the traffic-light buttons when the sidebar is hidden and the detail starts at the left edge.
+    private let hiddenSidebarLeadingInset: CGFloat = 72
 
     var body: some View {
         @Bindable var appState = appState
 
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(
-                selection: $selection,
-                onOutlineViewReady: { outlineView in
-                    DispatchQueue.main.async {
-                        sidebarOutlineView = outlineView
+        // A flush sidebar column, not a floating split-view panel. Both columns run the full
+        // window height, so each pane's tab strip reaches the top edge.
+        HStack(spacing: 0) {
+            if sidebarVisible {
+                SidebarView(
+                    selection: $selection,
+                    onOutlineViewReady: { outlineView in
+                        DispatchQueue.main.async {
+                            sidebarOutlineView = outlineView
+                            if sidebarFocusPending {
+                                sidebarFocusPending = false
+                                outlineView.window?.makeFirstResponder(outlineView)
+                            }
+                        }
                     }
-                }
-            )
-            .navigationSplitViewColumnWidth(
-                min: PurePointTheme.sidebarMinWidth,
-                ideal: PurePointTheme.sidebarIdealWidth,
-                max: PurePointTheme.sidebarMaxWidth
-            )
-        } detail: {
+                )
+                .padding(.top, trafficLightInset)
+                .frame(width: PurePointTheme.sidebarIdealWidth)
+                .frame(maxHeight: .infinity)
+                .background(Color(nsColor: Theme.sidebarBackground))
+
+                Rectangle()
+                    .fill(Color.primary.opacity(0.06))
+                    .frame(width: 1)
+            }
+
             DetailView(selection: $selection)
+                .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .ignoresSafeArea(.container, edges: .top)
         .navigationTitle("")
         .task {
             while !Task.isCancelled {
@@ -156,11 +177,16 @@ struct ContentView: View {
     private func handleHotkeyAction(_ action: HotkeyAction) {
         switch action {
         case .focusSidebar:
-            columnVisibility = .all
-            DispatchQueue.main.async {
-                if let outlineView = sidebarOutlineView {
-                    outlineView.window?.makeFirstResponder(outlineView)
+            if sidebarVisible {
+                DispatchQueue.main.async {
+                    if let outlineView = sidebarOutlineView {
+                        outlineView.window?.makeFirstResponder(outlineView)
+                    }
                 }
+            } else {
+                // The outline view is created when the sidebar reappears; focus it once it has a window.
+                sidebarFocusPending = true
+                sidebarVisible = true
             }
 
         case .focusContent:
@@ -172,7 +198,7 @@ struct ContentView: View {
 
         case .toggleSidebar:
             withAnimation {
-                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+                sidebarVisible.toggle()
             }
 
         case .navDashboard:
