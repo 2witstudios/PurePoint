@@ -33,12 +33,8 @@ struct PointGuardView: View {
             } else if let workspace {
                 PaneGridView(workspaceId: workspace.id)
             } else if projectRoot == nil {
-                VStack(spacing: 0) {
-                    PointGuardPaneControls(model: appState.pointGuardChat)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(8)
-                    PointGuardChatSurfaceView(isFocused: true)
-                }
-                .background(Color(nsColor: Theme.chatBackground))
+                PointGuardChatSurfaceView(isFocused: true, tabBar: AnyView(controlsStrip))
+                    .background(Color(nsColor: Theme.chatBackground))
             } else {
                 Color.clear
             }
@@ -51,6 +47,18 @@ struct PointGuardView: View {
             // or file sibling has focus. Background chat tabs don't handle it.
             if hasVisibleChat { showSidebar.toggle() }
         }
+    }
+
+    /// Without a workspace there is no pane tab strip, so the controls take its place beside the
+    /// conversation rail's header. A separate row above the chat would push the rail below the top edge.
+    private var controlsStrip: some View {
+        PointGuardPaneControls(model: appState.pointGuardChat)
+            .padding(.horizontal, 8)
+            // Matches PaneTabBar.height and the rail header, so the two read as one row.
+            .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .trailing)
+            .background(Color(nsColor: Theme.tabBarBackground))
+            .overlay(alignment: .bottom) { Divider() }
+            .environment(\.colorScheme, .dark)
     }
 
     private func activateWorkspace() {
