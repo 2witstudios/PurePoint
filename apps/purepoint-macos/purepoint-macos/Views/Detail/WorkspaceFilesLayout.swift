@@ -30,16 +30,7 @@ struct WorkspaceFilesLayout<Content: View>: View {
         .onChange(of: WorkspaceFilesState.identity(rootPath: rootPath, host: host)) { _, _ in
             filesState = WorkspaceFilesState(rootPath: rootPath, host: host)
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showSidebar.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .help(showSidebar ? "Hide workspace sidebar" : "Show workspace sidebar")
-                .accessibilityLabel(showSidebar ? "Hide workspace sidebar" : "Show workspace sidebar")
-            }
-        }
+        // No `.toolbar` here: any toolbar gives the window a title-bar band above the pane tab strips.
+        // View > Toggle Workspace Sidebar is the control.
     }
 }

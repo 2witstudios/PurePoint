@@ -49,7 +49,9 @@ struct ContentView: View {
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // The configurator makes the content view span the title bar; this drops the inset that leaves.
         .ignoresSafeArea(.container, edges: .top)
+        .background(WindowChromeConfigurator())
         .navigationTitle("")
         .task {
             while !Task.isCancelled {
