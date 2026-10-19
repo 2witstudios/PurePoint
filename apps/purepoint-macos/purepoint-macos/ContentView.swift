@@ -49,7 +49,8 @@ struct ContentView: View {
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .ignoresSafeArea(.container, edges: .top)
+        // Every safe-area region, not just the container's: the title-bar inset is not in the container region.
+        .ignoresSafeArea(edges: .top)
         .navigationTitle("")
         .task {
             while !Task.isCancelled {
