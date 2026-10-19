@@ -54,3 +54,4 @@ apps/purepoint-macos/LocalPackages/
 
 # PurePoint runtime
 .pu/
+__pycache__/

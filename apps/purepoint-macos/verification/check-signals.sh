@@ -10,7 +10,7 @@ swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
 "$task_dir/policy"
 swiftc -parse-as-library -strict-concurrency=complete -warnings-as-errors \
  "$mac/Models/AgentSignalPolicy.swift" "$mac/Models/AgentSignalSnapshot.swift" "$mac/Models/AgentSignalRouting.swift" \
- "$mac/Models/AgentStatus.swift" "$mac/Models/ManifestModel.swift" "$mac/Models/ChannelModel.swift" \
+ "$mac/Models/AgentStatus.swift" "$mac/Models/ManifestModel.swift" "$mac/Models/ChannelModel.swift" "$mac/Models/WorkspaceModel.swift" \
  "$mac/Services/DaemonProtocol.swift" "$mac/Services/DaemonConnection.swift" \
  "$checks/SignalWireChecks.swift" -o "$task_dir/mac-wire"
 "$task_dir/mac-wire" "$repo"
