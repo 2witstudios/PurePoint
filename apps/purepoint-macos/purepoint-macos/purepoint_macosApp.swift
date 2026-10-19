@@ -57,7 +57,8 @@ struct purepoint_macosApp: App {
             width: PurePointTheme.windowDefaultWidth,
             height: PurePointTheme.windowDefaultHeight
         )
-        .windowToolbarStyle(.unified(showsTitle: true))
+        // No title bar band: the sidebar and the pane tab strip both start at the top edge.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Agent\u{2026}") {

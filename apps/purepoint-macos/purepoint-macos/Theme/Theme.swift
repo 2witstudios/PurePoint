@@ -19,6 +19,10 @@ nonisolated enum Theme {
     static let composerShadow = darkOnly((0, 0, 0), alpha: 0.3, light: .clear)
     static let userBubbleBackground = darkOnly((0.149, 0.149, 0.165), light: NSColor.black.withAlphaComponent(0.055))
 
+    // MARK: - App Sidebar
+    /// The project sidebar is a flush column beside the detail, not a floating panel.
+    static let sidebarBackground = darkOnly((0.12, 0.12, 0.13), light: .windowBackgroundColor)
+
     // MARK: - Cards
     static let cardBackground = adaptive(dark: (0.14, 0.14, 0.15, 1.0), light: (1.0, 1.0, 1.0, 1.0))
     static let cardHeaderBackground = adaptive(dark: (0.16, 0.16, 0.17, 1.0), light: (0.93, 0.925, 0.92, 1.0))
