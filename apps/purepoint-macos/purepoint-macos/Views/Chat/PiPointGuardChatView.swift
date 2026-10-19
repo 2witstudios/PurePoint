@@ -127,7 +127,9 @@ struct PiPointGuardChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                // Eager on purpose: lazy row estimates for Markdown bubbles and selectable text
+                // never settled while scrolling, spinning the main thread in layout.
+                VStack(alignment: .leading, spacing: 12) {
                     if let history = model.browsing {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Reading: " + history.title).font(.system(size: 12, weight: .medium))
