@@ -78,6 +78,15 @@ struct purepoint_macosApp: App {
                 )
             }
 
+            // The workspace files sidebar's toolbar toggle is hidden with the title bar, so this is its control.
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Workspace Sidebar") {
+                    let defaults = UserDefaults.standard
+                    let isShown = defaults.object(forKey: "showWorkspaceFilesSidebar") as? Bool ?? true
+                    defaults.set(!isShown, forKey: "showWorkspaceFilesSidebar")
+                }
+            }
+
             CommandGroup(replacing: .appSettings) {
                 Button("Settings\u{2026}") {
                     appState.showSettings = true

@@ -1309,9 +1309,17 @@ private class WorktreeMenuContext: NSObject {
 final class SidebarKeyOutlineView: NSOutlineView {
     /// Return pressed; true if handled.
     var onReturn: (() -> Bool)?
+    /// Called once this view has joined a window, so a focus request made before that can land.
+    var onWindowAttached: ((NSOutlineView) -> Void)?
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 76, onReturn?() == true { return }
         super.keyDown(with: event)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        onWindowAttached?(self)
     }
 }

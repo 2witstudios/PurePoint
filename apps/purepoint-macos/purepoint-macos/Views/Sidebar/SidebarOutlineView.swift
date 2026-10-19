@@ -12,7 +12,7 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
 
     func makeNSViewController(context: Context) -> SidebarOutlineViewController {
         let vc = SidebarOutlineViewController(expansionStore: SidebarExpansionStore())
-        onOutlineViewReady?(vc.outlineView)
+        vc.outlineView.onWindowAttached = onOutlineViewReady
 
         vc.onSelectionChanged = { newSelection in
             selection = newSelection

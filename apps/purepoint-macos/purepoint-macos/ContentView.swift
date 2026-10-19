@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var selection: SidebarSelection? = .nav(.dashboard)
     @State private var sidebarVisible = true
     @State private var sidebarOutlineView: NSOutlineView?
+    /// A focus request that arrived while the sidebar was hidden, waiting for its outline view to join a window.
+    @State private var sidebarFocusPending = false
 
     /// Clears the traffic-light buttons, which sit over the top of the sidebar.
     private let trafficLightInset: CGFloat = 28
@@ -26,6 +28,10 @@ struct ContentView: View {
                     onOutlineViewReady: { outlineView in
                         DispatchQueue.main.async {
                             sidebarOutlineView = outlineView
+                            if sidebarFocusPending {
+                                sidebarFocusPending = false
+                                outlineView.window?.makeFirstResponder(outlineView)
+                            }
                         }
                     }
                 )
@@ -171,11 +177,16 @@ struct ContentView: View {
     private func handleHotkeyAction(_ action: HotkeyAction) {
         switch action {
         case .focusSidebar:
-            sidebarVisible = true
-            DispatchQueue.main.async {
-                if let outlineView = sidebarOutlineView {
-                    outlineView.window?.makeFirstResponder(outlineView)
+            if sidebarVisible {
+                DispatchQueue.main.async {
+                    if let outlineView = sidebarOutlineView {
+                        outlineView.window?.makeFirstResponder(outlineView)
+                    }
                 }
+            } else {
+                // The outline view is created when the sidebar reappears; focus it once it has a window.
+                sidebarFocusPending = true
+                sidebarVisible = true
             }
 
         case .focusContent:
