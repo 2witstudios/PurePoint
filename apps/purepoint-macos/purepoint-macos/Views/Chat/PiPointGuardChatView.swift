@@ -16,6 +16,7 @@ struct PiPointGuardChatView: View {
     @State private var scrollingTranscript = false
     @State private var transcriptVisible = false
     @State private var transcriptScroll = PiTranscriptScrollCoordinator()
+    @State private var transcriptWindow = PiTranscriptWindow()
     @State private var showFiles = false
     @State private var importingAttachment = false
     @FocusState private var composerFocused: Bool
@@ -146,21 +147,11 @@ struct PiPointGuardChatView: View {
                                 Button("Back to live") { model.browsing = nil }
                             }
                         }
-                        ForEach(PiTranscriptRows.make(messages: history.messages, tools: [])) { row in
-                            switch row {
-                            case .message(let message): messageView(message)
-                            case .activity(let tools): PiToolActivityView(tools: tools, onLayoutChange: transcriptScroll.userLayoutChanged)
-                            }
-                        }
+                        transcriptRows(PiTranscriptRows.make(messages: history.messages, tools: []))
                     } else if model.transcriptRows.isEmpty {
                         emptyState.padding(.vertical, 70)
                     } else {
-                        ForEach(model.transcriptRows) { row in
-                            switch row {
-                            case .message(let message): messageView(message)
-                            case .activity(let tools): PiToolActivityView(tools: tools, onLayoutChange: transcriptScroll.userLayoutChanged)
-                            }
-                        }
+                        transcriptRows(model.transcriptRows)
                     }
                     if model.browsing == nil && model.busy {
                         TypingIndicatorBubble(compact: compact, fill: Self.replyFill)
@@ -223,16 +214,19 @@ struct PiPointGuardChatView: View {
             }
             .onChange(of: ObjectIdentifier(model)) { _, _ in
                 transcriptScroll.reset()
+                transcriptWindow.reset()
                 scrollingTranscript = false
                 followOutput = true
                 requestTranscriptScroll(proxy)
             }
             .onChange(of: model.browsing?.sessionId) { _, _ in
                 transcriptScroll.reset()
+                transcriptWindow.reset()
                 if model.browsing == nil { requestTranscriptScroll(proxy) }
             }
             .onChange(of: model.snapshot?.sessionId) { _, _ in
                 transcriptScroll.reset()
+                transcriptWindow.reset()
                 scrollingTranscript = false
                 followOutput = true
                 requestTranscriptScroll(proxy)
@@ -251,6 +245,22 @@ struct PiPointGuardChatView: View {
                     }
                     .buttonStyle(.bordered).padding(12)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptRows(_ rows: [PiTranscriptRow]) -> some View {
+        let hidden = transcriptWindow.hiddenCount(of: rows.count)
+        if hidden > 0 {
+            Button("Show earlier messages (\(hidden) more)") { transcriptWindow.showEarlier() }
+                .buttonStyle(.borderless).font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+        }
+        ForEach(transcriptWindow.visible(rows)) { row in
+            switch row {
+            case .message(let message): messageView(message)
+            case .activity(let tools): PiToolActivityView(tools: tools, onLayoutChange: transcriptScroll.userLayoutChanged)
             }
         }
     }

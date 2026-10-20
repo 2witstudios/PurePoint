@@ -225,6 +225,18 @@ enum PiTranscriptRows {
         return rows
     }
 }
+/// How much of a transcript the eager chat renders. The bridge bounds snapshots by bytes
+/// (1 MiB), not rows, so a long session of short messages can hold thousands of rows; only
+/// the newest page renders until the reader asks for earlier ones.
+struct PiTranscriptWindow: Equatable, Sendable {
+    static let page = 200
+    private(set) var limit = page
+
+    func visible<Row>(_ rows: [Row]) -> ArraySlice<Row> { rows.suffix(limit) }
+    func hiddenCount(of total: Int) -> Int { max(0, total - limit) }
+    mutating func showEarlier() { limit += Self.page }
+    mutating func reset() { limit = Self.page }
+}
 struct PiQueuedText: Codable, Sendable { let id: String; let clientId: String?; let mode: String; let text: String }
 struct PiExtensionDialog: Codable, Identifiable, Sendable {
     let id: String; let method: String; var title: String?; var message: String?; var prefill: String?;

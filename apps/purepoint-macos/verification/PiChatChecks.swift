@@ -26,7 +26,20 @@ extension ChatModel {
         }
         fatalError("Timed out: " + description)
     }
+    static func checkTranscriptWindow() {
+        var window = PiTranscriptWindow()
+        let rows = Array(0..<450)
+        precondition(window.visible(Array(0..<12)) == ArraySlice(0..<12) && window.hiddenCount(of: 12) == 0)
+        precondition(window.visible(rows).first == 250 && window.visible(rows).last == 449 && window.hiddenCount(of: 450) == 250)
+        window.showEarlier()
+        precondition(window.visible(rows).first == 50 && window.hiddenCount(of: 450) == 50)
+        window.showEarlier()
+        precondition(window.visible(rows).count == 450 && window.hiddenCount(of: 450) == 0)
+        window.reset()
+        precondition(window.visible(rows).count == PiTranscriptWindow.page)
+    }
     @MainActor static func main() async throws {
+        checkTranscriptWindow()
         let env = ProcessInfo.processInfo.environment
         let home = env["CFFIXED_USER_HOME"]!
         precondition(
