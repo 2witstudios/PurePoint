@@ -251,9 +251,9 @@ struct PiPointGuardChatView: View {
 
     @ViewBuilder
     private func transcriptRows(_ rows: [PiTranscriptRow]) -> some View {
-        let hidden = transcriptWindow.hiddenCount(of: rows.count)
+        let hidden = transcriptWindow.firstIndex(in: rows)
         if hidden > 0 {
-            Button("Show earlier messages (\(hidden) more)") { transcriptWindow.showEarlier() }
+            Button("Show earlier messages (\(hidden) more)") { transcriptWindow.showEarlier(in: rows) }
                 .buttonStyle(.borderless).font(.system(size: 12))
                 .frame(maxWidth: .infinity)
         }
