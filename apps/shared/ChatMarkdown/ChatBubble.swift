@@ -51,14 +51,19 @@ struct ChatBubble<Content: View>: View {
 /// Proposes the content's ideal width, capped by the space offered, so a one-line
 /// reply gets a snug bubble even though Markdown content fills any width it is given.
 struct ChatBubbleHuggingLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let content = subviews.first else { return .zero }
-        let ideal = content.sizeThatFits(.unspecified)
-        let width = min(ideal.width, proposal.width ?? ideal.width)
+    /// The unconstrained measurement is the expensive one; SwiftUI rebuilds this cache
+    /// whenever the content changes, so each layout pass measures the content only once.
+    func makeCache(subviews: Subviews) -> CGFloat? {
+        subviews.first?.sizeThatFits(.unspecified).width
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat?) -> CGSize {
+        guard let content = subviews.first, let ideal = cache else { return .zero }
+        let width = min(ideal, proposal.width ?? ideal)
         return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat?) {
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }

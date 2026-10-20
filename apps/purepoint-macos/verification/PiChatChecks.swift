@@ -26,7 +26,32 @@ extension ChatModel {
         }
         fatalError("Timed out: " + description)
     }
+    static func checkTranscriptWindow() {
+        struct Row: Identifiable { let id: String }
+        func rows(_ range: Range<Int>) -> [Row] { range.map { Row(id: "r\($0)") } }
+        func ids(_ slice: ArraySlice<Row>) -> [String] { slice.map(\.id) }
+        var window = PiTranscriptWindow()
+        precondition(ids(window.visible(rows(0..<12))) == ids(ArraySlice(rows(0..<12))))
+        var all = rows(0..<450)
+        precondition(window.visible(all).first?.id == "r250" && window.firstIndex(in: all) == 250)
+        // Unexpanded, the newest page follows new rows.
+        precondition(window.visible(rows(0..<451)).first?.id == "r251")
+        window.showEarlier(in: all)
+        precondition(window.visible(all).first?.id == "r50" && window.firstIndex(in: all) == 50)
+        // Expanded history stays put as rows arrive, and as the bridge trims the oldest rows.
+        all = rows(0..<460)
+        precondition(window.visible(all).first?.id == "r50" && window.visible(all).last?.id == "r459")
+        all = Array(all.dropFirst(10))
+        precondition(window.visible(all).first?.id == "r50" && window.firstIndex(in: all) == 40)
+        window.showEarlier(in: all)
+        precondition(window.firstIndex(in: all) == 0)
+        // If the anchor itself is trimmed away, fall back to the newest page.
+        precondition(window.firstIndex(in: rows(100..<500)) == 200)
+        window.reset()
+        precondition(window.visible(all).count == PiTranscriptWindow.page)
+    }
     @MainActor static func main() async throws {
+        checkTranscriptWindow()
         let env = ProcessInfo.processInfo.environment
         let home = env["CFFIXED_USER_HOME"]!
         precondition(

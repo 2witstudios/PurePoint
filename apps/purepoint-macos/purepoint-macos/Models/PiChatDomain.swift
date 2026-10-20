@@ -225,6 +225,28 @@ enum PiTranscriptRows {
         return rows
     }
 }
+/// How much of a transcript the eager chat renders. The bridge bounds snapshots by bytes
+/// (1 MiB), not rows, so a long session of short messages can hold thousands of rows; only
+/// the newest page renders until the reader asks for earlier ones.
+struct PiTranscriptWindow: Equatable, Sendable {
+    static let page = 200
+    /// First row the reader asked to see. Anchored by ID so rows arriving at the end, or the
+    /// bridge trimming the oldest rows, never pull already-loaded history out from under them.
+    private var anchor: String?
+
+    func firstIndex<Row: Identifiable>(in rows: [Row]) -> Int where Row.ID == String {
+        if let anchor, let index = rows.firstIndex(where: { $0.id == anchor }) { return index }
+        return max(0, rows.count - Self.page)
+    }
+    func visible<Row: Identifiable>(_ rows: [Row]) -> ArraySlice<Row> where Row.ID == String {
+        rows[firstIndex(in: rows)...]
+    }
+    mutating func showEarlier<Row: Identifiable>(in rows: [Row]) where Row.ID == String {
+        let first = max(0, firstIndex(in: rows) - Self.page)
+        anchor = rows.indices.contains(first) ? rows[first].id : nil
+    }
+    mutating func reset() { anchor = nil }
+}
 struct PiQueuedText: Codable, Sendable { let id: String; let clientId: String?; let mode: String; let text: String }
 struct PiExtensionDialog: Codable, Identifiable, Sendable {
     let id: String; let method: String; var title: String?; var message: String?; var prefill: String?;
