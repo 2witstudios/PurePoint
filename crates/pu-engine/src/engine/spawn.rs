@@ -319,19 +319,24 @@ impl Engine {
             };
             crate::read_source::resolve_exact(runtime, id, &cwd, &env).ok()
         });
-        let observation = crate::signals::prepare(
-            &project_root,
-            &cwd,
-            &agent_id,
-            worktree_id.clone(),
-            &agent_type,
-            session_id.as_deref(),
-            false,
-            &command,
-            &mut args,
-            &mut env,
-        )
-        .await;
+        let observation = if crate::signals::tracking_enabled().await {
+            crate::signals::prepare(
+                &project_root,
+                &cwd,
+                &agent_id,
+                worktree_id.clone(),
+                &agent_type,
+                session_id.as_deref(),
+                false,
+                &command,
+                &mut args,
+                &mut env,
+            )
+            .await
+        } else {
+            crate::signals::strip_inherited(&mut env);
+            None
+        };
         let read_cwd = cwd.clone();
         let read_type = agent_type.clone();
         let spawn_config = SpawnConfig {

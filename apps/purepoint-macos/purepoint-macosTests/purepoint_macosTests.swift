@@ -19,10 +19,10 @@ struct GlobalAgentSettingsTests {
                 switch request {
                 case .getGlobalAgentSettings:
                     calls.append("load")
-                    return .globalAgentSettingsReport(codexYolo: false)
-                case .updateGlobalAgentSettings(let enabled):
+                    return .globalAgentSettingsReport(codexYolo: false, agentStatusTracking: true)
+                case .updateGlobalAgentSettings(let yolo, let tracking):
                     calls.append("save")
-                    return .globalAgentSettingsReport(codexYolo: enabled)
+                    return .globalAgentSettingsReport(codexYolo: yolo ?? false, agentStatusTracking: tracking ?? true)
                 default:
                     Issue.record("Unexpected project request")
                     return .error(code: "TEST", message: "Unexpected request")
@@ -46,7 +46,7 @@ struct GlobalAgentSettingsTests {
             },
             sendRequest: { _ in
                 requests += 1
-                return .globalAgentSettingsReport(codexYolo: true)
+                return .globalAgentSettingsReport(codexYolo: true, agentStatusTracking: true)
             }
         )
         await state.loadGlobalSettings()
@@ -75,12 +75,28 @@ struct GlobalAgentSettingsTests {
         #expect(json["type"] as? String == "update_global_agent_settings")
         #expect(json["codex_yolo"] as? Bool == true)
         #expect(json["project_root"] == nil)
+        #expect(json["agent_status_tracking"] == nil)
         let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(#"{"type":"global_agent_settings_report","codex_yolo":true}"#.utf8))
-        guard case .globalAgentSettingsReport(let enabled) = response else {
+        guard case .globalAgentSettingsReport(let enabled, let tracking) = response else {
             Issue.record("Expected global settings response")
             return
         }
         #expect(enabled)
+        #expect(tracking, "Older daemons always track status")
+    }
+
+    @Test func statusTrackingUpdateSendsOnlyItsOwnField() async throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(agentStatusTracking: false))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["agent_status_tracking"] as? Bool == false)
+        #expect(json["codex_yolo"] == nil)
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { _ in .globalAgentSettingsReport(codexYolo: true, agentStatusTracking: false) }
+        )
+        await state.updateAgentStatusTracking(false)
+        #expect(!state.agentStatusTracking)
+        #expect(state.codexYolo)
     }
 }
 

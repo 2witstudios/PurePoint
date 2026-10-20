@@ -40,10 +40,16 @@ Config domains:
 - Given a save fails, Settings should show the error and retain the last
   confirmed state. Settings should be available without an open project.
 - Daemon IPC: `get_global_agent_settings`, `update_global_agent_settings`
-  (`codex_yolo: bool`), response `global_agent_settings_report`.
+  (optional `codex_yolo: bool`, optional `agent_status_tracking: bool`; an
+  omitted field keeps its stored value), response
+  `global_agent_settings_report` (`codex_yolo`, `agent_status_tracking`).
 - YAML: `codexYolo: bool`, default `false`. The explicit machine policy takes
   precedence over project Codex permission flags; other configuration follows
   the normal hierarchy.
+- YAML: `agentStatusTracking: bool`, default `true`. When `false`, new and
+  resumed agents launch without status adapters, so they report no status.
+  Tracking works with any version of Claude Code, Codex, OpenCode or Pi;
+  adapters record the observed version but never gate on it.
 
 ## Research Notes
 

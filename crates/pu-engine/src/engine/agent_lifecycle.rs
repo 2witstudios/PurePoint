@@ -439,19 +439,24 @@ impl Engine {
             &mut env,
             worktree_id.as_ref().map(|_| Path::new(&cwd)),
         );
-        let observation = crate::signals::prepare(
-            project_root,
-            &cwd,
-            agent_id,
-            worktree_id.clone(),
-            &agent_entry.agent_type,
-            session_id.as_deref(),
-            true,
-            &command,
-            &mut args,
-            &mut env,
-        )
-        .await;
+        let observation = if crate::signals::tracking_enabled().await {
+            crate::signals::prepare(
+                project_root,
+                &cwd,
+                agent_id,
+                worktree_id.clone(),
+                &agent_entry.agent_type,
+                session_id.as_deref(),
+                true,
+                &command,
+                &mut args,
+                &mut env,
+            )
+            .await
+        } else {
+            crate::signals::strip_inherited(&mut env);
+            None
+        };
         let spawn_config = SpawnConfig {
             command,
             args,

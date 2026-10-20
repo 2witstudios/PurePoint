@@ -350,7 +350,7 @@ nonisolated enum DaemonRequest: Encodable {
     case deleteTrigger(projectRoot: String, name: String, scope: String)
     case getConfig(projectRoot: String)
     case getGlobalAgentSettings
-    case updateGlobalAgentSettings(codexYolo: Bool)
+    case updateGlobalAgentSettings(codexYolo: Bool? = nil, agentStatusTracking: Bool? = nil)
     case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: [String]?)
     case shutdown
     /// The daemon's registered projects; no project root means all of them.
@@ -587,9 +587,10 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(projectRoot, forKey: .key("project_root"))
         case .getGlobalAgentSettings:
             try container.encode("get_global_agent_settings", forKey: .key("type"))
-        case .updateGlobalAgentSettings(let codexYolo):
+        case .updateGlobalAgentSettings(let codexYolo, let agentStatusTracking):
             try container.encode("update_global_agent_settings", forKey: .key("type"))
-            try container.encode(codexYolo, forKey: .key("codex_yolo"))
+            try container.encodeIfPresent(codexYolo, forKey: .key("codex_yolo"))
+            try container.encodeIfPresent(agentStatusTracking, forKey: .key("agent_status_tracking"))
         case .updateAgentConfig(let projectRoot, let agentName, let launchArgs):
             try container.encode("update_agent_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -673,7 +674,7 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerList(triggers: [TriggerInfoPayload])
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
-    case globalAgentSettingsReport(codexYolo: Bool)
+    case globalAgentSettingsReport(codexYolo: Bool, agentStatusTracking: Bool)
     case inventory(InventoryReportPayload)
     case fsListResult(path: String, entries: [FsEntryPayload], truncated: Bool)
     case fsStatResult(FsStatPayload)
@@ -788,7 +789,7 @@ nonisolated enum DaemonResponse: Decodable {
             self = .configReport(defaultAgent: p.defaultAgent, agents: p.agents)
         case "global_agent_settings_report":
             let p = try GlobalAgentSettingsPayload(from: decoder)
-            self = .globalAgentSettingsReport(codexYolo: p.codexYolo)
+            self = .globalAgentSettingsReport(codexYolo: p.codexYolo, agentStatusTracking: p.agentStatusTracking ?? true)
         case "inventory":
             self = .inventory(try InventoryReportPayload(from: decoder))
         case "fs_list_result":
@@ -934,8 +935,11 @@ nonisolated struct SwarmDefInfo: Decodable {
 
 private nonisolated struct GlobalAgentSettingsPayload: Decodable {
     let codexYolo: Bool
+    /// Absent from daemons that predate the setting, where tracking is always on.
+    let agentStatusTracking: Bool?
     enum CodingKeys: String, CodingKey {
         case codexYolo = "codex_yolo"
+        case agentStatusTracking = "agent_status_tracking"
     }
 }
 

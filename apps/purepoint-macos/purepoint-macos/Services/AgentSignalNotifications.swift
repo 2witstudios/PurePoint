@@ -24,7 +24,7 @@ import UserNotifications
     }
 
     func update(_ agents: [AgentSignalAlertPolicy.Agent], foregroundIdentity: String?) {
-        // Empty until owner qualification records the exact tool/version/adapter combination.
+        // Empty until owner qualification records the tool/adapter combination.
         // This is a release capability gate, separate from notification preferences.
         let qualified = Set(defaults.stringArray(forKey: "PP_signalQualifiedMacAdapters") ?? [])
         for agent in agents where agent.identity == foregroundIdentity && agent.presentation.label == "Error" {

@@ -26,77 +26,14 @@ fn same_native_root(bound: &Binding, current: &Binding) -> bool {
         && bound.path == current.path
         && bound.cwd == current.cwd
 }
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn prepare_launch(
     project: &str,
     agent: &str,
     worktree: Option<String>,
     session: Option<&str>,
     cwd: &str,
-    command: &str,
     env: &[(String, String)],
 ) -> Option<Prepared> {
-    use tokio::io::AsyncReadExt;
-    // A rollout's cli_version names its creator, not the executable resuming it.
-    // Probe once before launch in a disposable profile: even --version can write
-    // PATH aliases, so it must never receive the real CODEX_HOME/configuration.
-    let profile = tempfile::Builder::new()
-        .prefix("pu-codex-version-")
-        .tempdir()
-        .ok()?;
-    let path = env
-        .iter()
-        .rev()
-        .find(|(key, _)| key == "PATH")
-        .map(|(_, value)| value.as_str())
-        .unwrap_or("");
-    let supported = || async {
-        let mut child = tokio::process::Command::new(command)
-            .args(["--no-daemon", "--version"])
-            .env_clear()
-            .env("HOME", profile.path())
-            .env("CODEX_HOME", profile.path())
-            .env("XDG_CONFIG_HOME", profile.path())
-            .env("TMPDIR", profile.path())
-            .env("PATH", path)
-            .current_dir(profile.path())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .ok()?;
-        let mut bytes = Vec::new();
-        child
-            .stdout
-            .take()?
-            .take(65)
-            .read_to_end(&mut bytes)
-            .await
-            .ok()?;
-        if bytes.len() > 64 || !child.wait().await.ok()?.success() {
-            return None;
-        }
-        (std::str::from_utf8(&bytes).ok()?.trim() == "codex-cli 0.163.0").then_some(())
-    };
-    // Cold executable validation can use the first attempt's budget before
-    // main. Retry a timeout once, so a hung binary costs at most one second.
-    let mut verified = false;
-    for _ in 0..2 {
-        match tokio::time::timeout(Duration::from_millis(500), supported()).await {
-            Ok(Some(())) => {
-                verified = true;
-                break;
-            }
-            // A genuine unsupported version or failed executable is never
-            // accepted; retries reuse the same disposable profile.
-            Ok(None) => return None,
-            Err(_) => {}
-        }
-    }
-    if !verified {
-        return None;
-    }
     let mut prepared = prepare(project, agent, worktree, session)?;
     if let Some(session) = session {
         let (session, cwd, env) = (session.to_owned(), cwd.to_owned(), env.to_vec());
@@ -144,7 +81,7 @@ pub(super) fn prepare(
         socket,
         token: String::new(),
         tool: "codex".into(),
-        version: "0.163.0".into(),
+        version: "unknown".into(),
         output: None,
         state: Arc::new(LaunchState {
             reducer: Mutex::new(None),
@@ -472,7 +409,7 @@ fn snapshot(
         },
         evidence: Some(SignalEvidence {
             tool: "codex".into(),
-            tool_version: "0.163.0".into(),
+            tool_version: history.version.as_deref().unwrap_or("unknown").into(),
             adapter_version: "2".into(),
             confidence: SignalConfidence::Authoritative,
             event_id: history
@@ -492,6 +429,7 @@ fn snapshot(
 #[derive(Default)]
 struct History {
     session: Option<String>,
+    version: Option<String>,
     turn: Option<String>,
     tools: BTreeMap<String, Option<AttentionKind>>,
     closed_turns: HashSet<String>,
@@ -516,12 +454,15 @@ impl History {
                 .filter(|s| crate::read_source::valid_session_id(s))?;
             if p["cwd"].as_str() != Some(cwd)
                 || p["source"] != "cli"
-                || p["cli_version"] != "0.163.0"
                 || self.session.as_ref().is_some_and(|old| old != id)
             {
                 return None;
             }
             self.session = Some(id.into());
+            self.version = p["cli_version"]
+                .as_str()
+                .filter(|v| !v.trim().is_empty() && v.len() <= 64)
+                .map(str::to_owned);
             return Some(());
         }
         self.session.as_ref()?;
@@ -958,32 +899,27 @@ mod tests {
             assert!(unbound_snapshot(&identity, &protocol, 100).is_none());
         }
     }
-    #[tokio::test]
-    async fn given_cold_version_probe_should_retry_without_disabling_supported_observation() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let executable = root.path().join("codex");
-        std::fs::write(&executable, "#!/bin/sh\nif [ ! -f \"$HOME/validated\" ]; then printf warm > \"$HOME/validated\"; exec /bin/sleep 2; fi\nprintf 'codex-cli 0.163.0\\n'\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let cwd = root.path().to_str().unwrap();
-        let env = vec![("HOME".into(), cwd.into())];
-        assert!(
-            prepare_launch(
-                cwd,
-                "agent",
-                None,
-                None,
-                cwd,
-                executable.to_str().unwrap(),
-                &env
-            )
-            .await
-            .is_some()
-        );
-        assert!(
-            !root.path().join("validated").exists(),
-            "Even retried version probes must keep the real profile untouched"
-        );
+    #[test]
+    fn given_any_cli_version_should_observe_and_report_it() {
+        let mut history = History::default();
+        let mut newer = meta();
+        newer["payload"]["cli_version"] = json!("0.164.0");
+        history.record(&newer, "/owned").unwrap();
+        history
+            .record(&event("task_started", "turn"), "/owned")
+            .unwrap();
+        let mut protocol = Protocol::default();
+        protocol.feed(b"\x1b]7501;state=working:app=codex\x1b\\");
+        let identity = SignalIdentity {
+            agent_id: "agent".into(),
+            worktree_id: None,
+            launch_id: "launch".into(),
+            generation: 1,
+            native_session_id: "native".into(),
+        };
+        let observed = snapshot(&identity, &protocol, &history, 100).unwrap();
+        assert_eq!(observed.activity, SignalActivity::Working);
+        assert_eq!(observed.evidence.unwrap().tool_version, "0.164.0");
     }
     #[test]
     fn given_idle_native_ui_and_unfinished_history_should_not_claim_working() {
@@ -1007,30 +943,8 @@ mod tests {
         assert!(observed.outcome.is_none());
     }
     #[tokio::test]
-    async fn given_incompatible_running_cli_should_not_use_historical_creator_version() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let executable = root.path().join("codex");
-        std::fs::write(&executable, b"#!/bin/sh\nprintf 'codex-cli 0.164.0\\n'\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(
-            prepare_launch(
-                root.path().to_str().unwrap(),
-                "agent",
-                None,
-                None,
-                root.path().to_str().unwrap(),
-                executable.to_str().unwrap(),
-                &[]
-            )
-            .await
-            .is_none()
-        );
-    }
-    #[tokio::test]
     async fn given_resumed_history_should_only_accept_records_after_the_owned_launch_boundary() {
         use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let cwd = root.path().to_str().unwrap();
         let sessions = root.path().join("sessions");
@@ -1041,25 +955,13 @@ mod tests {
         historical_meta["payload"]["cli_version"] = json!("older-creator");
         std::fs::write(&path, format!("{historical_meta}\n{}\n{}\n", event("task_started", "old"),
             json!({"type":"response_item","payload":{"type":"function_call","call_id":"old-request","name":"request_user_input"}}))).unwrap();
-        let marker = root.path().join("version-profile");
-        let executable = root.path().join("codex");
-        std::fs::write(&executable, format!("#!/bin/sh\nprintf '%s' \"$HOME\" > '{}'\nprintf alias > \"$CODEX_HOME/probe-alias\"\nprintf 'codex-cli 0.163.0\\n'\n", marker.display())).unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let env = vec![
             ("CODEX_HOME".into(), cwd.into()),
             ("HOME".into(), cwd.into()),
         ];
-        let prepared = prepare_launch(
-            cwd,
-            "agent",
-            None,
-            Some("native"),
-            cwd,
-            executable.to_str().unwrap(),
-            &env,
-        )
-        .await
-        .unwrap();
+        let prepared = prepare_launch(cwd, "agent", None, Some("native"), cwd, &env)
+            .await
+            .unwrap();
         let Some(NativeObserver::Codex(mut observer)) = prepared.observer else {
             panic!("missing observer");
         };
@@ -1077,10 +979,6 @@ mod tests {
             .unwrap();
         assert!(history.turn.is_none());
         assert!(history.tools.is_empty());
-        let profile = std::fs::read_to_string(marker).unwrap();
-        assert_ne!(profile, cwd);
-        assert!(!Path::new(&profile).exists());
-        assert!(!root.path().join("probe-alias").exists());
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
@@ -1177,12 +1075,8 @@ mod tests {
     }
 
     #[test]
-    fn wrong_root_or_version_never_binds() {
-        for (key, value) in [
-            ("source", json!("subagent")),
-            ("cwd", json!("/foreign")),
-            ("cli_version", json!("9.0.0")),
-        ] {
+    fn wrong_root_never_binds() {
+        for (key, value) in [("source", json!("subagent")), ("cwd", json!("/foreign"))] {
             let mut h = History::default();
             let mut v = meta();
             v["payload"][key] = value;

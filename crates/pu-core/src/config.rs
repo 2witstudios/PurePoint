@@ -4,11 +4,23 @@ use crate::error::PuError;
 use crate::paths;
 use crate::types::{AgentConfig, Config};
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalAgentSettings {
     #[serde(default)]
     pub codex_yolo: bool,
+    /// Observe agent status (working/idle/question) through the native adapters.
+    #[serde(default = "crate::serde_defaults::default_true")]
+    pub agent_status_tracking: bool,
+}
+
+impl Default for GlobalAgentSettings {
+    fn default() -> Self {
+        Self {
+            codex_yolo: false,
+            agent_status_tracking: true,
+        }
+    }
 }
 
 pub fn load_global_agent_settings() -> Result<GlobalAgentSettings, PuError> {
@@ -20,14 +32,25 @@ pub fn load_global_agent_settings() -> Result<GlobalAgentSettings, PuError> {
     }
 }
 
-pub fn save_global_agent_settings(codex_yolo: bool) -> Result<GlobalAgentSettings, PuError> {
+/// Update the given settings, keeping the stored value of any left as `None`.
+pub fn save_global_agent_settings(
+    codex_yolo: Option<bool>,
+    agent_status_tracking: Option<bool>,
+) -> Result<GlobalAgentSettings, PuError> {
     use fs4::FileExt;
     let dir = paths::global_pu_dir()?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("agent-settings.yaml");
     let lock = std::fs::File::create(path.with_extension("yaml.lock"))?;
     FileExt::lock(&lock)?;
-    let settings = GlobalAgentSettings { codex_yolo };
+    // A malformed file is replaced rather than blocking every future save.
+    let mut settings = load_global_agent_settings().unwrap_or_default();
+    if let Some(enabled) = codex_yolo {
+        settings.codex_yolo = enabled;
+    }
+    if let Some(enabled) = agent_status_tracking {
+        settings.agent_status_tracking = enabled;
+    }
     let yaml = serde_yaml_ng::to_string(&settings)?;
     let tmp_path = path.with_extension("yaml.tmp");
     let mut tmp = std::fs::File::create(&tmp_path)?;
@@ -278,7 +301,7 @@ mod tests {
         let yaml = "agents:\n  codex:\n    name: codex\n    command: wrapper -a authentication codex -s workspace-write --search\n    launchArgs: [--ask-for-approval=on-request, -m, custom-model, -c, a=1, -c, b=2]\n";
         std::fs::write(paths::config_path(project.path()), yaml).unwrap();
         let original = load_config_strict(project.path()).unwrap();
-        save_global_agent_settings(true).unwrap();
+        save_global_agent_settings(Some(true), None).unwrap();
         let cfg = load_config_strict(project.path()).unwrap();
         assert_eq!(
             cfg.agents["codex"].command,
@@ -309,7 +332,7 @@ mod tests {
                 .unwrap()
                 .contains(&"--no-daemon".into())
         );
-        save_global_agent_settings(false).unwrap();
+        save_global_agent_settings(Some(false), None).unwrap();
         let restored = load_config_strict(project.path()).unwrap();
         assert_eq!(
             restored.agents["codex"].command,
@@ -323,6 +346,26 @@ mod tests {
             std::fs::read_to_string(paths::config_path(project.path())).unwrap(),
             yaml
         );
+    }
+
+    #[test]
+    fn status_tracking_defaults_on_and_updates_independently_of_yolo() {
+        let home = TestHome::new();
+        assert!(load_global_agent_settings().unwrap().agent_status_tracking);
+        std::fs::create_dir_all(home.0.path().join(".pu")).unwrap();
+        std::fs::write(
+            home.0.path().join(".pu/agent-settings.yaml"),
+            "codexYolo: true\n",
+        )
+        .unwrap();
+        let settings = load_global_agent_settings().unwrap();
+        assert!(settings.codex_yolo && settings.agent_status_tracking);
+        let settings = save_global_agent_settings(None, Some(false)).unwrap();
+        assert!(settings.codex_yolo && !settings.agent_status_tracking);
+        let settings = save_global_agent_settings(Some(false), None).unwrap();
+        assert!(!settings.codex_yolo && !settings.agent_status_tracking);
+        let settings = load_global_agent_settings().unwrap();
+        assert!(!settings.codex_yolo && !settings.agent_status_tracking);
     }
 
     #[test]
@@ -341,9 +384,9 @@ mod tests {
     #[test]
     fn failed_global_save_retains_confirmed_setting() {
         let home = TestHome::new();
-        save_global_agent_settings(true).unwrap();
+        save_global_agent_settings(Some(true), None).unwrap();
         std::fs::create_dir(home.0.path().join(".pu/agent-settings.yaml.tmp")).unwrap();
-        assert!(save_global_agent_settings(false).is_err());
+        assert!(save_global_agent_settings(Some(false), None).is_err());
         assert!(load_global_agent_settings().unwrap().codex_yolo);
     }
 
@@ -352,7 +395,13 @@ mod tests {
         let mut config = Config::default();
         let command = "codex-wrapper  -a account --sandbox wrapper-profile";
         config.agents.get_mut("codex").unwrap().command = command.into();
-        apply_global_agent_settings(&mut config, &GlobalAgentSettings { codex_yolo: true });
+        apply_global_agent_settings(
+            &mut config,
+            &GlobalAgentSettings {
+                codex_yolo: true,
+                ..GlobalAgentSettings::default()
+            },
+        );
         assert_eq!(config.agents["codex"].command, command);
         assert_eq!(
             config.agents["codex"].launch_args.as_ref().unwrap(),

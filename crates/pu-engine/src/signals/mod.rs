@@ -285,6 +285,21 @@ fn helper(env: &[(String, String)]) -> Option<PathBuf> {
         .find(|p| p.is_absolute() && p.is_file())
 }
 
+/// Whether the user has status tracking on (the default). An unreadable
+/// settings file leaves it on, matching a missing one.
+pub(crate) async fn tracking_enabled() -> bool {
+    tokio::task::spawn_blocking(|| {
+        pu_core::config::load_global_agent_settings().map_or(true, |s| s.agent_status_tracking)
+    })
+    .await
+    .unwrap_or(true)
+}
+
+/// Fresh launches never inherit another launch's signal capabilities.
+pub(crate) fn strip_inherited(env: &mut Vec<(String, String)>) {
+    env.retain(|(key, _)| !key.starts_with("PU_SIGNAL_"));
+}
+
 /// Add launch-only observation artifacts. Failure never prevents the native launch.
 /// OpenCode observes its existing service without changing launch options.
 /// Claude reads its native interactive registry and transcript.
@@ -303,27 +318,27 @@ pub(crate) async fn prepare(
     args: &mut Vec<String>,
     env: &mut Vec<(String, String)>,
 ) -> Option<Prepared> {
-    env.retain(|(key, _)| !key.starts_with("PU_SIGNAL_"));
+    strip_inherited(env);
     if tool == "opencode" && Path::new(command).file_name()?.to_str()? == tool {
         let mut prepared =
             opencode::prepare_launch(project, cwd, agent, worktree, session?, args, env, resuming)
                 .await?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
-            qualification::load(project, tool, "2.0.28", "1", args).await;
+            qualification::load(project, tool, "1", args).await;
         return Some(prepared);
     }
     if tool == "codex" && Path::new(command).file_name()?.to_str()? == tool {
         let mut prepared =
-            codex::prepare_launch(project, agent, worktree, session, cwd, command, env).await?;
+            codex::prepare_launch(project, agent, worktree, session, cwd, env).await?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
-            qualification::load(project, tool, "0.163.0", "2", args).await;
+            qualification::load(project, tool, "2", args).await;
         return Some(prepared);
     }
     if tool == "claude" && Path::new(command).file_name()?.to_str()? == tool {
         let mut prepared =
             claude::prepare_launch(project, cwd, agent, worktree, session?, env, resuming).await?;
         Arc::get_mut(&mut prepared.state)?.macos_qualification =
-            qualification::load(project, tool, "2.1.300", "2", args).await;
+            qualification::load(project, tool, "2", args).await;
         return Some(prepared);
     }
     if tool != "pi" || Path::new(command).file_name()?.to_str()? != tool {
@@ -359,7 +374,7 @@ pub(crate) async fn prepare(
     {
         return None;
     }
-    let version = "1.3.0";
+    // Record the running version for evidence only; any release is observed.
     let probe = async {
         use tokio::io::AsyncReadExt;
         let mut child = tokio::process::Command::new(command)
@@ -387,15 +402,17 @@ pub(crate) async fn prepare(
         if bytes.len() > 4096 || !child.wait().await.ok()?.success() {
             return None;
         }
-        // Exact release token, not a prefix accepting an incompatible later build.
         String::from_utf8_lossy(&bytes)
             .split_whitespace()
-            .any(|v| v == version)
-            .then_some(())
+            .find(|v| v.starts_with(|c: char| c.is_ascii_digit()) && v.len() <= 64)
+            .map(str::to_owned)
     };
-    let qualified = tokio::time::timeout(Duration::from_millis(500), probe).await;
+    let version = tokio::time::timeout(Duration::from_millis(500), probe)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "unknown".into());
     let _ = std::fs::remove_dir(&home);
-    qualified.ok()??;
     let socket = UnixDatagram::bind(artifacts.socket_directory.join("s")).ok()?;
     let token = format!("{}{}", pu_core::id::session_id(), pu_core::id::session_id());
     let identity = SignalIdentity {
@@ -410,7 +427,7 @@ pub(crate) async fn prepare(
     } else {
         None
     };
-    let macos_qualification = qualification::load(project, tool, version, "1", args).await;
+    let macos_qualification = qualification::load(project, tool, "1", args).await;
     let p = artifacts
         .write(
             "pi.mjs",
@@ -438,7 +455,7 @@ pub(crate) async fn prepare(
         socket,
         token,
         tool: tool.into(),
-        version: version.into(),
+        version,
         state: Arc::new(LaunchState {
             reducer: Mutex::new(reducer),
             identity: Mutex::new(identity),
@@ -1321,13 +1338,14 @@ mod tests {
         Arc::get_mut(&mut prepared.state)
             .unwrap()
             .macos_qualification =
-            qualification::load(tmp.path().to_str().unwrap(), "claude", "2.1.300", "2", &[]).await;
+            qualification::load(tmp.path().to_str().unwrap(), "claude", "2", &[]).await;
         let identity = prepared.state.identity.lock().unwrap().clone();
         let mut reducer = SignalReducer::new(identity, limits()).unwrap();
         let event = SignalEvent {
             schema_version: 1,
             tool: "claude".into(),
-            tool_version: "2.1.300".into(),
+            // The grant was recorded on 2.1.300; later releases stay qualified.
+            tool_version: "2.1.304".into(),
             adapter_version: "2".into(),
             identity: prepared.state.identity.lock().unwrap().clone(),
             parent_session_id: None,
@@ -1356,7 +1374,7 @@ mod tests {
         );
 
         assert!(
-            qualification::load(tmp.path().to_str().unwrap(), "claude", "2.1.300", "1", &[])
+            qualification::load(tmp.path().to_str().unwrap(), "claude", "1", &[])
                 .await
                 .is_none()
         );
@@ -1439,7 +1457,7 @@ mod tests {
         let path = tmp.path().join(".pu/agent-signals/qualifications.json");
         std::fs::write(&path,serde_json::to_vec(&json!({"schema_version":1,"qualifications":[{"tool":"pi","tool_version":"1.3.0","adapter_version":"1","platform":"macos","execution_mode":"interactive_pty","owner_confirmed":true,"proof_record_url":"https://pagespace.ai/dashboard/drive/fixture-only","qualified_at_ms":now-1000,"expires_at_ms":now+1000}]})).unwrap()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let grant = qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", "1", &[])
+        let grant = qualification::load(tmp.path().to_str().unwrap(), "pi", "1", &[])
             .await
             .unwrap();
         Arc::get_mut(&mut prepared.state)
@@ -1476,7 +1494,6 @@ mod tests {
             qualification::load(
                 tmp.path().to_str().unwrap(),
                 "pi",
-                "1.3.0",
                 "1",
                 &["--mode".into(), "rpc".into()]
             )
@@ -1527,7 +1544,7 @@ mod tests {
         Arc::get_mut(&mut prepared.state)
             .unwrap()
             .macos_qualification =
-            qualification::load(tmp.path().to_str().unwrap(), "pi", "1.3.0", "1", &[]).await;
+            qualification::load(tmp.path().to_str().unwrap(), "pi", "1", &[]).await;
         let mut adapter = intake("pi");
         adapter.version = "1.3.0".into();
         receive(
