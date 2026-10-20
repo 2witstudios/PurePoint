@@ -127,8 +127,9 @@ struct PiPointGuardChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // Eager on purpose: lazy row estimates for Markdown bubbles and selectable text
-                // never settled while scrolling, spinning the main thread in layout.
+                // Eager on purpose: every update of a `.textSelection` overlay invalidates layout
+                // (AppKit line-break/font resets), and LazyVStack re-updated those overlays on each
+                // pass while scrolling, so layout never settled and the main thread hung.
                 VStack(alignment: .leading, spacing: 12) {
                     if let history = model.browsing {
                         VStack(alignment: .leading, spacing: 8) {
