@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftTerm
 @testable import PurePoint
 
 final class AgentControlTests: XCTestCase {
@@ -285,5 +286,26 @@ extension AgentControlTests {
         pan.movement = CGPoint(x: 0, y: 12)
         XCTAssertTrue(coordinator.canForwardScroll(pan))
         XCTAssertEqual(pan.translation(in: nil).y, 12, "Only subsequent pan movement remains")
+    }
+}
+
+extension AgentControlTests {
+    @MainActor func testGivenAgentEnablesMouseModeShouldNotAddCompetingTerminalPan() {
+        let terminal = ReadOnlyAgentTerminal(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        terminal.feed(text: "\u{1b}[?1049h\u{1b}[?1003h\u{1b}[?1006h")
+        XCTAssertTrue(terminal.getTerminal().isCurrentBufferAlternate)
+        XCTAssertNotEqual(terminal.getTerminal().mouseMode, .off)
+        let pans = (terminal.gestureRecognizers ?? []).filter { $0 is UIPanGestureRecognizer }
+        XCTAssertEqual(pans.count, 1)
+        XCTAssertTrue(pans.first === terminal.panGestureRecognizer, "Only the view's own scroll pan remains")
+    }
+
+    @MainActor func testGivenReadOnlyTerminalShouldNotOfferSwiftTermSelectionGestures() {
+        let terminal = ReadOnlyAgentTerminal(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        terminal.disableBuiltInSelection()
+        let selecting = (terminal.gestureRecognizers ?? []).filter {
+            ($0 is UITapGestureRecognizer || $0 is UILongPressGestureRecognizer) && $0.isEnabled
+        }
+        XCTAssertTrue(selecting.isEmpty, "Taps belong to the viewport's fit-width and keyboard gestures")
     }
 }
