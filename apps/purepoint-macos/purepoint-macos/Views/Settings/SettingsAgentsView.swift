@@ -288,6 +288,17 @@ struct SettingsAgentsView: View {
                     Text("Codex gets full access with no command approvals in every project on this Mac. Applies to new and resumed sessions; restart running agents to apply it.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                    Toggle("Agent status tracking", isOn: Binding(
+                        get: { state.agentStatusTracking },
+                        set: { enabled in
+                            Task { await state.updateAgentStatusTracking(enabled) }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(!state.globalSettingsLoaded || state.isSavingGlobalSettings)
+                    Text("Show whether Claude Code, Codex, OpenCode and Pi agents are working, idle or waiting on you. Works with any version of those tools. Applies to new and resumed sessions.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                     if let error = state.globalError {
                         Text(error).font(.system(size: 12)).foregroundStyle(.red)
                         Button("Retry") { Task { await state.loadGlobalSettings() } }

@@ -454,7 +454,8 @@ nonisolated struct AgentSignalSnapshot: Codable, Equatable, Sendable {
 
     var qualificationKey: String? {
         guard let evidence else { return nil }
-        return (try? JSONEncoder().encode([evidence.tool, evidence.tool_version, evidence.adapter_version]).base64EncodedString())
+        // Tool releases change often; qualification follows the adapter, not the tool version.
+        return (try? JSONEncoder().encode([evidence.tool, evidence.adapter_version]).base64EncodedString())
     }
 
     func presentation(agentID: String, sessionID: String? = nil, available: Bool = true, now: Date = Date()) -> AgentSignalPresentation {

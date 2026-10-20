@@ -11,7 +11,9 @@ import Foundation
             try JSONDecoder().decode(AgentSignalSnapshot.self, from: JSONSerialization.data(withJSONObject: wire.merging(changes) { _, new in new }))
         }
         let qualifiedTuple = try snapshot(["evidence": ["tool": "pi", "tool_version": "1.3.0", "adapter_version": "1", "confidence": "authoritative", "event_id": "e"]])
-        precondition(qualifiedTuple.qualificationKey == "WyJwaSIsIjEuMy4wIiwiMSJd")
+        precondition(qualifiedTuple.qualificationKey == "WyJwaSIsIjEiXQ==")
+        let newerRelease = try snapshot(["evidence": ["tool": "pi", "tool_version": "9.9.9", "adapter_version": "1", "confidence": "authoritative", "event_id": "e"]])
+        precondition(newerRelease.qualificationKey == qualifiedTuple.qualificationKey, "Qualification survives tool updates")
         let now = Date(timeIntervalSince1970: 1792195201)
         let current = try snapshot()
         precondition(current.presentation(agentID: "ag-root", now: now).label == "Permission")

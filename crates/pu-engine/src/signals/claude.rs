@@ -75,7 +75,7 @@ pub(super) fn prepare(
         socket,
         token: String::new(),
         tool: "claude".into(),
-        version: "2.1.300".into(),
+        version: "unknown".into(),
         state: Arc::new(LaunchState {
             reducer: Mutex::new(None),
             identity: Mutex::new(SignalIdentity {
@@ -166,7 +166,6 @@ impl Observer {
             || row["cwd"].as_str() != Some(cwd)
             || row["sessionId"].as_str() != Some(session)
             || row["kind"] != "interactive"
-            || row["version"] != "2.1.300"
             || row["peerProtocol"] != 1
             || row["entrypoint"] != "cli"
             || row["pidDomain"] != domain
@@ -481,7 +480,6 @@ impl Transcript {
         }
         if v["sessionId"].as_str() != Some(&identity.native_session_id)
             || v["cwd"].as_str() != Some(cwd)
-            || v["version"] != "2.1.300"
         {
             return if content_record { None } else { Some(()) };
         }
@@ -704,7 +702,11 @@ impl Transcript {
             },
             evidence: Some(SignalEvidence {
                 tool: "claude".into(),
-                tool_version: "2.1.300".into(),
+                tool_version: row["version"]
+                    .as_str()
+                    .filter(|v| !v.trim().is_empty())
+                    .unwrap_or("unknown")
+                    .into(),
                 adapter_version: "2".into(),
                 confidence: SignalConfidence::Authoritative,
                 event_id: format!(
@@ -1007,13 +1009,12 @@ mod tests {
         assert_eq!(t.outcome.as_ref().unwrap().kind, OutcomeKind::Completed);
     }
     #[test]
-    fn foreign_child_and_future_version_cannot_change_root_facts() {
+    fn foreign_and_child_records_cannot_change_root_facts() {
         let id = identity();
         let mut t = Transcript::default();
         for (field, value) in [
             ("sessionId", json!("foreign")),
             ("cwd", json!("/foreign")),
-            ("version", json!("9.0.0")),
             ("isSidechain", json!(true)),
         ] {
             let mut v = record("user", "foreign", json!({"content":"ignored"}));
@@ -1021,6 +1022,19 @@ mod tests {
             let _ = t.record(&v, &id, "/owned");
             assert!(t.turn.is_none());
         }
+    }
+    #[test]
+    fn any_cli_version_is_observed_and_reported() {
+        let id = identity();
+        let mut t = Transcript::default();
+        let mut user = record("user", "turn", json!({"content":"accepted"}));
+        user["version"] = json!("2.1.304");
+        t.record(&user, &id, "/owned").unwrap();
+        assert_eq!(t.turn.as_deref(), Some("turn"));
+        let row = json!({"status":"busy","version":"2.1.304"});
+        let snapshot = t.snapshot(&id, &row, 1).unwrap();
+        assert_eq!(snapshot.activity, SignalActivity::Working);
+        assert_eq!(snapshot.evidence.unwrap().tool_version, "2.1.304");
     }
     #[test]
     fn native_wait_category_requires_one_exact_root_request() {
@@ -1257,7 +1271,6 @@ mod tests {
             "sessionId",
             "kind",
             "startedAt",
-            "version",
             "peerProtocol",
             "entrypoint",
             "pidDomain",
@@ -1268,6 +1281,20 @@ mod tests {
             assert!(
                 observer.row("/owned", 123, "native").await.is_none(),
                 "{field}"
+            );
+        }
+        for version in [json!("2.1.304"), json!("9.0.0"), Value::Null] {
+            let mut other = row.clone();
+            other["version"] = version.clone();
+            std::fs::write(
+                sessions.join("123.json"),
+                serde_json::to_vec(&other).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                observer.row("/owned", 123, "native").await,
+                Some(other),
+                "{version}"
             );
         }
         std::fs::write(sessions.join("123.json"), serde_json::to_vec(&row).unwrap()).unwrap();

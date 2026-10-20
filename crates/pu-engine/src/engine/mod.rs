@@ -443,9 +443,13 @@ impl Engine {
                     .await
             }
             Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
-            Request::GetGlobalAgentSettings => self.handle_global_agent_settings(None).await,
-            Request::UpdateGlobalAgentSettings { codex_yolo } => {
-                self.handle_global_agent_settings(Some(codex_yolo)).await
+            Request::GetGlobalAgentSettings => self.handle_global_agent_settings(None, None).await,
+            Request::UpdateGlobalAgentSettings {
+                codex_yolo,
+                agent_status_tracking,
+            } => {
+                self.handle_global_agent_settings(codex_yolo, agent_status_tracking)
+                    .await
             }
             Request::UpdateAgentConfig {
                 project_root,
@@ -884,15 +888,21 @@ impl Engine {
         })
     }
 
-    async fn handle_global_agent_settings(&self, codex_yolo: Option<bool>) -> Response {
+    async fn handle_global_agent_settings(
+        &self,
+        codex_yolo: Option<bool>,
+        agent_status_tracking: Option<bool>,
+    ) -> Response {
         tokio::task::spawn_blocking(move || {
-            let result = match codex_yolo {
-                Some(enabled) => config::save_global_agent_settings(enabled),
-                None => config::load_global_agent_settings(),
+            let result = if codex_yolo.is_none() && agent_status_tracking.is_none() {
+                config::load_global_agent_settings()
+            } else {
+                config::save_global_agent_settings(codex_yolo, agent_status_tracking)
             };
             match result {
                 Ok(settings) => Response::GlobalAgentSettingsReport {
                     codex_yolo: settings.codex_yolo,
+                    agent_status_tracking: settings.agent_status_tracking,
                 },
                 Err(e) => Response::Error {
                     code: e.code().into(),

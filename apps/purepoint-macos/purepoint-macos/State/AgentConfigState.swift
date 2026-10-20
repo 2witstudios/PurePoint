@@ -9,6 +9,7 @@ final class AgentConfigState {
     var isLoading = false
     var error: String?
     var codexYolo = false
+    var agentStatusTracking = true
     var globalSettingsLoaded = false
     var isSavingGlobalSettings = false
     var globalError: String?
@@ -37,13 +38,21 @@ final class AgentConfigState {
         isSavingGlobalSettings = false
     }
 
+    func updateAgentStatusTracking(_ enabled: Bool) async {
+        guard !isSavingGlobalSettings else { return }
+        isSavingGlobalSettings = true
+        await sendGlobalSettings(.updateGlobalAgentSettings(agentStatusTracking: enabled))
+        isSavingGlobalSettings = false
+    }
+
     private func sendGlobalSettings(_ request: DaemonRequest) async {
         globalError = nil
         do {
             try await ensureDaemon()
             switch try await sendRequest(request) {
-            case .globalAgentSettingsReport(let enabled):
-                codexYolo = enabled
+            case .globalAgentSettingsReport(let yolo, let tracking):
+                codexYolo = yolo
+                agentStatusTracking = tracking
                 globalSettingsLoaded = true
             case .error(_, let message):
                 globalError = message

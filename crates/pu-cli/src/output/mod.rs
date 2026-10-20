@@ -321,8 +321,12 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::GateResult { passed, output } => {
             execution::print_gate_result(*passed, output);
         }
-        Response::GlobalAgentSettingsReport { codex_yolo } => {
+        Response::GlobalAgentSettingsReport {
+            codex_yolo,
+            agent_status_tracking,
+        } => {
             println!("Codex YOLO for all projects: {codex_yolo}");
+            println!("Agent status tracking: {agent_status_tracking}");
         }
         Response::ConfigReport {
             default_agent,

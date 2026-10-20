@@ -21,6 +21,15 @@ struct NativeObservation {
     idle_revision: Option<i64>,
     materialized: bool,
 }
+impl NativeObservation {
+    /// Evidence reports the running service's own version; it is never gated on.
+    fn with_version(mut self, version: &str) -> Self {
+        if let Some(evidence) = self.snapshot.evidence.as_mut() {
+            evidence.tool_version = version.into();
+        }
+        self
+    }
+}
 
 #[derive(Clone)]
 struct Root {
@@ -194,7 +203,7 @@ pub(super) fn prepare(
         socket,
         token: String::new(),
         tool: "opencode".into(),
-        version: "2.0.28".into(),
+        version: "unknown".into(),
         state: Arc::new(LaunchState {
             reducer: Mutex::new(None),
             identity: Mutex::new(identity),
@@ -240,7 +249,8 @@ fn registration(path: &Path) -> Option<Registration> {
     let r: Registration = serde_json::from_slice(&bytes).ok()?;
     let url = reqwest::Url::parse(&r.url).ok()?;
     if r.pid == 0
-        || r.version != "2.0.28"
+        || r.version.trim().is_empty()
+        || r.version.len() > 64
         || url.scheme() != "http"
         || !matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "::1"))
         || !url.username().is_empty()
@@ -339,11 +349,14 @@ async fn poll(
     {
         return None;
     }
-    Some(NativeObservation {
-        snapshot: snapshot(identity, cwd, &info, &after, &permissions, &forms, now_ms())?,
-        idle_revision: info["data"]["time"]["idle"].as_i64(),
-        materialized: true,
-    })
+    Some(
+        NativeObservation {
+            snapshot: snapshot(identity, cwd, &info, &after, &permissions, &forms, now_ms())?,
+            idle_revision: info["data"]["time"]["idle"].as_i64(),
+            materialized: true,
+        }
+        .with_version(&r.version),
+    )
 }
 
 // Per-service bracketing avoids downloading the global active map per agent.
@@ -454,6 +467,7 @@ async fn poll_batch(
                             forms.as_ref(),
                             now,
                         )
+                        .map(|o| o.with_version(&r.version))
                     });
                     (id, value)
                 })
@@ -695,7 +709,7 @@ fn current_snapshot(
         },
         evidence: Some(SignalEvidence {
             tool: "opencode".into(),
-            tool_version: "2.0.28".into(),
+            tool_version: "unknown".into(),
             adapter_version: "1".into(),
             confidence: SignalConfidence::Authoritative,
             event_id,
@@ -929,6 +943,8 @@ mod tests {
             assert!(registration(&path).is_none());
         }
         write_registration(&path, "http://127.0.0.1:1234", "2.0.29");
+        assert!(registration(&path).is_some());
+        write_registration(&path, "http://127.0.0.1:1234", "");
         assert!(registration(&path).is_none());
         let link = temp.path().join("link");
         std::os::unix::fs::symlink(&path, &link).unwrap();
