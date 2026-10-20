@@ -5,11 +5,23 @@ import CoreText
 
 // Automatic responses, paste and hardware keys are dropped. Only deliberate
 // full-screen scroll gestures may forward generated wheel events through Control.
-private final class ReadOnlyAgentTerminal: TerminalView {
+final class ReadOnlyAgentTerminal: TerminalView {
     var agentCols = 80
     var agentRows = 24
     override var canBecomeFirstResponder: Bool { false }
     override func paste(_ sender: Any?) {}
+    // SwiftTerm adds a mouse pan here that is inert without mouse reporting
+    // and would take swipes from the wheel pan.
+    override func mouseModeChanged(source: Terminal) {}
+
+    // SwiftTerm's taps start a selection that captures every later drag and,
+    // without first responder, never clears. The viewport owns taps instead.
+    func disableBuiltInSelection() {
+        for gesture in gestureRecognizers ?? []
+        where gesture is UITapGestureRecognizer || gesture is UILongPressGestureRecognizer {
+            gesture.isEnabled = false
+        }
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -107,6 +119,7 @@ struct AgentTerminalView: UIViewRepresentable {
                 scroll.setZoomScale(1, animated: false)
                 let view = ReadOnlyAgentTerminal(frame: CGRect(x: 0, y: 0, width: 800, height: 480), font: terminalFont)
                 view.terminalDelegate = self; view.allowMouseReporting = false
+                view.disableBuiltInSelection()
                 view.nativeBackgroundColor = .black; view.nativeForegroundColor = .white
                 terminal = view; scroll.addSubview(view)
                 let pan = UIPanGestureRecognizer(target: self, action: #selector(scrollAgent(_:)))
