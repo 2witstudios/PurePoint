@@ -8,6 +8,7 @@ import https from "node:https";
 import WebSocket from "ws";
 import { serve } from "./network.js";
 import { openTrustStore } from "./trust.js";
+import { Controller } from "./controller.js";
 function connect(url, credential, clientId) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, {
@@ -196,14 +197,15 @@ async function chatHarness(fn) {
     await trust.setTerminals(device.deviceId, terminals);
     await trust.setWorkspaceManagement(device.deviceId, management);
   };
-  const pair = async (tier = "off") => {
+  // Without a tier the device keeps the grants it was paired with.
+  const pair = async (tier) => {
     const device = await trust.enroll({
       enrollmentToken: JSON.parse(
         trust.createEnrollment({ endpoint: url }).payload,
       ).enrollmentToken,
       name: "Phone",
     });
-    await grant(device, tier);
+    if (tier) await grant(device, tier);
     const ws = await connect(url, device.credential, device.clientId);
     const inbox = [];
     ws.on("message", (bytes) => inbox.push(JSON.parse(bytes.toString())));
@@ -328,7 +330,7 @@ test("a live grant downgrade stops broadcasts, rejects further chat ops and noti
 
 test("a device with agents and terminals Off cannot reach agents through Point Guard chat", async () =>
   chatHarness(async ({ dispatched, pair }) => {
-    // Default pairing: terminals off, workspace management off.
+    // A freshly paired device with no grant changes: terminals off, no management.
     const phone = await pair();
     const granted = (await phone.call("permissions")).data;
     assert.equal(granted.terminals, "off");
@@ -350,4 +352,87 @@ test("a device with agents and terminals Off cannot reach agents through Point G
       assert.equal((await phone.call(op, fields)).ok, false, op);
     assert.deepEqual(dispatched, []);
     phone.ws.close();
+  }));
+
+test("a downgrade while a chat request is in flight withholds its result", async () =>
+  chatHarness(async ({ trust, c, pair }) => {
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    c.request = async (r) => {
+      await held;
+      return { op: r.op, transcript: "secret" };
+    };
+    const phone = await pair("manage");
+    const sending = phone.call("send", { text: "hi", mode: "send" });
+    const reading = phone.call("sync");
+    await settle();
+    // Read access remains, but the send result needs Control and Workspace management.
+    await trust.setWorkspaceManagement(phone.device.deviceId, false);
+    release();
+    const sent = await sending;
+    assert.equal(sent.ok, false);
+    assert.equal(sent.data, undefined);
+    assert.match(sent.error, /permission changed/);
+    assert.equal((await reading).ok, true);
+    let again;
+    const later = new Promise((resolve) => (again = resolve));
+    c.request = async (r) => {
+      await later;
+      return { op: r.op };
+    };
+    const syncing = phone.call("sync");
+    await settle();
+    await trust.setTerminals(phone.device.deviceId, "off");
+    again();
+    const synced = await syncing;
+    assert.equal(synced.ok, false);
+    assert.equal(synced.data, undefined);
+    phone.ws.close();
+  }));
+
+test("a chat action queued behind a running prompt does not run after a downgrade", async () =>
+  chatHarness(async ({ trust, c, pair }) => {
+    const prompts = [];
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    const rpc = Object.assign(new EventEmitter(), {
+      async call(op, data) {
+        if (op === "get_state")
+          return {
+            sessionId: "one",
+            model: { id: "test" },
+            isStreaming: false,
+          };
+        if (op === "get_entries") return { entries: [], leafId: null };
+        if (op === "prompt") {
+          prompts.push(data?.message ?? data);
+          if (prompts.length === 1) await held;
+          return { disposition: "started" };
+        }
+        return {};
+      },
+      answer() {},
+    });
+    const controller = new Controller(rpc, {});
+    await controller.refresh();
+    c.request = (r, options) => controller.request(r, options);
+    try {
+      const phone = await pair("manage");
+      const send = (text) =>
+        phone.call("send", { text, mode: "send", epoch: controller.epoch });
+      const first = send("first");
+      const second = send("second");
+      await settle();
+      assert.equal(prompts.length, 1);
+      await trust.setWorkspaceManagement(phone.device.deviceId, false);
+      release();
+      await first;
+      const queued = await second;
+      assert.equal(queued.ok, false);
+      assert.match(queued.error, /permission changed/);
+      assert.equal(prompts.length, 1, "queued prompt never reached the RPC");
+      phone.ws.close();
+    } finally {
+      controller.dispose();
+    }
   }));
