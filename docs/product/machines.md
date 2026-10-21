@@ -1,6 +1,6 @@
 # Machines over SSH
 
-**Maturity: SPECIFIED** | ID Prefix: MACH | Dependencies: `architecture/ipc-api.md`, `architecture/daemon-engine.md`, `architecture/desktop-app-integration.md`, `product/desktop-app.md`, `product/cli.md`
+**Maturity: SPECIFIED** | ID Prefix: MACH | Dependencies: `architecture/ipc-api.md`, `architecture/daemon-engine.md`, `architecture/desktop-app-integration.md`, `product/desktop-app.md`, `product/cli.md`, `product/ipad-app.md`
 
 ## Purpose
 
@@ -17,7 +17,12 @@ Let one PurePoint app (and the `pu` CLI) work with PurePoint daemons running on 
 PurePoint app / pu CLI
   ├── ~/.pu/daemon.sock                      → local daemon
   └── ~/.pu/machines/<id>/daemon.sock  ─ssh -L→ remote ~/.pu/daemon.sock → remote daemon
+
+PurePoint iPad app (no local daemon, no system ssh)
+  └── SSH exec channel per daemon connection: `pu daemon proxy` ⇄ remote ~/.pu/daemon.sock
 ```
+
+On iPad a machine's daemon endpoint is not a local socket. Each daemon connection is an SSH exec channel running `pu daemon proxy` on the machine (MACH-009, `ipad-app.md`).
 
 ## Research Notes
 
@@ -31,14 +36,17 @@ Alternative considered: a dedicated mTLS worker protocol with enrollment, ledger
 
 ## Decisions
 
-! [MACH-001] Transport is the system `/usr/bin/ssh` with Unix-socket forwarding and the user's own ssh config, agent and Keychain — PurePoint stores no keys or passwords.
+! [MACH-001] On macOS, transport is the system `/usr/bin/ssh` with Unix-socket forwarding and the user's own ssh config, agent and Keychain — PurePoint stores no keys or passwords. (iPad: MACH-009, MACH-010.)
 ! [MACH-002] The existing daemon protocol is reused unchanged over the forward — no second protocol; IPC-004 is answered for this transport by SSH authentication plus remote socket permissions.
 ! [MACH-003] Remote endpoints never auto-start a daemon. Starting a remote daemon is an explicit user action run over ssh on the remote machine.
 ! [MACH-004] The remote daemon owns its agents. Disconnecting, quitting the app or losing the network never stops remote work.
 ! [MACH-005] Project, workspace, selection and persisted-state identity is `(machineId, projectRoot)`; local keys keep their existing form.
 ! [MACH-006] The CLI targets a machine only through an explicit `--machine <name>` — agent ids can collide across daemons, so there is no implicit fan-out.
 ! [MACH-007] File and git access for any project goes through a project host abstraction; remote projects use the daemon file/git requests below, confined to registered project roots, their worktrees and agent transcript directories.
-! [MACH-008] Machines are registered in `~/.pu/machines.json`, shared by the app and the CLI.
+! [MACH-008] On macOS, machines are registered in `~/.pu/machines.json`, shared by the app and the CLI. (iPad: MACH-011.)
+! [MACH-009] On iPad, each daemon connection is an SSH exec channel running `pu daemon proxy`, a stdio-to-socket relay to the machine's `~/.pu/daemon.sock`. All channels share the machine's one primary SSH connection, and an overflow connection is added only when the server refuses a session channel (`MaxSessions`) — iOS has no system ssh, and SwiftNIO SSH cannot open `direct-streamlocal` forwards (`docs/research/ipad-ssh-transport.md`); the daemon protocol is unchanged (MACH-002) and the relay never starts a daemon (MACH-003).
+! [MACH-010] On iPad, PurePoint stores one device SSH identity: an Ed25519 private key in the Keychain, device-only and never synchronized, generated on first launch or imported from an OpenSSH key. It also pins each machine's host key on first use, after explicit confirmation, and refuses a changed key until the pin is deliberately reset — iOS has no ssh agent, `~/.ssh` or `known_hosts`, so the app must hold the key and the trust MACH-001 leaves to the system.
+! [MACH-011] On iPad, machines are registered in the app container's own `Application Support/PurePoint/machines.json` with the same schema, not synced with any Mac and without flock or `~/.ssh/config` — there is no shared home or CLI on iOS, and a Mac entry's ssh alias and key would not work from the iPad.
 
 ## Requirements
 
@@ -56,9 +64,24 @@ Alternative considered: a dedicated mTLS worker protocol with enrollment, ledger
 - Given the app quits or the network drops, should leave remote agents running.
 - Given `pu --machine <name> …` with the daemon down or the tunnel unavailable, should fail with an actionable error and never start a local daemon.
 
+### iPad (MACH-009 – MACH-011)
+
+- Given `pu daemon proxy` with the daemon running, should copy stdin to `~/.pu/daemon.sock` and the socket's output to stdout, byte for byte, until either side closes.
+- Given `pu daemon proxy` with no daemon answering, should exit 69 without starting one, and write its diagnostics to stderr only.
+- Given an iPad daemon connection to a machine, should open one SSH exec channel running the relay command on that machine's SSH connection, multiplexed with the machine's other channels.
+- Given a session channel refused by the server, should carry the connection on an overflow SSH connection to the same machine, and close that connection once it is idle.
+- Given a relay that reports no daemon, should show Daemon stopped and offer Start daemon, which runs the start command over SSH.
+- Given a missing `pu` on the machine (exit 127), should report an actionable error naming the machine.
+- Given first launch on iPad, should generate an Ed25519 device identity in the Keychain (device-only, not synchronizable), and show its OpenSSH public key for copying.
+- Given an imported OpenSSH Ed25519 private key, should store it in the Keychain in place of the generated identity, and never store its passphrase.
+- Given a first connection from an iPad, should require explicit confirmation of the host key's SHA256 fingerprint, then pin it for that machine.
+- Given a pinned machine presenting a different host key, should refuse before authentication until the pin is deliberately reset.
+- Given the iPad machine registry, should read and write the `machines.json` schema in the app container, with atomic replacement, no flock, no `~/.ssh/config` and no sync.
+- Given Add Machine on iPad, should store `ssh_host` as `user@host` or `user@host:port`, since there are no ssh config aliases.
+
 ## Sum Sheet
 
-Machine = SSH destination. Endpoint = forwarded socket. Identity = (machine, root). Daemon owns work. Files and git over IPC. CLI targets explicitly.
+Machine = SSH destination. Endpoint = forwarded socket (Mac) or exec relay per connection (iPad). Identity = (machine, root). Daemon owns work. Files and git over IPC. CLI targets explicitly. iPad keys and host pins live in the Keychain, and its registry lives in the container.
 
 ## Interfaces
 
@@ -80,6 +103,18 @@ Machine = SSH destination. Endpoint = forwarded socket. Identity = (machine, roo
 ```
 
 Remote home is resolved once per connection with `ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none <ssh_host> 'printf %s "$HOME"'`. Start daemon runs `ssh -o ControlMaster=no -o ControlPath=none <ssh_host> '<start command>'`, where the start command (one argument) is exactly `/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu health'`: `/bin/sh` makes it work whatever the remote login shell is (fish and csh can't parse the assignment), and the `PATH` prefix lets both `pu` and the `pu-engine` it spawns resolve (non-interactive SSH has a minimal `PATH`). It is given 60 s. The spawned daemon detaches into its own session with null stdio, so the SSH command returns and the daemon outlives it. `-o ControlMaster=no -o ControlPath=none` (on every ssh command) keeps a user's multiplexing config from routing a command through, or parking the forward on, a shared master that outlives it.
+
+### iPad relay (MACH-009)
+
+`pu daemon proxy [--socket <path>]` connects to the daemon socket and copies bytes in both directions until either side closes. It performs no handshake and never starts a daemon. It exits 0 after a normal close, 69 (`EX_UNAVAILABLE`) when no daemon answers, and 1 on any other failure. Diagnostics go to stderr only.
+
+The iPad runs it as one SSH exec string, wrapped like the start command:
+
+```
+/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu daemon proxy'
+```
+
+Keychain items, registry location and the overflow-connection rule are specified in `ipad-app.md` (Interfaces).
 
 ### Daemon file and git requests (protocol version 9)
 
@@ -121,6 +156,7 @@ All paths are absolute paths on the daemon host. Each is canonicalized and must 
 - **Large files**: reads over `max_bytes` return `truncated: true`; the editor treats them like local files over the preview limit. Writes are bounded by the 1 MB request line, so saves above ~750 KB of content are refused with a clear error.
 - **Old remote daemon (protocol 8)**: shown as incompatible; the user upgrades PurePoint on that machine.
 - **Agent/worktree id collision across machines**: ids are 8 random base36 characters (~2.8×10¹² space), so the app's terminal cache and pane surfaces key agents by id alone. A collision would only arise from copying a daemon's `.pu` state between machines; the CLI is unaffected because `--machine` scopes every request to one daemon.
+- **iPad and Mac on one machine**: each is an independent client of the machine's daemon (an exec relay and an `ssh -L` forward respectively), with its own registry entry. Neither sees the other's registry.
 - **Two app instances, one machine**: the instance holding `~/.pu/machines/<id>/forward.lock` (flock) owns the forward; another instance follows that forward and never launches or ends one of its own.
 - **Remote layout changed elsewhere** (another Mac, or `pu grid` on the machine): layout saves are conditional on the document's modification time; on a conflict the app adopts the machine's document instead of overwriting it, and quitting only writes layouts with unsaved changes.
 - **Remote files the editor cannot save** (over the ~750 KB request limit) open read-only; files over the 1 MB read limit show why they cannot open. Local copies for other apps are limited to 8 MB, quarantined (Gatekeeper checks them before anything runs), and removed when the app quits.
