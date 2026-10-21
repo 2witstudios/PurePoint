@@ -4,7 +4,7 @@ import SwiftUI
 struct DiffCardView: View {
     let fileDiff: FileDiff
     var onLoadPreview: (() -> Void)? = nil
-    var loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil
+    var loadPage: (@MainActor (FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil
     var revealToken: UUID? = nil
     @State private var expanded: Bool
     @State private var history = ReviewPageHistory()
@@ -16,7 +16,7 @@ struct DiffCardView: View {
     @State private var loadToken = UUID()
 
     init(fileDiff: FileDiff, onLoadPreview: (() -> Void)? = nil,
-         loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil,
+         loadPage: (@MainActor (FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil,
          revealToken: UUID? = nil) {
         self.fileDiff = fileDiff; self.onLoadPreview = onLoadPreview
         self.loadPage = loadPage; self.revealToken = revealToken
