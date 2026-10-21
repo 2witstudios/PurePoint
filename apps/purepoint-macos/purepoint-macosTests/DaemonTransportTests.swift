@@ -272,6 +272,7 @@ struct DaemonStreamTransportTests {
 @Suite(.serialized) struct DaemonEndpointTransportTests {
     private let machineId = UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556666")!
 
+    #if os(macOS)
     @Test func macOSEndpointsResolveToUnixSocketsAtTodaysPaths() {
         let previous = DaemonEndpoint.transportProvider
         DaemonEndpoint.transportProvider = nil
@@ -288,6 +289,7 @@ struct DaemonStreamTransportTests {
         #expect(machine.transport as? UnixSocketTransport == UnixSocketTransport(socketPath: machinePath))
         #expect(machine.makeClient().transport as? UnixSocketTransport == UnixSocketTransport(socketPath: machinePath))
     }
+    #endif
 
     @Test func injectedProviderResolvesMachineEndpointsWithoutChangingCallSites() async throws {
         let previous = DaemonEndpoint.transportProvider

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Sparkle
 import SwiftUI
 
@@ -434,3 +435,4 @@ struct purepoint_macosApp: App {
         }
     }
 }
+#endif
