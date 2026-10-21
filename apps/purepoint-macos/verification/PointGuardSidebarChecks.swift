@@ -15,8 +15,8 @@ enum PaneSplitNode { enum Axis { case vertical, horizontal } }
     init(chat: PiChatModel) { pointGuardChat = chat }
     func activatePointGuardWorkspace() {}
     func projectState(forRoot root: String) -> ProjectFixture? { projects.first { $0.projectRoot == root } }
-    func pointGuardPrompts() async -> [PointGuardPrompt] { [] }
-    func pointGuardPromptBody(_ name: String) async -> String? { nil }
+    func pointGuardPrompts() async -> [PointGuardPrompt]? { [] }
+    func pointGuardPrompt(named name: String) async -> PointGuardPrompt? { nil }
 }
 struct ProjectFixture { let projectRoot: String }
 @MainActor final class ServiceFixture {

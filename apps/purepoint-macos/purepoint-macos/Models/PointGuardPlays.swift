@@ -51,16 +51,21 @@ struct PointGuardPlay: Identifiable, Equatable, Sendable {
     ]
 
     /// Fills each slot from its assigned prompt. A slot whose prompt was deleted, or now needs
-    /// input, quietly plays its built-in again.
-    static func resolve(_ assignments: [PointGuardPlayAssignment], prompts: [PointGuardPrompt]) -> [PointGuardPlay] {
+    /// input, quietly plays its built-in again. `prompts` is nil until the global list has loaded:
+    /// assigned slots keep their saved titles meanwhile, and their bodies are fetched when played.
+    static func resolve(_ assignments: [PointGuardPlayAssignment], prompts: [PointGuardPrompt]?) -> [PointGuardPlay] {
         builtIns.map { builtIn in
-            guard let assignment = assignments.last(where: { $0.slot == builtIn.slot }),
-                let prompt = prompts.first(where: { $0.name == assignment.name }), !prompt.needsInput
-            else { return builtIn }
-            return PointGuardPlay(
-                slot: builtIn.slot, title: prompt.name, prompt: prompt.body, symbol: "text.bubble",
-                source: .saved(name: prompt.name))
+            guard let assignment = assignments.last(where: { $0.slot == builtIn.slot }) else { return builtIn }
+            guard let prompts else { return saved(slot: builtIn.slot, name: assignment.name, body: "") }
+            guard let prompt = prompts.first(where: { $0.name == assignment.name }), !prompt.needsInput else {
+                return builtIn
+            }
+            return saved(slot: builtIn.slot, name: prompt.name, body: prompt.body)
         }
+    }
+
+    private static func saved(slot: Int, name: String, body: String) -> PointGuardPlay {
+        PointGuardPlay(slot: slot, title: name, prompt: body, symbol: "text.bubble", source: .saved(name: name))
     }
 }
 
@@ -77,7 +82,8 @@ final class PointGuardPlaybook {
     static let shared = PointGuardPlaybook()
 
     private(set) var assignments: [PointGuardPlayAssignment]
-    var prompts: [PointGuardPrompt] = []
+    /// The global prompts on offer; nil until they have loaded.
+    var prompts: [PointGuardPrompt]?
     var plays: [PointGuardPlay] { PointGuardPlay.resolve(assignments, prompts: prompts) }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -124,16 +130,20 @@ enum PointGuardCourtGeometry {
         CGPoint(x: size.width * logo.x, y: size.height * logo.y)
     }
 
-    /// Wings slide below the composer as the centred column closes in on them.
+    /// Below this width the court can't hold the column and its plays, so they stack instead.
+    static let minimumWidth: CGFloat = 680
+
+    /// No play may sit on the composer. Wings beside it drop below it once the centred column would reach their
+    /// labels, and the low blocks always stay below it, as far as the pane's height allows.
     static func positions(in size: CGSize, columnWidth: CGFloat, composerBottom: CGFloat) -> [CGPoint] {
         let columnLeft = (size.width - min(columnWidth, size.width - 48)) / 2
-        let wingRight = size.width * anchors[0].x + labelHalfWidth
-        let squeeze = min(1, max(0, (wingRight - (columnLeft - 16)) / 80))
+        let wingsCrowded = size.width * anchors[0].x + labelHalfWidth > columnLeft - 16
         // A play is centred on its icon-and-label stack, about 70pt tall.
-        let dropped = min(size.height * anchors[2].y, composerBottom + 48)
+        let belowComposer = composerBottom + 48
         return anchors.enumerated().map { index, anchor in
             let y = size.height * anchor.y
-            return CGPoint(x: size.width * anchor.x, y: index < 2 ? y + (max(y, dropped) - y) * squeeze : y)
+            let clear = index < 2 ? (wingsCrowded ? max(y, belowComposer) : y) : max(y, belowComposer)
+            return CGPoint(x: size.width * anchor.x, y: min(clear, size.height - 40))
         }
     }
 

@@ -89,9 +89,11 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         connected && browsing == nil && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty)
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
-    /// A play sends its own text, so it needs an idle live session but not a draft.
+    /// A play sends its own text, so it needs an idle live session but not a draft. A message still on its way
+    /// counts as busy, since `busy` only turns true once the bridge's next snapshot arrives.
     var canSendPlay: Bool {
         connected && snapshot != nil && browsing == nil && snapshot?.error == nil && !changingSession && !busy
+            && !submissions.contains { $0.status == "Sending" }
     }
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [PiSubmission] { submissions.filter { $0.recoverable } }

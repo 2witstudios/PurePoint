@@ -27,7 +27,7 @@ struct PointGuardCourtView<Composer: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            if compact || proxy.size.width < 520 {
+            if compact || proxy.size.width < PointGuardCourtGeometry.minimumWidth {
                 stacked(height: proxy.size.height)
             } else {
                 court(proxy.size)
@@ -58,12 +58,13 @@ struct PointGuardCourtView<Composer: View>: View {
                     colors: [Self.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 420)
             }
             passLines(from: logo, pointer: pointer, to: lit.map { drifted[$0] })
-            column(size, pointer: pointer)
             ForEach(plays) { play in
                 playButton(play, lit: lit == play.slot)
                     .position(drifted[play.slot])
                     .animation(.spring(response: 0.35, dampingFraction: 0.8), value: drifted[play.slot])
             }
+            // Above the plays, so a play squeezed by a short pane can never take a click meant for the composer.
+            column(size, pointer: pointer)
             if let ball = passing.map({ drifted[$0] }) ?? pointer {
                 Circle().fill(Self.accent).frame(width: 14, height: 14)
                     .shadow(color: Self.accent.opacity(0.6), radius: 8)
@@ -166,20 +167,17 @@ struct PointGuardCourtView<Composer: View>: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    @ViewBuilder private var slot: some View {
-        if connected {
-            composer()
-        } else {
-            HStack(spacing: 16) {
-                Text("Finish setup to start.").font(.system(size: 14)).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Button("Open Settings", action: onOpenSettings).buttonStyle(.borderedProminent).tint(Self.accent)
+    /// The composer stays put while disconnected, so a reconnecting session keeps its draft and receipts in view.
+    private var slot: some View {
+        VStack(spacing: 8) {
+            if !connected {
+                HStack(spacing: 8) {
+                    Text("Finish setup to start.").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Button("Open Settings", action: onOpenSettings).buttonStyle(.borderless).tint(Self.accent)
+                        .font(.system(size: 13, weight: .medium))
+                }
             }
-            .padding(.vertical, 12).padding(.horizontal, 16)
-            .background(Color(nsColor: Theme.composerBackground), in: RoundedRectangle(cornerRadius: 16))
-            .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)) }
-            .frame(maxWidth: 520)
-            .padding(.horizontal, compact ? 8 : PurePointTheme.chatHorizontalPadding)
+            composer()
         }
     }
 

@@ -6,8 +6,8 @@ import Observation
 // Excluded from production targets; never starts Pi, Cargo or the daemon.
 @MainActor @Observable final class AppState {
     var showSettings = false
-    func pointGuardPrompts() async -> [PointGuardPrompt] { [] }
-    func pointGuardPromptBody(_ name: String) async -> String? { nil }
+    func pointGuardPrompts() async -> [PointGuardPrompt]? { [] }
+    func pointGuardPrompt(named name: String) async -> PointGuardPrompt? { nil }
 }
 struct InlineErrorBanner: View {
     let message: String

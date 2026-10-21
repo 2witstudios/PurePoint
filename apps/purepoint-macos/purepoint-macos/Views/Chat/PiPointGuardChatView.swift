@@ -23,6 +23,7 @@ struct PiPointGuardChatView: View {
     @State private var showFiles = false
     @State private var importingAttachment = false
     @State private var playbook = PointGuardPlaybook.shared
+    @State private var fetchingPlay = false
     #if os(iOS)
     @State private var showPhotos = false
     @State private var selectedPhoto: PhotosPickerItem?
@@ -313,31 +314,50 @@ struct PiPointGuardChatView: View {
         })
     }
 
-    /// A new conversation opens on the court until its first message is on its way.
+    /// A new conversation opens on the court until its first message is on its way. A send that failed brings the
+    /// court back; one accepted stays off it while the bridge's snapshot catches up with the transcript.
     private var showsCourt: Bool {
-        model.browsing == nil && model.transcriptRows.isEmpty && !model.busy
-            && !model.submissions.contains { $0.status == "Sending" }
+        let session = model.snapshot?.sessionId
+        let inFlight = ["Sending", "Accepted", "Queued"]
+        return model.browsing == nil && model.transcriptRows.isEmpty && !model.busy
+            && !model.submissions.contains { $0.sessionId == session && inFlight.contains($0.status) }
     }
 
     private var court: some View {
         PointGuardCourtView(
-            plays: playbook.plays, prompts: playbook.prompts, canRun: model.canSendPlay, connected: model.connected,
-            compact: compact, composer: { composer }, onRun: runPlay,
+            plays: playbook.plays, prompts: playbook.prompts ?? [], canRun: model.canSendPlay && !fetchingPlay,
+            connected: model.connected, compact: compact, composer: { composer }, onRun: runPlay,
             onAssign: { playbook.assign(slot: $0, prompt: $1) }, onReset: { playbook.reset(slot: $0) },
             onOpenSettings: { appState.showSettings = true }
         )
-        .task { playbook.prompts = await appState.pointGuardPrompts() }
+        .task { await refreshPlays() }
+    }
+
+    /// Re-lists the global prompts so edits, deletions and new prompts made elsewhere show on the court.
+    private func refreshPlays() async {
+        if let prompts = await appState.pointGuardPrompts() { playbook.prompts = prompts }
     }
 
     private func runPlay(_ play: PointGuardPlay) {
         followOutput = true
-        guard case .saved(let name) = play.source, play.prompt.isEmpty else { return model.submit(play: play.prompt) }
+        guard case .saved(let name) = play.source else { return model.submit(play: play.prompt) }
+        guard !fetchingPlay else { return }
+        fetchingPlay = true
         Task {
-            guard let body = await appState.pointGuardPromptBody(name) else {
-                model.error = "Couldn't load the saved prompt \u{201C}\(name)\u{201D}. Right-click the play to replace it."
+            defer { fetchingPlay = false }
+            // A saved play sends its prompt as it is now; one deleted or now needing input is refused, not swapped.
+            if let prompt = await appState.pointGuardPrompt(named: name), !prompt.needsInput {
+                model.submit(play: prompt.body)
                 return
             }
-            model.submit(play: body)
+            guard let prompts = await appState.pointGuardPrompts() else {
+                model.error =
+                    "Couldn't load the saved prompt \u{201C}\(name)\u{201D}. Check that the PurePoint daemon is running."
+                return
+            }
+            playbook.prompts = prompts
+            model.error =
+                "The saved prompt \u{201C}\(name)\u{201D} was deleted or now needs input, so this play is back to its default."
         }
     }
 

@@ -35,6 +35,14 @@ struct PointGuardPlaysTests {
         #expect(plays[1] == PointGuardPlay.builtIns[1])
     }
 
+    @Test func assignedSlotsKeepTheirTitlesUntilPromptsLoad() {
+        let plays = PointGuardPlay.resolve([PointGuardPlayAssignment(slot: 1, name: "review")], prompts: nil)
+        #expect(plays[1].title == "review")
+        #expect(plays[1].source == .saved(name: "review"))
+        #expect(plays[1].prompt.isEmpty)
+        #expect(plays[0] == PointGuardPlay.builtIns[0])
+    }
+
     // MARK: - Persisting
 
     @Test func assignmentsPersistAcrossPlaybooks() throws {
@@ -78,6 +86,25 @@ struct PointGuardPlaysTests {
         #expect(positions[0].y == 608)
         #expect(positions[1].y == 608)
         #expect(positions[2].y == 800 * 0.84)
+    }
+
+    @Test func wingsDropAsSoonAsTheColumnReachesTheirLabels() {
+        let size = CGSize(width: 1200, height: 800)
+        let positions = PointGuardCourtGeometry.positions(in: size, columnWidth: 720, composerBottom: 560)
+        #expect(positions[0].y == 608)
+        #expect(positions[1].y == 608)
+    }
+
+    @Test func lowBlocksStayBelowTheComposerInAShortPane() {
+        let size = CGSize(width: 1000, height: 550)
+        let positions = PointGuardCourtGeometry.positions(in: size, columnWidth: 720, composerBottom: 446)
+        #expect(positions.allSatisfy { $0.y == 494 })
+    }
+
+    @Test func playsNeverLeaveTheBottomOfThePane() {
+        let size = CGSize(width: 1000, height: 550)
+        let positions = PointGuardCourtGeometry.positions(in: size, columnWidth: 720, composerBottom: 500)
+        #expect(positions.allSatisfy { $0.y == 510 })
     }
 
     @Test func onlyAPlayWithinReachLightsUp() {
