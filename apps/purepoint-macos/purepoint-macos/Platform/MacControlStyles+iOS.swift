@@ -1,5 +1,6 @@
 #if os(iOS)
 import SwiftUI
+import UIKit
 
 // The Mac's control looks under the style names shared views already use, so a toggle, button
 // or text field draws as it does on the Mac rather than as its iOS namesake (a 51pt green
@@ -259,6 +260,35 @@ extension View {
 
     func textFieldStyle(_ style: RoundedBorderTextFieldStyle) -> some View {
         textFieldStyle(MacRoundedBorderTextFieldStyle())
+    }
+
+    /// The Mac's segmented control height: iOS's is 32pt for every control size.
+    func pickerStyle(_ style: SegmentedPickerStyle) -> some View {
+        modifier(MacSegmentedHeight()).swiftUIPickerStyle(style)
+    }
+
+    /// SwiftUI's own modifier: inside a generic context the concrete overload above does not apply.
+    private func swiftUIPickerStyle<S: PickerStyle>(_ style: S) -> some View {
+        pickerStyle(style)
+    }
+}
+
+private struct MacSegmentedHeight: ViewModifier {
+    @Environment(\.controlSize) private var controlSize
+
+    func body(content: Content) -> some View {
+        content.frame(height: MacControlMetrics(controlSize).height)
+    }
+}
+
+/// UIKit appearance the Mac controls need that SwiftUI cannot set: the segmented control's
+/// 13pt (11pt small) titles. Installed once at launch.
+@MainActor
+enum MacControlAppearance {
+    static func install() {
+        let segmented = UISegmentedControl.appearance()
+        segmented.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 13)], for: .normal)
+        segmented.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 13, weight: .medium)], for: .selected)
     }
 }
 #endif

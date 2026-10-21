@@ -15,6 +15,7 @@ struct PurePointiPadApp: App {
 
     init() {
         SSHMachineSupport.launch()
+        MacControlAppearance.install()
     }
 
     var body: some Scene {
