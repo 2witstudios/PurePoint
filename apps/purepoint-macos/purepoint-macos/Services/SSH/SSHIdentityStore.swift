@@ -22,10 +22,22 @@ nonisolated struct KeychainError: LocalizedError, Equatable {
     }
 }
 
+/// The Keychain calls a `KeychainSecretStore` makes: the Security framework in the app, a fake
+/// in tests.
+nonisolated struct KeychainCalls: Sendable {
+    var update: @Sendable (_ query: [String: Any], _ attributes: [String: Any]) -> OSStatus
+    var add: @Sendable (_ attributes: [String: Any]) -> OSStatus
+
+    static let system = KeychainCalls(
+        update: { SecItemUpdate($0 as CFDictionary, $1 as CFDictionary) },
+        add: { SecItemAdd($0 as CFDictionary, nil) })
+}
+
 /// Generic-password Keychain items for one service, readable after the first unlock, kept on
 /// this device only and never synchronized (IPAD-008).
 nonisolated struct KeychainSecretStore: SecretStore {
     let service: String
+    var keychain = KeychainCalls.system
 
     private func query(account: String) -> [String: Any] {
         [
@@ -49,13 +61,18 @@ nonisolated struct KeychainSecretStore: SecretStore {
         }
     }
 
+    /// Update the item in place, so a write that fails leaves the old value; add it only when
+    /// there is none. The update also sets the accessibility class, so it is always the
+    /// current one.
     func write(_ data: Data, account: String) throws {
-        // Replace rather than update, so the accessibility class is always the current one.
-        try delete(account: account)
-        var attributes = query(account: account)
-        attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(attributes as CFDictionary, nil)
+        let values: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        var status = keychain.update(query(account: account), values)
+        if status == errSecItemNotFound {
+            status = keychain.add(query(account: account).merging(values) { _, new in new })
+        }
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 

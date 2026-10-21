@@ -1,6 +1,7 @@
 #if os(iOS)
 import CryptoKit
 import Foundation
+import Security
 import Testing
 
 @testable import PurePoint
@@ -139,6 +140,76 @@ struct SSHIdentityStoreTests {
         let current = try store.identity()
         #expect(throws: SSHKeyImportError.notOpenSSHKey) { try store.importOpenSSHPrivateKey("not a key") }
         #expect(try store.identity().publicKey == current.publicKey)
+    }
+}
+
+/// Keychain items by account, behind the calls `KeychainSecretStore` makes.
+private final class FakeKeychain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String: [String: Any]] = [:]
+    private var adds = 0
+    /// What every update answers when the item exists (a locked device, say).
+    var updateFailure: OSStatus?
+
+    var addCount: Int { lock.withLock { adds } }
+
+    func value(_ account: String) -> Data? { lock.withLock { items[account]?[kSecValueData as String] as? Data } }
+    func accessible(_ account: String) -> String? {
+        lock.withLock { items[account]?[kSecAttrAccessible as String] as? String }
+    }
+
+    var calls: KeychainCalls {
+        KeychainCalls(
+            update: { query, attributes in
+                self.lock.withLock {
+                    let account = query[kSecAttrAccount as String] as! String
+                    guard self.items[account] != nil else { return errSecItemNotFound }
+                    if let failure = self.updateFailure { return failure }
+                    self.items[account]!.merge(attributes) { _, new in new }
+                    return errSecSuccess
+                }
+            },
+            add: { attributes in
+                self.lock.withLock {
+                    let account = attributes[kSecAttrAccount as String] as! String
+                    guard self.items[account] == nil else { return errSecDuplicateItem }
+                    self.adds += 1
+                    self.items[account] = attributes
+                    return errSecSuccess
+                }
+            })
+    }
+}
+
+struct KeychainSecretStoreTests {
+    @Test func firstWriteAddsTheItemThisDeviceOnly() throws {
+        let keychain = FakeKeychain()
+        let store = KeychainSecretStore(service: "test", keychain: keychain.calls)
+        try store.write(Data([1]), account: "a")
+        #expect(keychain.value("a") == Data([1]))
+        #expect(keychain.accessible("a") == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+        #expect(keychain.addCount == 1)
+    }
+
+    @Test func laterWritesUpdateInPlace() throws {
+        let keychain = FakeKeychain()
+        let store = KeychainSecretStore(service: "test", keychain: keychain.calls)
+        try store.write(Data([1]), account: "a")
+        try store.write(Data([2]), account: "a")
+        #expect(keychain.value("a") == Data([2]))
+        #expect(keychain.addCount == 1)
+    }
+
+    @Test func aFailedWriteKeepsTheOldValue() throws {
+        let keychain = FakeKeychain()
+        let store = KeychainSecretStore(service: "test", keychain: keychain.calls)
+        try store.write(Data([1]), account: "a")
+        keychain.updateFailure = errSecInteractionNotAllowed
+        #expect(throws: KeychainError(status: errSecInteractionNotAllowed)) {
+            try store.write(Data([2]), account: "a")
+        }
+        #expect(keychain.value("a") == Data([1]))
+        #expect(keychain.addCount == 1)
     }
 }
 
