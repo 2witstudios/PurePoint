@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 /// SwiftUI wrapper that hosts a cached terminal view for the selected agent.
@@ -112,3 +113,4 @@ struct TerminalContainerView: NSViewRepresentable {
         }
     }
 }
+#endif

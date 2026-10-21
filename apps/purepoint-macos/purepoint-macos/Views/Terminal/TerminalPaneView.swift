@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
 import SwiftTerm
@@ -247,3 +248,4 @@ class TerminalPaneNSView: NSView {
         terminal?.tearDown()
     }
 }
+#endif

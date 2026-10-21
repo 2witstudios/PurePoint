@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Foundation
 
 /// Caches terminal NSViews by agent ID. Uses hide/show pattern — never
