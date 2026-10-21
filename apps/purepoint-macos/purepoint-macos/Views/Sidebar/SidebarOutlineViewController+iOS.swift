@@ -258,6 +258,7 @@ class SidebarOutlineViewController: UIViewController {
 
     /// A user selection (tap or arrow key): what the Mac's `outlineViewSelectionDidChange` does.
     private func userSelected(_ indexPath: IndexPath?) {
+        NSLog("PUDBG userSelected %@ suppress=%d", "\(String(describing: indexPath))", suppressSelectionCallback ? 1 : 0)
         guard !suppressSelectionCallback else { return }
         guard let indexPath, let node = node(at: indexPath) else {
             onSelectionChanged?(nil)
@@ -365,6 +366,7 @@ class SidebarOutlineViewController: UIViewController {
     }
 
     @objc private func backgroundTapped(_ recognizer: UITapGestureRecognizer) {
+        NSLog("PUDBG backgroundTapped")
         outlineView.becomeFirstResponder()
         guard selectedIndexPath != nil else { return }
         deselectAll()
@@ -538,6 +540,7 @@ enum InlineRenameFocus {
 
 extension SidebarOutlineViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+        NSLog("PUDBG shouldSelect %@ %@", "\(indexPath)", node(at: indexPath)?.rowKey ?? "nil")
         guard let node = node(at: indexPath), SidebarTree.isSelectable(node) else { return false }
         // Clicking the selected row again changes nothing, as in the Mac outline.
         if collectionView.indexPathsForSelectedItems?.contains(indexPath) == true {
@@ -553,6 +556,7 @@ extension SidebarOutlineViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        NSLog("PUDBG didSelect %@", "\(indexPath)")
         if editingTextField == nil {
             outlineView.becomeFirstResponder()
         }
