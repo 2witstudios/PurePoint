@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 // MARK: - CommandPalettePanel
@@ -883,3 +884,4 @@ private extension NSTextView {
             forKey: "placeholderAttributedString")
     }
 }
+#endif

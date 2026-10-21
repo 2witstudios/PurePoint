@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct ConversationSidebarView: View {
@@ -196,3 +197,4 @@ struct ConversationSidebarView: View {
         .buttonStyle(.plain)
     }
 }
+#endif

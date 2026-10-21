@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 /// NSViewControllerRepresentable wrapping SidebarOutlineViewController.
@@ -137,3 +138,4 @@ struct SidebarOutlineView: NSViewControllerRepresentable {
         vc.selectNode(for: selection)
     }
 }
+#endif

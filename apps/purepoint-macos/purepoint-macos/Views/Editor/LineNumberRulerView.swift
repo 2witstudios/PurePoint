@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 class LineNumberRulerView: NSRulerView {
@@ -131,3 +132,4 @@ class LineNumberRulerView: NSRulerView {
         NSRect(x: bounds.maxX - 1, y: rect.origin.y, width: 1, height: rect.height).fill()
     }
 }
+#endif

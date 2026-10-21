@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -182,3 +183,4 @@ struct DiffContentRepresentable: NSViewRepresentable {
         nsView.update(hunks: hunks)
     }
 }
+#endif

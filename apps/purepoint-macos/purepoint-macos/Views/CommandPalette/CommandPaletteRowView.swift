@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 /// Reusable table cell view for command palette rows.
@@ -84,3 +85,4 @@ final class CommandPaletteRowView: NSTableCellView {
             : NSColor.clear.cgColor
     }
 }
+#endif

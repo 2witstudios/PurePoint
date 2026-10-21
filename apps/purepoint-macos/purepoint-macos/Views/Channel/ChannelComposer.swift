@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -89,3 +90,4 @@ final class ComposerTextView: NSTextView {
         } else { super.keyDown(with: event); if event.keyCode == 53 { completionOpen = false } }
     }
 }
+#endif

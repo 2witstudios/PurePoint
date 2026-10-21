@@ -57,7 +57,11 @@ struct ProjectChannelView: View {
             if searchVisible || !channel.query.isEmpty {
                 TextField("Search messages, people, branches…", text: $searchText)
                     .textFieldStyle(.roundedBorder).focused($searchFocused).padding(12)
+                    #if os(macOS)
                     .onExitCommand { channel.query = ""; searchText = ""; searchVisible = false; Task { await channel.search() } }
+                    #else
+                    .onKeyPress(.escape) { channel.query = ""; searchText = ""; searchVisible = false; Task { await channel.search() }; return .handled }
+                    #endif
                     .onSubmit { channel.query = searchText; Task { await channel.search() } }
                 if !channel.query.isEmpty {
                     Button("Clear search") { channel.query = ""; searchText = ""; Task { await channel.search() } }.buttonStyle(.plain).padding(.bottom, 8)
@@ -84,7 +88,11 @@ struct ProjectChannelView: View {
         .onAppear { unreadBoundary = channel.readSequence; searchText = channel.query; channel.start() }
         .onDisappear { visibleMessageIds = []; channel.stop() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { markVisibleMessages() } }
+        #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markVisibleMessages() }
+        #else
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in markVisibleMessages() }
+        #endif
         .sheet(item: $referenceSelection) { selection in ChannelReferenceView(project: project, selection: selection) }
         .sheet(item: $editing) { message in
             VStack(alignment: .leading, spacing: 14) {
@@ -147,7 +155,13 @@ struct ProjectChannelView: View {
         ChannelHoverRow(canReply: message.parentId == nil, canEdit: message.author.id == channel.selfAuthorId,
             reply: { Task { await channel.openThread(message.id) } },
             react: { Task { await channel.react(message) } },
-            copy: { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message.text, forType: .string) },
+            copy: {
+                #if os(macOS)
+                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message.text, forType: .string)
+                #else
+                UIPasteboard.general.string = message.text
+                #endif
+            },
             unread: { channel.markUnread(message); unreadBoundary = message.sequence - 1 },
             edit: { editText = message.text; editing = message }) {
         HStack(alignment: .top, spacing: 11) {
@@ -214,7 +228,7 @@ struct ProjectChannelView: View {
                 Spacer()
                 Button { Task { await channel.send(reply: reply) } } label: { if channel.isSending { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold)) } }.buttonStyle(.borderedProminent).controlSize(.small).disabled(channel.isSending || binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).help("Send message")
             }.padding(.horizontal, 10).padding(.bottom, 8)
-        }.background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2))).padding(.horizontal, 16).padding(.vertical, 12)
+        }.background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2) as Color)).padding(.horizontal, 16).padding(.vertical, 12)
         .onChange(of: channel.replyDraft) { _, _ in if reply { channel.saveReplyDraft() } }
     }
     private func observe(_ message: ChannelMessage, visible: Bool) {
