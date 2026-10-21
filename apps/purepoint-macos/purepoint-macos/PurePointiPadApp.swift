@@ -10,6 +10,7 @@ struct PurePointiPadApp: App {
     @State private var viewCache = TerminalViewCache()
     @State private var registry = WorkspaceRegistry()
     @State private var keyBindingState = KeyBindingState()
+    @State private var hotkeyMonitor = HotkeyMonitor()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -33,6 +34,8 @@ struct PurePointiPadApp: App {
                         viewCache.remove(agentId: agentId)
                         appState.projectState(forId: projectId)?.removeAndKillAgent(agentId)
                     }
+                    hotkeyMonitor.keyBindingState = keyBindingState
+                    hotkeyMonitor.start()
                     appState.loadMachines()
                 }
         }
