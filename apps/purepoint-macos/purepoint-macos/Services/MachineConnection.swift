@@ -55,6 +55,20 @@ nonisolated enum MachineConnectionState: Equatable, Sendable {
     var isDaemonRunning: Bool { self == .connected(.running) }
 }
 
+/// Resumes a continuation exactly once, whichever of exit, deadline or launch failure is first.
+nonisolated final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    func run(_ body: () -> Void) {
+        lock.lock()
+        let first = !done
+        done = true
+        lock.unlock()
+        if first { body() }
+    }
+}
+
 #if os(macOS)
 /// The exact ssh command lines from machines.md. The system ssh supplies identity, agent,
 /// Keychain and config (MACH-001); every value is one argv element, never a shell string.
@@ -229,20 +243,6 @@ nonisolated final class OutputCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return String(decoding: data, as: UTF8.self)
-    }
-}
-
-/// Resumes a continuation exactly once, whichever of exit, deadline or launch failure is first.
-nonisolated final class ResumeOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var done = false
-
-    func run(_ body: () -> Void) {
-        lock.lock()
-        let first = !done
-        done = true
-        lock.unlock()
-        if first { body() }
     }
 }
 

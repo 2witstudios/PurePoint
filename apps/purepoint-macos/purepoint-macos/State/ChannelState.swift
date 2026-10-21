@@ -45,7 +45,7 @@ final class ChannelState {
     var unreadCount: Int { unreadAuthors.filter { $0.key > readSequence && $0.value != selfAuthorId && !seenSequences.contains($0.key) }.count }
     var topLevelMessages: [ChannelMessage] { messages.filter { $0.parentId == nil } }
 
-    init(projectRoot: String, defaultsScope: String? = nil, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonClient().send($0) }) {
+    init(projectRoot: String, defaultsScope: String? = nil, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonEndpoint.local.makeClient().send($0) }) {
         self.sendRequest = sendRequest
         self.projectRoot = projectRoot
         self.defaultsScope = defaultsScope ?? projectRoot

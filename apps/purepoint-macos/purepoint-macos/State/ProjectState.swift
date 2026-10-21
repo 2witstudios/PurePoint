@@ -128,6 +128,7 @@ final class ProjectState: Identifiable {
         }
         let root = projectRoot
         let svc = service
+        let client = self.client
 
         openTask?.cancel()
         refreshTask?.cancel()
@@ -147,7 +148,7 @@ final class ProjectState: Identifiable {
             while true {
                 do {
                     try await DaemonLifecycle.ensureDaemon()
-                    let response = try await DaemonClient().send(.initProject(projectRoot: root))
+                    let response = try await client.send(.initProject(projectRoot: root))
                     if case .error(let code, let message) = response {
                         // At its connection limit: transient, so back off and retry.
                         if code == "BUSY" { throw DaemonClientError.busy }

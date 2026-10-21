@@ -254,7 +254,7 @@ private actor DaemonLauncher {
     private func probe(timeout: TimeInterval) async -> Probe {
         await withTaskGroup(of: Probe.self) { group in
             group.addTask {
-                switch try? await DaemonClient().send(.health) {
+                switch try? await DaemonEndpoint.local.makeClient().send(.health) {
                 case .healthReport(let pid, _, _, _)?: return .healthy(pid: pid)
                 case .error(let code, _)? where code == "BUSY": return .busy
                 default: return .unreachable

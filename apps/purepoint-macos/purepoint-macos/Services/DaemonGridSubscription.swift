@@ -11,7 +11,7 @@ actor DaemonGridSubscription {
     private var connection: (any DaemonByteStream)?
     private var stopped = false
 
-    init(projectRoot: String, projectId: String? = nil, registry: WorkspaceRegistry, client: DaemonClient = DaemonClient()) {
+    init(projectRoot: String, projectId: String? = nil, registry: WorkspaceRegistry, client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.projectRoot = projectRoot
         self.projectId = projectId ?? projectRoot
         self.registry = registry

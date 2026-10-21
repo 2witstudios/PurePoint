@@ -64,9 +64,23 @@ struct SidebarFooter: View {
             .frame(height: PurePointTheme.footerHeight)
         }
         .sheet(isPresented: $showAddMachine) {
+            #if os(iOS) && DEBUG
+            AddMachineSheet(flow: debugAddMachine.flow)
+            #else
             AddMachineSheet()
+            #endif
         }
+        #if os(iOS) && DEBUG
+        // `-PUDebugAddMachine` shows the sheet it is submitting (Debug launch arguments).
+        .onChange(of: debugAddMachine.flow == nil, initial: true) { _, isNil in
+            if !isNil { showAddMachine = true }
+        }
+        #endif
     }
+
+    #if os(iOS) && DEBUG
+    private var debugAddMachine: DebugAddMachinePresenter { .shared }
+    #endif
 
     private var activeProject: ProjectState? {
         switch selection {
