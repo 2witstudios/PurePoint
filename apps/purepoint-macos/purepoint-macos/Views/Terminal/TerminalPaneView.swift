@@ -33,7 +33,7 @@ class TerminalPaneNSView: NSView {
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; remote agents attach over their machine.
-    var client = DaemonClient() {
+    var client = DaemonEndpoint.local.makeClient() {
         didSet {
             terminal?.acceptsFileDrops = isLocalClient
             terminal?.usesRemoteHost = !isLocalClient

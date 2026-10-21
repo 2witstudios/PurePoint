@@ -16,7 +16,7 @@ actor DaemonStatusSubscription {
 
     private let client: DaemonClient
 
-    init(projectRoot: String, client: DaemonClient = DaemonClient()) {
+    init(projectRoot: String, client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.projectRoot = projectRoot
         self.client = client
     }

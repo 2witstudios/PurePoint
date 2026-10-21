@@ -34,7 +34,7 @@ class TerminalPaneNSView: UIView {
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; on iPad every agent is remote.
-    var client = DaemonClient() {
+    var client = DaemonEndpoint.local.makeClient() {
         didSet {
             terminal?.acceptsFileDrops = false
             terminal?.usesRemoteHost = true

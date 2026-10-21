@@ -10,6 +10,9 @@ nonisolated final class DaemonClient: @unchecked Sendable {
     let transport: any DaemonTransport
 
     init(socketPath: String? = nil, transport: (any DaemonTransport)? = nil) {
+        #if os(iOS)
+        let namesNoDaemon = socketPath == nil && transport == nil
+        #endif
         let socketPath =
             socketPath
             ?? {
@@ -21,7 +24,14 @@ nonisolated final class DaemonClient: @unchecked Sendable {
                 return "\(home)/.pu/daemon.sock"
             }()
         self.socketPath = socketPath
+        #if os(iOS)
+        // No local daemon on iOS: a client that names neither a socket nor a transport fails
+        // loudly (see `UnreachableLocalTransport`). Endpoint clients pass their machine's.
+        self.transport =
+            transport ?? (namesNoDaemon ? UnreachableLocalTransport() : UnixSocketTransport(socketPath: socketPath))
+        #else
         self.transport = transport ?? UnixSocketTransport(socketPath: socketPath)
+        #endif
     }
 
     /// Send a single request and return the response.
