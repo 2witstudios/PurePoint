@@ -130,8 +130,9 @@ enum PointGuardCourtGeometry {
         CGPoint(x: size.width * logo.x, y: size.height * logo.y)
     }
 
-    /// Below this width the court can't hold the column and its plays, so they stack instead.
-    static let minimumWidth: CGFloat = 680
+    /// Below this size the court can't hold the column and its plays, so they stack instead. The height leaves room
+    /// for the low blocks under a composer with a two-line heading above it.
+    static let minimumSize = CGSize(width: 680, height: 600)
 
     /// No play may sit on the composer. Wings beside it drop below it once the centred column would reach their
     /// labels, and the low blocks always stay below it, as far as the pane's height allows.

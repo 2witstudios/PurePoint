@@ -27,7 +27,9 @@ struct PointGuardCourtView<Composer: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            if compact || proxy.size.width < PointGuardCourtGeometry.minimumWidth {
+            if compact || proxy.size.width < PointGuardCourtGeometry.minimumSize.width
+                || proxy.size.height < PointGuardCourtGeometry.minimumSize.height
+            {
                 stacked(height: proxy.size.height)
             } else {
                 court(proxy.size)

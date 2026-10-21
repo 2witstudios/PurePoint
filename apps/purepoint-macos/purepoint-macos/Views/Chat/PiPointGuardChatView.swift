@@ -24,6 +24,8 @@ struct PiPointGuardChatView: View {
     @State private var importingAttachment = false
     @State private var playbook = PointGuardPlaybook.shared
     @State private var fetchingPlay = false
+    /// The snapshot revision a court send went out at, until its reply lands.
+    @State private var awaitingReply: Int?
     #if os(iOS)
     @State private var showPhotos = false
     @State private var selectedPhoto: PhotosPickerItem?
@@ -98,6 +100,8 @@ struct PiPointGuardChatView: View {
             .onChange(of: model.snapshot?.sessionId) { _, _ in
                 Task { await model.loadConversations() }
             }
+            .onChange(of: model.snapshot?.revision) { _, _ in awaitingReply = nil }
+            .onChange(of: model.recoverable.count) { _, _ in awaitingReply = nil }
             .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
                 Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
             }
@@ -314,13 +318,12 @@ struct PiPointGuardChatView: View {
         })
     }
 
-    /// A new conversation opens on the court until its first message is on its way. A send that failed brings the
-    /// court back; one accepted stays off it while the bridge's snapshot catches up with the transcript.
+    /// A new conversation opens on the court until its first message is on its way. After a send from the court it
+    /// stays down until the bridge's next snapshot (which carries the message) or a failed send; this is view state,
+    /// so an old receipt can't keep a later launch off the court.
     private var showsCourt: Bool {
-        let session = model.snapshot?.sessionId
-        let inFlight = ["Sending", "Accepted", "Queued"]
-        return model.browsing == nil && model.transcriptRows.isEmpty && !model.busy
-            && !model.submissions.contains { $0.sessionId == session && inFlight.contains($0.status) }
+        model.browsing == nil && model.transcriptRows.isEmpty && !model.busy && awaitingReply == nil
+            && !model.submissions.contains { $0.status == "Sending" }
     }
 
     private var court: some View {
@@ -338,26 +341,43 @@ struct PiPointGuardChatView: View {
         if let prompts = await appState.pointGuardPrompts() { playbook.prompts = prompts }
     }
 
+    /// Sends from the court and keeps it down until the reply's snapshot lands.
+    private func sendFromCourt(_ send: () -> Void) {
+        let revision = model.snapshot?.revision
+        let previous = model.submissions.last?.id
+        send()
+        if model.submissions.last?.id != previous { awaitingReply = revision }
+    }
+
     private func runPlay(_ play: PointGuardPlay) {
         followOutput = true
-        guard case .saved(let name) = play.source else { return model.submit(play: play.prompt) }
+        guard case .saved(let name) = play.source else { return sendFromCourt { model.submit(play: play.prompt) } }
         guard !fetchingPlay else { return }
         fetchingPlay = true
         Task {
             defer { fetchingPlay = false }
             // A saved play sends its prompt as it is now; one deleted or now needing input is refused, not swapped.
             if let prompt = await appState.pointGuardPrompt(named: name), !prompt.needsInput {
-                model.submit(play: prompt.body)
+                guard !prompt.body.isEmpty else {
+                    model.error = "The saved prompt \u{201C}\(name)\u{201D} is empty, so there's nothing to send."
+                    return
+                }
+                guard model.canSendPlay else {
+                    model.error = "Point Guard got busy. Run the play again once it's free."
+                    return
+                }
+                sendFromCourt { model.submit(play: prompt.body) }
                 return
             }
-            guard let prompts = await appState.pointGuardPrompts() else {
+            let prompts = await appState.pointGuardPrompts()
+            if let prompts { playbook.prompts = prompts }
+            if let prompts, !prompts.contains(where: { $0.name == name && !$0.needsInput }) {
                 model.error =
-                    "Couldn't load the saved prompt \u{201C}\(name)\u{201D}. Check that the PurePoint daemon is running."
-                return
+                    "The saved prompt \u{201C}\(name)\u{201D} was deleted or now needs input, so this play is back to its default."
+            } else {
+                model.error =
+                    "Couldn't load the saved prompt \u{201C}\(name)\u{201D}. Check the connection to PurePoint and try again."
             }
-            playbook.prompts = prompts
-            model.error =
-                "The saved prompt \u{201C}\(name)\u{201D} was deleted or now needs input, so this play is back to its default."
         }
     }
 
@@ -584,7 +604,8 @@ struct PiPointGuardChatView: View {
 
     private func submitDraft(mode: String? = nil) {
         followOutput = true
-        model.submit(mode: mode ?? (model.busy ? "after" : "send"))
+        let send = { model.submit(mode: mode ?? (model.busy ? "after" : "send")) }
+        if showsCourt { sendFromCourt(send) } else { send() }
         composerFocused = true
     }
 
