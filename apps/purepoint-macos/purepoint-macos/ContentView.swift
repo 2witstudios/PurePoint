@@ -217,8 +217,10 @@ struct ContentView: View {
                 focusTerminalInWindow(window)
             }
             #else
-            // iOS locates the focused terminal without walking NSView trees (IPAD-6.13).
-            break
+            DispatchQueue.main.async {
+                guard let window = NSApp.keyWindow else { return }
+                viewCache.terminalToFocus(in: registry.activeWorkspace, window: window)?.focusTerminal()
+            }
             #endif
 
         case .toggleSidebar:

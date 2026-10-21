@@ -10,6 +10,7 @@ struct PurePointiPadApp: App {
     @State private var viewCache = TerminalViewCache()
     @State private var registry = WorkspaceRegistry()
     @State private var keyBindingState = KeyBindingState()
+    @State private var hotkeyMonitor = HotkeyMonitor()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -17,6 +18,7 @@ struct PurePointiPadApp: App {
     }
 
     var body: some Scene {
+        // Each window (scene) gets its own shell over the shared state, as each Mac window does.
         WindowGroup {
             ContentView()
                 .environment(appState)
@@ -37,6 +39,9 @@ struct PurePointiPadApp: App {
                         viewCache.remove(agentId: agentId)
                         appState.projectState(forId: projectId)?.removeAndKillAgent(agentId)
                     }
+                    hotkeyMonitor.keyBindingState = keyBindingState
+                    hotkeyMonitor.start()
+                    CommandPalettePanel.registerPresenter()
                     appState.loadMachines()
                     SSHMachineSupport.machinesLoaded(appState: appState)
                 }

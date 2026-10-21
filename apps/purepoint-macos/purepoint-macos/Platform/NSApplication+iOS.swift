@@ -9,12 +9,13 @@ final class NSApplication {
     /// Foreground and active, as an active Mac app is.
     var isActive: Bool { UIApplication.shared.applicationState == .active }
 
-    /// The key window of the foreground scene, if any.
+    /// The window the user is working in. With several windows on screen every scene is
+    /// foreground-active, but only the one last interacted with holds the app's key window.
     var keyWindow: UIWindow? {
-        UIApplication.shared.connectedScenes
+        let scenes = UIApplication.shared.connectedScenes
             .filter { $0.activationState == .foregroundActive }
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
-            .first
+            .compactMap { $0 as? UIWindowScene }
+        return scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.compactMap(\.keyWindow).first
     }
 
     /// iOS apps cannot bring themselves to the foreground; a notification tap already did.

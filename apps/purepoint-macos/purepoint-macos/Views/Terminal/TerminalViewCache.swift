@@ -72,6 +72,28 @@ final class TerminalViewCache {
         views[agentId] != nil
     }
 
+    #if os(iOS)
+    /// The terminal Focus Content moves to in `window`: the focused pane's, else the first
+    /// terminal on screen in layout order. The Mac finds it by walking the window's `NSView`
+    /// tree; here the workspace says which agents are on screen and the cache holds their views.
+    func terminalToFocus(in workspace: Workspace?, window: UIWindow) -> TerminalPaneNSView? {
+        guard let workspace else { return nil }
+        for agentId in Self.focusOrder(of: workspace) {
+            guard let view = views[agentId], view.terminal != nil, view.window === window,
+                view.isShownInHierarchy
+            else { continue }
+            return view
+        }
+        return nil
+    }
+
+    /// The workspace's agents with the focused pane's first, then the rest in layout order.
+    static func focusOrder(of workspace: Workspace) -> [String] {
+        let focused = workspace.focusedAgentId
+        return (focused.map { [$0] } ?? []) + workspace.agentIds.filter { $0 != focused }
+    }
+    #endif
+
     /// Remove a specific agent's terminal view immediately.
     func remove(agentId: String) {
         views[agentId]?.tearDown()
@@ -114,3 +136,17 @@ final class TerminalViewCache {
         }
     }
 }
+
+#if os(iOS)
+private extension UIView {
+    /// Neither this view nor any ancestor is hidden, as the Mac's walk skips hidden subtrees.
+    var isShownInHierarchy: Bool {
+        var view: UIView? = self
+        while let current = view {
+            if current.isHidden { return false }
+            view = current.superview
+        }
+        return true
+    }
+}
+#endif
