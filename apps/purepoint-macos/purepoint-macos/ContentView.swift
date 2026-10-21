@@ -87,16 +87,17 @@ struct ContentView: View {
             }
 
             DetailView(selection: $selection)
+                .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 #if os(iOS)
                 // The pane grid clips each pane, so the tab strip's fill can't reach under the
-                // status bar as the sidebar columns' fills do; this band stands in for it.
+                // status bar as the sidebar columns' fills do; this band stands in for it, across
+                // the leading gutter too when the sidebar is hidden.
                 .background(alignment: .top) {
                     Color(nsColor: Theme.statusBarBand)
                         .frame(height: topSafeArea)
                         .offset(y: -topSafeArea)
                 }
                 #endif
-                .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         // One spot whether the sidebar is shown or not: in the sidebar's top band, or the detail's leading gutter.
