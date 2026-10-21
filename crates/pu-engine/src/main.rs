@@ -36,9 +36,10 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    // Create global dir
-    if let Some(parent) = socket.parent() {
-        std::fs::create_dir_all(parent).ok();
+    let global_dir = paths::global_pu_dir().ok();
+    if let Err(e) = daemon_lifecycle::prepare_socket_dir(&socket, global_dir.as_deref()) {
+        eprintln!("failed to prepare socket directory: {e}");
+        std::process::exit(1);
     }
 
     // One daemon per socket, in every mode. Binding unlinks the socket file, so

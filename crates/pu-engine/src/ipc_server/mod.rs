@@ -11,6 +11,9 @@ const MAX_MESSAGE_SIZE: u64 = 1024 * 1024; // 1MB
 /// well above what a busy session uses.
 const MAX_CONNECTIONS: usize = 1024;
 const ATTACH_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
+/// How long a new connection may take to send its first complete request.
+/// Streams and request loops have no idle limit once a request has arrived.
+const FIRST_LINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 use crate::engine::Engine;
 use pu_core::protocol::{Request, Response};
@@ -69,11 +72,53 @@ impl StreamMode {
     }
 }
 
-fn parse_stream_request(result: std::io::Result<usize>, line: &str) -> Option<Request> {
-    match result {
-        Ok(0) | Err(_) => None,
-        Ok(_) => serde_json::from_str(line.trim()).ok(),
+/// What one bounded read of a newline-delimited request produced.
+#[derive(Debug, PartialEq, Eq)]
+enum Frame {
+    Line,
+    Eof,
+    /// `MAX_MESSAGE_SIZE` bytes without a newline. The rest of the frame is
+    /// still unread, so the connection can never be resynchronized.
+    TooLarge,
+}
+
+async fn read_frame(reader: &mut IpcReader, line: &mut String) -> std::io::Result<Frame> {
+    line.clear();
+    let read = reader.take(MAX_MESSAGE_SIZE).read_line(line).await?;
+    Ok(if read == 0 {
+        Frame::Eof
+    } else if read as u64 >= MAX_MESSAGE_SIZE && !line.ends_with('\n') {
+        Frame::TooLarge
+    } else {
+        Frame::Line
+    })
+}
+
+fn parse_stream_request(frame: &std::io::Result<Frame>, line: &str) -> Option<Request> {
+    match frame {
+        Ok(Frame::Line) => serde_json::from_str(line.trim()).ok(),
+        _ => None,
     }
+}
+
+/// Best-effort error for an oversized frame; the caller closes the connection.
+async fn reject_frame_too_large(writer: &mut IpcWriter) {
+    let resp = Response::Error {
+        code: "FRAME_TOO_LARGE".into(),
+        message: format!("request exceeds {MAX_MESSAGE_SIZE} bytes without a newline"),
+    };
+    let _ = write_response(writer, &resp).await;
+}
+
+/// Only processes running as the daemon's own user may use the socket. The
+/// 0600 socket mode already says so; this holds even if the mode is changed.
+fn peer_allowed(peer_uid: Option<u32>, daemon_euid: u32) -> bool {
+    peer_uid == Some(daemon_euid)
+}
+
+fn daemon_euid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
 }
 
 pub struct IpcServer {
@@ -81,18 +126,24 @@ pub struct IpcServer {
     engine: Arc<Engine>,
     shutdown: Arc<Notify>,
     conn_limit: Arc<Semaphore>,
+    first_line_timeout: std::time::Duration,
 }
 
 impl IpcServer {
     pub fn bind(socket_path: &Path, engine: Engine) -> Result<Self, std::io::Error> {
+        use std::os::unix::fs::PermissionsExt;
         // Remove stale socket if it exists
         let _ = std::fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)?;
+        // Owner-only whatever the umask. Connections accepted before this are
+        // still held to the peer check in `run`.
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self {
             listener,
             engine: Arc::new(engine),
             shutdown: Arc::new(Notify::new()),
             conn_limit: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            first_line_timeout: FIRST_LINE_TIMEOUT,
         })
     }
 
@@ -100,6 +151,13 @@ impl IpcServer {
     #[cfg(test)]
     pub(crate) fn with_connection_limit(mut self, limit: usize) -> Self {
         self.conn_limit = Arc::new(Semaphore::new(limit));
+        self
+    }
+
+    /// Override how long a connection may wait before its first request.
+    #[cfg(test)]
+    pub(crate) fn with_first_line_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.first_line_timeout = timeout;
         self
     }
 
@@ -130,6 +188,11 @@ impl IpcServer {
                             continue;
                         }
                     };
+                    let peer_uid = stream.peer_cred().ok().map(|cred| cred.uid());
+                    if !peer_allowed(peer_uid, daemon_euid()) {
+                        tracing::warn!(?peer_uid, "rejecting connection from another user");
+                        continue; // dropping the stream closes it
+                    }
                     // Never wait for a permit: waiting here would stall accepting,
                     // shutdown and signals, and parking the stream in a task would
                     // let stalled clients pile up descriptors past the cap.
@@ -140,9 +203,10 @@ impl IpcServer {
                     };
                     let engine = self.engine.clone();
                     let shutdown = self.shutdown.clone();
+                    let first_line_timeout = self.first_line_timeout;
                     tokio::spawn(async move {
                         let _permit = permit;
-                        Self::handle_connection(stream, engine, shutdown).await;
+                        Self::handle_connection(stream, engine, shutdown, first_line_timeout).await;
                     });
                 }
                 _ = self.shutdown.notified() => {
@@ -168,28 +232,31 @@ impl IpcServer {
         stream: tokio::net::UnixStream,
         engine: Arc<Engine>,
         shutdown: Arc<Notify>,
+        first_line_timeout: std::time::Duration,
     ) {
         let (reader, writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut writer = writer;
         let mut line = String::new();
 
+        // A connection that never sends a request would hold a permit forever.
+        match tokio::time::timeout(first_line_timeout, read_frame(&mut reader, &mut line)).await {
+            Ok(Ok(Frame::Line)) => {}
+            Ok(Ok(Frame::TooLarge)) => return reject_frame_too_large(&mut writer).await,
+            Ok(Ok(Frame::Eof) | Err(_)) => return,
+            Err(_) => {
+                tracing::debug!("closing connection that sent no request");
+                return;
+            }
+        }
         loop {
-            line.clear();
-            match (&mut reader)
-                .take(MAX_MESSAGE_SIZE)
-                .read_line(&mut line)
-                .await
-            {
-                Ok(0) => break, // EOF
-                Ok(_) => {
-                    if !Self::dispatch_request(&line, &mut reader, &mut writer, &engine, &shutdown)
-                        .await
-                    {
-                        break;
-                    }
-                }
-                Err(_) => break,
+            if !Self::dispatch_request(&line, &mut reader, &mut writer, &engine, &shutdown).await {
+                break;
+            }
+            match read_frame(&mut reader, &mut line).await {
+                Ok(Frame::Line) => {}
+                Ok(Frame::TooLarge) => return reject_frame_too_large(&mut writer).await,
+                Ok(Frame::Eof) | Err(_) => break,
             }
         }
     }
@@ -259,17 +326,21 @@ impl IpcServer {
                     let _ = write_response(writer, &response).await;
                     return false;
                 }
-                streams::handle_attach_stream(reader, writer, engine, &agent_id, replay, client_id)
-                    .await;
+                return streams::handle_attach_stream(
+                    reader, writer, engine, &agent_id, replay, client_id,
+                )
+                .await;
             }
             StreamMode::Grid(project_root) => {
                 if matches!(response, Response::GridSubscribed) {
-                    streams::handle_grid_stream(reader, writer, engine, &project_root).await;
+                    return streams::handle_grid_stream(reader, writer, engine, &project_root)
+                        .await;
                 }
             }
             StreamMode::Status(project_root) => {
                 if matches!(response, Response::StatusSubscribed) {
-                    streams::handle_status_stream(reader, writer, engine, &project_root).await;
+                    return streams::handle_status_stream(reader, writer, engine, &project_root)
+                        .await;
                 }
             }
             StreamMode::Fs { root, recursive } => {

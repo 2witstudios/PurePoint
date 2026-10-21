@@ -15,6 +15,12 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 - `pu spawn --no-auto` now launches the bare command and ignores project and machine-level launch args. `--agent-args` still apply. The choice is saved with the agent, so it still launches bare after `pu bench`/`pu play`, suspend/resume or a daemon restart.
 - The daemon protocol is now version 11 because the launch args request and response shapes changed. Restart the daemon after updating (`pu` and the macOS app reject a v10 daemon with update guidance instead of appearing to save launch args that an old daemon drops).
 - Settings → Agents replaces the per-flag pickers for Claude, Codex and OpenCode with one launch args field per agent next to its command, for this project and for all projects. Codex YOLO for all projects is unchanged.
+- **Breaking:** `pu` no longer searches `PATH` or `~/.cargo/bin` when it auto-starts the daemon. It starts the `pu-engine` beside itself, then `~/.pu/bin/pu-engine`; a `pu` inside the macOS app starts only the app's own engine. To run another build, set `PU_ENGINE_PATH` to its path (or to a name to look up on `PATH`). The chosen binary must be owned by you or root and not writable by group or others.
+- The daemon socket is now always owner-only (0600) and the daemon accepts connections only from processes running as its own user. `~/.pu` is kept at mode 0700, and the daemon refuses to start if another user owns it.
+- A request line over 1 MB now gets a `FRAME_TOO_LARGE` error and closes the connection, instead of a `PARSE_ERROR` that left the rest of the line to be read as the next request. A connection that sends no request within 30 seconds is closed.
+
+### Fixed
+- `$HOME`, `/` and ancestors of `$HOME` are never registered as projects, even when an older version left `~/.pu/manifest.json` behind. Such entries are removed from the project registry when the daemon starts.
 
 ## [0.5.2] — 2026-10-15
 

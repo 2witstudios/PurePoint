@@ -985,3 +985,148 @@ async fn given_pending_old_geometry_output_should_reset_at_matching_size_and_liv
     assert_eq!(rendered.screen().contents(), expected.screen().contents());
     assert_eq!(cursor.offset, snapshot_offset);
 }
+
+/// Every response until the daemon closes the connection (panics if it doesn't).
+async fn responses_until_close(
+    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+) -> Vec<Response> {
+    let mut responses = Vec::new();
+    loop {
+        let mut line = String::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reader.read_line(&mut line),
+        )
+        .await
+        .expect("daemon must close the connection");
+        match read {
+            Ok(0) | Err(_) => return responses,
+            Ok(_) => responses.push(serde_json::from_str(&line).unwrap()),
+        }
+    }
+}
+
+fn oversized_then_health() -> Vec<u8> {
+    let mut bytes = vec![b'a'; MAX_MESSAGE_SIZE as usize];
+    bytes.extend_from_slice(serde_json::to_string(&Request::Health).unwrap().as_bytes());
+    bytes.push(b'\n');
+    bytes
+}
+
+fn assert_frame_too_large_only(responses: &[Response]) {
+    assert!(
+        matches!(responses, [Response::Error { code, .. }] if code == "FRAME_TOO_LARGE"),
+        "the bytes after an oversized frame must never run as a request: {responses:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_oversized_frame_should_reject_and_close_without_running_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let send = tokio::spawn(async move {
+        let _ = writer.write_all(&oversized_then_health()).await;
+        writer
+    });
+
+    assert_frame_too_large_only(&responses_until_close(&mut reader).await);
+    let _ = send.await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_oversized_frame_in_grid_stream_should_reject_and_close() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let engine = Engine::new();
+    let init = engine
+        .handle_request(Request::Init {
+            project_root: project_root.to_string_lossy().into(),
+        })
+        .await;
+    assert!(matches!(init, Response::InitResult { .. }));
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let req = serde_json::to_string(&Request::SubscribeGrid {
+        project_root: project_root.to_string_lossy().into(),
+    })
+    .unwrap();
+    writer
+        .write_all(format!("{req}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    let resp: Response = serde_json::from_str(&line).unwrap();
+    assert!(matches!(resp, Response::GridSubscribed), "{resp:?}");
+
+    let send = tokio::spawn(async move {
+        let _ = writer.write_all(&oversized_then_health()).await;
+        writer
+    });
+    assert_frame_too_large_only(&responses_until_close(&mut reader).await);
+    let _ = send.await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_connection_without_request_should_be_closed_after_first_line_timeout() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, Engine::new())
+        .unwrap()
+        .with_first_line_timeout(std::time::Duration::from_millis(100));
+    let handle = tokio::spawn(async move { server.run().await });
+
+    let idle = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, _writer) = idle.into_split();
+    let mut reader = BufReader::new(reader);
+    assert!(responses_until_close(&mut reader).await.is_empty());
+
+    // A connection that does send a request is still served.
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    assert!(matches!(
+        send_health(stream).await,
+        Some(Response::HealthReport { .. })
+    ));
+    handle.abort();
+}
+
+#[test]
+fn given_permissive_umask_socket_should_still_be_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    // SAFETY: umask has no preconditions; restored right after the bind.
+    let previous = unsafe { libc::umask(0o000) };
+    let server = runtime.block_on(async { IpcServer::bind(&sock_path, Engine::new()) });
+    unsafe { libc::umask(previous) };
+    let _server = server.unwrap();
+
+    let mode = std::fs::metadata(&sock_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn given_peer_of_another_user_should_be_refused() {
+    assert!(peer_allowed(Some(501), 501));
+    assert!(!peer_allowed(Some(502), 501));
+    assert!(!peer_allowed(Some(0), 501));
+    assert!(!peer_allowed(None, 501));
+}

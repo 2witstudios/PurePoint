@@ -155,7 +155,7 @@ fn install(socket: &Path, custom_socket: bool, now: bool) -> Result<(), CliError
     let manager = current_manager()?;
     let engine = daemon_ctrl::find_daemon_binary().ok_or_else(|| {
         CliError::Other(
-            "pu-engine not found on PATH, next to pu, or in ~/.pu/bin or ~/.cargo/bin".into(),
+            "no usable pu-engine next to pu or in ~/.pu/bin (or at PU_ENGINE_PATH)".into(),
         )
     })?;
     // The service file outlives this shell; never record a relative path.

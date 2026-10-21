@@ -7,6 +7,7 @@ use pu_core::protocol::*;
 use pu_core::types::{AgentEntry, AgentStatus};
 
 use super::Engine;
+use super::fs_ops::is_too_broad_project_root;
 
 impl Engine {
     /// Production daemons persist inventory beside their socket. `new()` remains
@@ -23,6 +24,19 @@ impl Engine {
                 "project registry roots must be absolute",
             ));
         }
+        // `/`, `$HOME` and its ancestors are never projects, whatever an older
+        // daemon recorded; drop them from the registry on disk too.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let count = projects.len();
+        let projects: Vec<String> = projects
+            .into_iter()
+            .filter(|root| !is_too_broad_project_root(Path::new(root), home.as_deref()))
+            .collect();
+        if projects.len() != count
+            && let Err(e) = write_registry(&path, &projects)
+        {
+            tracing::warn!("failed to rewrite project registry: {e}");
+        }
         let mut engine = Self::new();
         engine.project_registry_path = Some(path);
         *engine.registered_projects.lock().unwrap() = projects.into_iter().collect();
@@ -30,6 +44,17 @@ impl Engine {
     }
 
     pub(super) async fn register_project(&self, root: &str) -> Result<(), Response> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        self.register_project_with_home(root, home).await
+    }
+
+    /// Registers an initialized project, except one too broad to be a project
+    /// (`/`, `home` or an ancestor of it), which is skipped without error.
+    async fn register_project_with_home(
+        &self,
+        root: &str,
+        home: Option<PathBuf>,
+    ) -> Result<(), Response> {
         // Serialize durable updates without holding the inventory mutex over
         // filesystem I/O; health and queries can keep reading the old snapshot.
         let update = self.project_registry_updates.clone().lock_owned().await;
@@ -40,6 +65,9 @@ impl Engine {
             // Keep serialization even if the awaiting request is cancelled.
             let _update = update;
             let root = Path::new(&root).canonicalize()?;
+            if is_too_broad_project_root(&root, home.as_deref()) {
+                return Ok(());
+            }
             // Registration is only valid for readable, initialized projects.
             manifest::read_manifest(&root).map_err(std::io::Error::other)?;
             let root = root.to_string_lossy().into_owned();
@@ -55,20 +83,7 @@ impl Engine {
             next.push(root.clone());
             next.sort();
             if let Some(path) = registry {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let temporary = path.with_extension("json.tmp");
-                let write = || -> std::io::Result<()> {
-                    use std::io::Write;
-                    let mut file = std::fs::File::create(&temporary)?;
-                    file.write_all(&serde_json::to_vec_pretty(&next)?)?;
-                    file.sync_all()?;
-                    std::fs::rename(&temporary, &path)
-                };
-                write().inspect_err(|_| {
-                    let _ = std::fs::remove_file(&temporary);
-                })?;
+                write_registry(&path, &next)?;
             }
             projects
                 .lock()
@@ -523,6 +538,23 @@ impl Engine {
     }
 }
 
+fn write_registry(path: &Path, projects: &[String]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(&serde_json::to_vec_pretty(projects)?)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,6 +659,40 @@ mod tests {
             1
         );
         assert_eq!(engine.sessions.lock().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn given_home_with_a_manifest_should_never_be_registered() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+        std::fs::create_dir_all(tmp.path().join("home/.pu")).unwrap();
+        let home = tmp.path().join("home").canonicalize().unwrap();
+        // `~/.pu` doubles as the global dir, so `$HOME` can look initialized.
+        manifest::write_manifest(&home, &Manifest::new(home.to_string_lossy().into_owned()))
+            .unwrap();
+        let engine = Engine::with_project_registry(path.clone()).unwrap();
+        for root in [home.clone(), home.parent().unwrap().to_path_buf()] {
+            engine
+                .register_project_with_home(&root.to_string_lossy(), Some(home.clone()))
+                .await
+                .unwrap();
+        }
+        assert!(engine.registered_projects().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn given_registry_listing_a_too_broad_root_should_purge_it_on_load() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project = tmp.path().canonicalize().unwrap().join("project");
+        let project = project.to_string_lossy().into_owned();
+        let path = tmp.path().join("registry.json");
+        std::fs::write(&path, serde_json::to_vec(&["/", project.as_str()]).unwrap()).unwrap();
+
+        let engine = Engine::with_project_registry(path.clone()).unwrap();
+        assert_eq!(engine.registered_projects(), vec![project.clone()]);
+        let stored: Vec<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored, vec![project]);
     }
 
     #[tokio::test]
