@@ -1006,8 +1006,13 @@ async fn responses_until_close(
     }
 }
 
+/// One oversized frame whose bytes are not valid UTF-8 (a stray 0xFF, and a
+/// multibyte character split by the size limit), followed by a request that
+/// must never run.
 fn oversized_then_health() -> Vec<u8> {
-    let mut bytes = vec![b'a'; MAX_MESSAGE_SIZE as usize];
+    let mut bytes = vec![0xFF];
+    bytes.resize(MAX_MESSAGE_SIZE as usize - 1, b'a');
+    bytes.extend_from_slice("€".as_bytes()); // 3 bytes straddling the limit
     bytes.extend_from_slice(serde_json::to_string(&Request::Health).unwrap().as_bytes());
     bytes.push(b'\n');
     bytes
@@ -1020,29 +1025,53 @@ fn assert_frame_too_large_only(responses: &[Response]) {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn given_oversized_frame_should_reject_and_close_without_running_the_rest() {
-    let tmp = TempDir::new().unwrap();
-    let sock_path = tmp.path().join("test.sock");
-    let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
-    let handle = tokio::spawn(async move { server.run().await });
+async fn write_line(writer: &mut tokio::net::unix::OwnedWriteHalf, request: &Request) {
+    let line = serde_json::to_string(request).unwrap() + "\n";
+    writer.write_all(line.as_bytes()).await.unwrap();
+}
 
-    let stream = UnixStream::connect(&sock_path).await.unwrap();
+async fn read_response(reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>) -> Response {
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+/// A stream-entering request and a check of its first reply.
+type Subscribe = (Request, fn(&Response) -> bool);
+
+/// Opens a connection, optionally enters a stream with `subscribe` (checking
+/// its first reply), then sends an oversized frame and expects only
+/// `FRAME_TOO_LARGE` before the daemon closes the connection.
+async fn assert_oversized_frame_closes(sock_path: &std::path::Path, subscribe: Option<Subscribe>) {
+    let stream = UnixStream::connect(sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
+    if let Some((request, subscribed)) = subscribe {
+        write_line(&mut writer, &request).await;
+        let first = read_response(&mut reader).await;
+        assert!(subscribed(&first), "{first:?}");
+    }
     let send = tokio::spawn(async move {
         let _ = writer.write_all(&oversized_then_health()).await;
         writer
     });
-
-    assert_frame_too_large_only(&responses_until_close(&mut reader).await);
+    let responses: Vec<_> = responses_until_close(&mut reader)
+        .await
+        .into_iter()
+        // Stream traffic before the error is fine; only what follows matters.
+        .skip_while(|r| !matches!(r, Response::Error { .. }))
+        .collect();
+    assert_frame_too_large_only(&responses);
     let _ = send.await;
-    handle.abort();
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn given_oversized_frame_in_grid_stream_should_reject_and_close() {
-    let tmp = TempDir::new().unwrap();
+async fn initialized_server(
+    tmp: &TempDir,
+) -> (
+    std::path::PathBuf,
+    String,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
     let sock_path = tmp.path().join("test.sock");
     let project_root = tmp.path().canonicalize().unwrap().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
@@ -1055,29 +1084,129 @@ async fn given_oversized_frame_in_grid_stream_should_reject_and_close() {
     assert!(matches!(init, Response::InitResult { .. }));
     let server = IpcServer::bind(&sock_path, engine).unwrap();
     let handle = tokio::spawn(async move { server.run().await });
+    (
+        sock_path,
+        project_root.to_string_lossy().into_owned(),
+        handle,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_oversized_frame_should_reject_and_close_without_running_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+    assert_oversized_frame_closes(&sock_path, None).await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_oversized_frame_in_grid_stream_should_reject_and_close() {
+    let tmp = TempDir::new().unwrap();
+    let (sock_path, project_root, handle) = initialized_server(&tmp).await;
+    let subscribe = Request::SubscribeGrid { project_root };
+    let subscribed: fn(&Response) -> bool = |r| matches!(r, Response::GridSubscribed);
+    assert_oversized_frame_closes(&sock_path, Some((subscribe, subscribed))).await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_oversized_frame_in_status_stream_should_reject_and_close() {
+    let tmp = TempDir::new().unwrap();
+    let (sock_path, project_root, handle) = initialized_server(&tmp).await;
+    let subscribe = Request::SubscribeStatus { project_root };
+    let subscribed: fn(&Response) -> bool = |r| matches!(r, Response::StatusSubscribed);
+    assert_oversized_frame_closes(&sock_path, Some((subscribe, subscribed))).await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_oversized_frame_in_attach_stream_should_reject_and_close() {
+    let (engine, agent_id, tmp) =
+        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let engine = server.engine().clone();
+    let handle = tokio::spawn(async move { server.run().await });
+    let subscribe = Request::Attach {
+        agent_id: agent_id.clone(),
+        replay: None,
+        client_id: None,
+    };
+    let subscribed: fn(&Response) -> bool = |r| matches!(r, Response::AttachReady { .. });
+    assert_oversized_frame_closes(&sock_path, Some((subscribe, subscribed))).await;
+    engine
+        .kill_all_sessions(std::time::Duration::from_millis(10))
+        .await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_line_split_across_writes_in_attach_stream_should_not_lose_bytes() {
+    let (engine, agent_id, tmp) =
+        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let engine = server.engine().clone();
+    let handle = tokio::spawn(async move { server.run().await });
 
     let stream = UnixStream::connect(&sock_path).await.unwrap();
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let req = serde_json::to_string(&Request::SubscribeGrid {
-        project_root: project_root.to_string_lossy().into(),
-    })
-    .unwrap();
-    writer
-        .write_all(format!("{req}\n").as_bytes())
-        .await
-        .unwrap();
-    let mut line = String::new();
-    reader.read_line(&mut line).await.unwrap();
-    let resp: Response = serde_json::from_str(&line).unwrap();
-    assert!(matches!(resp, Response::GridSubscribed), "{resp:?}");
+    write_line(
+        &mut writer,
+        &Request::Attach {
+            agent_id: agent_id.clone(),
+            replay: None,
+            client_id: None,
+        },
+    )
+    .await;
+    assert!(matches!(
+        read_response(&mut reader).await,
+        Response::AttachReady { .. }
+    ));
 
-    let send = tokio::spawn(async move {
-        let _ = writer.write_all(&oversized_then_health()).await;
-        writer
-    });
-    assert_frame_too_large_only(&responses_until_close(&mut reader).await);
-    let _ = send.await;
+    // Send half a request line, then make the agent print so the stream's
+    // output branch wins the select while that line is still incomplete.
+    let input = serde_json::to_string(&Request::Input {
+        agent_id: agent_id.clone(),
+        data: b"split-line-marker\n".to_vec(),
+        submit: false,
+        cancel_on_disconnect: false,
+    })
+    .unwrap()
+        + "\n";
+    let (head, tail) = input.as_bytes().split_at(input.len() / 2);
+    writer.write_all(head).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    engine
+        .handle_request(Request::Input {
+            agent_id: agent_id.clone(),
+            data: b"interleaved-output\n".to_vec(),
+            submit: false,
+            cancel_on_disconnect: false,
+        })
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    writer.write_all(tail).await.unwrap();
+
+    let marker = b"split-line-marker";
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let mut received = Vec::new();
+        while !received.windows(marker.len()).any(|w| w == marker) {
+            match read_response(&mut reader).await {
+                Response::Output { data, .. } => received.extend(data),
+                other => panic!("expected Output, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the split request line must still reach the agent");
+    engine
+        .kill_all_sessions(std::time::Duration::from_millis(10))
+        .await;
     handle.abort();
 }
 
@@ -1104,23 +1233,35 @@ async fn given_connection_without_request_should_be_closed_after_first_line_time
     handle.abort();
 }
 
+/// umask is process-wide, so the permissive-umask bind runs in a child copy
+/// of this test binary instead of racing other tests' file creation.
 #[test]
 fn given_permissive_umask_socket_should_still_be_owner_only() {
-    use std::os::unix::fs::PermissionsExt;
-    let tmp = TempDir::new().unwrap();
-    let sock_path = tmp.path().join("test.sock");
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
+    const CHILD: &str = "PU_TEST_UMASK_CHILD";
+    let test = "ipc_server::tests::given_permissive_umask_socket_should_still_be_owner_only";
+    if std::env::var_os(CHILD).is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let sock_path = tmp.path().join("test.sock");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // SAFETY: umask has no preconditions; this process runs only this test.
+        unsafe { libc::umask(0o000) };
+        let _server = runtime
+            .block_on(async { IpcServer::bind(&sock_path, Engine::new()) })
+            .unwrap();
+        let mode = std::fs::metadata(&sock_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        return;
+    }
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--test-threads=1"])
+        .env(CHILD, "1")
+        .status()
         .unwrap();
-    // SAFETY: umask has no preconditions; restored right after the bind.
-    let previous = unsafe { libc::umask(0o000) };
-    let server = runtime.block_on(async { IpcServer::bind(&sock_path, Engine::new()) });
-    unsafe { libc::umask(previous) };
-    let _server = server.unwrap();
-
-    let mode = std::fs::metadata(&sock_path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    assert!(status.success(), "child test failed: {status}");
 }
 
 #[test]

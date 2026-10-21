@@ -99,7 +99,7 @@ async fn run_attachment(
         return true;
     }
 
-    let mut line = String::new();
+    let mut partial = Vec::new();
     loop {
         tokio::select! {
             biased;
@@ -117,12 +117,18 @@ async fn run_attachment(
                 let _ = write_attachment_update(writer, agent_id, update).await;
                 break;
             }
-            result = read_frame(reader, &mut line) => {
-                if matches!(result, Ok(Frame::TooLarge)) {
-                    reject_frame_too_large(writer).await;
-                    return false;
-                }
-                match parse_stream_request(&result, &line) {
+            frame = read_frame(reader, &mut partial) => {
+                let line = match frame {
+                    Ok(Frame::Line(line)) => line,
+                    Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    // Unreadable input leaves no trustworthy line boundary.
+                    Err(_) => return false,
+                };
+                match parse_stream_request(&line) {
                     Some(Request::Input { data, .. }) => {
                         engine.write_to_pty(&master_fd, &data).await.ok();
                     }
@@ -183,7 +189,7 @@ pub(super) async fn handle_grid_stream(
 
     tracing::debug!(project_root, "grid stream started");
 
-    let mut line = String::new();
+    let mut partial = Vec::new();
     loop {
         tokio::select! {
             result = rx.recv() => {
@@ -203,12 +209,18 @@ pub(super) async fn handle_grid_stream(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            result = read_frame(reader, &mut line) => {
-                if matches!(result, Ok(Frame::TooLarge)) {
-                    reject_frame_too_large(writer).await;
-                    return false;
-                }
-                match parse_stream_request(&result, &line) {
+            frame = read_frame(reader, &mut partial) => {
+                let line = match frame {
+                    Ok(Frame::Line(line)) => line,
+                    Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    // Unreadable input leaves no trustworthy line boundary.
+                    Err(_) => return false,
+                };
+                match parse_stream_request(&line) {
                     Some(Request::GridCommand { command, .. }) => {
                         let resp = engine.handle_grid_command(&pr, command).await;
                         if write_response(writer, &resp).await.is_err() {
@@ -252,7 +264,7 @@ pub(super) async fn handle_status_stream(
         return true;
     }
 
-    let mut line = String::new();
+    let mut partial = Vec::new();
     loop {
         tokio::select! {
             result = rx.recv() => {
@@ -273,12 +285,16 @@ pub(super) async fn handle_status_stream(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            result = read_frame(reader, &mut line) => {
-                if matches!(result, Ok(Frame::TooLarge)) {
-                    reject_frame_too_large(writer).await;
-                    return false;
+            frame = read_frame(reader, &mut partial) => {
+                match frame {
+                    // Any request ends the status stream.
+                    Ok(Frame::Line(_)) | Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    Err(_) => return false,
                 }
-                break;
             }
         }
     }
@@ -444,7 +460,7 @@ pub(super) async fn handle_fs_stream(
 
     let mut pending: BTreeSet<String> = BTreeSet::new();
     let mut flush_at: Option<tokio::time::Instant> = None;
-    let mut line = String::new();
+    let mut partial = Vec::new();
     loop {
         let flush = async {
             match flush_at {
@@ -480,9 +496,9 @@ pub(super) async fn handle_fs_stream(
                     break;
                 }
             }
-            result = read_frame(reader, &mut line) => {
+            frame = read_frame(reader, &mut partial) => {
                 // The connection closes after a watch stream either way.
-                if matches!(result, Ok(Frame::TooLarge)) {
+                if matches!(frame, Ok(Frame::TooLarge)) {
                     reject_frame_too_large(writer).await;
                 }
                 break;

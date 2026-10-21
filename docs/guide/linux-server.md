@@ -66,6 +66,6 @@ Client and server must speak the same protocol version. `pu daemon status` on th
 
 ## Troubleshooting
 
-- **`no usable pu-engine`**: `pu` looks beside itself, then in `~/.pu/bin`. Keep both binaries together (`install.sh` and `cargo install` both do). To use another build, set `PU_ENGINE_PATH` to its path. The binary must be owned by you (or root) and not writable by group or others.
+- **`no usable pu-engine`**: `pu` looks beside itself, then in `~/.pu/bin`. Keep both binaries together (`install.sh`, `cargo install` and the macOS app all do). The error lists why each candidate was refused. To use another build, set `PU_ENGINE_PATH` to its path. The binary must be owned by you (or root) and not writable by group or others.
 - **Agents can't find `claude`/`codex`**: the daemon takes agent environments from your login shell (`$SHELL -li`). Make sure your `PATH` is exported from `~/.profile` (or `~/.bash_profile`), not only from `~/.bashrc`.
 - **`systemctl --user` fails with "Failed to connect to bus"**: you're in a session without a user manager (e.g. `su`). Log in over SSH directly as that user.

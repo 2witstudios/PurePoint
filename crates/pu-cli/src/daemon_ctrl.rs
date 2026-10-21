@@ -12,17 +12,15 @@ const ENGINE_PATH_ENV: &str = "PU_ENGINE_PATH";
 /// The `pu-engine` this `pu` may auto-start. A `pu` inside an app bundle
 /// starts only the bundle's own engine. Otherwise `PU_ENGINE_PATH` names the
 /// only candidate when set; if not, the engine next to `pu` (where every
-/// install puts both), then `~/.pu/bin`. `PATH` is used only through
-/// `PU_ENGINE_PATH`. A candidate must be trusted (see [`is_trusted_binary`]).
-pub fn find_daemon_binary() -> Option<PathBuf> {
+/// install puts both: the macOS app copies its engine beside `~/.pu/bin/pu`),
+/// then `~/.pu/bin`. `PATH` is used only through `PU_ENGINE_PATH`. A candidate
+/// must pass [`check_trusted_binary`]; the error names why each one failed.
+pub fn find_daemon_binary() -> Result<PathBuf, String> {
     // Resolve symlinks so a linked `pu` still finds its real neighbors.
-    let exe_dir = std::env::current_exe()
-        .and_then(std::fs::canonicalize)
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok();
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let explicit = std::env::var_os(ENGINE_PATH_ENV).filter(|value| !value.is_empty());
-    find_daemon_binary_in(exe_dir.as_deref(), home.as_deref(), explicit.as_deref())
+    find_daemon_binary_in(exe.as_deref(), home.as_deref(), explicit.as_deref())
 }
 
 /// `<x>.app/Contents` when `exe_dir` is that bundle's `Helpers` or `MacOS`.
@@ -35,51 +33,74 @@ fn bundle_contents(exe_dir: &Path) -> Option<&Path> {
     is_bundle.then_some(contents)
 }
 
-/// Search order, without the trust check.
-fn daemon_binary_candidates(
-    exe_dir: Option<&Path>,
-    home: Option<&Path>,
-    explicit: Option<&std::ffi::OsStr>,
-) -> Vec<PathBuf> {
-    if let Some(contents) = exe_dir.and_then(bundle_contents) {
-        return vec![contents.join("MacOS").join(DAEMON_BINARY)];
-    }
-    if let Some(explicit) = explicit {
-        return which::which(explicit).into_iter().collect();
-    }
-    let mut candidates = Vec::new();
-    if let Some(dir) = exe_dir {
-        candidates.push(dir.join(DAEMON_BINARY));
-    }
-    if let Some(home) = home {
-        candidates.push(home.join(".pu/bin").join(DAEMON_BINARY));
-    }
-    candidates
-}
-
 fn find_daemon_binary_in(
-    exe_dir: Option<&Path>,
+    exe: Option<&Path>,
     home: Option<&Path>,
     explicit: Option<&std::ffi::OsStr>,
-) -> Option<PathBuf> {
-    daemon_binary_candidates(exe_dir, home, explicit)
-        .into_iter()
-        .find(|path| is_trusted_binary(path))
+) -> Result<PathBuf, String> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let mut owners = vec![unsafe { libc::geteuid() }, 0];
+    let exe_dir = exe.and_then(Path::parent);
+    let candidates = if let Some(contents) = exe_dir.and_then(bundle_contents) {
+        // An app installed by another account is owned by that account, and
+        // its engine is as trustworthy as the `pu` running now.
+        owners.extend(
+            exe.and_then(|exe| std::fs::metadata(exe).ok())
+                .map(|m| m.uid()),
+        );
+        vec![contents.join("MacOS").join(DAEMON_BINARY)]
+    } else if let Some(explicit) = explicit {
+        match which::which(explicit) {
+            Ok(path) => vec![path],
+            Err(e) => {
+                return Err(format!(
+                    "{ENGINE_PATH_ENV}={}: {e}",
+                    explicit.to_string_lossy()
+                ));
+            }
+        }
+    } else {
+        exe_dir
+            .map(|dir| dir.join(DAEMON_BINARY))
+            .into_iter()
+            .chain(home.map(|home| home.join(".pu/bin").join(DAEMON_BINARY)))
+            .collect()
+    };
+    let mut reasons = Vec::new();
+    for path in candidates {
+        match check_trusted_binary(&path, &owners) {
+            Ok(()) => return Ok(path),
+            Err(reason) => reasons.push(format!("{}: {reason}", path.display())),
+        }
+    }
+    if reasons.is_empty() {
+        reasons.push("no candidate locations".into());
+    }
+    Err(reasons.join("; "))
 }
 
-/// An executable file owned by this user or root that no other user can
+/// An executable file owned by an allowed user that no other user can
 /// modify: anyone who could rewrite it would run code as this user.
-fn is_trusted_binary(path: &Path) -> bool {
+fn check_trusted_binary(path: &Path, owners: &[u32]) -> Result<(), &'static str> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    std::fs::metadata(path).is_ok_and(|meta| {
-        // SAFETY: geteuid has no preconditions and cannot fail.
-        let euid = unsafe { libc::geteuid() };
-        meta.is_file() && trusted_mode_and_owner(meta.permissions().mode(), meta.uid(), euid)
-    })
+    let meta = std::fs::metadata(path).map_err(|_| "not found")?;
+    if !meta.is_file() {
+        return Err("not a file");
+    }
+    trusted_mode_and_owner(meta.permissions().mode(), meta.uid(), owners)
 }
 
-fn trusted_mode_and_owner(mode: u32, owner: u32, euid: u32) -> bool {
-    mode & 0o111 != 0 && mode & 0o022 == 0 && (owner == euid || owner == 0)
+fn trusted_mode_and_owner(mode: u32, owner: u32, owners: &[u32]) -> Result<(), &'static str> {
+    if mode & 0o111 == 0 {
+        Err("not executable")
+    } else if mode & 0o022 != 0 {
+        Err("writable by group or others")
+    } else if !owners.contains(&owner) {
+        Err("owned by another user")
+    } else {
+        Ok(())
+    }
 }
 
 /// Spawn the daemon detached from the caller's session: its own session (so
@@ -279,9 +300,9 @@ async fn wait_for_healthy(socket: &Path) -> Result<Option<()>, CliError> {
 }
 
 fn spawn_detached_daemon(socket: &Path) -> Result<(), CliError> {
-    let binary = find_daemon_binary().ok_or(CliError::Other(
-        "no usable pu-engine next to pu or in ~/.pu/bin (or at PU_ENGINE_PATH) — install PurePoint (see docs/guide/linux-server.md) or `cargo install --path crates/pu-engine`".into(),
-    ))?;
+    let binary = find_daemon_binary().map_err(|reasons| CliError::Other(format!(
+        "no usable pu-engine ({reasons}) — install PurePoint (see docs/guide/linux-server.md), `cargo install --path crates/pu-engine`, or set PU_ENGINE_PATH"
+    )))?;
 
     // Redirect daemon stderr to log file so startup errors are diagnosable
     let stderr_target = match paths::daemon_log_path() {
@@ -314,7 +335,7 @@ mod tests {
 
     #[test]
     fn given_find_daemon_binary_should_return_path_or_none() {
-        let result = find_daemon_binary();
+        let result = find_daemon_binary().ok();
         // If found, verify the path is an executable file
         if let Some(path) = result {
             assert!(path.exists(), "found binary does not exist: {path:?}");
@@ -324,6 +345,16 @@ mod tests {
             );
         }
         // If not found, that's fine — just verify no panic
+    }
+
+    /// Lookup as a `pu` in `exe_dir` would do it.
+    fn find(
+        exe_dir: Option<&Path>,
+        home: Option<&Path>,
+        explicit: Option<&std::ffi::OsStr>,
+    ) -> Option<PathBuf> {
+        let exe = exe_dir.map(|dir| dir.join("pu"));
+        find_daemon_binary_in(exe.as_deref(), home, explicit).ok()
     }
 
     fn make_executable(path: &Path) {
@@ -341,7 +372,7 @@ mod tests {
         make_executable(&exe_dir.join("pu-engine"));
         make_executable(&home.join(".pu/bin/pu-engine"));
         assert_eq!(
-            find_daemon_binary_in(Some(&exe_dir), Some(&home), None),
+            find(Some(&exe_dir), Some(&home), None),
             Some(exe_dir.join("pu-engine"))
         );
     }
@@ -352,13 +383,10 @@ mod tests {
         let exe_dir = tmp.path().join("empty");
         let home = tmp.path().join("home");
         make_executable(&home.join(".cargo/bin/pu-engine"));
-        assert_eq!(
-            find_daemon_binary_in(Some(&exe_dir), Some(&home), None),
-            None
-        );
+        assert_eq!(find(Some(&exe_dir), Some(&home), None), None);
         make_executable(&home.join(".pu/bin/pu-engine"));
         assert_eq!(
-            find_daemon_binary_in(Some(&exe_dir), Some(&home), None),
+            find(Some(&exe_dir), Some(&home), None),
             Some(home.join(".pu/bin/pu-engine"))
         );
     }
@@ -375,14 +403,14 @@ mod tests {
         make_executable(&path_engine);
         let explicit = Some(path_engine.as_os_str());
         assert_eq!(
-            find_daemon_binary_in(Some(&helpers), Some(&home), explicit),
+            find(Some(&helpers), Some(&home), explicit),
             None,
             "a missing bundled engine must not fall back"
         );
         make_executable(&contents.join("MacOS/pu-engine"));
         for exe_dir in [&helpers, &contents.join("MacOS")] {
             assert_eq!(
-                find_daemon_binary_in(Some(exe_dir), Some(&home), explicit),
+                find(Some(exe_dir), Some(&home), explicit),
                 Some(contents.join("MacOS/pu-engine"))
             );
         }
@@ -395,15 +423,9 @@ mod tests {
         make_executable(&exe_dir.join("pu-engine"));
         let dev = tmp.path().join("dev/pu-engine");
         make_executable(&dev);
-        assert_eq!(
-            find_daemon_binary_in(Some(&exe_dir), None, Some(dev.as_os_str())),
-            Some(dev)
-        );
+        assert_eq!(find(Some(&exe_dir), None, Some(dev.as_os_str())), Some(dev));
         let missing = tmp.path().join("missing/pu-engine");
-        assert_eq!(
-            find_daemon_binary_in(Some(&exe_dir), None, Some(missing.as_os_str())),
-            None
-        );
+        assert_eq!(find(Some(&exe_dir), None, Some(missing.as_os_str())), None);
     }
 
     #[test]
@@ -415,20 +437,45 @@ mod tests {
         make_executable(&engine);
         for shared in [0o775, 0o757, 0o777] {
             std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(shared)).unwrap();
-            assert_eq!(
-                find_daemon_binary_in(Some(&exe_dir), None, None),
-                None,
-                "{shared:o}"
-            );
+            assert_eq!(find(Some(&exe_dir), None, None), None, "{shared:o}");
         }
     }
 
     #[test]
     fn given_engine_owned_by_another_user_should_refuse_it() {
-        assert!(trusted_mode_and_owner(0o755, 501, 501));
-        assert!(trusted_mode_and_owner(0o755, 0, 501));
-        assert!(!trusted_mode_and_owner(0o755, 502, 501));
-        assert!(!trusted_mode_and_owner(0o644, 501, 501));
+        assert_eq!(trusted_mode_and_owner(0o755, 501, &[501, 0]), Ok(()));
+        assert_eq!(trusted_mode_and_owner(0o755, 0, &[501, 0]), Ok(()));
+        assert_eq!(
+            trusted_mode_and_owner(0o755, 502, &[501, 0]),
+            Err("owned by another user")
+        );
+        assert_eq!(
+            trusted_mode_and_owner(0o644, 501, &[501]),
+            Err("not executable")
+        );
+        assert_eq!(
+            trusted_mode_and_owner(0o775, 501, &[501]),
+            Err("writable by group or others")
+        );
+        // The bundle case also allows the owner of the running `pu`.
+        assert_eq!(trusted_mode_and_owner(0o755, 502, &[501, 0, 502]), Ok(()));
+    }
+
+    #[test]
+    fn given_untrusted_candidates_should_name_each_reason() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let exe_dir = tmp.path().join("bin");
+        let home = tmp.path().join("home");
+        let engine = exe_dir.join("pu-engine");
+        make_executable(&engine);
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let err = find_daemon_binary_in(Some(&exe_dir.join("pu")), Some(&home), None).unwrap_err();
+        assert!(
+            err.contains("bin/pu-engine: writable by group or others"),
+            "{err}"
+        );
+        assert!(err.contains(".pu/bin/pu-engine: not found"), "{err}");
     }
 
     #[test]
@@ -438,7 +485,7 @@ mod tests {
         let path = home.join(".pu/bin/pu-engine");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "").unwrap();
-        assert_eq!(find_daemon_binary_in(None, Some(&home), None), None);
+        assert_eq!(find(None, Some(&home), None), None);
     }
 
     #[test]

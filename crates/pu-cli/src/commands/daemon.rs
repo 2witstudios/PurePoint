@@ -153,11 +153,8 @@ async fn status(socket: &Path, custom_socket: bool) -> Result<(), CliError> {
 fn install(socket: &Path, custom_socket: bool, now: bool) -> Result<(), CliError> {
     require_default_socket(custom_socket)?;
     let manager = current_manager()?;
-    let engine = daemon_ctrl::find_daemon_binary().ok_or_else(|| {
-        CliError::Other(
-            "no usable pu-engine next to pu or in ~/.pu/bin (or at PU_ENGINE_PATH)".into(),
-        )
-    })?;
+    let engine = daemon_ctrl::find_daemon_binary()
+        .map_err(|reasons| CliError::Other(format!("no usable pu-engine ({reasons})")))?;
     // The service file outlives this shell; never record a relative path.
     let engine = std::fs::canonicalize(&engine)?;
     for note in service::install(manager, &engine, socket, now)? {

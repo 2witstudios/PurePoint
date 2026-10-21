@@ -125,6 +125,7 @@ impl Engine {
             _ => None,
         };
         let is_init = matches!(request, Request::Init { .. });
+        let legacy_root_use = allowed_on_too_broad_root(request);
         if let Some(root) = request.project_root_mut() {
             if root.is_empty() {
                 let Some(id) = targeted.as_deref() else {
@@ -146,6 +147,8 @@ impl Engine {
             {
                 *root = canonical.to_string_lossy().into_owned();
             }
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            check_project_root_scope(root, legacy_root_use, home.as_deref())?;
             if let Some(id) = targeted.as_deref() {
                 self.validate_live_owner(id, root).await?;
             }
@@ -538,6 +541,42 @@ impl Engine {
     }
 }
 
+/// Requests that may still name a root too broad to be a project (`/`,
+/// `$HOME` or an ancestor). An older version could record agents under
+/// `$HOME` through `~/.pu/manifest.json`; these let users see, read and stop
+/// them, but nothing new is created there.
+fn allowed_on_too_broad_root(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Status { .. }
+            | Request::SubscribeStatus { .. }
+            | Request::Read { .. }
+            | Request::ChannelRead { .. }
+            | Request::Kill { .. }
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn check_project_root_scope(
+    root: &str,
+    legacy_root_use: bool,
+    home: Option<&Path>,
+) -> Result<(), Response> {
+    if legacy_root_use || !is_too_broad_project_root(Path::new(root), home) {
+        return Ok(());
+    }
+    Err(project_root_not_allowed(root))
+}
+
+pub(super) fn project_root_not_allowed(root: &str) -> Response {
+    Response::Error {
+        code: "project_root_not_allowed".into(),
+        message: format!(
+            "{root} is /, $HOME or an ancestor of $HOME; register a project directory instead"
+        ),
+    }
+}
+
 fn write_registry(path: &Path, projects: &[String]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -679,6 +718,52 @@ mod tests {
         }
         assert!(engine.registered_projects().is_empty());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn given_too_broad_root_should_refuse_creating_ops_but_allow_legacy_cleanup() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path().canonicalize().unwrap().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let root = home.to_string_lossy().into_owned();
+        let spawn: Request = serde_json::from_value(serde_json::json!({
+            "type": "spawn", "project_root": root, "prompt": "",
+        }))
+        .unwrap();
+        for refused in [
+            spawn,
+            Request::Init {
+                project_root: root.clone(),
+            },
+            Request::CreateWorktree {
+                project_root: root.clone(),
+                name: None,
+                base: None,
+            },
+        ] {
+            let allowed = allowed_on_too_broad_root(&refused);
+            assert!(matches!(
+                check_project_root_scope(&root, allowed, Some(&home)),
+                Err(Response::Error { code, .. }) if code == "project_root_not_allowed"
+            ));
+        }
+        for cleanup in [
+            Request::Status {
+                project_root: root.clone(),
+                agent_id: None,
+            },
+            Request::Kill {
+                project_root: root.clone(),
+                target: KillTarget::All,
+                exclude: vec![],
+            },
+        ] {
+            let allowed = allowed_on_too_broad_root(&cleanup);
+            assert!(check_project_root_scope(&root, allowed, Some(&home)).is_ok());
+        }
+        // An ordinary project is unaffected.
+        let project = home.join("code").to_string_lossy().into_owned();
+        assert!(check_project_root_scope(&project, false, Some(&home)).is_ok());
     }
 
     #[tokio::test]

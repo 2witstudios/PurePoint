@@ -75,30 +75,35 @@ impl StreamMode {
 /// What one bounded read of a newline-delimited request produced.
 #[derive(Debug, PartialEq, Eq)]
 enum Frame {
-    Line,
+    Line(String),
     Eof,
     /// `MAX_MESSAGE_SIZE` bytes without a newline. The rest of the frame is
     /// still unread, so the connection can never be resynchronized.
     TooLarge,
 }
 
-async fn read_frame(reader: &mut IpcReader, line: &mut String) -> std::io::Result<Frame> {
-    line.clear();
-    let read = reader.take(MAX_MESSAGE_SIZE).read_line(line).await?;
-    Ok(if read == 0 {
-        Frame::Eof
-    } else if read as u64 >= MAX_MESSAGE_SIZE && !line.ends_with('\n') {
-        Frame::TooLarge
-    } else {
-        Frame::Line
-    })
+/// Reads the next line. `pending` holds a partial line across calls, which
+/// makes this cancel-safe inside `select!`: a read interrupted by another
+/// branch resumes where it stopped instead of losing bytes. The size limit
+/// is applied to raw bytes before UTF-8 decoding, and invalid UTF-8 in a
+/// complete line is an `InvalidData` error.
+async fn read_frame(reader: &mut IpcReader, pending: &mut Vec<u8>) -> std::io::Result<Frame> {
+    let budget = MAX_MESSAGE_SIZE.saturating_sub(pending.len() as u64);
+    let read = reader.take(budget).read_until(b'\n', pending).await?;
+    if pending.ends_with(b"\n") || (read == 0 && !pending.is_empty()) {
+        // A complete line, or a final unterminated one at EOF.
+        let line = String::from_utf8(std::mem::take(pending))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        return Ok(Frame::Line(line));
+    }
+    if pending.len() as u64 >= MAX_MESSAGE_SIZE {
+        return Ok(Frame::TooLarge);
+    }
+    Ok(Frame::Eof)
 }
 
-fn parse_stream_request(frame: &std::io::Result<Frame>, line: &str) -> Option<Request> {
-    match frame {
-        Ok(Frame::Line) => serde_json::from_str(line.trim()).ok(),
-        _ => None,
-    }
+fn parse_stream_request(line: &str) -> Option<Request> {
+    serde_json::from_str(line.trim()).ok()
 }
 
 /// Best-effort error for an oversized frame; the caller closes the connection.
@@ -237,27 +242,27 @@ impl IpcServer {
         let (reader, writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut writer = writer;
-        let mut line = String::new();
+        let mut pending = Vec::new();
 
         // A connection that never sends a request would hold a permit forever.
-        match tokio::time::timeout(first_line_timeout, read_frame(&mut reader, &mut line)).await {
-            Ok(Ok(Frame::Line)) => {}
-            Ok(Ok(Frame::TooLarge)) => return reject_frame_too_large(&mut writer).await,
-            Ok(Ok(Frame::Eof) | Err(_)) => return,
+        let first = tokio::time::timeout(first_line_timeout, read_frame(&mut reader, &mut pending));
+        let mut frame = match first.await {
+            Ok(frame) => frame,
             Err(_) => {
                 tracing::debug!("closing connection that sent no request");
                 return;
             }
-        }
+        };
         loop {
-            if !Self::dispatch_request(&line, &mut reader, &mut writer, &engine, &shutdown).await {
-                break;
-            }
-            match read_frame(&mut reader, &mut line).await {
-                Ok(Frame::Line) => {}
+            let line = match frame {
+                Ok(Frame::Line(line)) => line,
                 Ok(Frame::TooLarge) => return reject_frame_too_large(&mut writer).await,
-                Ok(Frame::Eof) | Err(_) => break,
+                Ok(Frame::Eof) | Err(_) => return,
+            };
+            if !Self::dispatch_request(&line, &mut reader, &mut writer, &engine, &shutdown).await {
+                return;
             }
+            frame = read_frame(&mut reader, &mut pending).await;
         }
     }
 
