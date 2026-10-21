@@ -104,7 +104,15 @@ nonisolated enum MachinePaths {
     #else
     static var puDirectory: String { NSHomeDirectory() + "/.pu" }
     #endif
+    #if os(macOS)
     static var registryPath: String { puDirectory + "/machines.json" }
+    #else
+    /// The iPad keeps its own registry in its container, not synced with any Mac (MACH-011).
+    static var registryPath: String {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("PurePoint/machines.json").path
+    }
+    #endif
     static var machinesDirectory: String { puDirectory + "/machines" }
 
     /// Machine ids are written lowercase, as the CLI's UUID formatter does, so both name the
