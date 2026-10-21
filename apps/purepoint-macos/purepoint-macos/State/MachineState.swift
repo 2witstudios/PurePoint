@@ -221,6 +221,11 @@ final class MachineState: Identifiable {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
+                #if os(iOS)
+                // Paused in the background; the return to the foreground refreshes at once.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
+                #endif
                 await self?.refreshProjects()
                 do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }

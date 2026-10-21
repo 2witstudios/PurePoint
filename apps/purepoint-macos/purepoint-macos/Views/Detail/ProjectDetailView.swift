@@ -59,12 +59,15 @@ struct ProjectDetailView: View {
         }.task(id: project.projectId + selectedTab.rawValue + String(showRootFiles)) {
             guard selectedTab == .overview, !showRootFiles else { return }
             while !Task.isCancelled {
-                // On iOS the scene-phase hook pauses background polling (IPAD-7.4).
                 #if os(macOS)
                 guard NSApplication.shared.isActive else {
                     do { try await Task.sleep(for: .seconds(5)) } catch { return }
                     continue
                 }
+                #else
+                // Paused in the background (the scene-phase hook); refreshed on return.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
                 #endif
                 let service = project.host.isLocal ? GitService() : project.git
                 let root = project.projectRoot

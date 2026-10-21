@@ -74,6 +74,15 @@ actor DaemonAttachSession {
                 isAgentGone = true
                 break
             } catch {
+                #if os(iOS)
+                // A suspended app loses its SSH streams: reconnect when it returns to the foreground,
+                // without spending retries while it is in the background.
+                if await AppActivity.shared.isInBackground {
+                    await AppActivity.shared.untilForeground()
+                    retries = 0
+                    continue
+                }
+                #endif
                 // Connection lost — attempt reconnect with backoff
                 retries += 1
                 print("[DaemonAttach \(agentId.prefix(8))] retry \(retries): \(error.localizedDescription)")

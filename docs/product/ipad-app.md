@@ -106,7 +106,7 @@ Alternatives considered:
 - REQ-IPAD-008: Given a Mac action that opens something locally (Reveal in Finder, Open Local Copy, open in default app), should present a share sheet or Quick Look of the fetched local copy. "Reveal in Finder" itself is not offered.
 - REQ-IPAD-009: Given Open Project, should pick a machine and browse its folders through daemon `fs_list` in folder-browsing mode (`directories_only`, `machines.md`), then open the chosen folder as a project root on that machine with the daemon's `init`, the request the Mac sends when it opens a local project. The picker follows the Mac open panel: back/forward, a folder pop-up and path bar, a show-hidden toggle, Cancel/Open, and the panel's keys. It offers no New Folder, because the daemon creates no directories on request. `/`, the home folder and its ancestors cannot be opened, matching the daemon's rule.
 - REQ-IPAD-010: Given Agents Hub, Schedule, Triggers or agent settings, should act on the daemon of the machine that owns the current selection and name that machine (IPAD-012).
-- REQ-IPAD-011: Given the app moving to the background, should pause polling. Given it returning to the foreground, should refresh state and resume streams.
+- REQ-IPAD-011: Given the app moving to the background, should pause polling and save the workspace layouts and selection a Mac quit saves, since iOS may end a suspended app without notice. Given it returning to the foreground, should refresh state and resume streams. Stream reconnect loops wait for the foreground rather than spend their retries while suspended.
 
 ### Exec-relay transport
 
