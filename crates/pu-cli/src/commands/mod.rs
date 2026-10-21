@@ -13,6 +13,7 @@ pub mod inventory;
 pub mod kill;
 pub mod logs;
 pub mod machine;
+pub mod phone;
 pub mod prompt;
 pub mod pulse;
 pub mod read;

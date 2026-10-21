@@ -218,6 +218,7 @@ export async function openTrustStore({
           enrollmentId,
           status: entry.status,
           expiresAt: entry.expiresAt,
+          ...(entry.deviceId ? { deviceId: entry.deviceId } : {}),
         };
       },
       revokeEnrollment(enrollmentId) {
@@ -270,7 +271,7 @@ export async function openTrustStore({
           );
           if (!entry || entry.status !== "pending" || entry.expiresAt <= now())
             throw new Error(
-              "Enrollment expired, revoked or already used. Scan a new Mac QR code.",
+              "Enrollment expired, revoked or already used. Create a new pairing code on the host.",
             );
           if (state.devices.length >= 256)
             throw new Error(
@@ -296,6 +297,8 @@ export async function openTrustStore({
           await publish(file, next, assertHeld);
           assertHeld();
           state = next;
+          // Reported to the owner only once the device is durable.
+          entry.deviceId = deviceId;
           permissionFences.set(deviceId, "off");
           return {
             version: 1,

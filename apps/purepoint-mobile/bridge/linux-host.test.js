@@ -67,7 +67,7 @@ test("platform defaults: XDG state on Linux, Application Support on the Mac", ()
 test("host label is the first DNS label with only conservative characters", () => {
   assert.equal(hostLabel("build-box.tail1234.ts.net", "linux"), "build-box");
   assert.equal(hostLabel("<script>", "linux"), "script");
-  assert.equal(hostLabel("…", "linux"), "Linux host");
+  assert.equal(hostLabel("…", "linux"), "linux-host");
 });
 
 test("interface candidates include only live tailnet IPv4 addresses", () => {

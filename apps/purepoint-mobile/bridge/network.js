@@ -38,8 +38,8 @@ function chatGate(granted, op) {
   if (chatAllowed(granted, needed)) return;
   throw new Error(
     granted === "read"
-      ? "Point Guard chat is read-only on this device. Sending needs Agents and terminals: Control and Workspace management. Change this on your Mac."
-      : "Point Guard chat needs Agents and terminals: View or Control on this device. Change this on your Mac.",
+      ? "Point Guard chat is read-only on this device. Sending needs Agents and terminals: Control and Workspace management. Change this on the host this device is paired with."
+      : "Point Guard chat needs Agents and terminals: View or Control on this device. Change this on the host this device is paired with.",
   );
 }
 function authenticated(header, token) {
@@ -166,7 +166,7 @@ export async function serve(
     } catch {
       if (!res.headersSent && !res.destroyed)
         respond(401, {
-          error: "Enrollment unavailable. Scan a new Mac QR code.",
+          error: "Enrollment unavailable. Create a new pairing code on the host.",
         });
     } finally {
       req.setTimeout(0);

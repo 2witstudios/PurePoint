@@ -94,10 +94,10 @@ pub enum PhoneAction {
         #[arg(long)]
         api_key_stdin: bool,
     },
-    /// Choose Point Guard's model as <provider>/<model>
+    /// Choose Point Guard's model as <provider>/<model> (omit to list models)
     Model {
         /// <provider>/<model>
-        model: String,
+        model: Option<String>,
     },
     /// Choose Point Guard's working folder (applies on restart)
     Cwd {
@@ -148,7 +148,8 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
             provider,
             api_key_stdin,
         } => login(provider, api_key_stdin).await,
-        PhoneAction::Model { model } => {
+        PhoneAction::Model { model: None } => list_models(),
+        PhoneAction::Model { model: Some(model) } => {
             let (provider, id) = model
                 .split_once('/')
                 .ok_or_else(|| CliError::Other("use <provider>/<model>".into()))?;
@@ -166,6 +167,28 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
             Ok(())
         }
     }
+}
+
+fn list_models() -> Result<(), CliError> {
+    let listed = admin()?.call(json!({"operation": "providers"}))?;
+    let mut any = false;
+    for p in listed["providers"].as_array().into_iter().flatten() {
+        if p["configured"].as_bool() != Some(true) {
+            continue;
+        }
+        for m in p["models"].as_array().into_iter().flatten() {
+            any = true;
+            println!(
+                "{}/{}",
+                p["id"].as_str().unwrap_or("?"),
+                m["id"].as_str().unwrap_or("?")
+            );
+        }
+    }
+    if !any {
+        println!("No signed-in providers. Sign in with `pu phone login`.");
+    }
+    Ok(())
 }
 
 fn admin() -> Result<Admin, CliError> {
@@ -573,6 +596,9 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
         return Err(CliError::Other("--ttl must be 1-300 seconds".into()));
     }
     let admin = admin()?;
+    // Handlers exist before the enrollment does, so no signal can end this
+    // process between creation and the revoke guard.
+    let signals = Signals::new()?;
     let created = admin.call(json!({"operation": "pairing.create", "ttlSeconds": ttl}))?;
     let enrollment = created["enrollmentId"].as_str().unwrap_or_default().to_string();
     let payload = created["payload"].as_str().unwrap_or_default().to_string();
@@ -590,59 +616,93 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
         if !text && columns.is_some_and(|c| c < size) {
             println!("Terminal is narrower than the QR ({size} columns); showing the paste code instead.");
         }
-        println!("In the PurePoint app: Connections → Pair → Paste code, then paste:\n");
+        println!("In the PurePoint app: Connections → Pair a computer → Paste code, then paste:\n");
         println!("purepoint-pair:{payload}\n");
     } else {
         print!("{qr}");
-        println!("Scan with the PurePoint app: Connections → Scan QR code.");
+        println!("Scan with the PurePoint app: Connections → Pair a computer → Scan pairing code.");
     }
     println!(
         "One phone can use this code within {ttl}s. Press Ctrl-C to cancel; the code is revoked when this command ends."
     );
     let _ = std::io::stdout().flush();
     let mut guard = guard;
-    let outcome = wait_for_enrollment(&admin, &enrollment).await;
-    match outcome {
-        Ok("consumed") => {
+    let mut signals = signals;
+    match wait_for_enrollment(&admin, &enrollment, &mut signals).await? {
+        Enrolled::Device(id) => {
             guard.armed = false;
             let devices = devices_list(&admin)?;
-            if let Some(newest) = devices
-                .iter()
-                .filter(|d| d["revokedAt"].is_null())
-                .max_by_key(|d| d["createdAt"].as_i64().unwrap_or(0))
-            {
-                println!(
+            match devices.iter().find(|d| d["deviceId"].as_str() == Some(id.as_str())) {
+                Some(d) => println!(
                     "Paired {:?}: {}. Change it with `pu phone grant`.",
-                    newest["name"].as_str().unwrap_or("device"),
-                    describe(newest)
-                );
+                    d["name"].as_str().unwrap_or("device"),
+                    describe(d)
+                ),
+                None => println!("Paired a device. Check it with `pu phone devices`."),
             }
             Ok(())
         }
-        Ok(other) => Err(CliError::Other(format!("enrollment {other}; run `pu phone pair` again"))),
-        Err(e) => Err(e),
+        Enrolled::Ended(status) => Err(CliError::Other(format!(
+            "pairing code {status}; run `pu phone pair` again"
+        ))),
     }
 }
 
-async fn wait_for_enrollment(admin: &Admin, enrollment: &str) -> Result<&'static str, CliError> {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate())?;
-    let mut hup = signal(SignalKind::hangup())?;
-    let mut int = signal(SignalKind::interrupt())?;
+/// SIGINT, SIGTERM and SIGHUP (an SSH drop) all end the wait.
+struct Signals {
+    term: tokio::signal::unix::Signal,
+    hup: tokio::signal::unix::Signal,
+    int: tokio::signal::unix::Signal,
+}
+
+impl Signals {
+    fn new() -> Result<Self, CliError> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Signals {
+            term: signal(SignalKind::terminate())?,
+            hup: signal(SignalKind::hangup())?,
+            int: signal(SignalKind::interrupt())?,
+        })
+    }
+
+    async fn any(&mut self) -> &'static str {
+        tokio::select! {
+            _ = self.term.recv() => "canceled",
+            _ = self.hup.recv() => "session ended",
+            _ = self.int.recv() => "canceled",
+        }
+    }
+}
+
+enum Enrolled {
+    Device(String),
+    Ended(String),
+}
+
+async fn wait_for_enrollment(
+    admin: &Admin,
+    enrollment: &str,
+    signals: &mut Signals,
+) -> Result<Enrolled, CliError> {
+    let mut consumed_at: Option<Instant> = None;
     loop {
         tokio::select! {
-            _ = term.recv() => return Err(CliError::Other("canceled".into())),
-            _ = hup.recv() => return Err(CliError::Other("session ended".into())),
-            _ = int.recv() => return Err(CliError::Other("canceled".into())),
+            reason = signals.any() => return Err(CliError::Other(reason.into())),
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
         let status = admin.call(json!({"operation": "pairing.status", "enrollmentId": enrollment}))?;
-        match status["status"].as_str() {
-            Some("pending") => continue,
-            Some("consumed") => return Ok("consumed"),
-            Some("expired") => return Ok("expired"),
-            Some("revoked") => return Ok("revoked"),
-            _ => return Ok("unknown"),
+        match (status["status"].as_str(), status["deviceId"].as_str()) {
+            (Some("pending"), _) => {}
+            // Consumed but not yet durable: wait briefly for the device id. A
+            // failed write never retries, so the phone must pair again.
+            (Some("consumed"), None) => {
+                if consumed_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(15) {
+                    return Ok(Enrolled::Ended("was used but the device was not saved".into()));
+                }
+            }
+            (Some("consumed"), Some(id)) => return Ok(Enrolled::Device(id.to_string())),
+            (Some(other), _) => return Ok(Enrolled::Ended(other.to_string())),
+            (None, _) => return Ok(Enrolled::Ended("unknown".into())),
         }
     }
 }
@@ -763,8 +823,15 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
         }
         piped_key = Some(key);
     }
+    let mut signals = Signals::new()?;
     let started = admin.call(json!({"operation": "auth.start", "provider": provider, "type": kind}))?;
     let attempt = started["attemptId"].as_str().unwrap_or_default().to_string();
+    // Cancel the attempt on any exit except success.
+    let mut guard = CancelLogin {
+        admin: &admin,
+        attempt: &attempt,
+        armed: true,
+    };
     let mut shown = 0usize;
     let mut answered: Option<String> = None;
     loop {
@@ -780,11 +847,19 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
             if let Some(code) = event["userCode"].as_str() {
                 println!("Code: {code}");
             }
+            for link in event["links"].as_array().into_iter().flatten() {
+                if let Some(url) = link["url"].as_str() {
+                    println!("  {url}");
+                }
+            }
         }
         shown = events.len();
         match s["status"].as_str() {
             Some("complete") => {
-                println!("Signed in to {provider}. Choose a model with `pu phone model {provider}/<model>`.");
+                guard.armed = false;
+                println!(
+                    "Signed in to {provider}. Apply it with `pu phone restart`, then choose a model with `pu phone model` (lists them)."
+                );
                 return Ok(());
             }
             Some("pending") => {}
@@ -820,6 +895,25 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
             admin.call(json!({"operation": "auth.respond", "attemptId": attempt, "promptId": id, "value": value}))?;
             answered = Some(id.to_string());
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::select! {
+            reason = signals.any() => return Err(CliError::Other(reason.into())),
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+    }
+}
+
+struct CancelLogin<'a> {
+    admin: &'a Admin,
+    attempt: &'a str,
+    armed: bool,
+}
+
+impl Drop for CancelLogin<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self
+                .admin
+                .call(json!({"operation": "auth.cancel", "attemptId": self.attempt}));
+        }
     }
 }

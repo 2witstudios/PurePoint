@@ -334,6 +334,10 @@ WorkingDirectory={home}
 UnsetEnvironment={unset}
 {env}UMask=0077
 NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
 Restart=on-failure
 RestartSec=5
 KillMode=mixed
@@ -512,6 +516,7 @@ mod tests {
         ), "{unit}");
         assert!(unit.contains("UMask=0077\n"));
         assert!(unit.contains("NoNewPrivileges=yes\n"));
+        assert!(unit.contains("RestrictSUIDSGID=yes\n"));
         assert!(unit.contains("Restart=on-failure\n"));
         assert!(unit.contains("UnsetEnvironment=NODE_OPTIONS NODE_PATH"));
         assert!(unit.contains("LD_PRELOAD"));

@@ -16,6 +16,7 @@ owo-colors = "4"
 shell-words = "1"
 which = "8"
 libc = "0.2"
+qrcode = { version = "0.14", default-features = false }
 
 [[bin]]
 name = "pu"

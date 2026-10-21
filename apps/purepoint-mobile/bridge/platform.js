@@ -37,7 +37,7 @@ export function hostLabel(hostname = os.hostname(), hostKind = "mac") {
     .split(".")[0]
     .replace(/[^A-Za-z0-9-]/g, "")
     .slice(0, 63);
-  return label || (hostKind === "linux" ? "Linux host" : "Mac");
+  return label || (hostKind === "linux" ? "linux-host" : "mac");
 }
 
 /** Host-specific recovery copy for owner-facing errors. */
