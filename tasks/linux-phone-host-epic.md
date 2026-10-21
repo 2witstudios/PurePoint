@@ -109,6 +109,7 @@ Add `pu phone install|uninstall|start|stop|restart|status|run`, writing a `pu-po
 **Requirements**:
 - Given `install --now`, should write a unit with an explicit environment that excludes `NODE_OPTIONS`, `NODE_PATH`, `PI_MOBILE_*` and `PU_*`, enable it, and warn when lingering is off.
 - Given `restart` while Point Guard is busy, should refuse with the idle message instead of killing in-flight work.
+- Given `stop` or `restart` without `--force` while the service is running but its admin channel is unreachable, should refuse and suggest `--force` instead of stopping it.
 - Given a payload whose manifest version differs from `pu`, should refuse to start it and tell the user how to reinstall.
 
 

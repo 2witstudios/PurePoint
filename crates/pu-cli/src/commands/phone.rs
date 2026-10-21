@@ -359,9 +359,17 @@ fn uninstall() -> Result<(), CliError> {
 }
 
 /// Ask the bridge to drain and exit while idle; it refuses during work.
+/// Fails closed when the unit runs but its admin channel can't be reached.
 fn stop_idle() -> Result<bool, CliError> {
-    let Ok(admin) = admin() else {
-        return Ok(false);
+    let admin = match admin() {
+        Ok(admin) => admin,
+        Err(_) if !phone::unit_running(&unit_state()) => return Ok(false),
+        Err(e) => {
+            return Err(CliError::Other(format!(
+                "{} is running but its admin channel is unavailable ({e}), so it can't be stopped only when idle; retry shortly, or pass --force to stop it anyway (unfinished replies are lost)",
+                phone::UNIT
+            )));
+        }
     };
     admin.call(json!({"operation": "runtime.stop"}))?;
     let deadline = Instant::now() + Duration::from_secs(30);

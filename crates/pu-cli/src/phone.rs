@@ -391,6 +391,12 @@ pub fn unit_file() -> Result<PathBuf, CliError> {
         .join(UNIT))
 }
 
+/// Whether `systemctl is-active` reports a unit that may still be running.
+/// Anything but a clear stop (including an unreadable state) counts.
+pub fn unit_running(state: &str) -> bool {
+    !matches!(state, "inactive" | "failed")
+}
+
 /// Payload directory an installed unit points at, if any.
 pub fn unit_payload(unit: &str) -> Option<PathBuf> {
     let line = unit.lines().find(|l| l.starts_with("ExecStart="))?;
@@ -631,6 +637,22 @@ mod tests {
         assert!(!prunable("0.7.9.1", keep));
         assert!(!prunable("0.7.+9", keep));
         assert!(!prunable("0.7.9", Path::new("/h/.pu/pointguard/dev")));
+    }
+
+    #[test]
+    fn given_unit_states_should_treat_only_stopped_units_as_not_running() {
+        for stopped in ["inactive", "failed"] {
+            assert!(!unit_running(stopped), "{stopped}");
+        }
+        for running in [
+            "active",
+            "activating",
+            "deactivating",
+            "reloading",
+            "unknown",
+        ] {
+            assert!(unit_running(running), "{running}");
+        }
     }
 
     #[test]
