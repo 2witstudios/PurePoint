@@ -45,12 +45,25 @@ Serve the existing admin dispatch over a Unix socket on Linux, still requiring t
 
 ## Tailnet discovery and late bind on Linux
 
-Discover the tailnet IPv4 address from interfaces confirmed with `tailscale ip -4`, and bind it, retrying in the background until the tailnet is available. (Effort: M)
+Discover the tailnet IPv4 address from interfaces confirmed with `tailscale ip -4` and bind it, or use `tailscale serve` TCP passthrough in userspace mode, retrying in the background until the tailnet is available. (Effort: L)
 
 **Requirements**:
 - Given an interface address and `tailscale ip -4` that agree on one 100.64.0.0/10 address, should bind the remote listener to exactly that address.
-- Given disagreement, multiple candidates, no tailscale binary at a fixed absolute path, or a query past its deadline, should not bind remotely and should report the reason in status.
+- Given `tailscale ip -4` reporting an address no interface holds, should bind the device-trust listener on loopback, advertise `wss://<tailnet IP>:<port>/v1`, and pair only once the serve forward answers.
+- Given a user who is not a Tailscale operator, should print the exact `tailscale serve` and operator commands instead of failing silently.
+- Given an ambiguous result, no tailscale binary at a fixed absolute path, or a query past its deadline, should not bind remotely and should report the reason in status.
 - Given the tailnet appearing after startup, should bind within the backoff interval while local admin and chat keep running.
+
+---
+
+## Rust TLS identity helper
+
+Add a private helper that mints the host TLS identity with `rcgen`. `trust-tls.js` calls it by absolute manifest path on both Linux and the Mac. (Effort: M, plus Mac bundle signing owner-verified in Xcode)
+
+**Requirements**:
+- Given no existing identity, should mint a certificate and key with fixed parameters into the trust directory as 0600 files, under the trust writer lock.
+- Given an existing `openssl`-minted identity, should load it unchanged so pins and paired devices survive.
+- Given a missing, non-executable or failing helper, should fail closed with recovery text and never fall back to a PATH lookup.
 
 ---
 
@@ -128,6 +141,16 @@ Make iOS copy host-neutral, read `hostKind`/`hostLabel` from `/pair/verify`, and
 - Given a Linux host, should label it with its host label, show a host-appropriate re-pair hint, and keep it distinct from a Mac with the same label by hostId.
 - Given a pasted enrollment string, should apply exactly the scanned-QR validation, including the pin, expiry and endpoint allow-list.
 - Given an older bridge without `hostKind`, should behave as today.
+
+---
+
+## Connected machines through a Linux host
+
+Expose the Linux host's registered SSH machines to the phone under the same device grants as on the Mac. (Effort: S)
+
+**Requirements**:
+- Given a registered machine with a healthy forward, should list its projects and agents scoped by machine ID, applying the device's current grants.
+- Given an unreachable or protocol-incompatible machine, should show it as unavailable without affecting the host or other machines, and never auto-start its daemon.
 
 ---
 

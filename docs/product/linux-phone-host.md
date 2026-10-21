@@ -1,12 +1,12 @@
 # Linux phone host
 
-**Maturity: EXPLORING** | ID Prefix: LPH | Dependencies: `product/point-guard-setup.md`, `product/machines.md`, `architecture/distribution.md`, `architecture/desktop-app-integration.md`, `product/cli.md`
+**Maturity: CONVERGING** | ID Prefix: LPH | Dependencies: `product/point-guard-setup.md`, `product/machines.md`, `architecture/distribution.md`, `architecture/desktop-app-integration.md`, `product/cli.md`
 
 ## Purpose
 
 Let a user pair an iPhone or iPad directly with a headless Linux machine running PurePoint, such as a cloud VM or a home server, with no Mac involved. Today a phone reaches a Linux daemon only through a Mac that stays on and forwards over SSH (`product/machines.md`, `apps/purepoint-mobile/README.md:3`). This spec runs the existing Point Guard bridge headless on Linux, shows the enrollment QR in a terminal, and keeps the trust model the Mac already uses: pinned TLS, a one-time QR, per-device credentials, checks on every message, and revocation.
 
-In scope: packaging, lifecycle, terminal pairing and device administration, headless provider setup, iOS changes for non-Mac hosts, and making the security model match the Mac's. Out of scope: Windows, multi-user hosts, agent sandboxing and permissions (the user's responsibility), and phone access to machines that the Linux host itself reaches over SSH (deferred, see LPH-012).
+In scope: packaging, lifecycle, terminal pairing and device administration, headless provider setup, iOS changes for non-Mac hosts, and making the security model match the Mac's. Out of scope: Windows, multi-user hosts, and agent sandboxing and permissions (the user's responsibility). Machines the Linux host reaches over SSH are in scope, exposed as on the Mac (LPH-012).
 
 ## Conceptual Model
 
@@ -79,18 +79,18 @@ Everything in the bridge and runtime packaging that assumes macOS or the Mac app
 
 ## Open Questions
 
-? [LPH-001] Which Node build and libc floor does the Linux bridge payload ship?
+! [LPH-001] Ship official nodejs.org glibc Node builds only (glibc ≥ 2.28); musl/Alpine hosts are refused with a clear message — owner chose the best long-term option: PurePoint never maintains its own Node build or depends on an experimental source, and support follows automatically if Node.js publishes official musl builds.
 ? [LPH-002] How does the bridge payload ship and stay in lockstep with `pu`/`pu-engine`?
 ? [LPH-003] Who starts, stops, restarts and upgrades the bridge, and how does device trust survive?
 ? [LPH-004] Where does Linux host state live, and with what modes?
-? [LPH-005] What is the CLI command surface for pairing and device administration?
+! [LPH-005] The command group is `pu phone` — owner decision; it names the user's goal, and the unit can still host Point Guard chat for other clients later.
 ? [LPH-006] What carries owner admin on Linux, where no app holds the admin token?
 ? [LPH-007] How is the QR rendered in a terminal, and what is the fallback?
-? [LPH-008] How is the phone endpoint chosen on Linux, and what happens without Tailscale?
+! [LPH-008] Kernel-TUN Tailscale binds the confirmed tailnet IP directly; userspace-networking Tailscale is supported in the first slice through `tailscale serve` TCP passthrough to a loopback listener; no Tailscale means no remote listener — owner decision to cover container and VM hosts from the start, while TLS stays end to end and pinned in both modes.
 ? [LPH-009] How does provider auth work without a browser on the host?
-? [LPH-010] How is the TLS identity minted when `/usr/bin/openssl` may be absent?
+! [LPH-010] Mint TLS identities with a small private Rust helper (`rcgen`, fixed parameters, written under the trust writer lock), used on both Linux and the Mac for new identities — owner chose the best long-term option: no OS-tool dependency, one code path on both platforms, and existing identities and pins stay valid, so nobody has to re-pair.
 ? [LPH-011] What does iOS need to tell a Linux host apart and hold several hosts side by side?
-? [LPH-012] Should a Linux host expose machines it reaches over SSH to the phone?
+! [LPH-012] A Linux host exposes the machines it reaches over SSH to the phone, the same way a Mac host does, under the same device grants — owner decision; it matches the Mac, where the Agents surface already spans connected machines.
 ? [LPH-013] How does Point Guard chat become a device grant, and how far does it reach?
 ? [LPH-014] What is shared with the Mac bridge and what is forked?
 
@@ -111,7 +111,7 @@ Option B: unofficial-builds musl Node.
 Option C: rely on the system Node.
 - Con: breaks PGSET-001's "no external Node" requirement and the pinned-runtime guarantees.
 
-Recommendation: A. Detect musl or old glibc at install time and refuse with a clear message. Musl is a later, separate question.
+Decided (LPH-001): A. Install detects musl or old glibc and refuses with a clear message. Musl support depends on Node.js publishing official musl builds; PurePoint will not build or vendor its own Node.
 
 #### [LPH-002] Packaging and distribution
 
@@ -156,7 +156,7 @@ Recommendation: A.
 
 #### [LPH-005] CLI surface
 
-Proposal, one `pu phone` group (name open; `pu pointguard` is the alternative, see Risks):
+Decided (LPH-005), one `pu phone` group:
 
 | Command | Admin op |
 |---|---|
@@ -218,11 +218,13 @@ Option A (port of the Mac logic): scan the interfaces for an up interface holdin
 
 Option B: in addition to A, support userspace mode by binding loopback and having the user run `tailscale serve --tcp 8787 tcp://127.0.0.1:<port>`. TLS stays end to end (TCP passthrough), and the phone still pins the bridge certificate.
 - Pro: works in containers.
-- Con: the listener sees every connection as loopback, so any peer-address checks need a different design for that mode. Kept as a follow-up.
+- Con: the listener sees every connection as loopback, so peer-address checks can't tell the phone from local processes in that mode. Authorization still rests on pinned TLS and device credentials.
+
+Serve-mode design: the bridge detects userspace mode when `tailscale ip -4` reports an address that no interface holds. It then binds the remote (pinned-TLS, device-trust) listener on `127.0.0.1:<port>` and advertises `wss://<tailnet IP>:<port>/v1` in the enrollment. Port 8787 is the default, and the advertised port always equals the serve port. `pu phone install` applies `tailscale serve --bg --tcp <port> tcp://127.0.0.1:<port>` when the user is a Tailscale operator; otherwise it prints that command, plus `sudo tailscale set --operator=$USER`, for the user to run. `status` shows `remote: tailscale serve (userspace)` or the missing step. The loopback listener is separate from the loopback desktop-chat listener and accepts only device-trust TLS connections.
 
 With no Tailscale, the remote listener is not started. Local admin, provider setup and native chat keep working (`remote-listener.js`), and `pu phone pair` reports "no tailnet address; connect Tailscale (`tailscale up`) and run `pu phone restart`". Arbitrary LAN or public binds stay refused (`endpoints.js`, `network.js:26-29`). Late Tailscale: unlike the Mac, a headless boot often starts the user unit before `tailscaled` is up. The bridge retries discovery and binding with backoff (for example 5 s doubling to 60 s), and `status` shows `remote: waiting for tailnet`. If the tailnet address changes, the old listener is closed, the new address is bound, and saved phones need a new pairing only if the endpoint changed (the pin and hostId are unchanged).
 
-Recommendation: A plus late-bind retry. B as a later task.
+Decided (LPH-008): A plus late-bind retry, and B in the first slice.
 
 #### [LPH-009] Headless provider setup
 
@@ -248,19 +250,21 @@ Option B: mint in Rust inside a small private helper (as with the lock helper) u
 - Pro: no OS tool dependency; the same code on both platforms.
 - Con: a new crate and binary to review.
 
-Recommendation: A for the first slice, B if minimal-image users show up. Either way the certificate format and pin stay the same, so this choice never forces a re-pair.
+Decided (LPH-010): B on both platforms. The helper ships next to `pu-point-guard-lock`, in the Linux payload and in the Mac bundle (where it is signed like the other helpers). `trust-tls.js` calls it by absolute manifest path with no shell. The bridge still validates the result: the key matches the certificate, the validity window holds, and files are 0600. Existing `openssl`-minted identities are loaded unchanged, so pins and paired devices survive.
 
 #### [LPH-011] iOS changes
 
 - Copy: "Your Macs", "Scan Mac QR code" and "Mac trust" strings (`SetupViews.swift:82`, `PairingSecret.swift:29-83`) become host-neutral ("Your computers").
 - Host kind: add optional `hostKind: "mac" | "linux"` and `hostLabel` (the host's short hostname) to the authenticated `/pair/verify` response (`network.js:74-84`). Keep it out of the QR, so older apps that strictly validate QR fields aren't affected. The phone uses it for the default name and icon, and to word recovery hints ("run `pu phone pair` on <label>" instead of "open Connect phone on your Mac").
 - Multiple hosts: the phone already stores trust per host and endpoint and offers a picker (`README.md:41`). The work is checking that a Mac and a Linux host on the same tailnet with matching labels stay distinct (by hostId) and that per-host names persist.
-- Capabilities: the existing capability check covers features. A Linux host advertises the same capability set, except "remote machines via this host" (LPH-012).
+- Capabilities: the existing capability check covers features. A Linux host advertises the same capability set as a Mac, including machines it reaches over SSH (LPH-012).
 - Paste enrollment: accept a `purepoint-pair:` clipboard string as a QR-scan alternative (LPH-007), with the same validation as a scanned code. The phone's endpoint allow-list (`ChatDomain.swift:153`) is unchanged.
 
 #### [LPH-012] Machines reached from the Linux host
 
-`daemon.js:102-110` already reads `~/.pu/machines.json`, so a Linux host with registered machines would offer them to the phone through its own SSH forwards. That widens what a Linux host exposes without adding new trust machinery. Recommendation: list only the local daemon in the first slice and treat this as a separate grant decision later.
+`daemon.js:102-110` already reads `~/.pu/machines.json`, so a Linux host with registered machines offers them to the phone through its own SSH forwards with no new trust machinery.
+
+Decided (LPH-012): expose them, as on the Mac. The same per-device grants (terminals Off/View/Control, workspace management, chat) apply to every machine. Registered machine IDs scope every target, and the phone never uses SSH. The Linux host's forwards must stay up for remote machines to be reachable. A machine whose daemon is unreachable or protocol-incompatible appears as unavailable, never as a guessed state. The `pu machine` requirements (MACH-003: no remote auto-start) still apply.
 
 #### [LPH-013] Chat as a device grant
 
@@ -311,6 +315,8 @@ These apply to the Linux host, and those marked (shared) also apply to the Mac b
 - **Two bridges on one host** (`pu phone run` while the unit is active): the state lock refuses the second (`lock_busy`) and nothing is adopted.
 - **`pu` upgraded but bridge payload not**: `pu phone` reports the version mismatch and does not administer it until `pu phone install`.
 - **musl/Alpine host**: install refuses with a clear "glibc ≥ 2.28 required for phone access" message, and `pu`/`pu-engine` keep working.
+- **Userspace Tailscale without operator rights**: the bridge runs, `status` shows the exact `tailscale serve` command still to run, and pairing refuses until the serve forward answers.
+- **A remote machine of the Linux host goes offline**: the phone shows it as unavailable, and the host and its other machines are unaffected.
 - **No lingering**: `pu phone install` warns, as `pu daemon install` does, that the bridge stops at logout.
 - **Same phone paired to a Mac and a Linux host**: two independent trust records keyed by hostId, with independent revocation.
 
@@ -322,7 +328,7 @@ The dependency-ordered epic lives in [`tasks/linux-phone-host-epic.md`](../../ta
 
 - **Grant semantics change on the Mac too** (LPH-013). Existing paired phones would move to the new chat default, which needs a migration and owner messaging.
 - **Size and supply chain**: a Linux bridge payload ships the bridge's ~175 lockfile production packages (some platform-optional) and a Node runtime to servers. Its integrity guarantees must not be weaker than the `pu` binaries'.
-- **glibc-only** support excludes Alpine and some container users at launch.
-- **Userspace-networking Tailscale** (common in containers) is unsupported until the LPH-008 option B follow-up.
-- **Command naming**: `pu phone` reads naturally, but the unit also hosts Point Guard chat for any future non-phone client. Owner to decide between `pu phone` and `pu pointguard`.
+- **glibc-only** support excludes Alpine hosts until Node.js publishes official musl builds (LPH-001).
+- **Userspace-networking Tailscale** relies on the user being a Tailscale operator, or running one printed `sudo` command, before `tailscale serve` can be applied (LPH-008).
+- **New identity helper on the Mac** (LPH-010) adds a signed helper to the bundle and needs owner Xcode/notarization acceptance.
 - **Headless OAuth** coverage depends on which Pi providers offer manual-code or device-code flows. API keys always work.
