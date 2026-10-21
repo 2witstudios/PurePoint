@@ -115,11 +115,15 @@ import Foundation
         try await open(model, bridge); try finishOpen(bridge)
         try await wait { model.streamId != nil }
         let scope = model.selected
+        model.hideShortcut(scope!); let recency = model.navigation.recency(scope!, startedAt: nil)
         model.transport(host: "host-a", connected: false)
         try check(model.selected == nil, "A transport drop closes the screen")
         model.transport(host: "host-a", connected: true, request: bridge.request)
         try await wait { !bridge.opens.isEmpty }
         try check(model.selected == scope, "Reconnecting to the same host reopens the dropped agent")
+        try check(
+            model.navigation.isHidden(scope!) && model.navigation.recency(scope!, startedAt: nil) == recency,
+            "An automatic reopen never counts as a navigation interaction")
         try finishOpen(bridge, id: "resumed")
         try await wait { model.streamId == "resumed" }
 

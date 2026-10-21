@@ -342,11 +342,12 @@ import UserNotifications
         }
     }
 
-    func open(machine: AgentMachine, agent: ControlledAgent, context token: Int) {
+    func open(machine: AgentMachine, agent: ControlledAgent, context token: Int, interactive: Bool = true) {
         guard token == generation, connected, permission != .off, machine.online, machine.metadataStatus != "error", let request else { return }
         closeScreen()
         let scope = AgentScope(host: host, machine: machine.id, agent: agent.id)
-        recordInteraction(scope)
+        // A lifecycle reopen is not a navigation choice, so it never touches Recents or hidden entries.
+        if interactive { recordInteraction(scope) }
         selected = scope; composer = composers[scope] ?? AgentComposer(text: drafts[scope.storageKey] ?? "")
         recoveries = savedRecoveries[scope.storageKey] ?? []
         screenMayBeInexact = machine.screenMayBeInexact
@@ -389,7 +390,7 @@ import UserNotifications
             let machine = machines.first(where: { $0.id == scope.machine && $0.online && $0.metadataStatus != "error" }),
             let agent = machine.agents.first(where: { $0.id == scope.agent })
         else { return }
-        open(machine: machine, agent: agent, context: generation)
+        open(machine: machine, agent: agent, context: generation, interactive: false)
     }
 
     func closeScreen() {
