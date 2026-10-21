@@ -175,7 +175,7 @@ def stage(app, pu, architecture, cache, replace_build_artifact=False, build_root
         shutil.copytree(SOURCE / 'support', target / 'support')
         shutil.copy2(SOURCE / 'package.json', target / 'package.json')
         sha = subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip()
-        manifest = dict(schemaVersion=1, contractVersion=1, piVersion='1.1.0', nodeVersion=PIN['version'],
+        manifest = dict(schemaVersion=1, contractVersion=1, piVersion='1.3.0', nodeVersion=PIN['version'],
                         architecture=architecture, sourceSHA=sha,
                         paths=dict(node='../../Helpers/point-guard-node', pu='../../Helpers/pu', lockHelper='../../Helpers/point-guard-lock',
                                    entry='bridge/main.js', instructions='docs/point-guard.md',
