@@ -64,8 +64,12 @@ final class AgentConfigState {
             case .globalAgentSettingsReport(let yolo, let tracking, let launchArgs):
                 codexYolo = yolo
                 agentStatusTracking = tracking
-                machineLaunchArgs = launchArgs
                 globalSettingsLoaded = true
+                if let launchArgs {
+                    machineLaunchArgs = launchArgs
+                } else if case .updateGlobalAgentSettings(_, _, .some) = request {
+                    globalError = Self.oldDaemonMessage("save launch args for all projects")
+                }
             case .error(_, let message):
                 globalError = message
             default:
@@ -83,8 +87,7 @@ final class AgentConfigState {
             let response = try await sendRequest(.getConfig(projectRoot: projectRoot))
             switch response {
             case .configReport(let defaultAgent, let agents):
-                self.defaultAgent = defaultAgent
-                self.agents = agents
+                applyConfigReport(defaultAgent: defaultAgent, agents: agents)
             case .error(_, let message):
                 self.error = message
             default:
@@ -104,8 +107,7 @@ final class AgentConfigState {
                 .updateAgentConfig(projectRoot: projectRoot, agentName: agentName, launchArgs: launchArgs))
             switch response {
             case .configReport(let defaultAgent, let agents):
-                self.defaultAgent = defaultAgent
-                self.agents = agents
+                applyConfigReport(defaultAgent: defaultAgent, agents: agents)
             case .error(_, let message):
                 self.error = message
             default:
@@ -114,6 +116,19 @@ final class AgentConfigState {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func applyConfigReport(defaultAgent: String, agents: [AgentConfigPayload]) {
+        self.defaultAgent = defaultAgent
+        self.agents = agents
+        // Daemons before protocol 11 omit `resolved_command` and expect list-shaped launch args.
+        if agents.contains(where: { $0.resolvedCommand == nil }) {
+            self.error = Self.oldDaemonMessage("edit launch args")
+        }
+    }
+
+    private static func oldDaemonMessage(_ action: String) -> String {
+        "Update the PurePoint daemon to \(action). Restart it after updating."
     }
 
     func agentConfig(named name: String) -> AgentConfigPayload? {

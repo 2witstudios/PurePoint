@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{AgentStatus, WorktreeEntry};
 use indexmap::IndexMap;
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

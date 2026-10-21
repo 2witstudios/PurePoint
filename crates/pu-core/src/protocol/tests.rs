@@ -491,7 +491,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 10);
+    assert_eq!(PROTOCOL_VERSION, 11);
 }
 
 // --- GridCommand round-trips ---

@@ -87,6 +87,37 @@ struct GlobalAgentSettingsTests {
         #expect(state.machineLaunchArgs == ["claude": "--model opus"])
     }
 
+    @Test func oldDaemonMachineLaunchArgsSaveReportsUpdateNeeded() async {
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { request in
+                switch request {
+                case .getGlobalAgentSettings:
+                    return .globalAgentSettingsReport(codexYolo: false, agentStatusTracking: true, launchArgs: ["claude": "--model opus"])
+                default:
+                    // A protocol-v10 daemon ignores machine launch args and omits them from its report.
+                    return .globalAgentSettingsReport(codexYolo: false, agentStatusTracking: true)
+                }
+            }
+        )
+        await state.loadGlobalSettings()
+        await state.updateMachineLaunchArgs(agentName: "claude", launchArgs: "--model sonnet", projectRoot: nil)
+        #expect(state.globalError?.contains("Update the PurePoint daemon") == true)
+        #expect(state.machineLaunchArgs == ["claude": "--model opus"], "An old daemon's report must not wipe the field")
+    }
+
+    @Test func oldDaemonConfigReportReportsUpdateNeeded() async {
+        let oldAgent = AgentConfigPayload(name: "claude", command: "claude", launchArgs: nil, resolvedLaunchArgs: [], interactive: true)
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { _ in .configReport(defaultAgent: "claude", agents: [oldAgent]) }
+        )
+        await state.load(projectRoot: "/p")
+        #expect(state.error?.contains("Update the PurePoint daemon") == true)
+        await state.updateLaunchArgs(projectRoot: "/p", agentName: "claude", launchArgs: "--model opus")
+        #expect(state.error?.contains("Update the PurePoint daemon") == true)
+    }
+
     @Test func configReportDecodesLaunchArgStrings() throws {
         let json = #"{"type":"config_report","default_agent":"claude","agents":[{"name":"claude","command":"claude","launch_args":null,"resolved_launch_args":["--model","opus"],"interactive":true,"machine_launch_args":"--model opus","resolved_command":"claude --model opus"}]}"#
         let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(json.utf8))
@@ -113,7 +144,7 @@ struct GlobalAgentSettingsTests {
         }
         #expect(enabled)
         #expect(tracking, "Older daemons always track status")
-        #expect(launchArgs.isEmpty, "Older daemons have no machine launch args")
+        #expect(launchArgs == nil, "Older daemons have no machine launch args")
     }
 
     @Test func statusTrackingUpdateSendsOnlyItsOwnField() async throws {

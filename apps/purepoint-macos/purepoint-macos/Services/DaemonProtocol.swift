@@ -677,7 +677,8 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerList(triggers: [TriggerInfoPayload])
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
-    case globalAgentSettingsReport(codexYolo: Bool, agentStatusTracking: Bool, launchArgs: [String: String] = [:])
+    /// `launchArgs` is nil when the daemon predates machine-level launch args (protocol < 11).
+    case globalAgentSettingsReport(codexYolo: Bool, agentStatusTracking: Bool, launchArgs: [String: String]? = nil)
     case inventory(InventoryReportPayload)
     case fsListResult(path: String, entries: [FsEntryPayload], truncated: Bool)
     case fsStatResult(FsStatPayload)
@@ -793,7 +794,7 @@ nonisolated enum DaemonResponse: Decodable {
         case "global_agent_settings_report":
             let p = try GlobalAgentSettingsPayload(from: decoder)
             self = .globalAgentSettingsReport(
-                codexYolo: p.codexYolo, agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs ?? [:])
+                codexYolo: p.codexYolo, agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs)
         case "inventory":
             self = .inventory(try InventoryReportPayload(from: decoder))
         case "fs_list_result":
@@ -1192,7 +1193,7 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
 nonisolated enum DaemonProtocol {
     /// The protocol this app speaks. A daemon reporting another version is incompatible.
-    static let version = 10
+    static let version = 11
 }
 
 nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {

@@ -7,7 +7,7 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 | Property | Value |
 |---|---|
 | Socket path | `~/.pu/daemon.sock` |
-| Protocol version | 7 |
+| Protocol version | 11 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
 | Max message size | 1 MB (1,048,576 bytes) |
 | Max connections | 1024 (semaphore-limited; further connections get one `BUSY` error line and are closed) |
@@ -85,7 +85,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 9,
+  "protocol_version": 11,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }
@@ -167,7 +167,15 @@ types and unbalanced quotes are rejected without saving).
 
 **Response**: `{"type": "global_agent_settings_report", "codex_yolo": false, "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
 
-`launch_args` was added additively and defaults to `{}`.
+`launch_args` defaults to `{}`. A daemon that omits it predates protocol v11
+and does not save machine-level launch args.
+
+**Protocol v11:** `update_agent_config.launch_args` takes a shell-style string
+(v10 daemons accept only a list), `update_global_agent_settings` and
+`global_agent_settings_report` carry machine-level `launch_args`, and each
+`config_report` agent adds `project_launch_args`, `machine_launch_args` and
+`resolved_command`. Clients that require an exact version match reject a v10
+daemon; restart the daemon after updating.
 
 ## Agent lifecycle
 
