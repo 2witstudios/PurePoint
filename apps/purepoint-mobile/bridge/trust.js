@@ -315,6 +315,33 @@ export async function openTrustStore({
             permissionFences.get(device.deviceId) ?? device.terminals ?? "off",
         }));
       },
+      renameDevice(deviceId, name) {
+        if (
+          typeof name !== "string" ||
+          !name.length ||
+          name.length > 80 ||
+          /[\x00-\x1f\x7f]/.test(name)
+        )
+          return Promise.reject(new Error("Invalid device name"));
+        return serialized(async () => {
+          if (
+            !state.devices.some(
+              (d) => d.deviceId === deviceId && d.revokedAt == null,
+            )
+          )
+            throw new Error("Unknown paired device");
+          const next = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, name } : d,
+            ),
+          };
+          await publish(file, next, assertHeld);
+          assertHeld();
+          state = next;
+          return {};
+        });
+      },
       setWorkspaceManagement(deviceId, workspaceManagement) {
         if (typeof workspaceManagement !== "boolean")
           return Promise.reject(new Error("Invalid workspace permission"));

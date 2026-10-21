@@ -58,6 +58,8 @@ export async function serve(
     tls = null,
     daemons = undefined,
     terminalQueueLimit = undefined,
+    hostInfo = undefined,
+    allowPeer = undefined,
   },
 ) {
   if (!allowedHost(host))
@@ -116,7 +118,16 @@ export async function serve(
       const identity = principal(req.headers.authorization);
       respond(
         identity ? 200 : 401,
-        identity ? { version: 1, hostId: trust.hostId, ...identity } : null,
+        identity
+          ? {
+              version: 1,
+              hostId: trust.hostId,
+              ...(hostInfo
+                ? { hostKind: hostInfo.hostKind, hostLabel: hostInfo.hostLabel }
+                : {}),
+              ...identity,
+            }
+          : null,
       );
       return;
     }
@@ -165,6 +176,16 @@ export async function serve(
   const server = tls
     ? https.createServer(tls, handler)
     : http.createServer(handler);
+  // Pre-authentication limits: bounded sockets and absolute header/request
+  // deadlines, so unauthenticated peers cannot hold the listener.
+  server.maxConnections = 64;
+  server.headersTimeout = 10000;
+  server.requestTimeout = 10000;
+  server.keepAliveTimeout = 5000;
+  if (allowPeer)
+    server.on("connection", (socket) => {
+      if (!allowPeer(socket.remoteAddress ?? "")) socket.destroy();
+    });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 1024 * 1024,
@@ -182,6 +203,13 @@ export async function serve(
         const clientId = req.headers["x-pointguard-client-id"];
         if (clientId !== identity.clientId) code = 403;
         else if (wss.clients.size >= 32) code = 503;
+        else if (
+          identity.deviceId &&
+          [...wss.clients].filter(
+            (ws) => identities.get(ws)?.deviceId === identity.deviceId,
+          ).length >= 4
+        )
+          code = 503;
         else code = 101;
       }
     }
