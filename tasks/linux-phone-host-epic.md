@@ -131,6 +131,8 @@ Add `pu phone login|model|cwd` driving `auth.*`, `model.select` and `runtime.con
 
 Make iOS copy host-neutral, read `hostKind`/`hostLabel` from `/pair/verify`, and accept a `purepoint-pair:` clipboard enrollment. (Effort: M, owner-built in Xcode)
 
+**Status**: Implemented on `pu/linux-phone-ios`; awaiting owner Xcode build, XCTest run and device check. Paste path: Connections → Pair a computer → Paste code (or Enter code manually). Description fields persist on the per-host `SavedMachine` metadata (`pi.machines.v1`), not the Keychain trust record.
+
 **Requirements**:
 - Given a Linux host, should label it with its host label, show a host-appropriate re-pair hint, and keep it distinct from a Mac with the same label by hostId.
 - Given a pasted enrollment string, should apply exactly the scanned-QR validation, including the pin, expiry and endpoint allow-list.
