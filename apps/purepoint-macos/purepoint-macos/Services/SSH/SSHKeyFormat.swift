@@ -1,4 +1,5 @@
 #if os(iOS)
+import Citadel
 import CryptoKit
 import Foundation
 
@@ -116,7 +117,11 @@ nonisolated struct SSHPublicKey: Hashable, Sendable {
 /// Why an imported private key was refused. Messages never include key material.
 nonisolated enum SSHKeyImportError: LocalizedError, Equatable {
     case notOpenSSHKey
-    case encrypted
+    /// A passphrase-protected key, imported without its passphrase.
+    case passphraseRequired
+    case wrongPassphrase
+    /// A protected key whose cipher or key derivation PurePoint cannot decrypt.
+    case unsupportedEncryption(String)
     case unsupportedKeyType(String)
     case malformed
 
@@ -124,8 +129,12 @@ nonisolated enum SSHKeyImportError: LocalizedError, Equatable {
         switch self {
         case .notOpenSSHKey:
             "This is not an OpenSSH private key. Paste the whole key file, from “-----BEGIN OPENSSH PRIVATE KEY-----” to the END line."
-        case .encrypted:
-            "This key is protected by a passphrase, which PurePoint cannot import. Remove the passphrase from a copy with “ssh-keygen -p -f <copy>” and import that copy."
+        case .passphraseRequired:
+            "This key is protected by a passphrase. Enter it to import the key; PurePoint does not keep the passphrase."
+        case .wrongPassphrase:
+            "The passphrase is not right for this key."
+        case .unsupportedEncryption(let cipher):
+            "This key is encrypted with \(cipher), which PurePoint cannot decrypt. Re-protect a copy with “ssh-keygen -p -f <copy>” (OpenSSH's default is aes256-ctr) and import that copy."
         case .unsupportedKeyType(let type):
             "Only Ed25519 keys can be imported; this is a\(type.first.map { "AEIOU".contains($0) } == true ? "n" : "") \(type) key."
         case .malformed:
@@ -134,15 +143,20 @@ nonisolated enum SSHKeyImportError: LocalizedError, Equatable {
     }
 }
 
-/// The unencrypted `openssh-key-v1` private key format (OpenSSH `PROTOCOL.key`), for Ed25519.
+/// The `openssh-key-v1` private key format (OpenSSH `PROTOCOL.key`), for Ed25519: unencrypted,
+/// or protected with OpenSSH's bcrypt key derivation and an AES-CTR cipher.
 nonisolated enum OpenSSHPrivateKey {
     static let beginMarker = "-----BEGIN OPENSSH PRIVATE KEY-----"
     static let endMarker = "-----END OPENSSH PRIVATE KEY-----"
     private static let magic = Data("openssh-key-v1".utf8) + Data([0])
 
-    /// The Ed25519 key in `text`. Refuses encrypted keys, other key types and anything that
-    /// is not exactly one well-formed OpenSSH private key.
-    static func parseEd25519(_ text: String) throws -> Curve25519.Signing.PrivateKey {
+    /// Ciphers Citadel's OpenSSH key reader decrypts, with `bcrypt` key derivation.
+    static let decryptableCiphers: Set<String> = ["aes256-ctr", "aes128-ctr"]
+
+    /// The Ed25519 key in `text`. A protected key needs its `passphrase`, which is used only to
+    /// decrypt and is never kept. Refuses other key types and anything that is not exactly one
+    /// well-formed OpenSSH private key.
+    static func parseEd25519(_ text: String, passphrase: String? = nil) throws -> Curve25519.Signing.PrivateKey {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let begin = trimmed.range(of: beginMarker), let end = trimmed.range(of: endMarker),
             begin.upperBound <= end.lowerBound
@@ -158,7 +172,9 @@ nonisolated enum OpenSSHPrivateKey {
         let cipher = try reader.text()
         let kdf = try reader.text()
         _ = try reader.string()  // kdf options
-        guard cipher == "none", kdf == "none" else { throw SSHKeyImportError.encrypted }
+        if cipher != "none" || kdf != "none" {
+            return try decryptEd25519(trimmed, cipher: cipher, kdf: kdf, passphrase: passphrase)
+        }
         guard try reader.uint32() == 1 else { throw SSHKeyImportError.malformed }
         let publicBlob = try reader.string()
         var publicReader = SSHWire.Reader(publicBlob)
@@ -191,6 +207,25 @@ nonisolated enum OpenSSHPrivateKey {
         }
         guard key.publicKey.rawRepresentation == publicKey else { throw SSHKeyImportError.malformed }
         return key
+    }
+
+    /// A protected key, decrypted by Citadel (bcrypt_pbkdf, then AES-CTR, then its check ints).
+    private static func decryptEd25519(
+        _ text: String, cipher: String, kdf: String, passphrase: String?
+    ) throws -> Curve25519.Signing.PrivateKey {
+        guard kdf == "bcrypt", decryptableCiphers.contains(cipher) else {
+            throw SSHKeyImportError.unsupportedEncryption(kdf == "bcrypt" ? cipher : "\(cipher) (\(kdf))")
+        }
+        guard let passphrase, !passphrase.isEmpty else { throw SSHKeyImportError.passphraseRequired }
+        let decrypted: Curve25519.Signing.PrivateKey
+        do {
+            decrypted = try Curve25519.Signing.PrivateKey(sshEd25519: text, decryptionKey: Data(passphrase.utf8))
+        } catch {
+            // A wrong passphrase decrypts to noise, which fails the key's check ints.
+            throw SSHKeyImportError.wrongPassphrase
+        }
+        // Re-validated through the unencrypted reader, so both paths accept the same keys.
+        return try parseEd25519(encodeEd25519(decrypted, comment: ""))
     }
 
     /// `key` in the unencrypted OpenSSH format `ssh-keygen` writes. Used to round-trip the

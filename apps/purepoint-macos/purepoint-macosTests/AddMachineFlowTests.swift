@@ -169,6 +169,32 @@ struct AddMachineFlowTests {
         #expect(pins.pinnedKey(machineId: flow.machineId) == hostKey)
     }
 
+    @Test func aProtectedKeyWaitsForItsPassphraseThenImports() {
+        let (flow, _, _, _) = makeFlow()
+        let before = flow.publicKeyLine
+        flow.importPrivateKey(OpenSSHKeyFormatTests.protectedKey, appState: AppState())
+        #expect(flow.keyAwaitingPassphrase != nil)
+        #expect(flow.error == nil)
+        #expect(flow.publicKeyLine == before)
+
+        flow.importAwaitingKey(passphrase: "not-it", appState: AppState())
+        #expect(flow.error == SSHKeyImportError.wrongPassphrase.localizedDescription)
+        #expect(flow.keyAwaitingPassphrase != nil)
+        #expect(flow.publicKeyLine == before)
+
+        flow.importAwaitingKey(passphrase: "test-pass", appState: AppState())
+        #expect(flow.error == nil)
+        #expect(flow.keyAwaitingPassphrase == nil)
+        #expect(flow.publicKeyLine?.contains(OpenSSHKeyFormatTests.protectedKeyPublicBlob) == true)
+    }
+
+    @Test func cancellingThePassphraseDropsTheKey() {
+        let (flow, _, _, _) = makeFlow()
+        flow.importPrivateKey(OpenSSHKeyFormatTests.protectedKey, appState: AppState())
+        flow.cancelPassphrase()
+        #expect(flow.keyAwaitingPassphrase == nil)
+    }
+
     @Test func importRefusesForeignKeysAndKeepsTheIdentity() {
         let (flow, _, _, _) = makeFlow()
         let before = flow.publicKeyLine

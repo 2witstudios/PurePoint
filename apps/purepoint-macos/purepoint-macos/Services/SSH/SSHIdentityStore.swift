@@ -131,11 +131,12 @@ nonisolated final class SSHIdentityStore: @unchecked Sendable {
         }
     }
 
-    /// Replace the identity with an imported OpenSSH Ed25519 private key. A key that does not
+    /// Replace the identity with an imported OpenSSH Ed25519 private key, decrypted with
+    /// `passphrase` when it is protected; only the decrypted key is stored. A key that does not
     /// parse is refused and the current identity stays.
     @discardableResult
-    func importOpenSSHPrivateKey(_ text: String) throws -> SSHIdentity {
-        let key = try OpenSSHPrivateKey.parseEd25519(text)
+    func importOpenSSHPrivateKey(_ text: String, passphrase: String? = nil) throws -> SSHIdentity {
+        let key = try OpenSSHPrivateKey.parseEd25519(text, passphrase: passphrase)
         return try lock.withLock {
             try store.write(key.rawRepresentation, account: Self.account)
             let identity = SSHIdentity(privateKey: key)

@@ -82,7 +82,49 @@ struct OpenSSHKeyFormatTests {
         data += SSHWire.string(SSHWire.string(Data(count: 16)) + SSHWire.uint32(24))
         data += SSHWire.uint32(1) + SSHWire.string(Data(count: 51)) + SSHWire.string(Data(count: 64))
         let text = OpenSSHPrivateKey.beginMarker + "\n" + data.base64EncodedString() + "\n" + OpenSSHPrivateKey.endMarker
-        #expect(throws: SSHKeyImportError.encrypted) { try OpenSSHPrivateKey.parseEd25519(text) }
+        #expect(throws: SSHKeyImportError.passphraseRequired) { try OpenSSHPrivateKey.parseEd25519(text) }
+    }
+
+    // A throwaway key made for these tests only (`ssh-keygen -t ed25519 -N test-pass -C fixture`);
+    // it is not used anywhere.
+    static let protectedKey = """
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAoeEI1n7
+IbQ25wPYsC7/KeAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIENNKIeD6kgKqZqI
+YfSP0c0/yM5NUQtxmySCSUUScXACAAAAkE/EbYjWFpd2RloHCB4xbEOLxp8uCfaN6s60+2
+eBuQfbmgfQnTtNaR4G47JE7eEzDW2d46ScObeo9VDzBzaebHVEzErcYJFT4Ix1TEgSICQl
+2XaTV8CSp+ziPx1Kx5z1C2XbPpo9t2BrIMQqkU/LClBaHBNOemHyizB00PfGwr9ku0Kk0R
+DP5OkQd7942FWlcA==
+-----END OPENSSH PRIVATE KEY-----
+"""
+    /// `ssh-keygen -y` of `protectedKey`.
+    static let protectedKeyPublicBlob = "AAAAC3NzaC1lZDI1NTE5AAAAIENNKIeD6kgKqZqIYfSP0c0/yM5NUQtxmySCSUUScXAC"
+
+    @Test func decryptsAPassphraseProtectedKey() throws {
+        let key = try OpenSSHPrivateKey.parseEd25519(Self.protectedKey, passphrase: "test-pass")
+        let blob = try #require(Data(base64Encoded: Self.protectedKeyPublicBlob))
+        #expect(blob.suffix(32) == key.publicKey.rawRepresentation)
+    }
+
+    @Test func aProtectedKeyAsksForItsPassphraseAndRefusesAWrongOne() {
+        #expect(throws: SSHKeyImportError.passphraseRequired) { try OpenSSHPrivateKey.parseEd25519(Self.protectedKey) }
+        #expect(throws: SSHKeyImportError.passphraseRequired) {
+            try OpenSSHPrivateKey.parseEd25519(Self.protectedKey, passphrase: "")
+        }
+        #expect(throws: SSHKeyImportError.wrongPassphrase) {
+            try OpenSSHPrivateKey.parseEd25519(Self.protectedKey, passphrase: "not-it")
+        }
+    }
+
+    @Test func refusesCiphersItCannotDecrypt() {
+        var data = Data("openssh-key-v1".utf8) + [0]
+        data += SSHWire.string("chacha20-poly1305@openssh.com") + SSHWire.string("bcrypt")
+        data += SSHWire.string(SSHWire.string(Data(count: 16)) + SSHWire.uint32(24))
+        data += SSHWire.uint32(1) + SSHWire.string(Data(count: 51)) + SSHWire.string(Data(count: 64))
+        let text = OpenSSHPrivateKey.beginMarker + "\n" + data.base64EncodedString() + "\n" + OpenSSHPrivateKey.endMarker
+        #expect(throws: SSHKeyImportError.unsupportedEncryption("chacha20-poly1305@openssh.com")) {
+            try OpenSSHPrivateKey.parseEd25519(text, passphrase: "x")
+        }
     }
 
     @Test func refusesOtherKeyTypesAndGarbage() {
@@ -104,7 +146,10 @@ struct OpenSSHKeyFormatTests {
     }
 
     @Test func importErrorsNeverEchoKeyMaterial() {
-        for error in [SSHKeyImportError.notOpenSSHKey, .encrypted, .unsupportedKeyType("RSA"), .malformed] {
+        for error in [
+            SSHKeyImportError.notOpenSSHKey, .passphraseRequired, .wrongPassphrase, .unsupportedEncryption("x"),
+            .unsupportedKeyType("RSA"), .malformed,
+        ] {
             let message = error.localizedDescription
             #expect(!message.contains("b3BlbnNzaC1rZXktdjE"))
             #expect(!message.isEmpty)

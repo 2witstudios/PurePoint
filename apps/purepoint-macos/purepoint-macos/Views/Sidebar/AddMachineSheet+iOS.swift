@@ -15,6 +15,7 @@ struct AddMachineSheet: View {
     @State private var showKeyImporter = false
     @State private var showPasteKey = false
     @State private var pastedKey = ""
+    @State private var passphrase = ""
     @State private var copied = false
 
     /// `flow` is given when something else already drives it (the DEBUG launch argument).
@@ -69,6 +70,14 @@ struct AddMachineSheet: View {
             importKeyFile(result)
         }
         .sheet(isPresented: $showPasteKey) { pasteKeySheet.presentedControlDefaults() }
+        .sheet(
+            isPresented: Binding(
+                // The paste sheet asks in place; a key from a file asks here.
+                get: { flow.keyAwaitingPassphrase != nil && !showPasteKey },
+                set: { shown in
+                    if !shown { flow.cancelPassphrase() }
+                })
+        ) { passphraseSheet.presentedControlDefaults() }
     }
 
     // MARK: - Sections
@@ -202,7 +211,7 @@ struct AddMachineSheet: View {
     private var pasteKeySheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Import Private Key").font(.headline)
-            Text("Paste an OpenSSH Ed25519 private key without a passphrase. It replaces this iPad's key for every machine and stays in this device's Keychain.")
+            Text("Paste an OpenSSH Ed25519 private key. A protected key asks for its passphrase next. It replaces this iPad's key for every machine and stays in this device's Keychain.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextEditor(text: $pastedKey)
@@ -211,23 +220,78 @@ struct AddMachineSheet: View {
                 .autocorrectionDisabled()
                 .frame(minHeight: 160)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+                .disabled(flow.keyAwaitingPassphrase != nil)
+            if flow.keyAwaitingPassphrase != nil {
+                SecureField("Passphrase", text: $passphrase)
+                    .textContentType(.password)
+                    .onSubmit(importPasted)
+                if let error = flow.error {
+                    Text(error).font(.system(size: 11)).foregroundStyle(.red)
+                }
+            }
             HStack {
                 Spacer()
                 Button("Cancel") {
                     pastedKey = ""
+                    passphrase = ""
+                    flow.cancelPassphrase()
                     showPasteKey = false
                 }
-                Button("Import") {
-                    flow.importPrivateKey(pastedKey, appState: appState)
-                    pastedKey = ""
-                    showPasteKey = false
-                    copied = false
-                }
-                .disabled(pastedKey.isEmpty)
+                Button("Import", action: importPasted)
+                    .disabled(pastedKey.isEmpty || (flow.keyAwaitingPassphrase != nil && passphrase.isEmpty))
             }
         }
         .padding(20)
         .frame(width: 420)
+    }
+
+    private var passphraseSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Key Passphrase").font(.headline)
+            Text("This key is protected by a passphrase. PurePoint uses it once to decrypt the key and does not keep it.")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Passphrase", text: $passphrase)
+                .textContentType(.password)
+                .onSubmit(importWithPassphrase)
+            if let error = flow.error {
+                Text(error).font(.system(size: 11)).foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    passphrase = ""
+                    flow.cancelPassphrase()
+                }
+                Button("Import", action: importWithPassphrase)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(passphrase.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+
+    /// Import the pasted key; a protected one keeps the sheet open to ask for its passphrase.
+    private func importPasted() {
+        if flow.keyAwaitingPassphrase != nil {
+            guard !passphrase.isEmpty else { return }
+            flow.importAwaitingKey(passphrase: passphrase, appState: appState)
+        } else {
+            flow.importPrivateKey(pastedKey, appState: appState)
+        }
+        passphrase = ""
+        copied = false
+        guard flow.keyAwaitingPassphrase == nil else { return }
+        pastedKey = ""
+        showPasteKey = false
+    }
+
+    private func importWithPassphrase() {
+        guard !passphrase.isEmpty else { return }
+        flow.importAwaitingKey(passphrase: passphrase, appState: appState)
+        passphrase = ""
+        copied = false
     }
 
     // MARK: - Helpers

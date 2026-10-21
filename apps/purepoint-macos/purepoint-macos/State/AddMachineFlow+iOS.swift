@@ -30,6 +30,9 @@ final class AddMachineFlow {
     private(set) var error: String?
     /// What the probe found, when it saved a machine whose daemon is not running.
     private(set) var notice: String?
+    /// A protected key waiting for its passphrase (REQ-IPAD-022). Held in memory only, and
+    /// dropped once imported or cancelled.
+    private(set) var keyAwaitingPassphrase: String?
 
     /// The pin is keyed by the id the machine will be saved under.
     let machineId = UUID()
@@ -152,18 +155,38 @@ final class AddMachineFlow {
 
     /// Replace the device identity with an imported OpenSSH Ed25519 private key. Machines that
     /// are offline (say, because they refused the old key) reconnect with the new one.
-    func importPrivateKey(_ text: String, appState: AppState) {
+    func importPrivateKey(_ text: String, passphrase: String? = nil, appState: AppState) {
         do {
-            try identities.importOpenSSHPrivateKey(text)
+            try identities.importOpenSSHPrivateKey(text, passphrase: passphrase)
+        } catch SSHKeyImportError.passphraseRequired {
+            keyAwaitingPassphrase = text
+            error = nil
+            return
         } catch {
+            // A wrong passphrase keeps the key so the user can try again.
+            if case SSHKeyImportError.wrongPassphrase = error { keyAwaitingPassphrase = text } else {
+                keyAwaitingPassphrase = nil
+            }
             self.error = error.localizedDescription
             return
         }
+        keyAwaitingPassphrase = nil
         error = nil
         notice = "Imported. This iPad now signs in with the imported key."
         for machine in appState.machines {
             if case .offline = machine.state { machine.reconnectNow() }
         }
+    }
+
+    /// Import the key waiting for its passphrase. The passphrase is used once and not kept.
+    func importAwaitingKey(passphrase: String, appState: AppState) {
+        guard let text = keyAwaitingPassphrase else { return }
+        importPrivateKey(text, passphrase: passphrase, appState: appState)
+    }
+
+    /// Drop the key waiting for its passphrase.
+    func cancelPassphrase() {
+        keyAwaitingPassphrase = nil
     }
 
     /// The user confirmed the presented key: pin it, authenticate and probe.
