@@ -92,7 +92,8 @@ struct ChatView: View {
             }
             .onChange(of: overlays) { _, _ in updateInventoryVisibility() }
             .onChange(of: destination) { _, _ in updateInventoryVisibility() }
-            .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
+            // Only a real background pauses; .inactive (Notification Center, sheets, app switcher) keeps the agent open.
+            .onChange(of: scenePhase) { _, phase in guard phase != .inactive else { return }; model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
             .task {
                 while !Task.isCancelled {
                     model.agentControl.updateSignalBadge()

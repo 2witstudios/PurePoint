@@ -35,6 +35,8 @@ import UserNotifications
     private var terminalPermissionRevision = 0
     private var refreshRevision = 0
     private var pendingOpen: AgentPendingOpen?
+    // The agent a transport drop closed, reopened once the same host reconnects.
+    private var resumeScope: AgentScope?
     private var refreshTask: Task<Void, Never>?
     private var discovering = false
     private var inventoryInFlight = false
@@ -208,8 +210,10 @@ import UserNotifications
                 reason: "Connection changed. Delivery may be uncertain. Inspect the terminal before sending again.")
         }
         // Close through the originating transport before adopting another host.
+        let resume = selected ?? resumeScope
         closeScreen()
         let sameHost = self.host == host
+        resumeScope = sameHost ? resume : nil
         self.request = request; self.connected = connected
         self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; permissionRevision += 1; terminalPermissionRevision += 1
         loading = false; error = nil; discovering = connected
@@ -326,6 +330,7 @@ import UserNotifications
             }
             if let data = try? JSONEncoder().encode(AgentInventory(machines: machines)) { defaults.set(data, forKey: inventoryCacheKey) }
             loading = false
+            resumeAfterReconnect()
             return true
         } catch {
             guard token == generation, revision == refreshRevision else { return false }
@@ -337,11 +342,12 @@ import UserNotifications
         }
     }
 
-    func open(machine: AgentMachine, agent: ControlledAgent, context token: Int) {
+    func open(machine: AgentMachine, agent: ControlledAgent, context token: Int, interactive: Bool = true) {
         guard token == generation, connected, permission != .off, machine.online, machine.metadataStatus != "error", let request else { return }
         closeScreen()
         let scope = AgentScope(host: host, machine: machine.id, agent: agent.id)
-        recordInteraction(scope)
+        // A lifecycle reopen is not a navigation choice, so it never touches Recents or hidden entries.
+        if interactive { recordInteraction(scope) }
         selected = scope; composer = composers[scope] ?? AgentComposer(text: drafts[scope.storageKey] ?? "")
         recoveries = savedRecoveries[scope.storageKey] ?? []
         screenMayBeInexact = machine.screenMayBeInexact
@@ -377,7 +383,18 @@ import UserNotifications
         }
     }
 
+    private func resumeAfterReconnect() {
+        guard let scope = resumeScope else { return }
+        resumeScope = nil
+        guard selected == nil, scope.host == host,
+            let machine = machines.first(where: { $0.id == scope.machine && $0.online && $0.metadataStatus != "error" }),
+            let agent = machine.agents.first(where: { $0.id == scope.agent })
+        else { return }
+        open(machine: machine, agent: agent, context: generation, interactive: false)
+    }
+
     func closeScreen() {
+        resumeScope = nil
         if let submission = composer.pending {
             if let selected {
                 settleRecovery(

@@ -84,6 +84,12 @@ extension AgentControlTests {
     @MainActor func testGivenEveryPromptResultShouldKeepDraftsAndReconnectMustNeverResend() async throws {
         try await AgentControlScenarios.allPromptOutcomesAndNoResend()
     }
+    @MainActor func testGivenTransportDropShouldReopenSameAgentOnlyOnSameHostUnlessClosed() async throws {
+        try await AgentControlScenarios.reconnectReopensDroppedAgentOnlyOnSameHost()
+    }
+    @MainActor func testGivenDroppedAgentMissingAfterReconnectShouldStayClosed() async throws {
+        try await AgentControlScenarios.reconnectSkipsDroppedAgentMissingFromInventory()
+    }
     @MainActor func testGivenEventsBeforeOpenReceiptAndResetShouldRenderOnlyCurrentSnapshot() async throws {
         try await AgentControlScenarios.eventsBeforeReceiptAndReset()
     }
