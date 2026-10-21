@@ -36,6 +36,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     case focusSidebar
     case focusContent
     case toggleSidebar
+    case toggleWorkspaceSidebar
     case navDashboard
     case navAgents
     case navSchedule
@@ -78,6 +79,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .focusSidebar: "Focus Sidebar"
         case .focusContent: "Focus Content"
         case .toggleSidebar: "Toggle Sidebar"
+        case .toggleWorkspaceSidebar: "Toggle Workspace Sidebar"
         case .navDashboard: "Dashboard"
         case .navAgents: "Agents"
         case .navSchedule: "Schedule"
@@ -103,7 +105,9 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     var category: HotkeyCategory {
         switch self {
         case .newAgent, .openProject, .settings: .application
-        case .focusSidebar, .focusContent, .toggleSidebar, .navDashboard, .navAgents, .navSchedule: .navigation
+        case .focusSidebar, .focusContent, .toggleSidebar, .toggleWorkspaceSidebar, .navDashboard, .navAgents,
+            .navSchedule:
+            .navigation
         case .splitBelow, .splitRight, .closePane, .focusUp, .focusDown, .focusLeft, .focusRight: .panes
         case .closeAgent, .newTab, .nextTab, .previousTab, .selectTab1, .selectTab2, .selectTab3, .selectTab4,
             .selectTab5, .selectTab6, .selectTab7, .selectTab8, .selectLastTab, .breakTab:
@@ -121,6 +125,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .focusSidebar: KeyBinding(key: .character("["), modifiers: [.command])
         case .focusContent: KeyBinding(key: .character("]"), modifiers: [.command])
         case .toggleSidebar: KeyBinding(key: .character("\\"), modifiers: [.command])
+        case .toggleWorkspaceSidebar: KeyBinding(key: .character("\\"), modifiers: [.command, .option])
         case .navDashboard: KeyBinding(key: .character("1"), modifiers: [.control])
         case .navAgents: KeyBinding(key: .character("2"), modifiers: [.control])
         case .navSchedule: KeyBinding(key: .character("3"), modifiers: [.control])
@@ -151,7 +156,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     /// Actions handled by the NSEvent monitor (not SwiftUI .commands menus)
     var isMonitorHandled: Bool {
         switch self {
-        case .focusSidebar, .focusContent, .toggleSidebar,
+        case .focusSidebar, .focusContent, .toggleSidebar, .toggleWorkspaceSidebar,
             .navDashboard, .navAgents, .navSchedule,
             .toggleChatSidebar:
             return true

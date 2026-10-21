@@ -158,7 +158,12 @@ export class Controller extends EventEmitter {
     if (e.type === "extension_ui_request") {
       const method = e.method;
       if (["confirm", "select", "input", "editor"].includes(method)) {
-        if ([...this.stops.values()].includes(this.runId)) {
+        // A queued Stop cancels late dialogs only while its sender may still stop.
+        if (
+          [...this.stops.values()].some(
+            (stop) => stop.runId === this.runId && stop.allowed(),
+          )
+        ) {
           this.rpc.answer({ id: e.id, cancelled: true });
         } else if (this.dialogs.size >= 32) {
           this.rpc.answer({ id: e.id, cancelled: true });
@@ -353,12 +358,16 @@ export class Controller extends EventEmitter {
       ...(this.refreshing ? [this.refreshing] : []),
     ]);
   }
-  async request(r) {
+  /**
+   * `allowed` re-checks the caller's access when queued work is about to run,
+   * so a permission change while it waits in the queue still stops it.
+   */
+  async request(r, { allowed = () => true } = {}) {
     if (!this.accepting)
       throw new Error(
         "Point Guard is closing. Inspect history; input will not be replayed.",
       );
-    const operation = this.dispatch(r);
+    const operation = this.dispatch(r, allowed);
     this.inflight.add(operation);
     try {
       return await operation;
@@ -366,10 +375,17 @@ export class Controller extends EventEmitter {
       this.inflight.delete(operation);
     }
   }
-  async dispatch(r) {
+  async dispatch(r, allowed = () => true) {
     this.validate(r);
+    const permitted = () => {
+      if (!allowed())
+        throw new Error(
+          "Point Guard chat permission changed. This action was not run.",
+        );
+    };
     if (r.op === "answer") {
       this.checkEpoch(r);
+      permitted();
       return this.answer(r);
     }
     if (r.op === "sync") return this.refresh();
@@ -395,7 +411,7 @@ export class Controller extends EventEmitter {
     this.pendingMutations++;
     try {
       if (r.op === "stop") {
-        this.stops.set(`${r.clientId}:${r.id}`, r.runId);
+        this.stops.set(`${r.clientId}:${r.id}`, { runId: r.runId, allowed });
         this.cancelDialogs();
       }
       const operation = this.serial.then(async () => {
@@ -403,6 +419,7 @@ export class Controller extends EventEmitter {
           throw new Error(
             "Point Guard is closing. Queued input was not dispatched.",
           );
+        permitted();
         // Native session_start hooks run before mutation replies. Retain their
         // bounded UI changes for reset, while interactive dialogs stay live.
         if (r.op !== "stop")

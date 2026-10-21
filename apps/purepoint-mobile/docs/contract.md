@@ -36,7 +36,7 @@ Research progressed SEED (lifetime / session authority questions), EXPLORING (up
 - REQ-MOB-008: Given invalid auth/version/client identity, should reject; bound inbound/outbound network data and never expose arbitrary RPC commands or filesystem paths as operations.
 - REQ-MOB-015: Given a paired device with Agents and terminals Off, should reject every chat operation before it reaches Pi and send it no snapshots or editor offers.
 - REQ-MOB-016: Given a paired device with View, or Control without Workspace management, should allow `sync`, `sessions` and `history` and deliver snapshots/editor offers, and reject `send` (all modes), `stop`, `new`, `resume` and `answer` before they reach Pi; Control with Workspace management allows all chat operations.
-- REQ-MOB-017: Given the owner lowers a device's grants, should fence its chat operations and broadcasts before the trust write completes, withhold results of chat requests still in flight, and push a `permissions` event; the app should lock chat (Off) or disable sending (read-only) without disconnecting.
+- REQ-MOB-017: Given the owner lowers a device's grants, should fence its chat operations and broadcasts before the trust write completes, re-check access before a queued chat action (send, stop, new, resume) or a dialog answer runs, withhold results of chat requests still in flight, and push a `permissions` event; the app should lock chat (Off) or disable sending (read-only) without disconnecting, keep that access per Mac, and never resurface an Off Mac's cached transcript. A queued Stop that loses access must not cancel later extension dialogs.
 
 ## Interface
 

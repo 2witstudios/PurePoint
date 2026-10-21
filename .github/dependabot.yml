@@ -12,6 +12,18 @@ updates:
           - patch
     open-pull-requests-limit: 5
 
+  # The Point Guard bridge and its bundled npm runtime.
+  - package-ecosystem: npm
+    directory: /apps/purepoint-mobile
+    schedule:
+      interval: weekly
+    groups:
+      npm-deps:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

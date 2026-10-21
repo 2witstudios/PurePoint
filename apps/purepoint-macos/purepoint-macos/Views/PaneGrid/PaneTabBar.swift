@@ -11,6 +11,7 @@ struct PaneTabBar: View {
     let isFocused: Bool
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
+    @Environment(\.showsWorkspaceSidebarToggle) private var showsWorkspaceSidebarToggle
     @State private var isDropTargeted = false
     @State private var tabStripWidth: CGFloat = 0
 
@@ -77,6 +78,10 @@ struct PaneTabBar: View {
             }
             if (workspace?.paneCount ?? 1) > 1 {
                 TabBarButton(icon: "xmark.rectangle", help: "Close Pane") { closePane() }
+            }
+            // The hidden workspace sidebar reopens from the strip's trailing end, where its header sat.
+            if showsWorkspaceSidebarToggle, workspace?.root.topTrailingLeafId == leafId {
+                WorkspaceSidebarToggle()
             }
         }
         .padding(.horizontal, 4)
@@ -248,7 +253,8 @@ private struct PaneTab: View {
     }
 }
 
-private struct TabBarButton: View {
+/// An icon button in the window's top strips: the pane tab bar, the workspace sidebar header and the sidebar toggle.
+struct TabBarButton: View {
     let icon: String
     let help: String
     let action: () -> Void

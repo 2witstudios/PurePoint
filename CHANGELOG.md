@@ -9,6 +9,10 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ### Changed
 - The daemon protocol is now version 12, for the new `attach_file` request. Update PurePoint on every machine and restart its daemon.
+- **Breaking: `scripts/install.sh` installs a Linux release only after verifying who built it.** Linux tarballs are signed with a PurePoint minisign key whose public half is embedded in the script, and releases carry GitHub build provenance attestations. The script checks the signature (with `minisign`, or OpenSSL 3 when minisign isn't installed) and, when the GitHub CLI is installed and signed in, runs `gh attestation verify`. If neither check can run, for example for releases published before signing started, it stops; set `PU_INSTALL_SKIP_VERIFY=1` to install anyway with a warning. A check that fails always stops the install.
+- Releases now include CycloneDX SBOMs for `pu`, `pu-engine` and the Point Guard npm runtime, attested against the DMG and Linux tarballs.
+- The update feed (`appcast.xml`) is now signed with the Sparkle update key, and the app requires a signed feed and verifies each update before extracting it.
+- Before starting Point Guard, the macOS app checks that its bundle still matches the signature it was launched with, and refuses to start the bridge if its files were modified.
 - Release builds now compile in jobs that hold no secrets, and a separate job in a protected environment signs and notarizes the result. The Sparkle signing tool matches the Sparkle version the app ships (2.9.0) and is checked against a pinned SHA-256. Workflow actions are pinned to commit SHAs. The GitHub release is created once, with all of its assets.
 - **Breaking: agents now launch without permission-skipping flags by default.** Claude Code used to start with `--dangerously-skip-permissions` and Codex with `--sandbox workspace-write --ask-for-approval on-request` whenever a project didn't set `launchArgs`. Now every agent launches with its bare command (`claude`, `codex`, `opencode`) and follows the tool's own approval settings. Worktrees isolate git state, not your filesystem or network, so skipping approvals is now something you opt into. To keep auto mode for yourself in every project, add it once to `~/.pu/agent-settings.yaml` (or Settings → Agents → Launch args for all projects):
   ```yaml
@@ -27,7 +31,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ### Fixed
 - `$HOME`, `/` and ancestors of `$HOME` are never registered as projects, even when an older version left `~/.pu/manifest.json` behind. Such entries are removed from the project registry when the daemon starts. Requests that would create or change something under such a root (`init`, `spawn`, worktrees, templates, schedules and the rest) now fail with `project_root_not_allowed`. If an older version recorded agents under `$HOME`, you can still see, read and kill them there (`status`, `read`, `kill`). Move ongoing work to a real project directory.
-- Request lines that arrive in several pieces while an attach or grid stream is sending output are no longer cut short.
+- Request lines that arrive in several pieces are no longer cut short, whether an attach or grid stream is sending output meanwhile or the stream ends (for example when the agent exits) before the line is complete. A last request sent without a trailing newline before the client closes its side is still answered.
 
 ## [0.5.2] — 2026-10-15
 

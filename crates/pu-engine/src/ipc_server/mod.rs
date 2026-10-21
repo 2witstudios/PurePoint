@@ -89,17 +89,18 @@ enum Frame {
 /// complete line is an `InvalidData` error.
 async fn read_frame(reader: &mut IpcReader, pending: &mut Vec<u8>) -> std::io::Result<Frame> {
     let budget = MAX_MESSAGE_SIZE.saturating_sub(pending.len() as u64);
-    let read = reader.take(budget).read_until(b'\n', pending).await?;
-    if pending.ends_with(b"\n") || (read == 0 && !pending.is_empty()) {
-        // A complete line, or a final unterminated one at EOF.
-        let line = String::from_utf8(std::mem::take(pending))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        return Ok(Frame::Line(line));
-    }
-    if pending.len() as u64 >= MAX_MESSAGE_SIZE {
+    reader.take(budget).read_until(b'\n', pending).await?;
+    // Without a newline, read_until stopped at the size limit or at EOF.
+    if !pending.ends_with(b"\n") && pending.len() as u64 >= MAX_MESSAGE_SIZE {
         return Ok(Frame::TooLarge);
     }
-    Ok(Frame::Eof)
+    if pending.is_empty() {
+        return Ok(Frame::Eof);
+    }
+    // A complete line, or a final unterminated one at EOF.
+    let line = String::from_utf8(std::mem::take(pending))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(Frame::Line(line))
 }
 
 fn parse_stream_request(line: &str) -> Option<Request> {
@@ -259,7 +260,16 @@ impl IpcServer {
                 Ok(Frame::TooLarge) => return reject_frame_too_large(&mut writer).await,
                 Ok(Frame::Eof) | Err(_) => return,
             };
-            if !Self::dispatch_request(&line, &mut reader, &mut writer, &engine, &shutdown).await {
+            if !Self::dispatch_request(
+                &line,
+                &mut reader,
+                &mut pending,
+                &mut writer,
+                &engine,
+                &shutdown,
+            )
+            .await
+            {
                 return;
             }
             frame = read_frame(&mut reader, &mut pending).await;
@@ -271,6 +281,7 @@ impl IpcServer {
     async fn dispatch_request(
         line: &str,
         reader: &mut IpcReader,
+        pending: &mut Vec<u8>,
         writer: &mut IpcWriter,
         engine: &Engine,
         shutdown: &Notify,
@@ -332,20 +343,32 @@ impl IpcServer {
                     return false;
                 }
                 return streams::handle_attach_stream(
-                    reader, writer, engine, &agent_id, replay, client_id,
+                    reader, pending, writer, engine, &agent_id, replay, client_id,
                 )
                 .await;
             }
             StreamMode::Grid(project_root) => {
                 if matches!(response, Response::GridSubscribed) {
-                    return streams::handle_grid_stream(reader, writer, engine, &project_root)
-                        .await;
+                    return streams::handle_grid_stream(
+                        reader,
+                        pending,
+                        writer,
+                        engine,
+                        &project_root,
+                    )
+                    .await;
                 }
             }
             StreamMode::Status(project_root) => {
                 if matches!(response, Response::StatusSubscribed) {
-                    return streams::handle_status_stream(reader, writer, engine, &project_root)
-                        .await;
+                    return streams::handle_status_stream(
+                        reader,
+                        pending,
+                        writer,
+                        engine,
+                        &project_root,
+                    )
+                    .await;
                 }
             }
             StreamMode::Fs { root, recursive } => {
@@ -353,7 +376,8 @@ impl IpcServer {
                     // A watch stream never returns to request mode: if the
                     // watcher fails after `FsSubscribed`, closing the
                     // connection is the client's unambiguous resubscribe signal.
-                    streams::handle_fs_stream(reader, writer, engine, &root, recursive).await;
+                    streams::handle_fs_stream(reader, pending, writer, engine, &root, recursive)
+                        .await;
                     return false;
                 }
             }

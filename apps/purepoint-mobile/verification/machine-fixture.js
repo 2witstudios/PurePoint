@@ -3,7 +3,7 @@ import https from "node:https";
 import net from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
 import { EventEmitter } from "node:events";
-import { writeFile, access, mkdir } from "node:fs/promises";
+import { writeFile, access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 // Optional bridge override exercises an integrated checkout without modifying it.
 const bridgeRoot = process.env.PHONE_CONTROL_BRIDGE_ROOT;
@@ -122,6 +122,8 @@ const timer = setInterval(async () => {
   for (const [index, name] of ["A", "B"].entries()) {
     if (await exists(`revoke-${name}`)) { await fixtures[index].trust.revokeDevice(fixtures[index].device.deviceId); }
     if (await exists(`broadcast-${name}`)) fixtures[index].controller.emit("editor", { type: "editor", id: "late", text: `${name} late editor` });
+    for (const [chat, terminals, management] of [["off", "off", false], ["send", "control", true]])
+      if (await exists(`chat-${chat}-${name}`)) { await rm(path.join(directory, `chat-${chat}-${name}`)); await fixtures[index].trust.setTerminals(fixtures[index].device.deviceId, terminals); await fixtures[index].trust.setWorkspaceManagement(fixtures[index].device.deviceId, management); }
   }
 }, 30);
 timer.unref();

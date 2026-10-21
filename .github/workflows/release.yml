@@ -1,9 +1,10 @@
 name: Release
 
 # Build jobs hold no secrets and only read the repository. Signing and
-# notarization run in their own job, in the protected `release` environment,
-# on the unsigned app the build job produced. Only the final publish job can
-# write to the repository, and it runs no build code.
+# notarization run in their own jobs, in the protected `release` environment,
+# on the builds the build jobs produced. Build provenance and SBOM
+# attestations come from a job that runs no repository code. Only the final
+# publish job can write to the repository, and it runs no build code either.
 
 on:
   push:
@@ -100,14 +101,24 @@ jobs:
           PKGEOF
           done
 
+      # The build phase packages the Point Guard npm runtime; use the same
+      # Node and npm as CI.
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+
       # Ad-hoc signed only; the sign-macos job re-signs every nested binary
-      # with the Developer ID identity.
+      # with the Developer ID identity. Swift packages resolve only to the
+      # committed Package.resolved.
       - name: Archive
         run: |
           xcodebuild archive \
             -project apps/purepoint-macos/purepoint-macos.xcodeproj \
             -scheme purepoint-macos \
             -configuration Release \
+            -onlyUsePackageVersionsFromResolvedFile \
             -archivePath build/PurePoint.xcarchive \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' \
             MARKETING_VERSION="$VERSION" \
@@ -139,11 +150,9 @@ jobs:
     environment: release
     permissions:
       contents: read
-    outputs:
-      ed_signature: ${{ steps.sparkle_sign.outputs.ed_signature }}
-      length: ${{ steps.sparkle_sign.outputs.length }}
     env:
       VERSION: ${{ needs.version.outputs.raw }}
+      BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
       APP_PATH: build/export/PurePoint.app
       DMG_PATH: build/PurePoint-${{ needs.version.outputs.raw }}.dmg
       # Must match the Sparkle version the app links (Package.resolved).
@@ -240,8 +249,12 @@ jobs:
 
           xcrun stapler staple "$APP_PATH"
 
+      # A non-zero exit is tolerated only when a complete, verifiable DMG was
+      # still written (create-dmg reports some Finder layout steps that way);
+      # anything else fails the release.
       - name: Create DMG
         run: |
+          STATUS=0
           "$RUNNER_TEMP/create-dmg-${CREATE_DMG_COMMIT}/create-dmg" \
             --volname "PurePoint" \
             --window-pos 200 120 \
@@ -252,8 +265,15 @@ jobs:
             --hide-extension "PurePoint.app" \
             "$DMG_PATH" \
             "$APP_PATH" \
-            || true
+            || STATUS=$?
 
+          if [ ! -f "$DMG_PATH" ] || ! hdiutil verify "$DMG_PATH"; then
+            echo "::error::create-dmg exited with status $STATUS and did not produce a valid $DMG_PATH"
+            exit 1
+          fi
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::warning::create-dmg exited with status $STATUS, but $DMG_PATH is complete and verifies"
+          fi
           ls -la "$DMG_PATH"
 
       # Last use of the signing identity: the keychain is deleted right after.
@@ -292,14 +312,51 @@ jobs:
             echo "::error::sign_update did not report an edSignature and length"
             exit 1
           fi
-          echo "ed_signature=${ED_SIGNATURE}" >> "$GITHUB_OUTPUT"
-          echo "length=${LENGTH}" >> "$GITHUB_OUTPUT"
+          echo "ED_SIGNATURE=${ED_SIGNATURE}" >> "$GITHUB_ENV"
+          echo "LENGTH=${LENGTH}" >> "$GITHUB_ENV"
+
+      # The app sets SURequireSignedFeed, so the feed itself carries an EdDSA
+      # signature from the same key as the DMG.
+      - name: Generate and sign appcast
+        env:
+          SPARKLE_ED25519_KEY: ${{ secrets.SPARKLE_ED25519_KEY }}
+        run: |
+          DMG_URL="https://github.com/2witstudios/purepoint/releases/download/v${VERSION}/PurePoint-${VERSION}.dmg"
+          PUB_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S %z')"
+
+          mkdir -p build/appcast
+          cat > build/appcast/appcast.xml << APPCAST_EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <channel>
+              <title>PurePoint</title>
+              <item>
+                <title>PurePoint v${VERSION}</title>
+                <pubDate>${PUB_DATE}</pubDate>
+                <sparkle:version>${BUILD_NUMBER}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <enclosure url="${DMG_URL}" sparkle:edSignature="${ED_SIGNATURE}" length="${LENGTH}" type="application/octet-stream" />
+              </item>
+            </channel>
+          </rss>
+          APPCAST_EOF
+
+          printf '%s\n' "$SPARKLE_ED25519_KEY" | "$RUNNER_TEMP/sparkle/bin/sign_update" build/appcast/appcast.xml --ed-key-file - > /dev/null
+          printf '%s\n' "$SPARKLE_ED25519_KEY" | "$RUNNER_TEMP/sparkle/bin/sign_update" --verify build/appcast/appcast.xml --ed-key-file - > /dev/null
 
       - name: Upload DMG
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-dmg
           path: ${{ env.DMG_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload appcast
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-appcast
+          path: build/appcast/appcast.xml
           if-no-files-found: error
           retention-days: 14
 
@@ -376,23 +433,138 @@ jobs:
             dist/${{ steps.package.outputs.name }}.tar.gz.sha256
           if-no-files-found: error
 
-  # The only job with a write token. It runs no build code: it creates the
-  # release with every asset in one step, then points the update feed at it.
-  # Versioned assets are never replaced; a re-run against an existing release
-  # only checks that the release already has them.
-  publish:
-    name: Publish release
-    needs: [version, sign-macos, linux]
+  # CycloneDX SBOMs for the Rust binaries and the bundled npm runtime. Holds
+  # no secrets; its outputs are attested by the attest job.
+  sbom:
+    name: Generate SBOMs
+    needs: version
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
-      contents: write
+      contents: read
     env:
-      GH_REPO: ${{ github.repository }}
-      VERSION: ${{ needs.version.outputs.raw }}
-      BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
-      ED_SIGNATURE: ${{ needs.sign-macos.outputs.ed_signature }}
-      LENGTH: ${{ needs.sign-macos.outputs.length }}
+      CARGO_CYCLONEDX_VERSION: 0.5.9
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
+
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+
+      # Installed outside the repository so its own lockfile and the 1.94.0
+      # toolchain apply.
+      - name: Install cargo-cyclonedx
+        working-directory: ${{ runner.temp }}
+        run: cargo install --locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"
+
+      - name: Generate SBOMs
+        env:
+          VERSION: ${{ needs.version.outputs.raw }}
+        run: |
+          mkdir -p dist
+          cargo cyclonedx --format json --spec-version 1.5 --target all --all
+          for crate in pu-cli pu-engine; do
+            mapfile -t found < <(find "crates/$crate" -maxdepth 1 -name '*.cdx.json')
+            if [ "${#found[@]}" -ne 1 ]; then
+              echo "::error::expected one SBOM for $crate, found ${#found[@]}"
+              exit 1
+            fi
+            cp "${found[0]}" "dist/purepoint-${VERSION}-${crate}.cdx.json"
+          done
+
+          cd apps/purepoint-mobile
+          npm ci --ignore-scripts
+          # The package is private and unversioned; the SBOM names the release.
+          npm pkg set version="$VERSION"
+          npm sbom --omit=dev --sbom-format cyclonedx > "../../dist/purepoint-${VERSION}-point-guard-npm.cdx.json"
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sboms
+          path: dist/*.cdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # Signs the Linux archives with the release minisign key that
+  # scripts/install.sh embeds. Runs only this repository's OpenSSL wrapper.
+  # Until the RELEASE_MINISIGN_KEY secret exists, releases ship without
+  # signatures (and say so); install.sh then relies on build provenance.
+  sign-linux:
+    name: Sign Linux archives
+    needs: linux
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Linux builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: purepoint-*
+          path: dist
+          merge-multiple: true
+
+      - name: Sign archives
+        id: sign
+        env:
+          RELEASE_MINISIGN_KEY: ${{ secrets.RELEASE_MINISIGN_KEY }}
+        run: |
+          if [ -z "$RELEASE_MINISIGN_KEY" ]; then
+            echo "::warning title=Linux archives are unsigned::RELEASE_MINISIGN_KEY is not set in the release environment, so this release has no .minisig files. See docs/architecture/distribution.md."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEY="$RUNNER_TEMP/release-minisign.pem"
+          (umask 077 && printf '%s\n' "$RELEASE_MINISIGN_KEY" > "$KEY")
+          EXPECTED=$(sed -n 's/^RELEASE_PUBLIC_KEY="\(.*\)"$/\1/p' scripts/install.sh)
+          ACTUAL=$(bash .github/scripts/minisign.sh pubkey "$KEY")
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            rm -f "$KEY"
+            echo "::error::RELEASE_MINISIGN_KEY does not match the public key in scripts/install.sh"
+            exit 1
+          fi
+          bash .github/scripts/minisign.sh sign "$KEY" dist/*.tar.gz
+          rm -f "$KEY"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload signatures
+        if: steps.sign.outputs.signed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-signatures
+          path: dist/*.minisig
+          if-no-files-found: error
+          retention-days: 14
+
+  # Records GitHub build provenance for every release binary and attests the
+  # SBOMs against them (verify with `gh attestation verify`). Runs no
+  # repository code.
+  attest:
+    name: Attest release artifacts
+    needs: [version, sign-macos, linux, sbom]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Download Linux builds
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -406,6 +578,90 @@ jobs:
         with:
           name: macos-dmg
           path: dist
+
+      - name: Download SBOMs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sboms
+          path: sbom
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.dmg
+
+      - name: Attest pu SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.dmg
+          sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-pu-cli.cdx.json
+
+      - name: Attest pu-engine SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.dmg
+          sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-pu-engine.cdx.json
+
+      - name: Attest Point Guard npm SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.dmg
+          sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-point-guard-npm.cdx.json
+
+  # The only job with a write token. It runs no build code: it creates the
+  # release with every asset in one step, then points the update feed at it.
+  # Versioned assets are never replaced; a re-run against an existing release
+  # only checks that the release already has them. Nothing is published until
+  # every artifact is signed and attested.
+  publish:
+    name: Publish release
+    needs: [version, sign-macos, linux, sbom, sign-linux, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.raw }}
+    steps:
+      - name: Download Linux builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: purepoint-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download DMG
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-dmg
+          path: dist
+
+      - name: Download SBOMs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sboms
+          path: dist
+
+      # Absent when the release environment has no signing key yet.
+      - name: Download Linux signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-signatures
+          path: dist
+          merge-multiple: true
+
+      - name: Download appcast
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-appcast
+          path: build
 
       # A re-run of every job re-signs and re-notarizes the DMG, which changes
       # its bytes. The appcast must never carry a signature for a DMG other
@@ -433,29 +689,10 @@ jobs:
           done
 
       # The `appcast` release is the moving update feed, so its appcast.xml is
-      # the one asset that is replaced on every release.
-      - name: Generate and upload appcast
+      # the one asset that is replaced on every release. The signing job
+      # generated and signed it.
+      - name: Upload appcast
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          DMG_URL="https://github.com/2witstudios/purepoint/releases/download/v${VERSION}/PurePoint-${VERSION}.dmg"
-          PUB_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S %z')"
-
-          mkdir -p build
-          cat > build/appcast.xml << APPCAST_EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
-            <channel>
-              <title>PurePoint</title>
-              <item>
-                <title>PurePoint v${VERSION}</title>
-                <pubDate>${PUB_DATE}</pubDate>
-                <sparkle:version>${BUILD_NUMBER}</sparkle:version>
-                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-                <enclosure url="${DMG_URL}" sparkle:edSignature="${ED_SIGNATURE}" length="${LENGTH}" type="application/octet-stream" />
-              </item>
-            </channel>
-          </rss>
-          APPCAST_EOF
-
           gh release upload appcast build/appcast.xml --clobber

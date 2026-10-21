@@ -6,5 +6,9 @@
 	<string>https://github.com/2witstudios/purepoint/releases/download/appcast/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>Haf3VK302m9j26z3IvT90R171NI9hRtJ2APIAyqqZXo=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>
