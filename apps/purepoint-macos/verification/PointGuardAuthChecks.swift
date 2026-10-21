@@ -262,6 +262,11 @@ import Foundation
         precondition(PointGuardPhoneAccess.summary(terminals: "view", workspaceManagement: true).contains("reads Point Guard chat"))
         precondition(PointGuardPhoneAccess.summary(terminals: "off", workspaceManagement: true).contains("No access"))
         precondition(PointGuardPhoneAccess.summary(terminals: "admin", workspaceManagement: true).contains("No access"))
+        for level in PointGuardPhoneAccess.Level.allCases {
+            precondition(PointGuardPhoneAccess.Level(terminals: level.terminals, workspaceManagement: level.workspaceManagement) == level)
+        }
+        precondition(PointGuardPhoneAccess.Level(terminals: "view", workspaceManagement: true) == .view)
+        precondition(PointGuardPhoneAccess.Level(terminals: "admin", workspaceManagement: true) == .off)
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }

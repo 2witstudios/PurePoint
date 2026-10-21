@@ -318,10 +318,6 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             if enrollmentStatus == "consumed" { await refresh() }
         } catch { self.error = error.localizedDescription }
     }
-    func rotateDevice(_ id: String) async {
-        do { _ = try await request("devices.rotate", fields: ["deviceId": .string(id)]); await refresh() }
-        catch { self.error = error.localizedDescription }
-    }
     @discardableResult func retryEnrollmentCleanup() async -> Bool {
         let lifetime = runtimeGeneration
         for id in pendingEnrollmentCleanup.sorted() {
@@ -345,14 +341,21 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         enrollment = .null; enrollmentStatus = ""
         _ = await retryEnrollmentCleanup()
     }
-    func setTerminalPermission(_ id: String, permission: String) async {
-        do { _ = try await request("devices.terminals", fields: ["deviceId": .string(id), "terminals": .string(permission)]); await refresh() }
-        catch { self.error = error.localizedDescription }
-    }
-
-    func setWorkspaceManagement(_ id: String, allowed: Bool) async {
-        do { _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(allowed)]); await refresh() }
-        catch { self.error = error.localizedDescription }
+    /// Moves a device to `level`, changing only the grants that differ. Workspace management
+    /// requires Control, so it is dropped before terminals go down and added after they go up.
+    func setAccess(_ id: String, from current: PointGuardPhoneAccess.Level, to level: PointGuardPhoneAccess.Level) async {
+        do {
+            if current.workspaceManagement && !level.workspaceManagement {
+                _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(false)])
+            }
+            if current.terminals != level.terminals {
+                _ = try await request("devices.terminals", fields: ["deviceId": .string(id), "terminals": .string(level.terminals)])
+            }
+            if !current.workspaceManagement && level.workspaceManagement {
+                _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(true)])
+            }
+        } catch { self.error = error.localizedDescription }
+        await refresh()
     }
 
     func revokeDevice(_ id: String) async {
@@ -448,6 +451,34 @@ private extension PiJSONValue {
 /// What a paired device's grants allow, including Point Guard chat, which follows them:
 /// Point Guard has a shell and the `pu` CLI, so sending to it is full control.
 enum PointGuardPhoneAccess {
+    /// The device grants as one choice. New devices pair with full access.
+    enum Level: String, CaseIterable, Identifiable {
+        case full, terminals, view, off
+        var id: String { rawValue }
+        init(terminals: String, workspaceManagement: Bool) {
+            switch terminals {
+            case "control": self = workspaceManagement ? .full : .terminals
+            case "view": self = .view
+            default: self = .off
+            }
+        }
+        var terminals: String {
+            switch self {
+            case .full, .terminals: return "control"
+            case .view: return "view"
+            case .off: return "off"
+            }
+        }
+        var workspaceManagement: Bool { self == .full }
+        var title: String {
+            switch self {
+            case .full: return "Full access"
+            case .terminals: return "Terminals only"
+            case .view: return "View only"
+            case .off: return "No access"
+            }
+        }
+    }
     static func summary(terminals: String, workspaceManagement: Bool) -> String {
         switch terminals {
         case "control" where workspaceManagement:
