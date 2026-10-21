@@ -261,28 +261,11 @@ extension View {
     func textFieldStyle(_ style: RoundedBorderTextFieldStyle) -> some View {
         textFieldStyle(MacRoundedBorderTextFieldStyle())
     }
-
-    /// The Mac's segmented control height: iOS's is 32pt for every control size.
-    func pickerStyle(_ style: SegmentedPickerStyle) -> some View {
-        modifier(MacSegmentedHeight()).swiftUIPickerStyle(style)
-    }
-
-    /// SwiftUI's own modifier: inside a generic context the concrete overload above does not apply.
-    private func swiftUIPickerStyle<S: PickerStyle>(_ style: S) -> some View {
-        pickerStyle(style)
-    }
-}
-
-private struct MacSegmentedHeight: ViewModifier {
-    @Environment(\.controlSize) private var controlSize
-
-    func body(content: Content) -> some View {
-        content.frame(height: MacControlMetrics(controlSize).height)
-    }
 }
 
 /// UIKit appearance the Mac controls need that SwiftUI cannot set: the segmented control's
-/// 13pt (11pt small) titles. Installed once at launch.
+/// 13pt titles (iOS uses 15pt). Its height stays UIKit's: UISegmentedControl ignores a
+/// SwiftUI frame. Installed once at launch.
 @MainActor
 enum MacControlAppearance {
     static func install() {
