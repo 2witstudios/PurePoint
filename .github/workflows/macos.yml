@@ -421,8 +421,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      # Pulled by digest from a mirror without Docker Hub's anonymous limit.
-      ALPINE_IMAGE: public.ecr.aws/docker/library/alpine@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 # 3.22
+      # Alpine 3.22, pinned by digest. The digest is checked on pull, so any
+      # mirror that serves it is equally trusted.
+      ALPINE_DIGEST: sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -529,6 +530,18 @@ jobs:
       - name: Point Guard service journal
         if: failure()
         run: XDG_RUNTIME_DIR="/run/user/$(id -u)" journalctl --user -u pu-pointguard.service --no-pager | tail -200 || true
+      - name: Pull the pinned Alpine image
+        run: |
+          for attempt in 1 2 3; do
+            for registry in public.ecr.aws/docker/library mirror.gcr.io/library docker.io/library; do
+              if docker pull --quiet "$registry/alpine@$ALPINE_DIGEST"; then
+                echo "ALPINE_IMAGE=$registry/alpine@$ALPINE_DIGEST" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            done
+            sleep $((attempt * 20))
+          done
+          exit 1
       - name: Refuse phone access on musl and keep pu installed
         run: |
           set +e
