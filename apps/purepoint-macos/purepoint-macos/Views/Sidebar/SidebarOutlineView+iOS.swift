@@ -1,8 +1,8 @@
 #if os(iOS)
 import SwiftUI
 
-/// iOS twin of the Mac sidebar representable, with the same inputs. It hosts the
-/// `SidebarOutlineViewController` placeholder until the real list lands (IPAD-6.2).
+/// UIViewControllerRepresentable wrapping SidebarOutlineViewController: the iOS twin of the
+/// Mac representable, bridging the same SwiftUI state to the `UICollectionView` outline.
 struct SidebarOutlineView: UIViewControllerRepresentable {
     @Environment(SettingsState.self) private var settingsState
     @Binding var selection: SidebarSelection?
@@ -14,17 +14,23 @@ struct SidebarOutlineView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> SidebarOutlineViewController {
         let vc = SidebarOutlineViewController(expansionStore: SidebarExpansionStore())
         vc.outlineView.onWindowAttached = onOutlineViewReady
-        vc.onSelectionChanged = { newSelection in
-            selection = newSelection
-        }
+
+        Self.wireCallbacks(
+            vc, selection: $selection, appState: appState, registry: registry, viewCache: viewCache,
+            settingsState: settingsState)
         return vc
     }
 
     func updateUIViewController(_ vc: SidebarOutlineViewController, context: Context) {
         _ = appState.signalClock
+        // The canonical workspace list is the sidebar's only input.
         vc.workspacesByProject = registry.workspacesByProject
         vc.activeWorkspaceId = registry.activeWorkspaceId
+
+        // Rebuild tree when data changes
         vc.rebuildNodes(projects: appState.projects, machines: appState.machines)
+
+        // Handle incoming programmatic selection (e.g., pendingSelectAgentId)
         vc.selectNode(for: selection)
     }
 }

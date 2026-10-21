@@ -78,53 +78,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         fatalError("init(coder:) is not supported: the sidebar is built in code")
     }
 
-    private struct SidebarRenderState: Equatable {
-        let activeWorkspaceId: String?
-        let projects: [ProjectRenderState]
-        let machines: [MachineRenderState]
-    }
-
-    private struct MachineRenderState: Equatable {
-        let id: UUID
-        let name: String
-        let state: MachineConnectionState
-        let statusText: String
-        let actionError: String?
-        let isStartingDaemon: Bool
-        let hiddenRevision: Int
-        let projects: [ProjectRenderState]
-        let hasLoadedProjects: Bool
-    }
-
-    private struct ProjectRenderState: Equatable {
-        let channelUnread: Int
-        let isUnavailable: Bool
-        let layoutError: String?
-        let projectRoot: String
-        let rootWorkspaces: [WorkspaceRenderState]
-        let worktrees: [WorktreeRenderState]
-        /// A project whose snapshot has not been read shows no worktrees yet, which is not a
-        /// change to its rows — but it is a change to whether the tree may be pruned, so it
-        /// has to reach the render state or the prune would be skipped.
-        let hasLoadedWorktrees: Bool
-    }
-
-    private struct WorktreeRenderState: Equatable {
-        let id: String
-        let branch: String
-        let workspaces: [WorkspaceRenderState]
-    }
-
-    private struct WorkspaceRenderState: Equatable {
-        let id: String
-        let title: String
-        let paneCount: Int
-        let tabCount: Int
-        /// `nil` for a workspace holding only file tabs — it has no agent to report on.
-        let status: AgentStatus?
-        let signal: AgentSignalPresentation?
-    }
-
     // MARK: - Lifecycle
 
     override func loadView() {
@@ -173,27 +126,15 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         // Reloading mid-rename discards the cell holding the field editor, leaving it dead.
         // `lastRenderState` is untouched, so the next update after the edit rebuilds.
         guard editingTextField == nil else { return }
-        let nextRenderState = makeRenderState(projects: projects, machines: machines)
+        let nextRenderState = SidebarRenderState.make(
+            projects: projects, machines: machines, workspacesByProject: workspacesByProject,
+            activeWorkspaceId: activeWorkspaceId)
         guard nextRenderState != lastRenderState else { return }
 
         let oldSelectedId = selectedNodeId()
         let scrollOrigin = scrollView.contentView.bounds.origin
 
-        projectNodes = projects.map { SidebarNode.projectNode($0, workspaces: workspacesByProject[$0.projectId] ?? []) }
-        if !machines.isEmpty {
-            projectNodes.append(SidebarNode.sectionHeaderNode("MACHINES"))
-            for machine in machines {
-                let machineKey = SidebarNode.machineKey(machine.machine.id)
-                projectNodes.append(
-                    SidebarNode(
-                        kind: .machine(machine),
-                        rowKey: machineKey,
-                        children: machine.projects.map {
-                            SidebarNode.projectNode(
-                                $0, workspaces: workspacesByProject[$0.projectId] ?? [], parentKey: machineKey)
-                        }))
-            }
-        }
+        projectNodes = SidebarTree.build(projects: projects, machines: machines, workspacesByProject: workspacesByProject)
         lastRenderState = nextRenderState
         // Reloading drops every expansion AppKit knows about, and it may announce that as it
         // does. Neither that nor the replay below is the user opening or closing a row.
@@ -210,66 +151,6 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    /// How a workspace presents itself as one row: named after its first pane's agent,
-    /// with the pane count when it holds more than one.
-    private func renderState(for workspace: Workspace, in project: ProjectState) -> WorkspaceRenderState {
-        let agents = workspace.agentIds.compactMap { project.agent(byId: $0) }
-        let firstFile = workspace.surfaces.lazy.compactMap { entry -> String? in
-            guard case .file(let path) = entry.surface.content else { return nil }
-            return path.map { ($0 as NSString).lastPathComponent } ?? "Files"
-        }.first
-        let title = agents.first?.displayName ?? workspace.primaryAgentId ?? firstFile ?? workspace.id
-        let status: AgentStatus? =
-            agents.isEmpty
-            ? nil : agents.contains { !$0.status.isAlive } ? .broken : (agents.first?.status ?? .running)
-        return WorkspaceRenderState(
-            id: workspace.id, title: title, paneCount: workspace.paneCount, tabCount: workspace.tabCount,
-            status: status, signal: agents.first.map { $0.signalPresentation(available: !project.isUnavailable) })
-    }
-
-    private func makeRenderState(projects: [ProjectState], machines: [MachineState]) -> SidebarRenderState {
-        let machineStates = machines.map { machine in
-            MachineRenderState(
-                id: machine.machine.id, name: machine.machine.name, state: machine.state,
-                statusText: machine.statusText, actionError: machine.actionError,
-                isStartingDaemon: machine.isStartingDaemon, hiddenRevision: machine.hiddenCountRevision,
-                projects: machine.projects.map(projectRenderState),
-                hasLoadedProjects: machine.hasLoadedProjects)
-        }
-        return SidebarRenderState(
-            activeWorkspaceId: activeWorkspaceId, projects: projects.map(projectRenderState), machines: machineStates)
-    }
-
-    private func projectRenderState(_ project: ProjectState) -> ProjectRenderState {
-        let workspaces = workspacesByProject[project.projectId] ?? []
-
-        let rootWorkspaces =
-            workspaces
-            .filter { $0.container == .projectRoot && !$0.isPointGuard }
-            .map { renderState(for: $0, in: project) }
-
-        let worktrees = project.worktrees.map { worktree in
-            WorktreeRenderState(
-                id: worktree.id,
-                branch: worktree.branch,
-                workspaces:
-                    workspaces
-                    .filter { $0.container == .worktree(worktree.id) }
-                    .map { renderState(for: $0, in: project) }
-            )
-        }
-
-        return ProjectRenderState(
-            channelUnread: project.channel.unreadCount,
-            isUnavailable: project.isUnavailable,
-            layoutError: project.isRemote ? project.registry?.layoutErrorsByProject[project.projectId] : nil,
-            projectRoot: project.projectId,
-            rootWorkspaces: rootWorkspaces,
-            worktrees: worktrees,
-            hasLoadedWorktrees: project.hasLoadedWorktrees
-        )
-    }
-
     /// Close the rows the user closed and leave the rest open. `reloadData()` above leaves
     /// every row collapsed, so the recorded rows stay collapsed and everything else is
     /// expanded.
@@ -284,52 +165,19 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         expansionStore.record(liveClosed)
     }
 
-    /// Whether every row in the tree holds all the rows it will ever hold. `false` while a
-    /// project has yet to read its snapshot and a machine has yet to answer its inventory,
-    /// which is how the sidebar looks for the first moments after a relaunch or a machine
-    /// connection.
-    ///
-    /// An empty row in that window is not evidence that nothing is under it, so nothing may
-    /// be pruned on that basis. A remote project is registered with the registry before its
-    /// snapshot has been read, which is why the registry cannot answer this on its own; and a
-    /// machine whose daemon is not running cannot answer for its rows either.
-    private var isTreeSettled: Bool {
-        func settled(_ nodes: [SidebarNode]) -> Bool {
-            nodes.allSatisfy { node in
-                switch node.kind {
-                case .project(let project) where !project.hasLoadedWorktrees:
-                    return false
-                case .machine(let machine) where !machine.reportsCompleteProjects:
-                    return false
-                case .project, .machine:
-                    return settled(node.children)
-                case .worktree, .workspace, .sectionHeader:
-                    return true
-                }
-            }
-        }
-        return settled(projectNodes)
-    }
+    /// Whether every row in the tree holds all the rows it will ever hold.
+    /// See `SidebarTree.isSettled(_:)`.
+    private var isTreeSettled: Bool { SidebarTree.isSettled(projectNodes) }
 
     /// Expands the rows that are not recorded closed and reports the ones in the tree that
     /// are, parents before children.
-    ///
-    /// `parentOpen` carries whether this row is on screen yet: a row inside a closed row has
-    /// no row of its own, so it cannot be expanded, but it is still closed — that is what
-    /// lets it come back as it was when its parent opens again.
     private func applyExpansionState(_ nodes: [SidebarNode], parentOpen: Bool) -> Set<String> {
-        var liveClosed: Set<String> = []
-        for node in nodes where node.isExpandable {
-            let isClosed = expansionStore.closedRowKeys.contains(node.rowKey)
-            if isClosed {
-                liveClosed.insert(node.rowKey)
-            } else if parentOpen {
-                outlineView.expandItem(node)
-            }
-            liveClosed.formUnion(
-                applyExpansionState(node.children, parentOpen: parentOpen && !isClosed))
+        let expansion = SidebarTree.expansion(
+            nodes, closedRowKeys: expansionStore.closedRowKeys, parentOpen: parentOpen)
+        for node in expansion.open {
+            outlineView.expandItem(node)
         }
-        return liveClosed
+        return expansion.closed
     }
 
     private func selectedNodeId() -> String? {
@@ -341,18 +189,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
     // MARK: - Programmatic Selection
 
     func selectNode(for selection: SidebarSelection?) {
-        guard let selection else {
-            deselectAll()
-            return
-        }
-
-        let targetId: String
-        switch selection {
-        case .workspace(let id): targetId = id
-        case .worktree(let id): targetId = id
-        case .channel(let root): targetId = root
-        case .project(let root): targetId = root
-        case .nav:
+        guard let targetId = SidebarTree.targetId(for: selection) else {
             deselectAll()
             return
         }
@@ -390,23 +227,8 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     /// The rows above a matching row, outermost first. Empty when the row is at the top level
     /// or is not in the tree.
-    private func ancestors(
-        where matches: (SidebarNode) -> Bool, in nodes: [SidebarNode]? = nil,
-        chain: [SidebarNode] = []
-    ) -> [SidebarNode] {
-        func find(in nodes: [SidebarNode], chain: [SidebarNode]) -> [SidebarNode]? {
-            for node in nodes {
-                if matches(node) {
-                    return chain
-                }
-                if let found = find(in: node.children, chain: chain + [node]) {
-                    return found
-                }
-            }
-            return nil
-        }
-        // `nil` is no match at all, which a caller reads as "no ancestors".
-        return find(in: nodes ?? projectNodes, chain: chain) ?? []
+    private func ancestors(where matches: (SidebarNode) -> Bool) -> [SidebarNode] {
+        SidebarTree.ancestors(where: matches, in: projectNodes)
     }
 
     // MARK: - Row Expansion
@@ -479,12 +301,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
         guard let node = item as? SidebarNode else { return false }
-        switch node.kind {
-        case .sectionHeader: return false
-        // Selectable so keyboard and VoiceOver users can reach its actions (Return toggles
-        // the connection; the context menu and accessibility actions hold the rest).
-        case .project, .worktree, .workspace, .machine: return true
-        }
+        return SidebarTree.isSelectable(node)
     }
 
     // MARK: - NSOutlineViewDelegate
@@ -513,13 +330,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
             return
         }
 
-        let selection: SidebarSelection
-        switch node.kind {
-        case .project(let p): selection = .project(p.projectId)
-        case .worktree(let w): selection = .worktree(w.id)
-        case .workspace(let w): selection = .workspace(w.id)
-        case .sectionHeader, .machine: return
-        }
+        guard let selection = SidebarTree.selection(for: node) else { return }
         onSelectionChanged?(selection)
     }
 
@@ -695,7 +506,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let (cell, stack) = makeCellWithStack(spacing: 5)
 
         guard let project = findProject(forWorkspaceId: workspace.id) else { return cell }
-        let state = renderState(for: workspace, in: project)
+        let state = SidebarRenderState.workspace(workspace, in: project)
 
         stack.addArrangedSubview(makeStatusDot(color: state.status?.nsColor ?? .tertiaryLabelColor))
 
