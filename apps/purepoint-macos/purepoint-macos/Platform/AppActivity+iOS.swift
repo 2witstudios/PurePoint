@@ -14,6 +14,11 @@ final class AppActivity {
     private(set) var isInBackground = false
     private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private let backgroundTasks: any BackgroundTaskRunner
+
+    init(backgroundTasks: any BackgroundTaskRunner = UIApplication.shared) {
+        self.backgroundTasks = backgroundTasks
+    }
 
     /// Apply a scene phase. Returns true when the app returned from the background.
     @discardableResult
@@ -64,16 +69,29 @@ final class AppActivity {
     /// saves finish before the app is suspended.
     private func beginBackgroundGrace() {
         guard backgroundTask == .invalid else { return }
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PurePoint background grace") {
+        backgroundTask = backgroundTasks.beginBackgroundTask(withName: "PurePoint background grace") {
             [weak self] in
-            Task { @MainActor in self?.endBackgroundGrace() }
+            // iOS suspends the app once the handler returns, so the task ends before that,
+            // not in a later main-actor turn. The handler runs on the main thread.
+            MainActor.assumeIsolated { self?.endBackgroundGrace() }
         }
     }
 
     private func endBackgroundGrace() {
         guard backgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTasks.endBackgroundTask(backgroundTask)
         backgroundTask = .invalid
     }
 }
+
+/// Begins and ends background tasks: `UIApplication` in the app, a fake in tests.
+@MainActor
+protocol BackgroundTaskRunner: AnyObject {
+    func beginBackgroundTask(
+        withName taskName: String?, expirationHandler handler: (@MainActor @Sendable () -> Void)?
+    ) -> UIBackgroundTaskIdentifier
+    func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier)
+}
+
+extension UIApplication: BackgroundTaskRunner {}
 #endif

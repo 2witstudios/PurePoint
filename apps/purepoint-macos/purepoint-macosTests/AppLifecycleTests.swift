@@ -9,6 +9,27 @@ import SwiftUI
 // MARK: - Scene lifecycle
 
 @MainActor
+private final class FakeBackgroundTasks: BackgroundTaskRunner {
+    private(set) var begun = 0
+    private(set) var ended: [UIBackgroundTaskIdentifier] = []
+    private var handler: (@MainActor @Sendable () -> Void)?
+
+    func beginBackgroundTask(
+        withName taskName: String?, expirationHandler handler: (@MainActor @Sendable () -> Void)?
+    ) -> UIBackgroundTaskIdentifier {
+        begun += 1
+        self.handler = handler
+        return UIBackgroundTaskIdentifier(rawValue: begun)
+    }
+
+    func endBackgroundTask(_ identifier: UIBackgroundTaskIdentifier) {
+        ended.append(identifier)
+    }
+
+    func expire() { handler?() }
+}
+
+@MainActor
 struct AppActivityTests {
     @Test func givenTheBackgroundShouldHoldPollersUntilTheForeground() async {
         let activity = AppActivity()
@@ -41,6 +62,27 @@ struct AppActivityTests {
         await waiting.value
         #expect(activity.isInBackground)
         activity.apply(.active)
+    }
+
+    @Test func givenTheGraceExpiresShouldEndTheTaskBeforeTheHandlerReturns() {
+        let tasks = FakeBackgroundTasks()
+        let activity = AppActivity(backgroundTasks: tasks)
+        activity.apply(.background)
+        #expect(tasks.begun == 1)
+        tasks.expire()
+        // Synchronously: iOS suspends the app as soon as the handler returns.
+        #expect(tasks.ended == [UIBackgroundTaskIdentifier(rawValue: 1)])
+        // Returning to the foreground does not end it a second time.
+        activity.apply(.active)
+        #expect(tasks.ended.count == 1)
+    }
+
+    @Test func givenTheForegroundShouldEndTheGrace() {
+        let tasks = FakeBackgroundTasks()
+        let activity = AppActivity(backgroundTasks: tasks)
+        activity.apply(.background)
+        activity.apply(.active)
+        #expect(tasks.ended == [UIBackgroundTaskIdentifier(rawValue: 1)])
     }
 
     @Test func givenTheSceneHookShouldReachAppState() {
