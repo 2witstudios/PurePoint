@@ -155,6 +155,7 @@ final class FileTreeState {
         directory: String,
         worktreeRoot: String
     ) async -> Set<String> {
+        #if os(macOS)
         await Task.detached(priority: .utility) {
             let fm = FileManager.default
             guard let contents = try? fm.contentsOfDirectory(atPath: directory) else {
@@ -196,5 +197,10 @@ final class FileTreeState {
                 return Set<String>()
             }
         }.value
+        #else
+        // No local git on iOS. Remote trees take ignore verdicts from the daemon listing
+        // (`remoteTree`); local ignore resolution arrives with IPAD-6.4.
+        Set<String>()
+        #endif
     }
 }
