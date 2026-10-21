@@ -18,6 +18,8 @@ nonisolated protocol DaemonByteStream: AnyObject, Sendable {
 
 /// A connection for synchronous callers that already run off the main thread
 /// (`DaemonClient.sendBlocking`). Every call blocks for at most the timeout it was opened with.
+/// Callers must be on a GCD thread (`HostIO`, a git service's queue, a saver's queue), never
+/// on Swift's cooperative pool: a bridged stream blocks its thread on async work.
 nonisolated protocol DaemonBlockingByteStream: AnyObject {
     /// Write all of `data`. Throws `DaemonClientError.requestTimeout` when the timeout elapses
     /// and `DaemonClientError.eof` when the stream is gone.
@@ -55,12 +57,46 @@ extension DaemonTransport {
     /// Transports without a native blocking path bridge the async stream with semaphores.
     /// Callers are already off the main thread, so blocking one of them is acceptable.
     nonisolated func openBlockingStream(timeout: TimeInterval) throws -> any DaemonBlockingByteStream {
-        let stream = try BlockingBridge.wait(timeout: timeout, onTimeout: DaemonClientError.connectTimeout) {
+        try bridgedBlockingStream(connectTimeout: DaemonClient.connectTimeout, timeout: timeout)
+    }
+
+    /// The bridged connect waits `connectTimeout`, a connect allowance distinct from the
+    /// request's `timeout`, which bounds each later write and read.
+    nonisolated func bridgedBlockingStream(
+        connectTimeout: TimeInterval, timeout: TimeInterval
+    ) throws -> any DaemonBlockingByteStream {
+        let stream = try BlockingBridge.wait(timeout: connectTimeout, onTimeout: DaemonClientError.connectTimeout) {
             try await self.openStream(cancellable: true)
         } discard: { $0.close() }
         return BridgedBlockingByteStream(stream: stream, timeout: timeout)
     }
 }
+
+#if os(iOS)
+/// The local daemon endpoint on iOS, where there is none. Every daemon call on the iPad must
+/// name its machine's endpoint; a stray local client is a bug, so it traps in debug builds and
+/// otherwise reports that no daemon is running.
+nonisolated struct UnreachableLocalTransport: DaemonTransport {
+    func openStream(cancellable: Bool) async throws -> any DaemonByteStream {
+        Self.strayLocalClient()
+        throw DaemonClientError.notRunning
+    }
+
+    func openBlockingStream(timeout: TimeInterval) throws -> any DaemonBlockingByteStream {
+        Self.strayLocalClient()
+        throw DaemonClientError.notRunning
+    }
+
+    /// Tests that check the failure itself turn the trap off.
+    nonisolated(unsafe) static var trapsInDebug = true
+
+    private static func strayLocalClient() {
+        if trapsInDebug {
+            assertionFailure("A daemon client on iOS has no machine endpoint; resolve it through DaemonEndpoint.machine")
+        }
+    }
+}
+#endif
 
 // MARK: - Blocking bridge
 
