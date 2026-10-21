@@ -58,7 +58,7 @@ try {
       name: manifest.name,
       version: manifest.version,
       node: process.version,
-      pi: "1.1.0",
+      pi: "1.3.0",
       engines: manifest.engines ?? null,
       extensions: resolved.extensions.map((e) => path.relative(pkg, e.path)),
       skills: resolved.skills.map((s) => path.relative(pkg, s.path)),

@@ -9,7 +9,7 @@ import Foundation
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
         let manifest = """
-        {"schemaVersion":1,"contractVersion":1,"piVersion":"1.1.0","nodeVersion":"22.23.0","architecture":"arm64","sourceSHA":"fixture","paths":{"node":"../../Helpers/point-guard-node","pu":"../../Helpers/pu","lockHelper":"../../Helpers/point-guard-lock","entry":"bridge/main.js","instructions":"docs/point-guard.md","skills":["support/pu/SKILL.md","support/pu-cli/SKILL.md"]}}
+        {"schemaVersion":1,"contractVersion":1,"piVersion":"1.3.0","nodeVersion":"22.23.0","architecture":"arm64","sourceSHA":"fixture","paths":{"node":"../../Helpers/point-guard-node","pu":"../../Helpers/pu","lockHelper":"../../Helpers/point-guard-lock","entry":"bridge/main.js","instructions":"docs/point-guard.md","skills":["support/pu/SKILL.md","support/pu-cli/SKILL.md"]}}
         """
         try FileManager.default.createDirectory(at: resources.appendingPathComponent("bridge"), withIntermediateDirectories: true)
         try Data().write(to: resources.appendingPathComponent("bridge/main.js"))

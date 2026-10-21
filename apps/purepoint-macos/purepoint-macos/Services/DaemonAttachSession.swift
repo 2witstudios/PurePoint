@@ -108,7 +108,7 @@ actor DaemonAttachSession {
     /// `timeout` for a reconnect when the attach connection is down.
     func deliverInput(_ data: Data, timeout: Duration = .seconds(5)) async -> Bool {
         let deadline = ContinuousClock.now + timeout
-        var failed: NWConnection?
+        var failed: (any DaemonByteStream)?
         while !stopped, !isAgentGone, !didStreamEnd {
             // Retry only on a new connection: a failed one stays set until replaced.
             if let conn = connection, conn !== failed {
