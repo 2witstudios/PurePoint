@@ -290,12 +290,7 @@ fn installed_port() -> u16 {
 
 fn write_unit(unit: &str) -> Result<PathBuf, CliError> {
     let file = phone::unit_file()?;
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temp = file.with_extension("service.tmp");
-    std::fs::write(&temp, unit)?;
-    std::fs::rename(&temp, &file)?;
+    phone::write_unit_file(&file, unit)?;
     systemctl(&["daemon-reload"])?;
     Ok(file)
 }

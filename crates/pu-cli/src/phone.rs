@@ -391,6 +391,53 @@ pub fn unit_file() -> Result<PathBuf, CliError> {
         .join(UNIT))
 }
 
+/// Write the unit atomically as 0644, whatever the umask, into a directory
+/// no other user can write: the unit runs as the owner on its next start.
+pub fn write_unit_file(file: &Path, unit: &str) -> Result<(), CliError> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = file
+        .parent()
+        .ok_or_else(|| CliError::Other(format!("{} has no directory", file.display())))?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o755)
+        .create(dir)?;
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.is_dir() || (meta.uid() != euid() && meta.uid() != 0) {
+        return Err(CliError::Other(format!(
+            "{} is not a directory owned by you; refusing to write the unit there",
+            dir.display()
+        )));
+    }
+    let mode = meta.permissions().mode();
+    if mode & 0o022 != 0 {
+        if meta.uid() != euid() {
+            return Err(CliError::Other(format!(
+                "{} is writable by others; refusing to write the unit there",
+                dir.display()
+            )));
+        }
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode & !0o022 & 0o7777))?;
+    }
+    let temp = file.with_extension("service.tmp");
+    // A leftover (or planted) temp file is replaced, never written through.
+    match std::fs::remove_file(&temp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .open(&temp)?;
+    out.set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    out.write_all(unit.as_bytes())?;
+    out.sync_all()?;
+    drop(out);
+    std::fs::rename(&temp, file)?;
+    Ok(())
+}
+
 /// Whether `systemctl is-active` reports a unit that may still be running.
 /// Anything but a clear stop (including an unreadable state) counts.
 pub fn unit_running(state: &str) -> bool {
@@ -653,6 +700,28 @@ mod tests {
         ] {
             assert!(unit_running(running), "{running}");
         }
+    }
+
+    #[test]
+    fn given_permissive_modes_should_write_the_unit_0644_in_an_unwritable_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("systemd/user");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let file = dir.join(UNIT);
+        let stale = file.with_extension("service.tmp");
+        std::fs::write(&stale, "stale").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o666)).unwrap();
+        write_unit_file(&file, "[Unit]\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "[Unit]\n");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&file), 0o644);
+        assert_eq!(mode(&dir) & 0o022, 0);
+        assert!(!stale.exists());
+        let fresh = root.path().join("new/systemd/user").join(UNIT);
+        write_unit_file(&fresh, "x").unwrap();
+        assert_eq!(mode(&fresh), 0o644);
+        assert_eq!(mode(fresh.parent().unwrap()) & 0o022, 0);
     }
 
     #[test]
