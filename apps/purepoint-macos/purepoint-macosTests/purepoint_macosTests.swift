@@ -185,6 +185,32 @@ struct PaneSplitNodeTests {
         #expect(result == expected)
     }
 
+    // MARK: Top-trailing leaf
+
+    @Test func singleLeafIsTopTrailing() {
+        #expect(PaneSplitNode.leaf(id: 3).topTrailingLeafId == 3)
+    }
+
+    @Test func rightPaneOfAVerticalSplitIsTopTrailing() {
+        let tree = PaneSplitNode.split(axis: .vertical, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        #expect(tree.topTrailingLeafId == 1)
+    }
+
+    @Test func topPaneOfAHorizontalSplitIsTopTrailing() {
+        let tree = PaneSplitNode.split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        #expect(tree.topTrailingLeafId == 0)
+    }
+
+    @Test func nestedGridResolvesTheTopRightPane() {
+        // Two columns; the right column is split into a top (2) and bottom (1) pane.
+        let tree = PaneSplitNode.split(
+            axis: .vertical, ratio: 0.5,
+            first: .leaf(id: 0),
+            second: .split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 2), second: .leaf(id: 1))
+        )
+        #expect(tree.topTrailingLeafId == 2)
+    }
+
     // MARK: Row count / canSplit
 
     @Test func horizontalSplitCountsRows() {

@@ -29,8 +29,10 @@ struct WorkspaceFilesSidebar: View {
                     .accessibilityAddTraits(state.mode == mode ? [.isSelected] : [])
                 }
                 Spacer(minLength: 0)
+                WorkspaceSidebarToggle()
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 10)
+            .padding(.trailing, 4)
             .frame(height: PaneTabBar.height)
             Divider()
             if state.mode == .pointGuard {
