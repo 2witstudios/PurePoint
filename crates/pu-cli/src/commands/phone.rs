@@ -272,7 +272,7 @@ fn render_unit(port: u16) -> Result<(String, PathBuf), CliError> {
         home: &home,
         pu: &pu,
         port,
-    });
+    })?;
     Ok((unit, payload))
 }
 

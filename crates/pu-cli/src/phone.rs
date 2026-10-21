@@ -317,9 +317,28 @@ pub fn bridge_environment(p: &UnitPaths) -> Vec<(String, String)> {
     ]
 }
 
+/// A path that can go into a unit file verbatim: absolute UTF-8 with no
+/// control characters (a newline would inject directives) and no backslash
+/// (line continuation and escapes). Anything else is refused, not escaped.
+fn unit_path(path: &Path) -> Result<&str, CliError> {
+    path.to_str()
+        .filter(|text| {
+            path.is_absolute() && !text.chars().any(|c| c.is_control() || c == '\\')
+        })
+        .ok_or_else(|| {
+            CliError::Other(format!(
+                "{} can't be used in a systemd unit (needs an absolute path without control characters or backslashes)",
+                path.display()
+            ))
+        })
+}
+
 /// `Restart=on-failure`: an idle `runtime.stop` (exit 0) stays stopped.
 /// `KillMode=mixed`: SIGTERM reaches the bridge, which drains its Pi child.
-pub fn systemd_unit(p: &UnitPaths) -> String {
+pub fn systemd_unit(p: &UnitPaths) -> Result<String, CliError> {
+    for path in [p.payload, p.state, p.home, p.pu] {
+        unit_path(path)?;
+    }
     let mut env = String::new();
     for (key, value) in bridge_environment(p) {
         env.push_str(&format!(
@@ -327,7 +346,7 @@ pub fn systemd_unit(p: &UnitPaths) -> String {
             systemd_quote(&format!("{key}={value}"))
         ));
     }
-    format!(
+    Ok(format!(
         "\
 [Unit]
 Description=PurePoint Point Guard phone bridge
@@ -356,9 +375,11 @@ WantedBy=default.target
 ",
         node = systemd_quote(&p.payload.join("bin/node").to_string_lossy()),
         entry = systemd_quote(&p.payload.join("bridge/main.js").to_string_lossy()),
-        home = systemd_quote(&p.home.to_string_lossy()),
+        // WorkingDirectory= takes the rest of the line literally: no quotes,
+        // only specifiers escaped.
+        home = unit_path(p.home)?.replace('%', "%%"),
         unset = UNSET_ENVIRONMENT.join(" "),
-    )
+    ))
 }
 
 pub fn unit_file() -> Result<PathBuf, CliError> {
@@ -536,13 +557,36 @@ mod tests {
     }
 
     fn sample_unit() -> String {
+        unit_with_home("/home/a b").unwrap()
+    }
+
+    fn unit_with_home(home: &str) -> Result<String, CliError> {
+        let home = Path::new(home);
         systemd_unit(&UnitPaths {
-            payload: Path::new("/home/a b/.pu/pointguard/1.2.3"),
-            state: Path::new("/home/a b/.local/state/purepoint/point-guard"),
-            home: Path::new("/home/a b"),
-            pu: Path::new("/home/a b/.pu/bin/pu"),
+            payload: &home.join(".pu/pointguard/1.2.3"),
+            state: &home.join(".local/state/purepoint/point-guard"),
+            home,
+            pu: &home.join(".pu/bin/pu"),
             port: 8787,
         })
+    }
+
+    #[test]
+    fn given_home_should_write_an_unquoted_working_directory_and_refuse_injection() {
+        assert!(sample_unit().contains("\nWorkingDirectory=/home/a b\n"));
+        assert!(
+            unit_with_home("/home/50%")
+                .unwrap()
+                .contains("\nWorkingDirectory=/home/50%%\n")
+        );
+        for bad in [
+            "/home/x\nExecStartPre=/bin/sh",
+            "/home/x\\y",
+            "home/rel",
+            "/home/\x1b",
+        ] {
+            assert!(unit_with_home(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

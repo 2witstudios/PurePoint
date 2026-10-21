@@ -367,7 +367,7 @@ arch=$(detect_arch)
 if [ -n "${PU_PHONE_ARCHIVE:-}" ]; then
     phone_archive="$PU_PHONE_ARCHIVE"
     [ -f "$phone_archive" ] || phone_die "PU_PHONE_ARCHIVE not found: $phone_archive"
-    phone_name=$(LC_ALL=C tar -tzf "$phone_archive" | head -n 1 | cut -d / -f 1)
+    phone_name=$(LC_ALL=C tar -tzf "$phone_archive" | sed -n 1p | cut -d / -f 1)
     valid_payload_name "$phone_name" "$arch" || phone_die "PU_PHONE_ARCHIVE is not a $arch phone access payload: $phone_archive"
     if [ -f "$phone_archive.sha256" ]; then
         expected=$(cut -d ' ' -f 1 "$phone_archive.sha256")
