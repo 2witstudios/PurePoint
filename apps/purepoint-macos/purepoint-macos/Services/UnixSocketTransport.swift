@@ -1,3 +1,6 @@
+// The Mac's local and forwarded daemons only: iOS has no Unix-socket daemon to reach, so the
+// type does not exist there and no iOS path can build one (machines go over SSH).
+#if os(macOS)
 import Darwin
 import Foundation
 import Network
@@ -198,3 +201,4 @@ nonisolated final class UnixBlockingSocket: DaemonBlockingByteStream {
         fd = -1
     }
 }
+#endif

@@ -73,10 +73,14 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
     var transport: any DaemonTransport {
         if let provided = (Self.transportOverride ?? Self.transportProvider)?(self) { return provided }
         #if os(iOS)
-        // iOS has no local daemon: the local endpoint never falls back to a socket.
-        if isLocal { return UnreachableLocalTransport() }
-        #endif
+        // iOS has no Unix-socket daemon: a machine is always reached over its SSH session (the
+        // provider's transport, also when no provider is installed yet, as in unit tests), and
+        // the local endpoint never answers.
+        guard let machineId else { return UnreachableLocalTransport() }
+        return SSHExecTransport(machineId: machineId, sessions: SSHMachineSessions.shared)
+        #else
         return UnixSocketTransport(socketPath: socketPath)
+        #endif
     }
 
     func makeClient() -> DaemonClient { DaemonClient(socketPath: socketPath, transport: transport) }
@@ -96,6 +100,23 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
     private static let providerLock = NSLock()
     nonisolated(unsafe) private static var installedProvider: TransportProvider?
 }
+
+#if os(iOS)
+nonisolated extension DaemonEndpoint {
+    /// The endpoint a socket path names: a machine's when it is `MachinePaths.socketPath` for
+    /// that machine, otherwise the (unreachable) local one.
+    init(socketPath: String) {
+        let parts = socketPath.split(separator: "/")
+        if parts.count >= 2, parts.last == "daemon.sock", let id = UUID(uuidString: String(parts[parts.count - 2])),
+            MachinePaths.socketPath(machineId: id) == socketPath
+        {
+            self.init(machineId: id, socketPath: socketPath)
+        } else {
+            self.init(machineId: nil, socketPath: socketPath)
+        }
+    }
+}
+#endif
 
 /// Filesystem locations shared with the CLI (`crates/pu-core/src/paths.rs`).
 nonisolated enum MachinePaths {

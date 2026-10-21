@@ -174,6 +174,7 @@ struct DaemonTransportTests {
 
     // MARK: - Unix socket
 
+    #if os(macOS)
     @Test func defaultTransportIsUnixSocketAtClientPath() {
         let client = DaemonClient(socketPath: "/tmp/pu-test.sock")
         #expect(client.transport as? UnixSocketTransport == UnixSocketTransport(socketPath: "/tmp/pu-test.sock"))
@@ -186,6 +187,7 @@ struct DaemonTransportTests {
             try await offMain { try client.sendBlocking(.health, timeout: 1) }
         }
     }
+    #endif
 }
 
 // MARK: - Long-lived streams
@@ -306,6 +308,26 @@ struct DaemonEndpointTransportTests {
         // Outside the scope the override is gone.
         #expect(!(DaemonEndpoint.machine(machineId).transport is InMemoryTransport))
     }
+
+    #if os(iOS)
+    @Test func iOSMachineEndpointsGoOverSSH() {
+        #expect((DaemonEndpoint.machine(machineId).transport as? SSHExecTransport)?.machineId == machineId)
+        #expect(DaemonEndpoint.local.transport is UnreachableLocalTransport)
+    }
+
+    @Test func iOSClientNamingAMachineSocketReachesThatMachineOverSSH() {
+        let client = DaemonClient(socketPath: MachinePaths.socketPath(machineId: machineId))
+        #expect((client.transport as? SSHExecTransport)?.machineId == machineId)
+    }
+
+    @Test func iOSClientNamingAnyOtherSocketNeverOpensAUnixSocket() async {
+        UnreachableLocalTransport.trapsInDebug = false
+        defer { UnreachableLocalTransport.trapsInDebug = true }
+        let client = DaemonClient(socketPath: NSTemporaryDirectory() + "pu-missing.sock")
+        #expect(client.transport is UnreachableLocalTransport)
+        await #expect(throws: DaemonClientError.notRunning) { _ = try await client.send(.health) }
+    }
+    #endif
 }
 
 /// Endpoints a provider was asked for, asserted after the fact rather than inside it.

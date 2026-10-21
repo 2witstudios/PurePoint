@@ -26,9 +26,11 @@ nonisolated final class DaemonClient: @unchecked Sendable {
         self.socketPath = socketPath
         #if os(iOS)
         // No local daemon on iOS: a client that names neither a socket nor a transport fails
-        // loudly (see `UnreachableLocalTransport`). Endpoint clients pass their machine's.
+        // loudly (see `UnreachableLocalTransport`). A socket path resolves to the endpoint it
+        // names, so a machine's socket path reaches that machine over SSH, never a Unix socket.
         self.transport =
-            transport ?? (namesNoDaemon ? UnreachableLocalTransport() : UnixSocketTransport(socketPath: socketPath))
+            transport
+            ?? (namesNoDaemon ? UnreachableLocalTransport() : DaemonEndpoint(socketPath: socketPath).transport)
         #else
         self.transport = transport ?? UnixSocketTransport(socketPath: socketPath)
         #endif
