@@ -38,6 +38,7 @@ struct PurePointiPadApp: App {
                         appState.projectState(forId: projectId)?.removeAndKillAgent(agentId)
                     }
                     appState.loadMachines()
+                    SSHMachineSupport.machinesLoaded(appState: appState)
                 }
         }
         .onChange(of: scenePhase) { _, phase in

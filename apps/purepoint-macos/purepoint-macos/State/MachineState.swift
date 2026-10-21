@@ -230,6 +230,11 @@ final class MachineState: Identifiable {
 
     private func applyHostKeyRefusal(_ refusal: SSHTrustError?) {
         hostKeyRefusal = refusal
+        #if DEBUG
+        if case .hostKeyUnconfirmed? = refusal, DebugLaunchArguments.current.trustHostKey {
+            confirmHostKey()
+        }
+        #endif
     }
 
     /// The user confirmed the host key the machine presented on first use: pin it and connect.

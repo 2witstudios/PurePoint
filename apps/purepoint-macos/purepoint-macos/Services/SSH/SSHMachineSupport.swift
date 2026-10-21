@@ -13,11 +13,23 @@ enum SSHMachineSupport {
         launched = true
         SSHMachineSessions.installTransportProvider()
         do {
-            _ = try SSHIdentityStore.shared.identity()
+            let identity = try SSHIdentityStore.shared.identity()
+            #if DEBUG
+            DebugLaunchArguments.writePublicKey(identity.authorizedKeyLine)
+            #else
+            _ = identity
+            #endif
         } catch {
             // Shown again where the key is needed (Add Machine, Settings); connects fail with it.
             print("[SSH] Could not load the device identity: \(error.localizedDescription)")
         }
+    }
+
+    /// After the machines loaded: run the DEBUG add-machine launch argument, if given.
+    static func machinesLoaded(appState: AppState) {
+        #if DEBUG
+        DebugLaunchArguments.current.runAddMachine(appState: appState)
+        #endif
     }
 }
 #endif
