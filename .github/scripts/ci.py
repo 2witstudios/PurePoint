@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 RUST_ROOT = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml"}
+LOCK_HELPER = {"crates/pu-cli/Cargo.toml", "crates/pu-cli/src/bin/point_guard_lock.rs"}
 MOBILE = "apps/purepoint-mobile/"
 RUNTIME_TARGETS = [
     {"runner": "macos-26", "architecture": "arm64"},
@@ -20,7 +21,8 @@ def components(paths, full=False):
     if full:
         return {
             "macos": True, "mobile": True, "mobile_swift": True,
-            "packaging": True, "universal": True, "runtime_targets": RUNTIME_TARGETS,
+            "packaging": True, "release_archive": True, "universal": True,
+            "runtime_targets": RUNTIME_TARGETS,
         }
     shared = any(
         path in {".github/workflows/macos.yml", ".github/workflows/release-proof.yml", ".github/workflows/release.yml"} or path.startswith((".github/scripts/", "apps/shared/ChatMarkdown/"))
@@ -35,18 +37,18 @@ def components(paths, full=False):
         or path in {
             MOBILE + "package.json", MOBILE + "package-lock.json",
             MOBILE + "runtime/verify-simulator-signing.py",
-            "crates/pu-cli/Cargo.toml", "crates/pu-cli/src/bin/point_guard_lock.rs",
-        } | RUST_ROOT
+        } | LOCK_HELPER | RUST_ROOT
         for path in paths
     )
-    # Inputs staged into the packaged runtime or the Release archive. Rust
-    # changes alone are proven by the ordinary jobs and by full runs on main.
+    # Inputs staged into the packaged runtime, including the lock helper it
+    # signs and launches. Other Rust changes are proven by the ordinary jobs
+    # and by full runs on main.
     packaging = shared or any(
         path.startswith((
             ".github/workflows/release", MOBILE + "runtime/", MOBILE + "support/", MOBILE + "docs/",
         ))
         or (path.startswith(MOBILE + "bridge/") and not path.endswith(".test.js"))
-        or path in {MOBILE + "package.json", MOBILE + "package-lock.json"}
+        or path in {MOBILE + "package.json", MOBILE + "package-lock.json"} | LOCK_HELPER
         or path.endswith(("/project.pbxproj", "/Package.resolved"))
         for path in paths
     )
@@ -61,6 +63,9 @@ def components(paths, full=False):
         "mobile": shared or packaged_rust or any(path.startswith(MOBILE) for path in paths),
         "mobile_swift": mobile_swift,
         "packaging": packaging,
+        # The only pull-request job that builds the macOS app in Release for
+        # both architectures and verifies its deep signature.
+        "release_archive": packaging or any(path.startswith("apps/purepoint-macos/") for path in paths),
         # The universal proof needs the Intel slice, which pull requests skip.
         "universal": False,
         "runtime_targets": RUNTIME_TARGETS[:1],
@@ -85,7 +90,7 @@ def changed_paths(event):
 
 CHECKS = (
     ("macos", "macos"),
-    ("release-archive", "packaging"),
+    ("release-archive", "release_archive"),
     ("mobile-bridge", "mobile"),
     ("mobile-swift", "mobile_swift"),
     ("runtime-package", "packaging"),

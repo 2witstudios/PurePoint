@@ -15,7 +15,9 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request runs are cancelled; main, nightly and manual
+  # runs each finish their full proof.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -30,6 +32,7 @@ jobs:
       mobile: ${{ steps.paths.outputs.mobile }}
       mobile_swift: ${{ steps.paths.outputs.mobile_swift }}
       packaging: ${{ steps.paths.outputs.packaging }}
+      release_archive: ${{ steps.paths.outputs.release_archive }}
       universal: ${{ steps.paths.outputs.universal }}
       runtime_targets: ${{ steps.paths.outputs.runtime_targets }}
     steps:
@@ -383,7 +386,7 @@ jobs:
 
   release-archive:
     needs: changes
-    if: needs.changes.outputs.packaging == 'true'
+    if: needs.changes.outputs.release_archive == 'true'
     uses: ./.github/workflows/release-proof.yml
 
   build-and-test:
