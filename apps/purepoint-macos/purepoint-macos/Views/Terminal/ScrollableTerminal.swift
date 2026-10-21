@@ -419,8 +419,12 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     }
 
     /// A pointer move over this terminal that SwiftTerm would report to the app.
+    /// Cached panes stay in the window hidden, so a hidden terminal must not claim
+    /// hovers over the visible one. Bounds, not hit-testing: SwiftTerm's tracking
+    /// area still reports moves under views that overlap the terminal.
     private func isHoverReport(_ event: NSEvent) -> Bool {
         guard event.window === terminalView.window,
+            !terminalView.isHiddenOrHasHiddenAncestor,
             terminalView.getTerminal().mouseMode.sendMotionEvent()
         else { return false }
         return terminalView.bounds.contains(terminalView.convert(event.locationInWindow, from: nil))
