@@ -89,9 +89,17 @@ struct ContentView: View {
             DetailView(selection: $selection)
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 #if os(iOS)
+                // With the sidebar hidden, its gutter keeps the sidebar's fill, top to bottom, so
+                // it reads as a thin sidebar rather than the window's pure black in dark mode.
+                .background(alignment: .leading) {
+                    if !sidebarVisible {
+                        Color(nsColor: Theme.sidebarBackground)
+                            .frame(width: hiddenSidebarLeadingInset)
+                            .ignoresSafeArea()
+                    }
+                }
                 // The pane grid clips each pane, so the tab strip's fill can't reach under the
-                // status bar as the sidebar columns' fills do; this band stands in for it, across
-                // the leading gutter too when the sidebar is hidden.
+                // status bar as the sidebar columns' fills do; this band stands in for it.
                 .background(alignment: .top) {
                     Color(nsColor: Theme.statusBarBand)
                         .frame(height: topSafeArea)
