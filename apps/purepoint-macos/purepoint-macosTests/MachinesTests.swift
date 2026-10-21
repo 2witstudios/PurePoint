@@ -314,8 +314,8 @@ struct HealthProbeTests {
 // MARK: - Daemon file and git requests (protocol 9)
 
 struct DaemonProjectHostRequestTests {
-    @Test func givenProtocolShouldBeVersionEleven() {
-        #expect(DaemonProtocol.version == 11)
+    @Test func givenProtocolShouldBeCurrentVersion() {
+        #expect(DaemonProtocol.version == 12)
     }
 
     @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {

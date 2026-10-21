@@ -1,4 +1,5 @@
 mod agent_lifecycle;
+mod attach_file;
 mod build_cache;
 mod channel;
 mod definitions;
@@ -802,6 +803,7 @@ impl Engine {
             | Request::FsDelete { .. }
             | Request::SubscribeFs { .. }
             | Request::GitExec { .. }) => self.handle_fs_request(request).await,
+            request @ Request::AttachFile { .. } => self.handle_attach_file(request).await,
         }
     }
 

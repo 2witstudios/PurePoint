@@ -491,7 +491,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 11);
+    assert_eq!(PROTOCOL_VERSION, 12);
 }
 
 // --- GridCommand round-trips ---
@@ -2289,6 +2289,18 @@ fn given_minimal_fs_requests_should_apply_spec_defaults() {
             ..
         }
     ));
+    let parsed: Request = serde_json::from_str(
+        r#"{"type":"attach_file","upload_id":"u1","name":"a.png","data_base64":"aGk="}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        parsed,
+        Request::AttachFile {
+            offset: 0,
+            done: false,
+            ..
+        }
+    ));
     let parsed: Request = serde_json::from_str(r#"{"type":"subscribe_fs","root":"/p"}"#).unwrap();
     assert!(matches!(
         parsed,
@@ -2349,6 +2361,16 @@ fn given_fs_and_git_requests_should_round_trip_with_snake_case_tags() {
                 path: "/p/a".into(),
             },
             "fs_delete",
+        ),
+        (
+            Request::AttachFile {
+                upload_id: "u1".into(),
+                name: "shot.png".into(),
+                offset: 4,
+                data_base64: "aGk=".into(),
+                done: true,
+            },
+            "attach_file",
         ),
         (
             Request::SubscribeFs {
@@ -2430,6 +2452,13 @@ fn given_fs_and_git_responses_should_round_trip_with_spec_shapes() {
                 paths: vec!["/p/a".into()],
             },
             "fs_event",
+        ),
+        (
+            Response::AttachFileResult {
+                received: 6,
+                path: Some("/h/.pu/attachments/u1/shot.png".into()),
+            },
+            "attach_file_result",
         ),
         (
             Response::GitExecResult {

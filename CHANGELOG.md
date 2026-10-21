@@ -4,7 +4,11 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+- Paste an image (Cmd+V) into any agent's terminal, or drop files on a remote agent's terminal, and the macOS app uploads it to the agent's machine and types its path there, so remote agents can see screenshots. Uploads are kept in `~/.pu/attachments` on that machine for 7 days.
+
 ### Changed
+- The daemon protocol is now version 12, for the new `attach_file` request. Update PurePoint on every machine and restart its daemon.
 - **Breaking: `scripts/install.sh` installs a Linux release only after verifying who built it.** Linux tarballs are signed with a PurePoint minisign key whose public half is embedded in the script, and releases carry GitHub build provenance attestations. The script checks the signature (with `minisign`, or OpenSSL 3 when minisign isn't installed) and, when the GitHub CLI is installed and signed in, runs `gh attestation verify`. If neither check can run, for example for releases published before signing started, it stops; set `PU_INSTALL_SKIP_VERIFY=1` to install anyway with a warning. A check that fails always stops the install.
 - Releases now include CycloneDX SBOMs for `pu`, `pu-engine` and the Point Guard npm runtime, attested against the DMG and Linux tarballs.
 - The update feed (`appcast.xml`) is now signed with the Sparkle update key, and the app requires a signed feed and verifies each update before extracting it.

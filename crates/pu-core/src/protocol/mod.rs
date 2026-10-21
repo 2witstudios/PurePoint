@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{AgentStatus, WorktreeEntry};
 use indexmap::IndexMap;
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -433,6 +433,18 @@ pub enum Request {
         #[serde(default = "crate::serde_defaults::default_true")]
         recursive: bool,
     },
+    /// One chunk of a file sent to the daemon's machine, so an agent there can
+    /// read it by path. Chunks arrive in order: `offset` is the number of bytes
+    /// already received, and 0 starts the upload over.
+    AttachFile {
+        upload_id: String,
+        name: String,
+        #[serde(default)]
+        offset: u64,
+        data_base64: String,
+        #[serde(default)]
+        done: bool,
+    },
     GitExec {
         cwd: String,
         program: String,
@@ -692,6 +704,12 @@ pub enum Response {
     FsEvent {
         root: String,
         paths: Vec<String>,
+    },
+    /// `path` is set once the last chunk (`done`) is written.
+    AttachFileResult {
+        received: u64,
+        #[serde(default)]
+        path: Option<String>,
     },
     GitExecResult {
         exit_code: i32,
