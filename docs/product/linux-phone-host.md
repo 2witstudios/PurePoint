@@ -1,6 +1,6 @@
 # Linux phone host
 
-**Maturity: CONVERGING** | ID Prefix: LPH | Dependencies: `product/point-guard-setup.md`, `product/machines.md`, `architecture/distribution.md`, `architecture/desktop-app-integration.md`, `product/cli.md`
+**Maturity: DECIDED** | ID Prefix: LPH | Dependencies: `product/point-guard-setup.md`, `product/machines.md`, `architecture/distribution.md`, `architecture/desktop-app-integration.md`, `product/cli.md`
 
 ## Purpose
 
@@ -25,7 +25,7 @@ owner shell (SSH) ── pu phone … ──▶ owner admin socket
 - **Host**: a machine running a Point Guard bridge that a phone can pair with. A Mac host is owned by the Mac app; a **Linux host** is owned by a systemd user unit and administered with `pu phone`.
 - **Owner**: on a Mac, the app process holding the admin token. On Linux, the Unix user that runs the unit. Any process running as that uid counts as the owner. Agents run as that uid, so how far to trust them is up to the user (out of scope, see Purpose).
 - **Bridge payload**: one versioned directory holding the bundled Node, `bridge/`, production `node_modules`, `support/`, `docs/`, the `pu-point-guard-lock` helper and `runtime-manifest.json`. It ships in lockstep with `pu`/`pu-engine`.
-- **Device grant**: per paired device, `chat ∈ {off, view, send}`, `terminals ∈ {off, view, control}`, and `workspaceManagement ∈ {false, true}`. Every bridge operation and every broadcast is checked against the device's current grant.
+- **Device grant**: per paired device, `terminals ∈ {off, view, control}` and `workspaceManagement ∈ {false, true}`. Point Guard chat access is derived from those grants (PGSET-012, PR #264): none for Off, read-only for View or Control without workspace management, full only for Control plus workspace management. Every bridge operation and every broadcast is checked against the device's current grant.
 - **Enrollment**: an in-memory, single-use, short-lived token plus the host certificate pin, encoded in the QR. This is unchanged from PGSET-004.
 
 ## Current coupling inventory
@@ -42,10 +42,10 @@ Everything in the bridge and runtime packaging that assumes macOS or the Mac app
 | `runtime.js:177-182` | `POINT_GUARD_PU_PATH` must point to the bundled pu ("Reinstall the complete PurePoint app") | Unit sets it to `~/.pu/bin/pu`; error text becomes host-neutral |
 | `runtime.js:193-196`, `setup.js:24-47` | Admin and desktop-chat tokens as private files read by the Mac app (`PointGuardServiceModel.swift:104-105`) | Admin moves to a Unix socket (LPH-006); the desktop-chat listener stays for a future local client but is not required on Linux |
 | `runtime.js:294-309` | `PI_MOBILE_HOST` chosen by the Mac app (`PointGuardServiceModel.swift:86-89`) before launch; with no address, the remote listener is skipped until restart (`remote-listener.js:2-16`) | Linux discovers the address in the bridge or the unit's start step and rebinds when Tailscale appears later (LPH-008) |
-| `runtime.js:363-462`, `admin.js:29-102` | Owner admin is loopback HTTP plus a bearer token on an ephemeral port, published through `admin.json` | Linux transport: Unix socket (LPH-006). The dispatch table is reused unchanged, with `devices.rename` and `devices.chat` added |
+| `runtime.js:363-462`, `admin.js:29-102` | Owner admin is loopback HTTP plus a bearer token on an ephemeral port, published through `admin.json` | Linux transport: Unix socket (LPH-006). The dispatch table is reused unchanged, with `devices.rename` added |
 | `runtime.js:423-427`, `pairing.js:47-49`, `pair.js:46-48` | User-facing copy says "this Mac", "Your Mac", "Open PurePoint … Connect phone" | Host-neutral copy, with a host-kind-specific recovery hint |
 | `pairing.js:7-10, 41-58`, `pair.js:1-50` | QR is delivered as an SVG HTML page at `~/.config/pi-mobile/pairing.html` (developer path) | Replaced on Linux by `pu phone pair` terminal rendering (LPH-007); no QR file is written to disk by default |
-| `trust-tls.js:53-72` | Identity minted with absolute `/usr/bin/openssl` | Usually present on Linux but missing from minimal images; see LPH-010 |
+| `trust-tls.js:53-72` | Identity minted with absolute `/usr/bin/openssl` | Replaced on both platforms by in-process minting with Node's built-in crypto (LPH-010) |
 | `trust-tls.js:12-24`, `runtime-state.js:14-30`, `native-provider.js:10-26` | uid/mode/symlink checks via `process.getuid` | Portable |
 | `lock-helper.js:29-73`, `crates/pu-cli/src/bin/point_guard_lock.rs:71` | Kernel `flock` held by the `pu-point-guard-lock` helper binary; helper env `PATH=/usr/bin:/bin` | Portable (Linux `flock` keeps the same open-file-description semantics). The helper is missing from the Linux tarball (`release.yml:302-317` builds and copies only `pu` and `pu-engine`) |
 | `endpoints.js:2-9`, `network.js:26-29` | Remote bind limited to tailnet CGNAT/ULA ranges or loopback | Portable; kept (LPH-008) |
@@ -59,7 +59,7 @@ Everything in the bridge and runtime packaging that assumes macOS or the Mac app
 | Location | Responsibility | Linux owner |
 |---|---|---|
 | `PointGuardServiceModel.swift:57-58` | State dir choice | Unit env |
-| `PointGuardServiceModel.swift:74-91` | Env scrubbing (`NODE_OPTIONS`, `NODE_PATH`, `PI_MOBILE_*`, `PU_*`), fixed `PATH`, cwd = home | Unit `Environment=` with an explicit allow-list (`UnsetEnvironment=` cannot scrub a user manager's inherited env, so the unit starts from `env -i`-style explicit values) |
+| `PointGuardServiceModel.swift:74-91` | Env scrubbing (`NODE_OPTIONS`, `NODE_PATH`, `PI_MOBILE_*`, `PU_*`), fixed `PATH`, cwd = home | Unit sets every bridge variable explicitly with `Environment=` and removes anything the user manager imported with `UnsetEnvironment=` (`NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `PI_MOBILE_*`, `PU_*`, owner bootstrap variables). `pu phone run` starts from an empty environment |
 | `PointGuardServiceModel.swift:93-99` | Owned child, lifetime pipe, readiness wait | systemd plus `pu phone status` readiness read over admin |
 | `PointGuardTailnet.swift:5-11, 37-42` | Tailnet IPv4 on a `utun*` interface, confirmed with `tailscale ip -4` from fixed macOS paths | Linux discovery (LPH-008) |
 | Connect phone sheet (`PointGuardSetupView.swift`) | QR display, close revokes, device list, terminal and workspace toggles | `pu phone pair`, `pu phone devices`, `pu phone grant` |
@@ -80,19 +80,19 @@ Everything in the bridge and runtime packaging that assumes macOS or the Mac app
 ## Open Questions
 
 ! [LPH-001] Ship official nodejs.org glibc Node builds only (glibc ≥ 2.28); musl/Alpine hosts are refused with a clear message — owner chose the best long-term option: PurePoint never maintains its own Node build or depends on an experimental source, and support follows automatically if Node.js publishes official musl builds.
-? [LPH-002] How does the bridge payload ship and stay in lockstep with `pu`/`pu-engine`?
-? [LPH-003] Who starts, stops, restarts and upgrades the bridge, and how does device trust survive?
-? [LPH-004] Where does Linux host state live, and with what modes?
+! [LPH-002] A separate opt-in release asset `purepoint-pointguard-<version>-<arch>-linux-gnu.tar.gz` with `.sha256` and a release signature/provenance attestation, unpacked by `install.sh` (`PU_WITH_PHONE=1`) into a new `~/.pu/pointguard/<version>/`; `pu phone` runs only the payload whose manifest `puVersion` equals its own — servers that never pair a phone don't pay for Node, and a running version is never modified.
+! [LPH-003] A hardened systemd user unit `pu-pointguard.service` written by `pu phone install`, pointing at the exact versioned payload; `pu phone restart` stops only when idle, rewrites the unit for the new version, starts it and prunes payloads nothing runs; `pu phone run` covers hosts without systemd — reuses the proven `pu daemon install` pattern, and all trust and session state lives outside the payload.
+! [LPH-004] `${XDG_STATE_HOME:-~/.local/state}/purepoint/point-guard/`, 0700 directories and 0600 files verified with `lstat` — keeps remote-access trust out of `~/.pu`, which has a broader writer set.
 ! [LPH-005] The command group is `pu phone` — owner decision; it names the user's goal, and the unit can still host Point Guard chat for other clients later.
-? [LPH-006] What carries owner admin on Linux, where no app holds the admin token?
-? [LPH-007] How is the QR rendered in a terminal, and what is the fallback?
+! [LPH-006] A Unix socket in a directory recreated at 0700 on every start, socket set to 0600 after bind regardless of umask, bearer token still required; `pu` checks directory, socket and token ownership and modes before sending the token — no TCP surface, and other uids are excluded by the filesystem; the owner is the Unix user.
+! [LPH-007] `pu phone pair` renders the QR in Rust (`qrcode` crate, explicit black-on-white, quiet zone) and falls back to a `purepoint-pair:` paste string when stdout isn't a terminal or is too narrow; it revokes the enrollment on any exit except success — keeps QR code out of the long-lived listener process; no QR image is written to disk.
 ! [LPH-008] Kernel-TUN Tailscale binds the confirmed tailnet IP directly; userspace-networking Tailscale is supported in the first slice through `tailscale serve` TCP passthrough to a loopback listener; no Tailscale means no remote listener — owner decision to cover container and VM hosts from the start, while TLS stays end to end and pinned in both modes.
-? [LPH-009] How does provider auth work without a browser on the host?
-! [LPH-010] Mint TLS identities with a small private Rust helper (`rcgen`, fixed parameters, written under the trust writer lock), used on both Linux and the Mac for new identities — owner chose the best long-term option: no OS-tool dependency, one code path on both platforms, and existing identities and pins stay valid, so nobody has to re-pair.
-? [LPH-011] What does iOS need to tell a Linux host apart and hold several hosts side by side?
+! [LPH-009] `pu phone login` drives the existing `auth.*` admin flows (URLs and device codes printed for another device, no-echo secret prompts, `--api-key-stdin`) — one owner channel that reuses Pi's catalog and stale-commit guards.
+! [LPH-010] Mint new TLS identities in-process with Node's built-in crypto (ECDSA P-256, fixed-template self-signed certificate, parsed and signature-verified before use), on both Linux and the Mac — the best long-term option the owner asked for: no OS-tool dependency, no new native binary to build, sign and ship, one code path on both platforms; existing identities and pins stay valid, so nobody re-pairs.
+! [LPH-011] Host-neutral copy, optional `hostKind`/`hostLabel` in the authenticated `/pair/verify` response (never in the QR), and paste enrollment with the same validation as a scan — older apps and bridges keep working, and identity data arrives only over the pinned channel.
 ! [LPH-012] A Linux host exposes the machines it reaches over SSH to the phone, the same way a Mac host does, under the same device grants — owner decision; it matches the Mac, where the Agents surface already spans connected machines.
-? [LPH-013] How does Point Guard chat become a device grant, and how far does it reach?
-? [LPH-014] What is shared with the Mac bridge and what is forked?
+! [LPH-013] Adopt PGSET-012 from PR #264: chat access is derived from the existing grants (Off → none, View or Control without workspace management → read-only, Control plus workspace management → full), checked per message and per broadcast — no new field, migration or admin op, and since chat can run `pu`, full chat requires the broadest grant. Linux work depends on #264 landing first.
+! [LPH-014] One bridge with a small platform seam (`platform.js`, `tailnet.js`, `remote.js`); only packaging and the owner UI fork — avoids two diverging trust implementations.
 
 ## Research Notes
 
@@ -115,7 +115,7 @@ Decided (LPH-001): A. Install detects musl or old glibc and refuses with a clear
 
 #### [LPH-002] Packaging and distribution
 
-Option A: a separate release asset `purepoint-pointguard-<version>-<arch>-linux-gnu.tar.gz` plus `.sha256`, installed by `install.sh` only when asked (`PU_WITH_PHONE=1`, or `pu phone install` fetching the matching version). It unpacks to `~/.pu/pointguard/<version>/`, and `~/.pu/pointguard/current` is switched by an atomic symlink rename.
+Option A: a separate release asset `purepoint-pointguard-<version>-<arch>-linux-gnu.tar.gz` plus `.sha256`, installed by `install.sh` only when asked (`PU_WITH_PHONE=1`, or `pu phone install` fetching the matching version). It unpacks to a new `~/.pu/pointguard/<version>/`; the unit names that exact directory, so there is no shared `current` link to race.
 - Pro: server users who never pair a phone don't download about 40 MB of Node and modules. Versioned dirs let a running bridge keep its files while a new version lands (the same no-overwrite principle as DIST-004's rename install).
 - Con: one more asset per arch; install.sh grows an optional path.
 
@@ -125,7 +125,7 @@ Option B: put the payload into the existing `pu` tarball.
 
 Integrity: the same SHA-256 check as `install.sh:51-58`, plus a release signature or build-provenance attestation that the installer verifies when its tool is present. The bridge payload is code that holds remote-access trust, so it needs at least the guarantees of the `pu` binaries. Lockstep: `runtime-manifest.json` records the `pu` version it was built with. `pu phone` refuses to start or administer a bridge whose manifest version differs from its own, and says to run `pu phone install`.
 
-Recommendation: A.
+Decided (LPH-002): A.
 
 #### [LPH-003] Lifecycle
 
@@ -137,9 +137,9 @@ Option B: the daemon (`pu-engine`) spawns and owns the bridge.
 - Pro: one service.
 - Con: Node supply-chain code gets coupled to the daemon's process tree, and DIST-003 "never adopt unknown processes" becomes harder to reason about.
 
-Upgrade: install the new version dir. `pu phone restart` calls admin `runtime.stop` (idle-only, `runtime.js:417-422`), waits for the unit to become inactive, switches `current` and starts the unit. Trust, TLS identity, native sessions and the selected provider/cwd live in the state dir and Pi dir, so they survive the switch (PGSET-006). Outstanding enrollments are invalidated by the restart, as designed. A forced `systemctl --user restart` while busy follows the existing SIGTERM drain and no-replay rules. `runtime.stop` exits 0, so `Restart=on-failure` does not resurrect a deliberate stop.
+Upgrade: install the new version dir. `pu phone restart` calls admin `runtime.stop` (idle-only, `runtime.js:417-422`), waits for the unit to become inactive, rewrites the unit for the new version dir, starts it, and removes payload dirs nothing runs. Trust, TLS identity, native sessions and the selected provider/cwd live in the state dir and Pi dir, so they survive the switch (PGSET-006). Outstanding enrollments are invalidated by the restart, as designed. A forced `systemctl --user restart` while busy follows the existing SIGTERM drain and no-replay rules. `runtime.stop` exits 0, so `Restart=on-failure` does not resurrect a deliberate stop.
 
-Recommendation: A, with `pu phone run` for foreground and non-systemd use.
+Decided (LPH-003): A, with `pu phone run` for foreground and non-systemd use. The unit also sets `UMask=0077`, `NoNewPrivileges=yes` and `UnsetEnvironment=` for inherited variables.
 
 #### [LPH-004] State location and modes
 
@@ -152,7 +152,7 @@ Option B: `~/.pu/point-guard/`.
 
 Requirements either way: every directory is created 0700 and verified by `lstat` (not a symlink, owned by the euid, no group/other bits) before use, and files are 0600, as on the Mac (`runtime-state.js`, `trust-tls.js`). Native Pi keeps its existing `~/.pi/agent` rules (PGSET: existing native Pi directory permissions). The unit file itself is 0644 and contains no secrets.
 
-Recommendation: A.
+Decided (LPH-004): A.
 
 #### [LPH-005] CLI surface
 
@@ -166,9 +166,9 @@ Decided (LPH-005), one `pu phone` group:
 | `pu phone login [provider] [--api-key-stdin]`, `pu phone model <provider>/<id>`, `pu phone cwd <path>` | `providers`, `auth.*`, `model.select`, `runtime.configure` |
 | `pu phone pair [--ttl 120] [--name <label>]` | `pairing.create` → poll `pairing.status` → `pairing.revoke` on exit |
 | `pu phone devices [--json]` | `devices.list` |
-| `pu phone grant <device> [--chat off\|view\|send] [--terminals off\|view\|control] [--workspace on\|off]` | `devices.chat`, `devices.terminals`, `devices.workspaceManagement` |
+| `pu phone grant <device> [--terminals off\|view\|control] [--workspace on\|off]` | `devices.terminals`, `devices.workspaceManagement` (downgrades applied first; chat level is derived and shown) |
 | `pu phone rename <device> <name>` | `devices.rename` (new) |
-| `pu phone revoke <device>` / `rotate <device>` | `devices.revoke` / `devices.rotate` |
+| `pu phone revoke <device>` | `devices.revoke` (re-pairing replaces a rotated credential) |
 
 Devices are addressed by name or a unique device-id prefix, and ambiguity is an error. Every command works over plain SSH with no TTY features except `pair` (LPH-007).
 
@@ -184,9 +184,9 @@ Option B: an owner Unix socket at `<state>/admin/admin.sock`. The `admin/` dir i
 - Pro: filesystem permissions keep other uids out entirely, and there is no TCP surface. On Linux, `connect(2)` needs write permission on the socket inode, and the 0700 parent covers the window before `chmod`.
 - Con: Node has no built-in `SO_PEERCRED`. A peer-uid check needs a small helper (the lock-helper pattern), and the directory check makes it defense in depth only.
 
-Owner authority itself: on Linux the owner is the Unix user. A same-uid process can always reach owner admin, just as it can reach `~/.pu/daemon.sock`. Trust-raising operations (`pairing.create`, grant upgrades, `rotate`) are logged to journald with device id and grant (never secrets). `pu phone devices` shows each device's grants, creation time and last-seen time, so the owner can audit them.
+Owner authority itself: on Linux the owner is the Unix user. A same-uid process can always reach owner admin, just as it can reach `~/.pu/daemon.sock`. Trust-raising operations (`pairing.create`, grant upgrades) are logged to journald with device id and grant (never secrets). `pu phone devices` shows each device's grants, derived chat level and creation time, so the owner can audit them.
 
-Recommendation: B.
+Decided (LPH-006): B.
 
 #### [LPH-007] Terminal QR
 
@@ -206,7 +206,7 @@ Fallbacks when the terminal can't show a scannable code (not a TTY, too narrow, 
 
 TTL defaults to 120 s with a maximum of 300 s (unchanged). Closing the sheet revokes the enrollment: `pu phone pair` stays in the foreground, polls `pairing.status`, and on success prints the new device name and its default grants. On Ctrl-C, SIGHUP (SSH drop), SIGTERM or normal exit it calls `pairing.revoke`. If the revoke can't be confirmed, it prints "enrollment may remain valid until <time>", matching the Mac sheet's uncertain state.
 
-Recommendation: A, with `--text` and `--png` fallbacks.
+Decided (LPH-007): A, with the `--text` paste fallback. The `--png` fallback is dropped: it would write enrollment material to disk.
 
 #### [LPH-008] Endpoint selection
 
@@ -240,17 +240,17 @@ Option B: run the bundled Pi CLI's own `/login` against the same `~/.pi/agent` (
 
 Credentials stay in `~/.pi/agent/auth.json` (0600, existing checks in `native-provider.js:28-44`). No credential passes through the bridge state dir, journald, argv or the QR.
 
-Recommendation: A.
+Decided (LPH-009): A.
 
 #### [LPH-010] TLS identity minting
 
-Option A: keep `/usr/bin/openssl` and check for it in `pu phone install` and `status` with an actionable message. Present on mainstream distros; missing from distroless and some minimal images.
+Option A: keep `/usr/bin/openssl` and check for it in `pu phone install` and `status`. Present on mainstream distros; missing from distroless and some minimal images.
 
-Option B: mint in Rust inside a small private helper (as with the lock helper) using `rcgen`, with fixed parameters and output written under the trust writer lock.
-- Pro: no OS tool dependency; the same code on both platforms.
-- Con: a new crate and binary to review.
+Option B: a private Rust helper using `rcgen`. No OS tool, but `rcgen` pulls in `ring` or `aws-lc-rs` (C and assembly) for the static musl `pu` build, and the Mac bundle gains another binary to sign.
 
-Decided (LPH-010): B on both platforms. The helper ships next to `pu-point-guard-lock`, in the Linux payload and in the Mac bundle (where it is signed like the other helpers). `trust-tls.js` calls it by absolute manifest path with no shell. The bridge still validates the result: the key matches the certificate, the validity window holds, and files are 0600. Existing `openssl`-minted identities are loaded unchanged, so pins and paired devices survive.
+Option C: mint in-process with Node's built-in crypto. Node can generate keys and sign but has no X.509 builder, so the bridge encodes one fixed-template certificate in DER (version 3, random positive serial, `CN=Point Guard` as subject and issuer, ten-year validity, basic constraints CA, subject and authority key identifiers) and signs it with ECDSA P-256/SHA-256. Only the key, serial and dates vary, and no caller input reaches the encoder. The certificate is parsed with `X509Certificate` and its self-signature checked before it is written. A prototype passed `openssl x509 -text` and `openssl verify`, and the phone's pin check accepts any leaf because it uses a basic X.509 policy anchored on the exact pinned certificate (`PairingSecret.swift:181-196`).
+
+Decided (LPH-010): C on both platforms. Files are written 0600 in a `mkdtemp` (0700) directory under the trust writer lock, then renamed into place. Existing `openssl`-minted RSA identities are loaded unchanged, so pins and paired devices survive.
 
 #### [LPH-011] iOS changes
 
@@ -270,22 +270,23 @@ Decided (LPH-012): expose them, as on the Mac. The same per-device grants (termi
 
 Point Guard can run `pu`, so sending chat amounts to driving the host's workspace. Grants must therefore cover every bridge operation, not only terminals and workspaces.
 
-Proposal:
-- `chat: off` gets no snapshots, editor offers, history, sessions or queue data in broadcasts or replies, and every controller op is refused.
-- `chat: view` gets `sync`, `sessions` and `history` plus broadcasts, and every mutating op is refused (`send`, `steer`, `after`, `stop`, `answer`, `new`, `resume`, attachments).
-- `chat: send` gets all ops.
+PR #264 (PGSET-012) already implements this on the shared bridge without a new field: chat level is derived from the existing grants.
 
-The check runs per message before `controller.request`, and per recipient in the broadcast fan-out, re-reading the current grant each time like the terminal checks (`network.js:195-198`). A downgrade takes effect before the next message or broadcast. New devices default to `view`. An upgrade to `send` is labeled "Point Guard can run commands and control agents on this host" in both `pu phone grant` and the Mac settings.
+| Grants | Point Guard chat |
+|---|---|
+| terminals Off | none: chat ops refused, no snapshots or editor offers |
+| View, or Control without workspace management | read-only: `sync`, `sessions`, `history` and broadcasts |
+| Control plus workspace management | full |
 
-Open sub-question: should a chat turn from a device without `terminals: control` + workspace management run with a Pi environment whose `pu` cannot mutate the daemon? That would stop chat from being a way around the narrower grants, at the cost of a per-turn environment or a turn-origin tag.
-
-The bridge is shared code, so this change ships to the Mac in the same release.
+Decided (LPH-013): adopt it unchanged. `pu phone devices` and `pu phone grant` print the derived level, and `grant` warns when a change enables full chat. Linux implementation depends on #264 merging first. A further layer (running chat turns from narrower devices with a `pu` that cannot mutate the daemon) remains a possible later hardening, not a Linux blocker.
 
 #### [LPH-014] Shared vs forked
 
 Shared without a fork: `network.js`, `trust.js`, `trust-tls.js`, `controller.js`, `core.js`, `rpc.js`, `terminals.js`, `workspace.js`, `daemon.js`, `provider.js`, `native-provider.js`, `lock-helper.js`, `runtime-state.js`, `pairing.js` (payload validation) and the Rust lock helper.
 
-Platform seam: a small `platform.js` exporting `defaultStateDir()`, `hostKind`, `hostLabel()`, `discoverTailnet()` (Linux only, since the Mac app passes `PI_MOBILE_HOST`), `adminTransport()` (loopback HTTP on darwin, Unix socket on linux) and the copy strings. `runtime.js` takes these through parameters, not `process.platform` checks spread through the code.
+Platform seam: `platform.js` (state dir, host kind and label, admin transport, copy), `tailnet.js` (discovery and serve-passthrough check) and `remote.js` (late-bind listener manager). `runtime.js` takes these through parameters, not `process.platform` checks spread through the code.
+
+Decided (LPH-014): one bridge with this seam.
 
 Forked: packaging (`package-runtime.py` gains a dir/tarball layout; `sign-runtime.py` stays Mac-only) and the owner UI (SwiftUI sheet vs `pu phone`).
 
@@ -322,7 +323,7 @@ These apply to the Linux host, and those marked (shared) also apply to the Mac b
 
 ## Implementation plan
 
-The dependency-ordered epic lives in [`tasks/linux-phone-host-epic.md`](../../tasks/linux-phone-host-epic.md). Implementation should wait until this spec reaches DECIDED (CLAUDE.md maturity gate).
+The dependency-ordered epic lives in [`tasks/linux-phone-host-epic.md`](../../tasks/linux-phone-host-epic.md). The spec is DECIDED; the next step is SPECIFIED (Given/should requirements and interfaces per task) before implementation. A prototype of the bridge seam, Node-native identity minting, tailnet discovery, the late-bind remote manager and the Unix-socket admin transport exists on the local branch `pu/linux-phone-impl-wip` (its new bridge tests pass; the Rust `pu phone` code there is not yet compiled). Implementation also depends on PR #264 (chat grants) and aligns with PR #265 (owner-only daemon socket, explicit `pu-engine` lookup: the payload runs the `pu` beside the installed `pu-engine`).
 
 ## Risks
 

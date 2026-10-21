@@ -11,13 +11,7 @@ Users who run PurePoint on a cloud VM or home server can reach it from their pho
 
 ## Chat grant on the shared bridge
 
-Make Point Guard chat a per-device `off | view | send` grant enforced on every message and broadcast, plus `devices.chat` and `devices.rename` admin ops. Shared with the Mac. (Effort: M, plus Mac settings UI owner-built in Xcode)
-
-**Requirements**:
-- Given a device with `chat: off`, should receive no snapshot, editor, history or session data and have every controller op refused.
-- Given a device with `chat: view`, should be refused every mutating chat op while still receiving sync, history and broadcasts.
-- Given a grant downgrade, should apply before that device's next message or broadcast, without affecting other devices.
-- Given existing trust state without a chat field, should load it with the documented default and never fail open to `send`.
+Delivered by PR #264 (PGSET-012): chat access derived from existing grants, enforced per message and per broadcast. This epic depends on it merging; no further work here. (Effort: none)
 
 ---
 
@@ -56,14 +50,14 @@ Discover the tailnet IPv4 address from interfaces confirmed with `tailscale ip -
 
 ---
 
-## Rust TLS identity helper
+## Node-native TLS identity minting
 
-Add a private helper that mints the host TLS identity with `rcgen`. `trust-tls.js` calls it by absolute manifest path on both Linux and the Mac. (Effort: M, plus Mac bundle signing owner-verified in Xcode)
+Replace `/usr/bin/openssl` in `trust-tls.js` with an in-process ECDSA P-256 self-signed certificate built from a fixed DER template, on both platforms. (Effort: S)
 
 **Requirements**:
-- Given no existing identity, should mint a certificate and key with fixed parameters into the trust directory as 0600 files, under the trust writer lock.
+- Given no existing identity, should mint a certificate whose self-signature verifies and whose key matches, and write both as 0600 files under the trust writer lock.
 - Given an existing `openssl`-minted identity, should load it unchanged so pins and paired devices survive.
-- Given a missing, non-executable or failing helper, should fail closed with recovery text and never fall back to a PATH lookup.
+- Given validity extending past 2049, should encode GeneralizedTime per RFC 5280.
 
 ---
 
@@ -102,18 +96,18 @@ Add `pu phone install|uninstall|start|stop|restart|status|run`, writing a `pu-po
 
 ## Terminal pairing
 
-Implement `pu phone pair` with Unicode QR rendering in Rust, polling, revoke-on-exit, and `--text`/`--png` fallbacks. (Effort: M)
+Implement `pu phone pair` with Unicode QR rendering in Rust, polling, revoke-on-exit, and a `--text` paste fallback (no QR image on disk). (Effort: M)
 
 **Requirements**:
 - Given a TTY of at least the needed size, should render a QR that scans on both light and dark terminal themes.
 - Given Ctrl-C, SIGHUP, SIGTERM or normal exit before the enrollment is consumed, should revoke it, and report "may remain valid until <time>" when the revoke is unconfirmed.
-- Given a successful enrollment, should print the device name and its default grants and remove any fallback PNG.
+- Given a successful enrollment, should print the device name and its default grants.
 
 ---
 
 ## Device administration commands
 
-Add `pu phone devices|grant|rename|revoke|rotate` over the admin transport. (Effort: S)
+Add `pu phone devices|grant|rename|revoke` over the admin transport, with a new `devices.rename` admin op. (Effort: S)
 
 **Requirements**:
 - Given a device argument, should resolve by exact name or unique id prefix and fail on ambiguity.
