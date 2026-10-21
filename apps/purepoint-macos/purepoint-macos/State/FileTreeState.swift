@@ -198,8 +198,10 @@ final class FileTreeState {
             }
         }.value
         #else
-        // No local git on iOS. Remote trees take ignore verdicts from the daemon listing
-        // (`remoteTree`); local ignore resolution arrives with IPAD-6.4.
+        // No `/usr/bin/git` on iOS, and every iPad tree is remote: `remoteTree` takes each
+        // entry's verdict from the daemon's own `git check-ignore` (`fs_list`), the same
+        // hardened git `git_exec` runs, in the one round trip that lists the directory.
+        // (`git_exec`'s allowlist has no `check-ignore`.) A local tree shows every file.
         Set<String>()
         #endif
     }
