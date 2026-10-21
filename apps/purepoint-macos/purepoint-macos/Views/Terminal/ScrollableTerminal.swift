@@ -12,6 +12,9 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     var attachSession: DaemonAttachSession?
     /// Remote TUIs must not handle browser/clipboard gestures on their host.
     var usesRemoteHost = false
+    /// The agent's daemon. Pasted images, and files dropped on a remote agent, are
+    /// uploaded to it so the agent reads them from its own machine.
+    var attachmentClient: DaemonClient?
     var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
     private var clickedLink: URL?
     private var linkDragStarted = false
@@ -22,6 +25,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     private var scrollMonitor: Any?
     private var mouseMonitor: Any?
+    private var pasteMonitor: Any?
     private var dragAutoscrollTimer: DispatchSourceTimer?
     private var lastDragEvent: NSEvent?
     /// True only between a mouse-down that hit this terminal and the matching mouse-up,
@@ -72,6 +76,12 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             return event
         }
 
+        // SwiftTerm's paste only handles text; an image on the clipboard is uploaded instead.
+        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.handlePasteImage(event) else { return event }
+            return nil
+        }
+
         // Accept file drops
         registerForDraggedTypes([.fileURL])
     }
@@ -115,6 +125,10 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         if let scrollMonitor {
             NSEvent.removeMonitor(scrollMonitor)
             self.scrollMonitor = nil
+        }
+        if let pasteMonitor {
+            NSEvent.removeMonitor(pasteMonitor)
+            self.pasteMonitor = nil
         }
         let session = attachSession
         Task { await session?.stop() }
@@ -227,14 +241,46 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         guard forceRefresh else { return }
     }
 
+    // MARK: - Attachments
+
+    /// Cmd-V with an image (and no text) on the clipboard uploads it as a PNG and
+    /// types its path on the agent's machine.
+    private func handlePasteImage(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+            event.charactersIgnoringModifiers == "v",
+            let window, event.window === window, window.firstResponder === terminalView,
+            let client = attachmentClient,
+            let png = AttachmentUpload.pastedImage(from: .general)
+        else { return false }
+        typeUploadedPaths(of: [(png, AttachmentUpload.pastedImageName())], via: client)
+        return true
+    }
+
+    /// Uploads files in order, then types their remote paths as one shell-escaped
+    /// line without submitting, as a local drop does. Beeps if any upload fails.
+    private func typeUploadedPaths(of files: [(data: Data, name: String)], via client: DaemonClient) {
+        let session = attachSession
+        Task {
+            do {
+                var paths: [String] = []
+                for file in files {
+                    paths.append(try await AttachmentUpload.upload(file.data, name: file.name, via: client))
+                }
+                let line = paths.map(shellEscape).joined(separator: " ")
+                await session?.sendInput(Data(line.utf8))
+            } catch {
+                print("[Attachment] upload failed: \(error.localizedDescription)")
+                await MainActor.run { NSSound.beep() }
+            }
+        }
+    }
+
     // MARK: - Drag & Drop
 
     /// Dropping a file types its path. A remote agent's machine cannot see this Mac's
-    /// files, so its terminal refuses drops instead of pasting a meaningless local path.
-    var acceptsFileDrops = true
-
+    /// files, so for a remote agent the files are uploaded first.
     private func canAcceptDrop(_ sender: NSDraggingInfo) -> Bool {
-        acceptsFileDrops
+        (!usesRemoteHost || attachmentClient != nil)
             && sender.draggingPasteboard.canReadObject(
                 forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
     }
@@ -266,6 +312,18 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             !urls.isEmpty
         else {
             return false
+        }
+        if usesRemoteHost, let client = attachmentClient {
+            let files = urls.compactMap { url -> (data: Data, name: String)? in
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+                return (data, url.lastPathComponent)
+            }
+            guard files.count == urls.count else {
+                NSSound.beep()  // a folder or unreadable file
+                return false
+            }
+            typeUploadedPaths(of: files, via: client)
+            return true
         }
         let escaped = urls.map { shellEscape($0.path) }.joined(separator: " ")
         let session = attachSession

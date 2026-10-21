@@ -48,6 +48,7 @@ Alternative considered: a dedicated mTLS worker protocol with enrollment, ledger
 - Given an unreachable machine, should show it offline and retry with backoff without blocking local projects.
 - Given a remote agent, should attach, send input, resize and kill it exactly like a local agent.
 - Given a remote terminal, should open clicked web URLs and OSC 8 hyperlinks on the viewing Mac. Text selection and Cmd+C/Cmd+V use that Mac's clipboard; ordinary clicks and drags are not sent to the remote TUI. Option-click/drag opts into remote mouse handling; Command-click stays local. Native selection covers the displayed terminal buffer, so scroll a fullscreen TUI to the desired text before selecting it.
+- Given a file dropped on a remote agent's terminal, or an image pasted (Cmd+V) into any agent's terminal, should upload it to the agent's machine and type its path there without submitting, so the agent reads it like a local file. An image paste applies only when the clipboard holds no text.
 - Given spawn or new worktree on a remote project, should run on that machine.
 - Given a remote project, should browse, preview, edit and save files, show git status/diffs/review and persist workspace layouts on that machine.
 - Given a save whose file changed remotely since it was read, should reject the write with a conflict.
@@ -108,6 +109,16 @@ All paths are absolute paths on the daemon host. Each is canonicalized and must 
 - git global options before the subcommand are limited to `--literal-pathspecs`, `--glob-pathspecs`, `--noglob-pathspecs`, `--icase-pathspecs`, `--no-pager`, `--no-optional-locks`, `--no-replace-objects` and `-c core.quotePath=<value>` (so `-C`, other `-c` keys, `--git-dir`, `--work-tree`, `--exec-path`, `--namespace`, `--config-env` are refused).
 - `--no-index` is allowed only as `diff [options] --no-index [options] -- <a> <b>` where each of `<a>`, `<b>` is `/dev/null` or a relative path of plain names.
 
+### Attachments (protocol version 11)
+
+| Request (`type`) | Fields | Response (`type`) |
+|---|---|---|
+| `attach_file` | `upload_id` (1–64 of `[A-Za-z0-9_-]`), `name`, `offset` (default 0), `data_base64`, `done` (default false) | `attach_file_result { received, path }`; `path` only after the `done` chunk |
+
+A client sends a file to the daemon's machine in order, in chunks small enough for the 1 MB request line (the app sends 512 KiB of raw data per chunk). `offset` must equal the bytes already received for that `upload_id`, or the daemon answers `Error { code: "offset_mismatch" }`; offset 0 starts the upload over. The file is written to `~/.pu/attachments/<upload_id>/<name>` (directory mode 0700), where `name` is reduced to a plain file name: no directory parts, control characters or leading dots, at most 200 bytes, `attachment` if nothing is left. Bytes collect in `.partial` and are renamed to the name on `done`. Uploads are limited to 64 MiB (`Error { code: "too_large" }`, and the upload is discarded). Each new upload first removes upload directories untouched for 7 days. The directory is outside every repository, so attachments never appear in git status or a diff.
+
+The app then types the returned path, shell-escaped, into the agent's terminal with `input` (`submit: false`), the same as a local file drop. Socket permissions (or the SSH forward) are the only auth, as for every other request.
+
 ### CLI
 
 - `pu --machine <name> <command…>` — conflicts with `--socket`. Uses the app's live forward when its socket answers; otherwise opens a private `ssh -N -L` forward on `cli-<pid>.sock` for the invocation, records the ssh pid in `cli-<pid>.sock.pid`, and closes both on exit. SIGTERM, SIGHUP and SIGINT also close it before the CLI exits. Before opening one it sweeps files whose CLI pid is dead, sending SIGTERM to a recorded pid only if it is still an `ssh` process whose arguments contain `-L <machine dir>/cli-<pid>.sock:`. Never starts a daemon. Project-scoped commands require `--project <remote root>`; agent-targeted commands resolve by id on that machine.
@@ -118,6 +129,7 @@ All paths are absolute paths on the daemon host. Each is canonicalized and must 
 - **Two forwards for one machine** (app and CLI): the CLI reuses a live app socket and otherwise uses a per-invocation socket, so they never unlink each other's socket.
 - **Remote home with spaces**: the remote socket path is passed as a single argv element.
 - **Daemon restarted remotely**: the forward stays up; requests reconnect per call and streams resubscribe like local ones.
+- **Dropped folder or unreadable file on a remote agent**: the drop is refused with a beep; nothing is uploaded or typed.
 - **Large files**: reads over `max_bytes` return `truncated: true`; the editor treats them like local files over the preview limit. Writes are bounded by the 1 MB request line, so saves above ~750 KB of content are refused with a clear error.
 - **Old remote daemon (protocol 8)**: shown as incompatible; the user upgrades PurePoint on that machine.
 - **Agent/worktree id collision across machines**: ids are 8 random base36 characters (~2.8×10¹² space), so the app's terminal cache and pane surfaces key agents by id alone. A collision would only arise from copying a daemon's `.pu` state between machines; the CLI is unaffected because `--machine` scopes every request to one daemon.
