@@ -30,6 +30,11 @@ struct PiPointGuardChatView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        lifecycle(attachmentPickers(conversationLayout))
+            .sheet(item: dialogBinding) { dialog in dialogSheet(dialog) }
+    }
+
+    private var conversationLayout: some View {
         PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact, tabBar: tabBar) {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
@@ -57,44 +62,58 @@ struct PiPointGuardChatView: View {
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: Theme.chatBackground))
-        // The iPad also attaches photos through PhotosPicker, with the same limits (IPAD-8.3).
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
-            result in
-            importAttachment(result)
-        }
-        #if os(iOS)
-        .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
-        .onChange(of: selectedPhoto) { _, item in
-            if let item { importPhoto(item) }
-        }
-        #endif
-        .task { if model.connected { await model.loadConversations() } }
-        .onChange(of: model.connected) { _, connected in
-            if connected { Task { await model.loadConversations() } }
-        }
-        .onChange(of: model.busy) { _, busy in
-            if !busy && model.connected { Task { await model.loadConversations() } }
-        }
-        .onChange(of: model.snapshot?.sessionId) { _, _ in
-            Task { await model.loadConversations() }
-        }
-        .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
-            Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
-        }
-        .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
-            Button("Stop and resume") {
-                if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
+    }
+
+    private func attachmentPickers(_ content: some View) -> some View {
+        content
+            // The iPad also attaches photos through PhotosPicker, with the same limits (IPAD-8.3).
+            .fileImporter(
+                isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]
+            ) { result in
+                importAttachment(result)
             }
-        }
-        .sheet(
-            item: Binding(
-                get: { model.snapshot?.dialogs.first },
-                set: { dialog in
-                    if dialog == nil, let current = model.snapshot?.dialogs.first {
-                        Task { await model.answer(current, cancelled: true) }
-                    }
-                })
-        ) { dialog in PiDialogView(model: model, dialog: dialog).id(dialog.id).presentedControlDefaults() }
+            #if os(iOS)
+            .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
+            .onChange(of: selectedPhoto) { _, item in
+                if let item { importPhoto(item) }
+            }
+            #endif
+    }
+
+    private func lifecycle(_ content: some View) -> some View {
+        content
+            .task { if model.connected { await model.loadConversations() } }
+            .onChange(of: model.connected) { _, connected in
+                if connected { Task { await model.loadConversations() } }
+            }
+            .onChange(of: model.busy) { _, busy in
+                if !busy && model.connected { Task { await model.loadConversations() } }
+            }
+            .onChange(of: model.snapshot?.sessionId) { _, _ in
+                Task { await model.loadConversations() }
+            }
+            .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
+                Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
+            }
+            .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
+                Button("Stop and resume") {
+                    if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
+                }
+            }
+    }
+
+    private var dialogBinding: Binding<PiExtensionDialog?> {
+        Binding(
+            get: { model.snapshot?.dialogs.first },
+            set: { dialog in
+                if dialog == nil, let current = model.snapshot?.dialogs.first {
+                    Task { await model.answer(current, cancelled: true) }
+                }
+            })
+    }
+
+    private func dialogSheet(_ dialog: PiExtensionDialog) -> some View {
+        PiDialogView(model: model, dialog: dialog).id(dialog.id).presentedControlDefaults()
     }
 
     private var sidebar: some View {
