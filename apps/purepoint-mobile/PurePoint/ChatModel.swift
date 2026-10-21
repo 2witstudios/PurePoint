@@ -10,6 +10,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     @Published var snapshot: Snapshot? { didSet { if !projectingSnapshot, let snapshot { transcriptRows = TranscriptRows.make(messages: snapshot.messages, tools: snapshot.tools) } else if snapshot == nil { transcriptRows = [] } } }
     private(set) var transcriptRows: [TranscriptRow] = []
     @Published var connected = false
+    /// Mirrors the chat access the Mac derives from this phone's grants; the bridge enforces it.
+    @Published private(set) var chatGrant: ChatGrant = .send
     @Published var connectionStatus = "Not connected"
     @Published var error: String?
     @Published var draft = "" { didSet { saveDraft() } }
@@ -82,7 +84,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     @Published private(set) var pairing = false
     var demo = false
     var busy: Bool { snapshot?.busy ?? false }
-    var canSend: Bool { connected && !recoveryFailed && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
+    var canSend: Bool { connected && chatGrant.canSend && !recoveryFailed && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
     var draftKey: String { machineKey + ":" + (snapshot?.sessionId ?? machineSessions[machineKey] ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
@@ -415,7 +417,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.syncState()
+                // The bridge pushes this phone's grants before any receipt, so a sync the
+                // Mac refused for chat Off is settled here and agents still connect.
+                do { try await self.syncState() } catch where current == self.generation && !self.chatGrant.canRead {}
                 guard current == self.generation else { return }
                 let transport = self.generation
                 self.agentControl.transport(host: self.machineKey, connected: true) { [weak self] op, fields in
@@ -473,6 +477,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         case .snapshot(let state, let rows): try apply(state, rows: rows); return
         case .envelope(let envelope): record = envelope
         }
+        if record.type == "permissions" { applyChatGrant(ChatGrant.from(record.chat), resync: true) }
         if record.type == "permissions" || record.type.hasPrefix("terminal.") { agentControl.receive(record); return }
         switch record.type {
         case "receipt":
@@ -483,7 +488,21 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         default: throw MobileError("Unsupported bridge response. Update the app and bridge together.")
         }
     }
+    /// A downgrade hides chat content at once; regaining read access fetches the current conversation.
+    private func applyChatGrant(_ grant: ChatGrant, resync: Bool) {
+        let previous = chatGrant
+        chatGrant = grant
+        if !grant.canRead {
+            saveDraft(); snapshot = nil; cursor.reset(); editorOffer = nil; browsing = nil; conversations = []
+        } else if resync && !previous.canRead && connected {
+            let current = generation
+            Task { [weak self] in
+                do { try await self?.syncState() } catch { if let self, current == self.generation { self.error = error.localizedDescription } }
+            }
+        }
+    }
     private func apply(_ state: Snapshot, rows: [TranscriptRow]? = nil) throws {
+        guard chatGrant.canRead else { return }
         guard state.version == 1 else { throw MobileError("Unsupported bridge version. Update the app and bridge together.") }
         guard cursor.accept(epoch: state.epoch, revision: state.revision) else { return }
         let previous = snapshot?.sessionId
@@ -617,6 +636,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     func stop(selection: Int? = nil) async -> Bool {
         if let selection, !isSelected(selection) { return false }
         let current = generation
+        guard chatGrant.canSend else { error = chatGrant.explanation; return false }
         guard let state = snapshot, let run = state.runId else { return !busy }
         do {
             _ = try await call("stop", fields: ["epoch": state.epoch, "runId": run])
@@ -627,17 +647,20 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if let selection, !isSelected(selection) { return }
         let current = generation
         if demo { conversations = [Conversation(id: "previous", title: "A previous thought", date: nil)]; return }
+        guard chatGrant.canRead else { error = chatGrant.explanation; return }
         do { let value = try await call("sessions")["sessions"]; let result = try await Task.detached(priority: .userInitiated) { try value.decode([Conversation].self) }.value; guard current == generation else { return }; conversations = result } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func browse(_ conversation: Conversation, selection: Int? = nil) async {
         if let selection, !isSelected(selection) { return }
         let current = generation
+        guard chatGrant.canRead else { error = chatGrant.explanation; return }
         if demo { browsing = History(sessionId: conversation.id, title: conversation.title, messages: [ChatMessage(id: "old", role: "assistant", text: "There is room here for a fresh idea.")]); return }
         do { let value = try await call("history", fields: ["sessionId": conversation.id]); let result = try await Task.detached(priority: .userInitiated) { try value.decode(History.self) }.value; guard current == generation else { return }; browsing = result } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func changeSession(to id: String? = nil, stopFirst: Bool = false, selection: Int? = nil) async {
         if let selection, !isSelected(selection) { return }
         let current = generation
+        guard chatGrant.canSend else { error = chatGrant.explanation; return }
         guard !changingSession, let state = snapshot else { return }; changingSession = true; defer { if current == generation { changingSession = false } }
         if busy { guard stopFirst, await stop() else { return } }
         guard current == generation else { return }
@@ -650,12 +673,13 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     func answer(_ dialog: ExtensionDialog, value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false, selection: Int? = nil) async {
         if let selection, !isSelected(selection) { return }
         let current = generation
+        guard chatGrant.canSend else { error = chatGrant.explanation; return }
         guard let state = snapshot, state.dialogs.contains(where: { $0.id == dialog.id }) else { return }
         var fields: [String: Any] = ["epoch": state.epoch, "dialogId": dialog.id, "cancelled": cancelled]; if let optionId { fields["optionId"] = optionId }; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
         do { _ = try await call("answer", fields: fields) } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func exploreDemo() {
-        disconnect(); demo = true; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()
+        disconnect(); demo = true; chatGrant = .send; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()
         snapshot = Snapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "preview", title: "PurePoint", messages: [ChatMessage(id: "welcome", role: "assistant", text: "What would you like to work on?")], tools: [], queue: [], dialogs: [], notices: [])
     }
     private func demoReply(_ text: String) async {
