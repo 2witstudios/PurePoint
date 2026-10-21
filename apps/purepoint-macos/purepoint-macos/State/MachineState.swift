@@ -310,6 +310,13 @@ final class MachineState: Identifiable {
         }
     }
 
+    /// Show a hidden project again; it reappears with the next project refresh.
+    func unhideProject(root: String) {
+        guard hiddenRoots.remove(root) != nil else { return }
+        hiddenCountRevision += 1
+        UserDefaults.standard.set(Array(hiddenRoots), forKey: Self.hiddenKey(machine.id))
+    }
+
     /// Drop every project, returning the savers whose queued layout writes should be flushed
     /// before the forward closes. With `keepingUnsaved`, a project holding unsaved file tabs
     /// stays (unwatched, shown as unavailable) so its edits are not lost.

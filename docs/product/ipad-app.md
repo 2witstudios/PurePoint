@@ -104,7 +104,7 @@ Alternatives considered:
 - REQ-IPAD-006: Given review changes, should render the same diffs and inline code as the Mac (APP-010, APP-015).
 - REQ-IPAD-007: Given multiple iPad windows, should give each window its own shell, as each Mac window has.
 - REQ-IPAD-008: Given a Mac action that opens something locally (Reveal in Finder, Open Local Copy, open in default app), should present a share sheet or Quick Look of the fetched local copy. "Reveal in Finder" itself is not offered.
-- REQ-IPAD-009: Given Open Project, should pick a machine and browse its folders through daemon `fs_list`, then open the chosen folder as a project root on that machine.
+- REQ-IPAD-009: Given Open Project, should pick a machine and browse its folders through daemon `fs_list` in folder-browsing mode (`directories_only`, `machines.md`), then open the chosen folder as a project root on that machine with the daemon's `init`, the request the Mac sends when it opens a local project. The picker follows the Mac open panel: back/forward, a folder pop-up and path bar, a show-hidden toggle, Cancel/Open, and the panel's keys. It offers no New Folder, because the daemon creates no directories on request. `/`, the home folder and its ancestors cannot be opened, matching the daemon's rule.
 - REQ-IPAD-010: Given Agents Hub, Schedule, Triggers or agent settings, should act on the daemon of the machine that owns the current selection and name that machine (IPAD-012).
 - REQ-IPAD-011: Given the app moving to the background, should pause polling. Given it returning to the foreground, should refresh state and resume streams.
 
