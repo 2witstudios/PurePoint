@@ -26,17 +26,17 @@ enum PairingSecret {
         let value: [String: Any] = [kSecValueData as String: Data("pending".utf8), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
         var status = SecItemUpdate(identity as CFDictionary, value as CFDictionary)
         if status == errSecItemNotFound { status = SecItemAdd(identity.merging(value) { _, new in new } as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw MobileError("Could not begin safe Mac trust storage. Unlock this phone and try again.") }
+        guard status == errSecSuccess else { throw MobileError("Could not begin safe trust storage for this computer. Unlock this phone and try again.") }
     }
     static func finishTrustChange(endpoint: String) throws {
         let status = SecItemDelete(pendingQuery(endpoint: endpoint) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not finalize Mac trust. Unlock this phone and re-pair deliberately.") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not finalize trust for this computer. Unlock this phone and re-pair deliberately.") }
     }
     static func readTrust(endpoint: String) throws -> TrustedHost? {
         let status = SecItemCopyMatching(pendingQuery(endpoint: endpoint) as CFDictionary, nil)
         guard status == errSecItemNotFound else {
-            if status == errSecSuccess { throw TrustFailure("Mac pairing was interrupted before trust finalized. Scan a new QR code deliberately.") }
-            throw MobileError("Unlock this phone to access its saved Mac trust, then reconnect.")
+            if status == errSecSuccess { throw TrustFailure("Pairing was interrupted before trust finalized.") }
+            throw MobileError("Unlock this phone to access its saved computer trust, then reconnect.")
         }
         return try readTrustRecord(endpoint: endpoint)
     }
@@ -46,8 +46,8 @@ enum PairingSecret {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(attributes as CFDictionary, &item)
         if status == errSecItemNotFound { return nil } // Legacy PiMobile.Pairing strings never become trust.
-        guard status == errSecSuccess else { throw MobileError("Unlock this phone to access its saved Mac trust, then reconnect.") }
-        guard let data = item as? Data, let record = try? JSONDecoder().decode(TrustedHost.self, from: data), record.valid, record.endpoint == endpoint else { throw TrustFailure("Saved Mac trust is invalid. Scan a new Mac QR code deliberately.") }
+        guard status == errSecSuccess else { throw MobileError("Unlock this phone to access its saved computer trust, then reconnect.") }
+        guard let data = item as? Data, let record = try? JSONDecoder().decode(TrustedHost.self, from: data), record.valid, record.endpoint == endpoint else { throw TrustFailure("Saved trust for this computer is invalid.") }
         return record
     }
     // Back up bytes and quarantine provenance without interpreting or authorizing them.
@@ -57,11 +57,11 @@ enum PairingSecret {
         var attributes = query(endpoint: endpoint); attributes[kSecReturnData as String] = true
         var item: CFTypeRef?
         let status = SecItemCopyMatching(attributes as CFDictionary, &item)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace Mac trust.") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace computer trust.") }
         let previous = item as? Data
-        guard status == errSecItemNotFound || previous != nil else { throw MobileError("Could not preserve previous Mac trust.") }
+        guard status == errSecItemNotFound || previous != nil else { throw MobileError("Could not preserve previous computer trust.") }
         let pending = SecItemCopyMatching(pendingQuery(endpoint: endpoint) as CFDictionary, nil)
-        guard pending == errSecSuccess || pending == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace Mac trust.") }
+        guard pending == errSecSuccess || pending == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace computer trust.") }
         let wasPending = pending == errSecSuccess
         return {
             if let previous { try writeTrustData(previous, endpoint: endpoint) } else { try removeTrust(endpoint: endpoint) }
@@ -73,14 +73,14 @@ enum PairingSecret {
         let identity = query(endpoint: endpoint)
         var status = SecItemUpdate(identity as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound { status = SecItemAdd(identity.merging(attributes) { _, new in new } as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw MobileError("Could not save Mac trust in Keychain (\(status)). Create a new QR and try again.") }
+        guard status == errSecSuccess else { throw MobileError("Could not save computer trust in Keychain (\(status)). Create a new pairing code and try again.") }
     }
     static func removeTrust(endpoint: String) throws {
         let status = SecItemDelete(query(endpoint: endpoint) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not discard canceled Mac trust. Unlock this phone and try again.") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not discard canceled computer trust. Unlock this phone and try again.") }
     }
     static func saveTrust(_ record: TrustedHost) throws {
-        guard record.valid else { throw TrustFailure("The Mac returned invalid device trust. Scan a new QR code.") }
+        guard record.valid else { throw TrustFailure("The computer returned invalid device trust.") }
         try writeTrustData(JSONEncoder().encode(record), endpoint: record.endpoint)
     }
 }
