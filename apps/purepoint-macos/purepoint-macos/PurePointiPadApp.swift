@@ -29,6 +29,8 @@ struct PurePointiPadApp: App {
                 .preferredColorScheme(settingsState.appearance.colorScheme)
                 // The Mac's 13pt default for text that names no font (MacTextStyles+iOS.swift).
                 .font(.body)
+                // Mac checkboxes and push buttons for controls that name no style (MacControlStyles+iOS.swift).
+                .macControlDefaults()
                 .onAppear {
                     appState.registry = registry
                     viewCache.agentStatus = { [weak appState] agentId in
