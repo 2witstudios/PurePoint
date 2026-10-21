@@ -1,17 +1,15 @@
-import AppKit
 import Foundation
-import Network
 import SwiftTerm
 
 /// Manages a single attach connection per terminal view.
 /// Connects to the daemon, streams Output messages, and feeds bytes to the terminal.
-/// Actor isolation serializes all writes to the NWConnection, preventing garbled JSON.
+/// Actor isolation serializes all writes to the daemon stream, preventing garbled JSON.
 actor DaemonAttachSession {
     let agentId: String
     private let clientId = "mac:" + UUID().uuidString
     private var desiredSize: (Int, Int)?
-    private weak var terminalView: TerminalView?
-    private var connection: NWConnection?
+    private weak var terminalView: PlatformTerminalView?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
     private(set) var isAgentGone = false
     /// True once the daemon closed an attached stream on its own, which it does
@@ -33,7 +31,7 @@ actor DaemonAttachSession {
 
     init(
         agentId: String,
-        terminalView: TerminalView,
+        terminalView: PlatformTerminalView,
         resetBeforeReplay: Bool = false,
         localCols: Int = 120, localRows: Int = 40,
         onFirstOutput: (() -> Void)? = nil,
@@ -113,7 +111,7 @@ actor DaemonAttachSession {
     /// Stop the attach session.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -125,7 +123,7 @@ actor DaemonAttachSession {
         let tv = self.terminalView
 
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        self.connection?.close()
         self.connection = conn
 
         // Send attach request
@@ -149,7 +147,7 @@ actor DaemonAttachSession {
 
         let focused = await MainActor.run {
             guard let tv else { return false }
-            return tv.window?.firstResponder === tv
+            return tv.hasKeyboardFocus
         }
         if focused { await claimSize() }
 
@@ -175,7 +173,7 @@ actor DaemonAttachSession {
                 termRows = rows
                 await MainActor.run {
                     guard let tv else { return }
-                    (tv.superview as? ScrollableTerminal)?.applyReportedSize(cols: cols, rows: rows)
+                    tv.applyReportedPtySize(cols: cols, rows: rows)
                 }
             case .output(_, let data):
                 guard !data.isEmpty else { continue }

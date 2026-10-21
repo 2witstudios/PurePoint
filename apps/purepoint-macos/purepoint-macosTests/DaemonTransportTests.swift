@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import SwiftTerm
 import Testing
 
 @testable import PurePoint
@@ -84,6 +86,14 @@ private struct InMemoryTransport: DaemonTransport {
         Task { try? await serve(server) }
         return client
     }
+}
+
+/// Counts the streams a transport opened.
+private final class OpenCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() -> Int { lock.withLock { count += 1; return count } }
+    var value: Int { lock.withLock { count } }
 }
 
 /// A daemon that answers one `health` request with a health report, split across chunks the
@@ -175,5 +185,83 @@ struct DaemonTransportTests {
         await #expect(throws: DaemonClientError.notRunning) {
             try await offMain { try client.sendBlocking(.health, timeout: 1) }
         }
+    }
+}
+
+// MARK: - Long-lived streams
+
+/// A daemon that confirms one subscription with `reply`, then closes the stream.
+private func confirmThenClose(_ reply: String, opens: OpenCounter) -> InMemoryTransport {
+    InMemoryTransport { server in
+        _ = opens.increment()
+        _ = try await DaemonLineReader(stream: server).readLine()
+        try await server.send(Data(reply.utf8) + [0x0A])
+        server.close()
+    }
+}
+
+private func waitUntil(timeout: Duration = .seconds(10), _ condition: () async -> Bool) async {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline, !(await condition()) {
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+struct DaemonStreamTransportTests {
+
+    @Test func gridSubscriptionReconnectsOverTransportAfterStreamCloses() async throws {
+        let opens = OpenCounter()
+        let client = DaemonClient(transport: confirmThenClose(#"{"type":"grid_subscribed"}"#, opens: opens))
+        let registry = await WorkspaceRegistry(loadWorkspaces: { _ in [] })
+        let subscription = DaemonGridSubscription(projectRoot: "/p", registry: registry, client: client)
+        let task = Task { await subscription.start() }
+        await waitUntil { opens.value >= 2 }
+        await subscription.stop()
+        task.cancel()
+        #expect(opens.value >= 2)
+    }
+
+    @Test func statusSubscriptionReportsDaemonLostWhenEstablishedStreamCloses() async throws {
+        let opens = OpenCounter()
+        let client = DaemonClient(transport: confirmThenClose(#"{"type":"status_subscribed"}"#, opens: opens))
+        let subscription = DaemonStatusSubscription(projectRoot: "/p", client: client)
+        let lost = OpenCounter()
+        await subscription.start(onEvent: { _, _ in }, onDaemonLost: { _ = lost.increment() })
+        #expect(lost.value == 1)
+        #expect(opens.value == 1)
+    }
+
+    @Test func statusSubscriptionSurfacesSubscribeErrorWithoutRetrying() async throws {
+        let opens = OpenCounter()
+        let client = DaemonClient(
+            transport: confirmThenClose(#"{"type":"error","code":"NOPE","message":"no"}"#, opens: opens))
+        let subscription = DaemonStatusSubscription(projectRoot: "/p", client: client)
+        let lost = OpenCounter()
+        await subscription.start(onEvent: { _, _ in }, onDaemonLost: { _ = lost.increment() })
+        #expect(lost.value == 0)
+        #expect(opens.value == 1)
+    }
+
+    @MainActor @Test func attachSessionEndsWithoutReattachWhenDaemonClosesStream() async throws {
+        let opens = OpenCounter()
+        let client = DaemonClient(
+            transport: confirmThenClose(#"{"type":"attach_ready","buffered_bytes":0}"#, opens: opens))
+        let terminal = PlatformTerminalView(frame: .init(x: 0, y: 0, width: 200, height: 100))
+        let session = DaemonAttachSession(agentId: "ag-1", terminalView: terminal, client: client)
+        await session.start()
+        #expect(await session.didStreamEnd)
+        #expect(await session.isAgentGone == false)
+        #expect(opens.value == 1)
+    }
+
+    @MainActor @Test func attachSessionStopsRetryingWhenAgentIsGone() async throws {
+        let opens = OpenCounter()
+        let client = DaemonClient(
+            transport: confirmThenClose(#"{"type":"error","code":"AGENT_NOT_FOUND","message":"gone"}"#, opens: opens))
+        let terminal = PlatformTerminalView(frame: .init(x: 0, y: 0, width: 200, height: 100))
+        let session = DaemonAttachSession(agentId: "ag-1", terminalView: terminal, client: client)
+        await session.start()
+        #expect(await session.isAgentGone)
+        #expect(opens.value == 1)
     }
 }

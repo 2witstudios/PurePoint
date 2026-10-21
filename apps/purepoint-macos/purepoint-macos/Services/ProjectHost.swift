@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 // MARK: - Values
 
@@ -602,7 +601,7 @@ nonisolated struct SubscriptionBackoff: Sendable {
 actor DaemonFsSubscription {
     let root: String
     private let client: DaemonClient
-    private var connection: NWConnection?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
     private var backoff = SubscriptionBackoff()
     private var subscribedAt: ContinuousClock.Instant?
@@ -634,16 +633,16 @@ actor DaemonFsSubscription {
 
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
     private func runLoop(onEvent: @escaping @Sendable () -> Void) async throws {
         let (conn, reader) = try await client.connect()
-        connection?.cancel()
+        connection?.close()
         connection = conn
         guard !stopped else {
-            conn.cancel()
+            conn.close()
             return
         }
         try await DaemonClient.write(.subscribeFs(root: root, recursive: true), to: conn)

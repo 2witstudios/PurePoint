@@ -84,7 +84,7 @@ nonisolated struct UnixSocketTransport: DaemonTransport, Hashable {
 
 /// A connected `NWConnection` to a daemon socket.
 nonisolated final class UnixSocketStream: DaemonByteStream {
-    let connection: NWConnection
+    private let connection: NWConnection
 
     init(connection: NWConnection) {
         self.connection = connection

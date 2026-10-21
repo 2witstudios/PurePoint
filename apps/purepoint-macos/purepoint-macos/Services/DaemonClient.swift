@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 // MARK: - DaemonClient
 
@@ -66,10 +65,11 @@ nonisolated final class DaemonClient: @unchecked Sendable {
         return Self.parse(line)
     }
 
-    /// Connect to the daemon and return the connection + a line reader.
-    func connect() async throws -> (NWConnection, DaemonLineReader) {
-        let stream = try await UnixSocketTransport(socketPath: socketPath).openStream() as! UnixSocketStream
-        return (stream.connection, DaemonLineReader(stream: stream))
+    /// Open a long-lived stream to the daemon and return it with a line reader. The connect
+    /// runs to completion or its timeout regardless of task cancellation.
+    func connect() async throws -> (any DaemonByteStream, DaemonLineReader) {
+        let stream = try await transport.openStream()
+        return (stream, DaemonLineReader(stream: stream))
     }
 
     // MARK: - Private
@@ -79,10 +79,6 @@ nonisolated final class DaemonClient: @unchecked Sendable {
         var message = json
         message.append(0x0A)  // newline
         try await stream.send(message)
-    }
-
-    static func write(_ request: DaemonRequest, to connection: NWConnection) async throws {
-        try await write(request, to: UnixSocketStream(connection: connection))
     }
 
     private func readOne(from reader: DaemonLineReader) async throws -> DaemonResponse {
