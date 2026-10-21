@@ -93,10 +93,31 @@ nonisolated struct SSHOpenedChannel: Sendable {
 actor SSHMachineSession {
     private struct Slot {
         let connection: any SSHExecConnection
+        /// Open channels plus opens in flight.
         var channels = 0
+        /// Channels the server has accepted and not yet released.
+        var established = 0
+        /// How many channels the server holds at most, learned from its refusals (OpenSSH
+        /// `MaxSessions`), so a burst of opens does not keep asking a full connection.
+        var limit: Int?
+
+        /// Until the server's limit is known, only a few opens are in flight at once, so a burst
+        /// learns it from a few refusals rather than one per opener.
+        var hasRoom: Bool {
+            limit.map { channels < $0 } ?? (channels - established < SSHMachineSession.probeWindow)
+        }
+
+        /// No known limit, but a full probe window: its outcome decides whether to overflow.
+        var isProbing: Bool { limit == nil && !hasRoom }
     }
 
+    /// Opens in flight on a connection whose limit is not known yet.
+    nonisolated static let probeWindow = 8
+
     private let connector: any SSHConnector
+    /// The session limit the server enforced on this machine's connections; a new connection
+    /// starts with it.
+    private var learnedLimit: Int?
     private let now: @Sendable () -> Date
     private var primaryId: Int?
     private var slots: [Int: Slot] = [:]
@@ -104,6 +125,9 @@ actor SSHMachineSession {
     private var overflowOrder: [Int] = []
     private var nextId = 0
     private var pendingPrimary: Task<Int, Error>?
+    /// An overflow connection being opened; concurrent opens wait for it instead of each
+    /// opening their own.
+    private var pendingOverflow: Task<Int, Error>?
     private var backoff = SSHReconnectBackoff()
     private var lastError: Error?
     private var onPrimaryDropped: (@Sendable () -> Void)?
@@ -141,6 +165,8 @@ actor SSHMachineSession {
     func disconnect() {
         pendingPrimary?.cancel()
         pendingPrimary = nil
+        pendingOverflow?.cancel()
+        pendingOverflow = nil
         let connections = slots.values.map(\.connection)
         slots.removeAll()
         overflowOrder.removeAll()
@@ -158,26 +184,46 @@ actor SSHMachineSession {
     /// Open an exec channel on the primary connection, or on an overflow connection when the
     /// primary refuses it.
     func openChannel(_ command: String) async throws -> SSHOpenedChannel {
-        let primary = try await primary(failFast: true)
-        do {
-            return try await open(command, on: primary)
-        } catch where Self.isSessionLimit(error) {
-            // Fall through to the overflow connections.
-        }
-        for id in overflowOrder {
+        _ = try await primary(failFast: true)
+        // Bounded: each pass opens, learns a connection is full, waits on a probe, or adds a
+        // connection.
+        for _ in 0..<1000 {
+            let ids = [primaryId].compactMap { $0 } + overflowOrder
+            if let id = ids.first(where: { slots[$0]?.hasRoom == true }) {
+                do {
+                    return try await open(command, on: id)
+                } catch where Self.isSessionLimit(error) {
+                    continue
+                }
+            }
+            if ids.contains(where: { slots[$0]?.isProbing == true }) {
+                try await Task.sleep(for: .milliseconds(10))
+                continue
+            }
+            if let pendingOverflow {
+                _ = try? await pendingOverflow.value
+                continue
+            }
+            // The task clears itself on the actor before it completes, so a waiter never finds
+            // a finished task still pending and spins on it.
+            let task = Task {
+                defer { self.pendingOverflow = nil }
+                return try await self.addConnection(primary: false)
+            }
+            pendingOverflow = task
+            let id = try await task.value
+            // Waiters may have filled it meanwhile; then pick again like everyone else.
+            guard slots[id]?.hasRoom == true else { continue }
             do {
                 return try await open(command, on: id)
             } catch where Self.isSessionLimit(error) {
                 continue
+            } catch {
+                releaseIfIdle(id)
+                throw error
             }
         }
-        let id = try await addConnection(primary: false)
-        do {
-            return try await open(command, on: id)
-        } catch {
-            releaseIfIdle(id)
-            throw error
-        }
+        throw DaemonClientError.connectTimeout
     }
 
     /// The server refused another session channel on this connection: OpenSSH `MaxSessions`.
@@ -220,7 +266,7 @@ actor SSHMachineSession {
             connection.close()
             throw CancellationError()
         }
-        slots[id] = Slot(connection: connection)
+        slots[id] = Slot(connection: connection, limit: learnedLimit)
         if primary { primaryId = id } else { overflowOrder.append(id) }
         return id
     }
@@ -235,8 +281,19 @@ actor SSHMachineSession {
             channel = try await connection.openExec(command)
         } catch {
             slots[id]?.channels -= 1
+            if Self.isSessionLimit(error), let established = slots[id]?.established {
+                slots[id]?.limit = max(1, established)
+                learnedLimit = max(learnedLimit ?? 0, max(1, established))
+            }
             releaseIfIdle(id)
             throw error
+        }
+        slots[id]?.established += 1
+        // An open in flight when the refusal arrived can still succeed: the limit is at least
+        // what the server has accepted.
+        if let slot = slots[id], let limit = slot.limit, slot.established > limit {
+            slots[id]?.limit = slot.established
+            learnedLimit = max(learnedLimit ?? 0, slot.established)
         }
         let released = ReleaseOnce()
         return SSHOpenedChannel(
@@ -251,6 +308,7 @@ actor SSHMachineSession {
     private func release(_ id: Int) {
         guard slots[id] != nil else { return }
         slots[id]?.channels -= 1
+        slots[id]?.established -= 1
         releaseIfIdle(id)
     }
 

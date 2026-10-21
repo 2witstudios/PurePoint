@@ -72,6 +72,8 @@ final class FakeExecConnection: SSHExecConnection, @unchecked Sendable {
     private let lock = NSLock()
     private var open: [FakeExecChannel] = []
     private(set) var closed = false
+    private var refusedCount = 0
+    var refusals: Int { lock.withLock { refusedCount } }
     private let maxSessions: Int
     private let respond: @Sendable (FakeExecChannel, Data) -> Void
     private let onOpen: @Sendable (FakeExecChannel) -> Void
@@ -92,7 +94,10 @@ final class FakeExecConnection: SSHExecConnection, @unchecked Sendable {
         let channel: FakeExecChannel = try lock.withLock {
             open.removeAll { $0.isEnded }
             guard !closed else { throw DaemonClientError.eof }
-            guard open.count < maxSessions else { throw SSHSessionLimitReached() }
+            guard open.count < maxSessions else {
+                refusedCount += 1
+                throw SSHSessionLimitReached()
+            }
             let channel = FakeExecChannel(command: command, respond: respond)
             open.append(channel)
             return channel
@@ -257,6 +262,36 @@ struct SSHMachineSessionTests {
         await eventually { await session.overflowCount == 0 }
         #expect(connector.all[1].isClosed)
         #expect(!connector.all[0].isClosed)
+    }
+
+    @Test func aBurstOfOpensAddsOnlyTheConnectionsItNeeds() async throws {
+        let connector = FakeConnector(maxSessions: 10)
+        let session = SSHMachineSession(connector: connector)
+        let first = try await session.openChannel("relay")
+        let opened = try await withThrowingTaskGroup(of: SSHOpenedChannel.self) { group in
+            for _ in 0..<29 { group.addTask { try await session.openChannel("relay") } }
+            return try await group.reduce(into: [first]) { $0.append($1) }
+        }
+        #expect(connector.attempts == 3)
+        #expect(await session.channelCounts == [10, 10, 10])
+
+        // With each connection's limit learned, a later burst asks no full connection.
+        let refusalsBefore = connector.all.map(\.refusals).reduce(0, +)
+        // Learning the limit costs at most one probe window of refusals, on the primary only.
+        #expect(refusalsBefore <= SSHMachineSession.probeWindow)
+        #expect(connector.all.dropFirst().allSatisfy { $0.refusals == 0 })
+        for channel in opened.filter(\.onPrimary).prefix(5) {
+            channel.channel.close()
+            channel.release()
+        }
+        await eventually { await session.channelCounts == [5, 10, 10] }
+        let again = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<5 { group.addTask { try await session.openChannel("relay").onPrimary } }
+            return try await group.reduce(into: [Bool]()) { $0.append($1) }
+        }
+        #expect(again == [true, true, true, true, true])
+        #expect(connector.all.map(\.refusals).reduce(0, +) == refusalsBefore)
+        #expect(connector.attempts == 3)
     }
 
     @Test func maxSessionsOneStillWorksAtOneConnectionPerStream() async throws {
