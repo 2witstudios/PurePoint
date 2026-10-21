@@ -75,6 +75,13 @@ struct SidebarFooter: View {
         .onChange(of: debugAddMachine.flow == nil, initial: true) { _, isNil in
             if !isNil { showAddMachine = true }
         }
+        // `-PUDebugOpen add-machine` shows it empty, as this footer's button does.
+        .onChange(of: debugAddMachine.showEmpty, initial: true) { _, show in
+            if show {
+                debugAddMachine.showEmpty = false
+                showAddMachine = true
+            }
+        }
         #endif
     }
 

@@ -94,6 +94,9 @@ struct ContentView: View {
                 selection = debugSelection
             }
         }
+        .task {
+            await DebugLaunchArguments.current.runOpen(appState: appState) { selection = $0 }
+        }
         #endif
         .task {
             while !Task.isCancelled {
