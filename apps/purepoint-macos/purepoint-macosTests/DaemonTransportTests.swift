@@ -268,15 +268,15 @@ struct DaemonStreamTransportTests {
 
 // MARK: - Endpoint resolution
 
-/// Mutates the process-wide provider hook, so these run one at a time.
-@Suite(.serialized) struct DaemonEndpointTransportTests {
+/// Providers are injected through the task-local override, so neither other suites nor the
+/// hosted app can observe them, and nothing here mutates the process-wide hook.
+struct DaemonEndpointTransportTests {
     private let machineId = UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556666")!
 
     #if os(macOS)
     @Test func macOSEndpointsResolveToUnixSocketsAtTodaysPaths() {
-        let previous = DaemonEndpoint.transportProvider
-        DaemonEndpoint.transportProvider = nil
-        defer { DaemonEndpoint.transportProvider = previous }
+        // The Mac app never installs a provider.
+        #expect(DaemonEndpoint.transportProvider == nil)
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let local = DaemonEndpoint.local
@@ -292,19 +292,26 @@ struct DaemonStreamTransportTests {
     #endif
 
     @Test func injectedProviderResolvesMachineEndpointsWithoutChangingCallSites() async throws {
-        let previous = DaemonEndpoint.transportProvider
-        let seen = OpenCounter()
-        let id = machineId
-        DaemonEndpoint.transportProvider = { endpoint in
-            _ = seen.increment()
-            #expect(endpoint.machineId == id)
+        let seen = EndpointLog()
+        let provider: DaemonEndpoint.TransportProvider = { endpoint in
+            seen.append(endpoint)
             return InMemoryTransport(serve: healthDaemon)
         }
-        defer { DaemonEndpoint.transportProvider = previous }
-
-        let client = DaemonEndpoint.machine(machineId).makeClient()
+        let client = DaemonEndpoint.$transportOverride.withValue(provider) {
+            DaemonEndpoint.machine(machineId).makeClient()
+        }
         #expect(client.transport is InMemoryTransport)
-        #expect(seen.value == 1)
+        #expect(seen.endpoints == [DaemonEndpoint.machine(machineId)])
         expectHealth(try await client.send(.health))
+        // Outside the scope the override is gone.
+        #expect(!(DaemonEndpoint.machine(machineId).transport is InMemoryTransport))
     }
+}
+
+/// Endpoints a provider was asked for, asserted after the fact rather than inside it.
+private final class EndpointLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [DaemonEndpoint] = []
+    func append(_ endpoint: DaemonEndpoint) { lock.withLock { recorded.append(endpoint) } }
+    var endpoints: [DaemonEndpoint] { lock.withLock { recorded } }
 }

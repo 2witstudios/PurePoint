@@ -12,6 +12,10 @@ struct PurePointiPadApp: App {
     @State private var keyBindingState = KeyBindingState()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        SSHMachineSupport.launch()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

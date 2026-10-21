@@ -542,7 +542,7 @@ final class AppState {
         let projectRoots = localManagedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            let client = DaemonClient()
+            let client = DaemonEndpoint.local.makeClient()
             // Only an instance that owns the daemon stops anything. A second app
             // instance attached to a shared daemon must leave the owner's agents
             // running: suspending them would strand them, since that daemon stays

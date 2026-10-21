@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated struct DaemonWorkspaceService: WorkspaceService {
-    var client = DaemonClient()
+    var client = DaemonEndpoint.local.makeClient()
 
     func manifestPath(projectRoot: String) -> String {
         (projectRoot as NSString)

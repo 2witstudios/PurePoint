@@ -71,12 +71,21 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
     /// at `socketPath`; a platform that reaches machines another way (the iPad, over SSH)
     /// installs `transportProvider` and every client made from an endpoint uses it.
     var transport: any DaemonTransport {
-        Self.transportProvider?(self) ?? UnixSocketTransport(socketPath: socketPath)
+        if let provided = (Self.transportOverride ?? Self.transportProvider)?(self) { return provided }
+        #if os(iOS)
+        // iOS has no local daemon: the local endpoint never falls back to a socket.
+        if isLocal { return UnreachableLocalTransport() }
+        #endif
+        return UnixSocketTransport(socketPath: socketPath)
     }
 
     func makeClient() -> DaemonClient { DaemonClient(socketPath: socketPath, transport: transport) }
 
     typealias TransportProvider = @Sendable (DaemonEndpoint) -> any DaemonTransport
+
+    /// A provider scoped to the current task and its children, consulted before
+    /// `transportProvider`. Tests use it so nothing outside the test observes their transport.
+    @TaskLocal static var transportOverride: TransportProvider?
 
     /// The platform's transport hook. Nil on macOS.
     static var transportProvider: TransportProvider? {
