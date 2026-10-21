@@ -164,7 +164,7 @@ Decided (LPH-005), one `pu phone` group:
 | `pu phone start` / `stop` / `restart` / `status` | systemd + `status` |
 | `pu phone run` | foreground `--managed` |
 | `pu phone login [provider] [--api-key-stdin]`, `pu phone model <provider>/<id>`, `pu phone cwd <path>` | `providers`, `auth.*`, `model.select`, `runtime.configure` |
-| `pu phone pair [--ttl 120] [--name <label>]` | `pairing.create` → poll `pairing.status` → `pairing.revoke` on exit |
+| `pu phone pair [--ttl 120] [--text]` | `pairing.create` → poll `pairing.status` → `pairing.revoke` on exit |
 | `pu phone devices [--json]` | `devices.list` |
 | `pu phone grant <device> [--terminals off\|view\|control] [--workspace on\|off]` | `devices.terminals`, `devices.workspaceManagement` (downgrades applied first; chat level is derived and shown) |
 | `pu phone rename <device> <name>` | `devices.rename` (new) |
