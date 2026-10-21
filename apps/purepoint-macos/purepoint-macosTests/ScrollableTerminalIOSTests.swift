@@ -161,9 +161,14 @@ struct ScrollableTerminalIOSTests {
         #expect(recorder.inputBytes == expected)
     }
 
-    @Test func softwareKeyBarShowsOnlyWithoutHardwareKeyboard() {
-        #expect(ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: false))
-        #expect(!ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: true))
+    @Test func softwareKeyBarShowsOnlyWithTheSoftwareKeyboard() {
+        #expect(ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: false, softwareKeyboardHeight: 0))
+        #expect(ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: false, softwareKeyboardHeight: 380))
+        // Hardware keyboard: at most the shortcuts bar is on screen.
+        #expect(!ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: true, softwareKeyboardHeight: 0))
+        #expect(!ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: true, softwareKeyboardHeight: 69))
+        // Hardware keyboard, but the software keyboard was brought up anyway.
+        #expect(ScrollableTerminal.showsAccessoryBar(hardwareKeyboardAttached: true, softwareKeyboardHeight: 380))
     }
 
     // MARK: Size

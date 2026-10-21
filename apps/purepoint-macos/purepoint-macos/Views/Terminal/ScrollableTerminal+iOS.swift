@@ -242,10 +242,15 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
 
     // MARK: - Keyboard
 
+    /// The shortest on-screen keyboard that counts as the software keyboard. With a hardware
+    /// keyboard attached iPadOS shows at most its shortcuts bar, which is far shorter.
+    static let softwareKeyboardMinHeight: CGFloat = 150
+
     /// SwiftTerm's Esc/Ctrl/arrow bar stands in for keys the software keyboard lacks; a
-    /// hardware keyboard has them.
-    static func showsAccessoryBar(hardwareKeyboardAttached: Bool) -> Bool {
-        !hardwareKeyboardAttached
+    /// hardware keyboard has them. The software keyboard can still be up with one attached
+    /// (shown from the keyboard menu, or a simulator), and then the bar shows with it.
+    static func showsAccessoryBar(hardwareKeyboardAttached: Bool, softwareKeyboardHeight: CGFloat) -> Bool {
+        !hardwareKeyboardAttached || softwareKeyboardHeight >= softwareKeyboardMinHeight
     }
 
     private func observeHardwareKeyboard() {
@@ -255,12 +260,37 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
                     MainActor.assumeIsolated { self?.updateKeyboardAccessory() }
                 })
         }
+        for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardWillHideNotification] {
+            keyboardObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                    let frame = name == UIResponder.keyboardWillHideNotification
+                        ? CGRect.zero
+                        : (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect) ?? .zero
+                    MainActor.assumeIsolated { self?.keyboardFrameWillChange(to: frame) }
+                })
+        }
         updateKeyboardAccessory()
+    }
+
+    /// Height of the on-screen keyboard, not counting our accessory bar.
+    private var softwareKeyboardHeight: CGFloat = 0
+
+    private func keyboardFrameWillChange(to frame: CGRect) {
+        let screen = window?.windowScene?.screen.bounds ?? frame
+        var height = frame.intersection(screen).height
+        if let accessory = terminalView.inputAccessoryView, terminalView.isFirstResponder {
+            height -= accessory.bounds.height
+        }
+        softwareKeyboardHeight = max(0, height)
+        // Not from inside the keyboard's own frame change.
+        DispatchQueue.main.async { [weak self] in self?.updateKeyboardAccessory() }
     }
 
     private func updateKeyboardAccessory() {
         let accessory =
-            Self.showsAccessoryBar(hardwareKeyboardAttached: GCKeyboard.coalesced != nil)
+            Self.showsAccessoryBar(
+                hardwareKeyboardAttached: GCKeyboard.coalesced != nil,
+                softwareKeyboardHeight: softwareKeyboardHeight)
             ? softwareKeyboardAccessory : nil
         guard terminalView.inputAccessoryView !== accessory else { return }
         terminalView.inputAccessoryView = accessory
@@ -599,7 +629,7 @@ class ScrollableTerminal: UIView, TerminalViewDelegate, UIGestureRecognizerDeleg
     // MARK: - Scripted input
 
     #if DEBUG
-    /// Types the `-PPDebugTerminalInput` script into the first terminal that shows output.
+    /// Types the `-PUDebugTerminalInput` script into the first terminal that shows output.
     func runScriptedInputIfRequested() {
         guard !Self.didRunScriptedInput,
             let script = UserDefaults.standard.string(forKey: TerminalScriptedInput.launchArgument)

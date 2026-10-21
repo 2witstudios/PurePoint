@@ -276,7 +276,7 @@ final class LinkTapRecognizer: UIGestureRecognizer {
 // MARK: - Scripted input (DEBUG)
 
 #if DEBUG
-/// A key sequence typed into a terminal at launch (`-PPDebugTerminalInput "<script>"`), for
+/// A key sequence typed into a terminal at launch (`-PUDebugTerminalInput "<script>"`), for
 /// driving the simulator where `simctl` cannot type. Text goes through SwiftTerm's text input
 /// (`insertText`, which hardware-keyboard characters also use) and special keys through
 /// `send`, where SwiftTerm's `pressesBegan` delivers them.
@@ -292,7 +292,7 @@ enum TerminalScriptedInput {
         case arrow(Arrow)
     }
 
-    static let launchArgument = "PPDebugTerminalInput"
+    static let launchArgument = "PUDebugTerminalInput"
 
     static func parse(_ script: String) -> [Step] {
         var steps: [Step] = []
