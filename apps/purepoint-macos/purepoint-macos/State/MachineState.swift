@@ -274,6 +274,13 @@ final class MachineState: Identifiable {
             await connection.reconnectNow()
         }
     }
+
+    /// Back from the background: check the SSH connection still answers, and replace it if
+    /// not (`MachineConnection.checkAfterForeground`).
+    func checkAfterForeground() {
+        let connection = self.connection!
+        Task { await connection.checkAfterForeground() }
+    }
     #endif
 
     private func apply(_ newState: MachineConnectionState) {

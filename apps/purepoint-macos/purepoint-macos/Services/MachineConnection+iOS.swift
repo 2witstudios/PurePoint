@@ -6,7 +6,9 @@ import Foundation
 /// (`SSHMachineSession`) and every daemon connection is an exec channel on it (IPAD-004). The
 /// supervisor reconnects with the session's backoff, probes `health` through the relay, and
 /// never starts a daemon (MACH-003). A host key that needs confirmation or changed stops the
-/// supervisor until the user decides (IPAD-009).
+/// supervisor until the user decides (IPAD-009). A connection that died without closing (a NAT
+/// drop, a suspended app) is noticed by TCP keepalive, by probes that time out
+/// (`ProbeTimeoutPolicy`) and by a probe on returning to the foreground, and is replaced.
 actor MachineConnection {
     /// There is no forward process on iOS; quitting needs nothing ended synchronously.
     nonisolated struct Forward: Sendable {
@@ -28,14 +30,18 @@ actor MachineConnection {
     private var lastReported: MachineConnectionState = .disconnected
     private var generation = 0
     private var tracker = HealthProbeTracker()
+    private var timeouts = ProbeTimeoutPolicy()
+    private let probeDeadline: TimeInterval
 
     init(
         machine: Machine,
         connector: (any SSHConnector)? = nil,
+        probeTimeout: TimeInterval = MachineConnection.probeTimeout,
         onTrust: @escaping @Sendable (SSHTrustError?) -> Void = { _ in },
         onState: @escaping @Sendable (MachineConnectionState) -> Void
     ) {
         self.machine = machine
+        self.probeDeadline = probeTimeout
         self.endpoint = .machine(machine.id)
         self.onState = onState
         self.onTrust = onTrust
@@ -71,6 +77,7 @@ actor MachineConnection {
         generation += 1
         supervisor?.cancel()
         supervisor = nil
+        timeouts = ProbeTimeoutPolicy()
         SSHMachineSessions.shared.unregister(machineId: machine.id, session: session)
         await session.disconnect()
         report(.disconnected)
@@ -87,7 +94,16 @@ actor MachineConnection {
         stopSupervising()
         await session.disconnect()
         await session.resetBackoff()
+        timeouts = ProbeTimeoutPolicy()
         connect()
+    }
+
+    /// Back in the foreground: iOS may have dropped the TCP connection while the app was
+    /// suspended without either side seeing it close, so probe at once, and replace the
+    /// session if that probe times out.
+    func checkAfterForeground() async {
+        guard supervisor != nil, await session.isConnected else { return }
+        await probeAndReport(afterForeground: true)
     }
 
     /// Probe now rather than at the next interval — after Start daemon, for instance.
@@ -154,6 +170,10 @@ actor MachineConnection {
     }
 
     private func supervise(generation: Int) async {
+        // A dropped primary connection is reported at once rather than at the next poll.
+        await session.setPrimaryDroppedHandler { [weak self] in
+            Task { await self?.primaryDropped() }
+        }
         while isCurrent(generation) {
             // As on the Mac, a machine whose last attempt failed reads Offline while it waits
             // out the backoff, and Connecting only once the next attempt starts.
@@ -198,10 +218,37 @@ actor MachineConnection {
         }
     }
 
+    /// The primary connection dropped: report it now and restart the supervisor, which may be
+    /// waiting out a probe or its interval, so it reconnects (with the session's backoff).
+    private func primaryDropped() async {
+        guard supervisor != nil, !(await session.isConnected) else { return }
+        report(.offline("SSH connection closed"))
+        stopSupervising()
+        connect()
+    }
+
     /// One `health` probe through the relay. Returns whether it settled the state.
     @discardableResult
-    private func probeAndReport() async -> Bool {
-        switch await probe() {
+    private func probeAndReport(afterForeground: Bool = false) async -> Bool {
+        let outcome = await probe()
+        if case .timedOut = outcome {
+            switch timeouts.recordTimeout(afterForeground: afterForeground) {
+            case .retry:
+                return false
+            case .reconnect:
+                // The connection stopped answering without closing. The supervisor sees it
+                // gone and reconnects through the backoff; its streams fail and resubscribe.
+                await session.abandon(
+                    SSHTransportError.connectFailed(machine: machine.name, detail: "the connection stopped answering"))
+                return true
+            case .unresponsive:
+                // A new connection did not answer either: the relay, not the network.
+                report(.offline("No answer from the daemon relay on \(machine.name)."))
+                return true
+            }
+        }
+        timeouts.recordAnswer()
+        switch outcome {
         case .health(let probe):
             guard let availability = tracker.record(probe) else { return false }
             report(.connected(availability))
@@ -214,12 +261,16 @@ actor MachineConnection {
         case .unusable(let message):
             report(.offline(message))
             return true
+        case .timedOut:
+            return false
         }
     }
 
     private enum Probe {
         case health(HealthProbe)
         case noDaemon
+        /// No answer before the deadline: a dead connection, or a relay that prints nothing.
+        case timedOut
         /// SSH works but the relay cannot serve: `pu` missing, a failing relay, or a login
         /// shell that writes to stdout.
         case unusable(String)
@@ -232,7 +283,7 @@ actor MachineConnection {
         do {
             outcome = .success(
                 try await Deadline.run(
-                    seconds: Self.probeTimeout, cancellable: true, onTimeout: DaemonClientError.requestTimeout
+                    seconds: probeDeadline, cancellable: true, onTimeout: DaemonClientError.requestTimeout
                 ) {
                     try await client.send(.health)
                 } discard: { _ in })
@@ -251,6 +302,8 @@ actor MachineConnection {
             return .health(MachineHealth.classify(response))
         case .failure(DaemonClientError.notRunning):
             return .noDaemon
+        case .failure(DaemonClientError.requestTimeout), .failure(DaemonClientError.connectTimeout):
+            return .timedOut
         case .failure(let error as SSHTransportError):
             return .unusable(error.localizedDescription)
         case .failure:
@@ -262,6 +315,43 @@ actor MachineConnection {
         guard state != lastReported else { return }
         lastReported = state
         onState(state)
+    }
+}
+
+/// Decides what probe timeouts mean. A connection that died without closing keeps
+/// `isConnected` true while every probe times out; any answer, even "no daemon" (exit 69),
+/// shows the connection works. Several timeouts in a row replace the connection, and one right
+/// after returning to the foreground does, since iOS often drops connections of a suspended
+/// app. When the replacement times out as well, the network is not the cause: the machine is
+/// reported unresponsive and keeps its connection until something answers.
+nonisolated struct ProbeTimeoutPolicy: Sendable {
+    static let timeoutsBeforeReconnect = 2
+
+    enum Decision: Equatable, Sendable {
+        /// Probe again soon.
+        case retry
+        /// Close the connection and connect again through the backoff.
+        case reconnect
+        /// Report the machine offline: the daemon relay does not answer.
+        case unresponsive
+    }
+
+    private(set) var consecutiveTimeouts = 0
+    /// The connection was already replaced for timeouts, and nothing has answered since.
+    private(set) var reconnectedForTimeouts = false
+
+    mutating func recordTimeout(afterForeground: Bool = false) -> Decision {
+        consecutiveTimeouts += 1
+        guard afterForeground || consecutiveTimeouts >= Self.timeoutsBeforeReconnect else { return .retry }
+        consecutiveTimeouts = 0
+        if reconnectedForTimeouts, !afterForeground { return .unresponsive }
+        reconnectedForTimeouts = true
+        return .reconnect
+    }
+
+    mutating func recordAnswer() {
+        consecutiveTimeouts = 0
+        reconnectedForTimeouts = false
     }
 }
 

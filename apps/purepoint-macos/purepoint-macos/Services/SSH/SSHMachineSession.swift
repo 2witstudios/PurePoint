@@ -177,6 +177,15 @@ actor SSHMachineSession {
         for connection in connections { connection.close() }
     }
 
+    /// Close every connection as `disconnect` does, and count it as a failed connect: the
+    /// connection had stopped answering. The next connect waits out the backoff, and streams
+    /// fail with `error` meanwhile.
+    func abandon(_ error: Error) {
+        disconnect()
+        backoff.recordFailure(at: now())
+        lastError = error
+    }
+
     /// Forget past failures so the next connect starts at once (a user's Connect, a key
     /// import, a trusted host key).
     func resetBackoff() {

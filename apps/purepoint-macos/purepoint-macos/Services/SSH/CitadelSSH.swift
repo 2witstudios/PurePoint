@@ -2,10 +2,12 @@
 @preconcurrency import Citadel
 import Foundation
 import NIOCore
+import NIOPosix
 import NIOSSH
 
 /// Connects to a machine with Citadel: the device identity, the machine's pinned host key
-/// checked before authentication, and no automatic reconnect (the session paces reconnects).
+/// checked before authentication, TCP keepalive, and no automatic reconnect (the session paces
+/// reconnects).
 nonisolated struct CitadelSSHConnector: SSHConnector {
     let machineId: UUID
     let machineName: String
@@ -16,18 +18,40 @@ nonisolated struct CitadelSSHConnector: SSHConnector {
     /// TCP connect and SSH login together.
     static let connectTimeout: Int64 = 15
 
+    /// TCP keepalive: probe after 30 s idle, every 10 s, and drop the connection after 3
+    /// unanswered probes, so a connection that died without closing (a NAT drop, a sleeping
+    /// network) fails its channels within about a minute. Citadel's own bootstrap takes no
+    /// socket options, so the socket is made here.
+    static let keepAliveIdle: Int32 = 30
+    static let keepAliveInterval: Int32 = 10
+    static let keepAliveCount: Int32 = 3
+
     func connect(onDisconnect: @escaping @Sendable () -> Void) async throws -> any SSHExecConnection {
         let identity = try identities.identity()
         let validator = PinningHostKeyValidator(machineId: machineId, pins: pins)
+        let user = destination.user
+        var settings = SSHClientSettings(
+            host: destination.host,
+            port: destination.port,
+            authenticationMethod: { .ed25519(username: user, privateKey: identity.privateKey) },
+            hostKeyValidator: .custom(validator))
+        settings.connectTimeout = .seconds(Self.connectTimeout)
         let client: SSHClient
         do {
-            client = try await SSHClient.connect(
-                host: destination.host,
-                port: destination.port,
-                authenticationMethod: .ed25519(username: destination.user, privateKey: identity.privateKey),
-                hostKeyValidator: .custom(validator),
-                reconnect: .never,
-                connectTimeout: .seconds(Self.connectTimeout))
+            let channel = try await Self.bootstrap(connectTimeout: settings.connectTimeout)
+                .connect(host: destination.host, port: destination.port).get()
+            do {
+                // Citadel's `connect(to:)` with the keepalive socket; reconnect stays off. It
+                // adds its handlers synchronously, which NIO allows only on the channel's
+                // event loop, so it runs there.
+                let settings = settings
+                client = try await withTaskExecutorPreference(EventLoopTaskExecutor(channel.eventLoop)) {
+                    try await SSHClient.connect(on: channel, settings: settings)
+                }
+            } catch {
+                channel.close(promise: nil)
+                throw error
+            }
         } catch {
             throw describe(error, verdict: validator.verdict)
         }
@@ -35,6 +59,18 @@ nonisolated struct CitadelSSHConnector: SSHConnector {
         client.onDisconnect(perform: onDisconnect)
         if !client.isConnected { onDisconnect() }
         return connection
+    }
+
+    /// Citadel's client bootstrap (`SO_REUSEADDR`, `TCP_NODELAY`) plus TCP keepalive.
+    private static func bootstrap(connectTimeout: TimeAmount) -> ClientBootstrap {
+        ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
+            .connectTimeout(connectTimeout)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_KEEPALIVE), value: 1)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_KEEPALIVE), value: keepAliveIdle)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_KEEPINTVL), value: keepAliveInterval)
+            .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_KEEPCNT), value: keepAliveCount)
     }
 
     /// The refusal the user can act on: a host key to confirm or that changed, a key the
@@ -59,6 +95,22 @@ nonisolated struct CitadelSSHConnector: SSHConnector {
         }
         let text = String(describing: error)
         return text.count > 200 ? String(text.prefix(200)) + "…" : text
+    }
+}
+
+/// Runs tasks that prefer it on a NIO event loop's thread.
+nonisolated final class EventLoopTaskExecutor: TaskExecutor, @unchecked Sendable {
+    private let eventLoop: any EventLoop
+
+    init(_ eventLoop: any EventLoop) {
+        self.eventLoop = eventLoop
+    }
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        eventLoop.execute {
+            job.runSynchronously(on: self.asUnownedTaskExecutor())
+        }
     }
 }
 

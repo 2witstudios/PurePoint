@@ -627,6 +627,9 @@ final class AppState {
     }
 
     private func refreshAfterBackground() {
+        for machine in machines {
+            machine.checkAfterForeground()
+        }
         for machine in machines where machine.state.isDaemonRunning {
             Task { await machine.refreshProjects() }
         }

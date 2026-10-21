@@ -256,6 +256,92 @@ struct SSHRelayErrorTests {
     }
 }
 
+// MARK: - Probe timeouts
+
+struct ProbeTimeoutPolicyTests {
+    @Test func consecutiveTimeoutsReplaceTheConnection() {
+        var policy = ProbeTimeoutPolicy()
+        #expect(policy.recordTimeout() == .retry)
+        #expect(policy.recordTimeout() == .reconnect)
+    }
+
+    @Test func anAnswerBetweenTimeoutsStartsTheCountAgain() {
+        var policy = ProbeTimeoutPolicy()
+        #expect(policy.recordTimeout() == .retry)
+        // "No daemon" (exit 69) is an answer: the connection works.
+        policy.recordAnswer()
+        #expect(policy.recordTimeout() == .retry)
+        #expect(policy.recordTimeout() == .reconnect)
+    }
+
+    @Test func aReplacementThatTimesOutTooIsTheRelayNotTheNetwork() {
+        var policy = ProbeTimeoutPolicy()
+        _ = policy.recordTimeout()
+        #expect(policy.recordTimeout() == .reconnect)
+        #expect(policy.recordTimeout() == .retry)
+        #expect(policy.recordTimeout() == .unresponsive)
+        // It keeps the connection until something answers; then timeouts reconnect again.
+        #expect(policy.recordTimeout() == .retry)
+        #expect(policy.recordTimeout() == .unresponsive)
+        policy.recordAnswer()
+        _ = policy.recordTimeout()
+        #expect(policy.recordTimeout() == .reconnect)
+    }
+
+    @Test func oneTimeoutAfterTheForegroundReplacesTheConnection() {
+        var policy = ProbeTimeoutPolicy()
+        #expect(policy.recordTimeout(afterForeground: true) == .reconnect)
+        // Even when the connection was just replaced for timeouts: suspension drops it again.
+        _ = policy.recordTimeout()
+        #expect(policy.recordTimeout() == .unresponsive)
+        #expect(policy.recordTimeout(afterForeground: true) == .reconnect)
+    }
+}
+
+@Suite(.serialized) struct SSHSessionAbandonTests {
+    @Test func abandoningClosesTheConnectionAndBacksOff() async throws {
+        let clock = FakeClock()
+        let connector = FakeConnector(respond: healthRelay)
+        let session = SSHMachineSession(connector: connector, now: { clock.now })
+        let dropped = DropCounter()
+        await session.setPrimaryDroppedHandler { dropped.increment() }
+        let opened = try await session.openChannel("relay")
+        let stream = SSHRelayByteStream(opened: opened, machineName: "studio")
+        let silent = SSHTransportError.connectFailed(machine: "studio", detail: "the connection stopped answering")
+        await session.abandon(silent)
+        #expect(connector.all[0].isClosed)
+        #expect(await !session.isConnected)
+        // Streams on it fail like a closed socket and resubscribe after the backoff.
+        await #expect(throws: DaemonClientError.eof) { try await stream.receive() }
+        await #expect(throws: silent) { try await session.openChannel("relay") }
+        #expect(connector.attempts == 1)
+        #expect(await session.backoffState.failures == 1)
+        clock.advance(1.1)
+        _ = try await session.openChannel("relay")
+        #expect(connector.attempts == 2)
+        // An abandon is this side's decision, not a drop.
+        #expect(dropped.value == 0)
+    }
+
+    @Test func aDroppedPrimaryRunsTheHandler() async throws {
+        let connector = FakeConnector()
+        let session = SSHMachineSession(connector: connector)
+        let dropped = DropCounter()
+        await session.setPrimaryDroppedHandler { dropped.increment() }
+        _ = try await session.openChannel("relay")
+        connector.all[0].drop()
+        await eventually { dropped.value == 1 }
+        #expect(dropped.value == 1)
+    }
+}
+
+final class DropCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.withLock { count += 1 } }
+    var value: Int { lock.withLock { count } }
+}
+
 // MARK: - Session
 
 struct SSHMachineSessionTests {
