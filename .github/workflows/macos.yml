@@ -40,7 +40,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Check CI routing
+      # minisign lets the install script tests also check signature
+      # compatibility with the reference implementation.
+      - name: Install minisign
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends minisign
+      - name: Check CI routing and release scripts
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Detect changed components
         id: paths
@@ -73,6 +77,12 @@ jobs:
           CARGO_TARGET_DIR="$RUNNER_TEMP/bridge-lock-cargo" cargo build --locked -p pu-cli --bin pu-point-guard-lock
           printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/bridge-lock-cargo/debug/pu-point-guard-lock\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: npm ci --ignore-scripts
+      # Registry signatures and provenance of every installed package, and no
+      # known high-severity advisory in what ships with the app.
+      - name: Verify npm package signatures
+        run: npm audit signatures
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
       - run: npm run check
       - run: npm test
       - name: Interrupted package download recovery
@@ -130,6 +140,7 @@ jobs:
           xcodebuild build-for-testing \
             -project PurePoint.xcodeproj \
             -scheme PurePoint-Debug \
+            -onlyUsePackageVersionsFromResolvedFile \
             -destination "platform=iOS Simulator,id=$simulator_id" \
             -derivedDataPath "$RUNNER_TEMP/mobile-derived" \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
@@ -175,8 +186,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Pinned release, checked against its SHA-256 instead of Homebrew's moving formula.
       - name: Install xcbeautify
-        run: brew install xcbeautify
+        env:
+          XCBEAUTIFY_VERSION: 3.2.1
+          XCBEAUTIFY_SHA256: 87fdbe786f71d7b2ee28c5c1ca97087587292f2c5c6f9e721cf02db8b2a3c241
+        run: |
+          ARCHIVE="$RUNNER_TEMP/xcbeautify.zip"
+          curl -fsSL --proto '=https' \
+            "https://github.com/cpisciotta/xcbeautify/releases/download/${XCBEAUTIFY_VERSION}/xcbeautify-${XCBEAUTIFY_VERSION}-universal-apple-macosx.zip" \
+            -o "$ARCHIVE"
+          echo "${XCBEAUTIFY_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/xcbeautify"
+          echo "$RUNNER_TEMP/xcbeautify/release" >> "$GITHUB_PATH"
 
       - name: Checkout pinned local tree-sitter packages
         run: bash .github/scripts/checkout-tree-sitter.sh
@@ -230,6 +252,8 @@ jobs:
         run: python3 apps/purepoint-macos/verification/check-point-guard-service.py
       - name: Check pane-local Point Guard conversation sidebar
         run: python3 apps/purepoint-macos/verification/check-point-guard-sidebar.py
+      - name: Check app bundle seal before bridge launch
+        run: python3 apps/purepoint-macos/verification/check-bundle-seal.py
 
       - name: Compile app and test bundles
         timeout-minutes: 18
@@ -238,6 +262,7 @@ jobs:
             xcodebuild build-for-testing \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
+            -onlyUsePackageVersionsFromResolvedFile \
             -destination "$DESTINATION" \
             -derivedDataPath "$RUNNER_TEMP/purepoint-derived" \
             CODE_SIGN_IDENTITY="-" \

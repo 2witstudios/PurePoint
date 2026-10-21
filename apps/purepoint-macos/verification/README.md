@@ -101,3 +101,9 @@ clearing geometry dedupe while retaining deferred scrolling and eligibility chec
 check above also compiles the real chat view with this coordinator. These checks do
 not reproduce the reported macOS 26.2 layout crash; live streaming, tool expansion,
 scrollback, Latest and session switching still need visual verification in Xcode.
+
+The bundle seal check that guards the Point Guard bridge launch runs against throwaway ad-hoc signed bundles (intact, modified bridge script, re-signed, missing):
+
+```sh
+python3 apps/purepoint-macos/verification/check-bundle-seal.py
+```

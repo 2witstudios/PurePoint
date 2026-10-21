@@ -10,6 +10,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.yml"))
 RELEASE = ROOT / ".github/workflows/release.yml"
+RELEASE_PROOF = ROOT / ".github/workflows/release-proof.yml"
+MACOS = ROOT / ".github/workflows/macos.yml"
+INSTALL = ROOT / "scripts/install.sh"
+INFO_PLIST = ROOT / "apps/purepoint-macos/Info.plist"
+PBXPROJ = ROOT / "apps/purepoint-macos/purepoint-macos.xcodeproj/project.pbxproj"
 PACKAGE_RESOLVED = ROOT / "apps/purepoint-macos/purepoint-macos.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 
 
@@ -62,6 +67,28 @@ class PinningTests(unittest.TestCase):
                             self.assertIs((step.get("with") or {}).get("persist-credentials"), False)
 
 
+    def test_no_workflow_installs_unpinned_homebrew_tools(self):
+        for path in WORKFLOWS:
+            with self.subTest(file=path.name):
+                self.assertNotIn("brew install", path.read_text())
+
+    def test_app_builds_resolve_swift_packages_only_from_the_committed_file(self):
+        for path in (RELEASE, RELEASE_PROOF, MACOS):
+            commands = re.findall(r"xcodebuild (?:archive|build-for-testing)\b.*?(?=\n\s*\n|\n\s*-\s+name:|\Z)", path.read_text(), re.S)
+            self.assertTrue(commands, path.name)
+            for command in commands:
+                with self.subTest(file=path.name, command=command.splitlines()[0]):
+                    self.assertIn("-onlyUsePackageVersionsFromResolvedFile", command)
+
+    def test_swift_packages_are_never_tracked_by_branch(self):
+        self.assertNotIn("kind = branch", PBXPROJ.read_text())
+        resolved = json.loads(PACKAGE_RESOLVED.read_text())
+        direct = set(re.findall(r'repositoryURL = "([^"]+)"', PBXPROJ.read_text()))
+        for pin in resolved["pins"]:
+            if pin["location"] in direct:
+                with self.subTest(package=pin["identity"]):
+                    self.assertNotIn("branch", pin["state"])
+
     def test_every_workflow_defaults_to_a_read_only_token(self):
         for path in WORKFLOWS:
             with self.subTest(file=path.name):
@@ -89,14 +116,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertIn("permissions", job)
                 if "write" in job["permissions"].values():
                     writers.append(name)
-        self.assertEqual(writers, ["publish"])
+        self.assertEqual(writers, ["attest", "publish"])
         self.assertEqual(self.jobs["publish"]["permissions"], {"contents": "write"})
+        self.assertEqual(self.jobs["attest"]["permissions"], {
+            "contents": "read", "id-token": "write", "attestations": "write", "artifact-metadata": "write",
+        })
 
     def test_write_token_reaches_only_the_steps_that_publish(self):
         publish = self.jobs["publish"]
         self.assertNotIn("GH_TOKEN", publish.get("env", {}))
         holders = [step["name"] for step in steps(publish) if "GH_TOKEN" in (step.get("env") or {})]
-        self.assertEqual(holders, ["Create GitHub Release", "Generate and upload appcast"])
+        self.assertEqual(holders, ["Create GitHub Release", "Upload appcast"])
 
     def test_existing_release_must_match_the_new_assets_byte_for_byte(self):
         # Re-signing changes the DMG, so a name-only check could publish an
@@ -120,18 +150,88 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertRegex(env["CREATE_DMG_SHA256"], r"^[0-9a-f]{64}$")
         self.assertNotIn("refs/tags", run_text(self.jobs["sign-macos"]))
 
-    def test_publish_job_runs_no_repository_code(self):
-        for step in steps(self.jobs["publish"]):
-            self.assertFalse(step.get("uses", "").startswith("actions/checkout@"))
+    def test_jobs_with_write_scopes_run_no_repository_code(self):
+        for name in ("attest", "publish"):
+            for step in steps(self.jobs[name]):
+                with self.subTest(job=name, step=step.get("name")):
+                    self.assertFalse(step.get("uses", "").startswith("actions/checkout@"))
+                    self.assertNotIn("run", step if name == "attest" else {})
 
-    def test_secrets_reach_only_the_protected_signing_job(self):
-        sign = self.jobs["sign-macos"]
-        self.assertEqual(sign["environment"], "release")
-        self.assertIn("refs/tags/v", sign["if"])
+    def test_secrets_reach_only_the_protected_signing_jobs(self):
+        signers = {"sign-macos", "sign-linux"}
+        for name in signers:
+            with self.subTest(job=name):
+                self.assertEqual(self.jobs[name]["environment"], "release")
+                self.assertIn("refs/tags/v", self.jobs[name]["if"])
         for name, job in self.jobs.items():
-            if name != "sign-macos":
+            if name not in signers:
                 with self.subTest(job=name):
                     self.assertNotIn("secrets.", json.dumps(job))
+
+    def test_nothing_is_published_before_it_is_signed_and_attested(self):
+        self.assertTrue({"sign-macos", "sign-linux", "attest", "sbom"} <= set(self.jobs["publish"]["needs"]))
+        self.assertTrue({"sign-macos", "linux", "sbom"} <= set(self.jobs["attest"]["needs"]))
+
+    def test_every_release_binary_has_provenance_and_sbom_attestations(self):
+        attests = [step for step in steps(self.jobs["attest"]) if step.get("uses", "").startswith("actions/attest@")]
+        provenance = [step["with"] for step in attests if "sbom-path" not in step["with"]]
+        self.assertEqual(len(provenance), 1)
+        self.assertIn("dist/*.tar.gz", provenance[0]["subject-path"])
+        self.assertIn("dist/*.dmg", provenance[0]["subject-path"])
+        sboms = {re.search(r"\}-(.+)\.cdx\.json$", step["with"]["sbom-path"]).group(1): step["with"]["subject-path"]
+                 for step in attests if "sbom-path" in step["with"]}
+        self.assertEqual(set(sboms), {"pu-cli", "pu-engine", "point-guard-npm"})
+        for name in ("pu-cli", "pu-engine"):
+            self.assertIn("dist/*.tar.gz", sboms[name])
+            self.assertIn("dist/*.dmg", sboms[name])
+        self.assertIn("dist/*.dmg", sboms["point-guard-npm"])
+
+    def test_sboms_cover_the_rust_binaries_and_the_npm_runtime(self):
+        sbom = run_text(self.jobs["sbom"])
+        self.assertIn("cargo cyclonedx --format json", sbom)
+        self.assertIn("--target all", sbom)
+        self.assertIn("for crate in pu-cli pu-engine", sbom)
+        self.assertIn("npm sbom --omit=dev --sbom-format cyclonedx", sbom)
+        self.assertRegex(self.jobs["sbom"]["env"]["CARGO_CYCLONEDX_VERSION"], r"^\d+\.\d+\.\d+$")
+        self.assertIn('--locked cargo-cyclonedx --version "$CARGO_CYCLONEDX_VERSION"', sbom)
+
+    def test_linux_archives_are_signed_with_the_key_install_sh_embeds(self):
+        sign = next(step for step in steps(self.jobs["sign-linux"]) if step.get("name") == "Sign archives")
+        self.assertEqual(sign["env"], {"RELEASE_MINISIGN_KEY": "${{ secrets.RELEASE_MINISIGN_KEY }}"})
+        script = sign["run"]
+        # Without the secret the release still ships, with a visible warning.
+        self.assertIn('if [ -z "$RELEASE_MINISIGN_KEY" ]', script)
+        self.assertIn("::warning", script)
+        self.assertIn("RELEASE_PUBLIC_KEY", script)
+        self.assertIn("scripts/install.sh", script)
+        self.assertIn(".github/scripts/minisign.sh sign", script)
+        self.assertGreaterEqual(script.count('rm -f "$KEY"'), 2)
+        self.assertIn("umask 077", script)
+        self.assertRegex(INSTALL.read_text(), r'(?m)^RELEASE_PUBLIC_KEY="RWS[A-Za-z0-9+/]{53}"$')
+
+    def test_appcast_is_signed_by_the_update_key_holder(self):
+        sign = run_text(self.jobs["sign-macos"])
+        self.assertIn('sign_update" build/appcast/appcast.xml --ed-key-file -', sign)
+        self.assertIn('sign_update" --verify build/appcast/appcast.xml --ed-key-file -', sign)
+        publish = run_text(self.jobs["publish"])
+        self.assertNotIn("<rss", publish)
+        plist = INFO_PLIST.read_text()
+        for key in ("SURequireSignedFeed", "SUVerifyUpdateBeforeExtraction"):
+            with self.subTest(key=key):
+                self.assertRegex(plist, rf"<key>{key}</key>\s*<true/>")
+
+    def test_dmg_creation_failures_are_not_ignored(self):
+        create = next(step["run"] for step in steps(self.jobs["sign-macos"]) if step.get("name") == "Create DMG")
+        self.assertNotIn("|| true", create)
+        self.assertIn("|| STATUS=$?", create)
+        self.assertIn('hdiutil verify "$DMG_PATH"', create)
+        self.assertIn("exit 1", create)
+
+    def test_packaging_uses_the_same_node_as_ci(self):
+        node = [step["with"] for step in steps(self.jobs["build-macos"]) if step.get("uses", "").startswith("actions/setup-node@")]
+        self.assertEqual(len(node), 1)
+        self.assertEqual(str(node[0]["node-version"]), "22.23.3")
+        self.assertIs(node[0]["package-manager-cache"], False)
 
     def test_build_job_produces_an_unsigned_app(self):
         archive = run_text(self.jobs["build-macos"])
