@@ -301,6 +301,11 @@ final class MachineState: Identifiable {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
+                #if os(iOS)
+                // Paused in the background; the return to the foreground refreshes at once.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
+                #endif
                 await self?.refreshProjects()
                 do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
@@ -388,6 +393,13 @@ final class MachineState: Identifiable {
             forget(project)
             projects.removeAll { $0 === project }
         }
+    }
+
+    /// Show a hidden project again; it reappears with the next project refresh.
+    func unhideProject(root: String) {
+        guard hiddenRoots.remove(root) != nil else { return }
+        hiddenCountRevision += 1
+        UserDefaults.standard.set(Array(hiddenRoots), forKey: Self.hiddenKey(machine.id))
     }
 
     /// Drop every project, returning the savers whose queued layout writes should be flushed

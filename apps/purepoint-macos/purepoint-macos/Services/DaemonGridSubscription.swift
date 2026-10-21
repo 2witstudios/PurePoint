@@ -34,6 +34,16 @@ actor DaemonGridSubscription {
             } catch is CancellationError {
                 break
             } catch {
+                #if os(iOS)
+                // A suspended app loses its SSH streams: reconnect when it returns to the foreground,
+                // without spending retries while it is in the background.
+                if await AppActivity.shared.isInBackground {
+                    await AppActivity.shared.untilForeground()
+                    retries = 0
+                    backoff = 500_000_000
+                    continue
+                }
+                #endif
                 retries += 1
                 guard !stopped, retries <= maxRetries else { break }
                 do {

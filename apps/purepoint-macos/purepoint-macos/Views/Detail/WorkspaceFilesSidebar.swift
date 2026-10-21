@@ -229,7 +229,9 @@ private struct InlineFilePreview: View {
                 #if os(macOS)
                 let checkNow = hunks == nil || host.isLocal || NSApplication.shared.isActive
                 #else
-                // On iOS the scene-phase hook pauses background polling (IPAD-7.4).
+                // Paused in the background (the scene-phase hook); checked again on return.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
                 let checkNow = true
                 #endif
                 let modified = checkNow ? await FileIOService.fileModificationDate(at: path, host: host) : lastModified

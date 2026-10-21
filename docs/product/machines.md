@@ -123,6 +123,7 @@ All paths are absolute paths on the daemon host. Each is canonicalized and must 
 | Request (`type`) | Fields | Response (`type`) |
 |---|---|---|
 | `fs_list` | `path`, `recursive` (default false), `include_hidden` (default true), `max_entries` (default 20000, clamped to 100000) | `fs_list_result { path, entries: [{ name, path, is_dir, is_symlink, size, modified_ms, ignored }], truncated }` |
+| `fs_list` with `directories_only: true` (folder browsing, for choosing a project root) | `path` (absolute; `~` or a `~/` prefix names the daemon user's home), `include_hidden`, `max_entries` | `fs_list_result` listing only the directory's subdirectories (symlinks to directories included, `is_symlink` set), non-recursively, with `size`, `modified_ms` 0 and `ignored` false. The only fs request not confined to the roots above — there is no root yet — so it never reports files, contents or ignore state: directory names only, which the socket's owner can already reach. A daemon without it ignores the field and refuses the path (`path_not_allowed`) |
 | `fs_stat` | `path` | `fs_stat_result { path, exists, is_dir, size, modified_ms }` |
 | `fs_read` | `path`, `max_bytes` (default 1048576, clamped to 8 MiB) | `fs_read_result { path, data_base64, size, modified_ms, truncated }`; regular files only, else `Error { code: "not_a_file" }` (`"is_directory"` for a directory) |
 | `fs_write` | `path`, `data_base64`, `expected_modified_ms` (optional), `create_dirs` (default false) | `fs_write_result { path, size, modified_ms }` or `Error { code: "conflict" }` |

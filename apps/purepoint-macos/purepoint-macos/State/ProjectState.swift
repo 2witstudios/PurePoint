@@ -320,6 +320,20 @@ final class ProjectState: Identifiable {
         #endif
     }
 
+    #if os(iOS)
+    /// Re-open the daemon streams and re-read status after the app was in the background,
+    /// where iOS suspends it and its SSH streams drop or stall. Nothing to do for a project
+    /// that is not being watched.
+    func resumeStreams() {
+        guard !isUnavailable, statusSubscription != nil || gridSubscription != nil else { return }
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
+        startGridSubscription()
+        startStatusSubscription()
+        refresh()
+    }
+    #endif
+
     // MARK: - Data
 
     private func invalidateSignals() {
@@ -632,6 +646,10 @@ final class ProjectState: Identifiable {
                         self.resubscribeTask?.cancel()
                         self.resubscribeTask = Task { [weak self] in
                             do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                            #if os(iOS)
+                            await AppActivity.shared.untilForeground()
+                            if Task.isCancelled { return }
+                            #endif
                             self?.startWatching()
                         }
                     } else {

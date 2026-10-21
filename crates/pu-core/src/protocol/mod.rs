@@ -398,6 +398,11 @@ pub enum Request {
         include_hidden: bool,
         #[serde(default = "default_fs_list_max_entries")]
         max_entries: usize,
+        /// Folder browsing for choosing a project root (the iPad's Open Project): lists
+        /// only the subdirectories of any directory the daemon user can read, never
+        /// files, non-recursively. `~` names the daemon user's home.
+        #[serde(default)]
+        directories_only: bool,
     },
     FsStat {
         path: String,

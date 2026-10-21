@@ -2199,11 +2199,13 @@ fn given_minimal_fs_requests_should_apply_spec_defaults() {
             recursive,
             include_hidden,
             max_entries,
+            directories_only,
         } => {
             assert_eq!(path, "/p");
             assert!(!recursive);
             assert!(include_hidden);
             assert_eq!(max_entries, 20_000);
+            assert!(!directories_only);
         }
         other => panic!("expected FsList, got {other:?}"),
     }
@@ -2260,6 +2262,7 @@ fn given_fs_and_git_requests_should_round_trip_with_snake_case_tags() {
                 recursive: true,
                 include_hidden: false,
                 max_entries: 5,
+                directories_only: true,
             },
             "fs_list",
         ),

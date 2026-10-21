@@ -357,6 +357,9 @@ nonisolated enum DaemonRequest: Encodable {
     case inventory(kind: String, projectRoot: String? = nil)
     // File and git access confined to registered projects (machines.md, protocol 9).
     case fsList(path: String, recursive: Bool = false, includeHidden: Bool = true, maxEntries: Int = 20_000)
+    /// `fs_list` with `directories_only`: the subdirectories of any directory on the machine,
+    /// for choosing a folder to open as a project. `~` is the daemon user's home.
+    case fsBrowse(path: String, includeHidden: Bool, maxEntries: Int = 20_000)
     case fsStat(path: String)
     case fsRead(path: String, maxBytes: Int = 1_048_576)
     case fsWrite(path: String, data: Data, expectedModifiedMs: Int64? = nil, createDirs: Bool = false)
@@ -609,6 +612,12 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(recursive, forKey: .key("recursive"))
             try container.encode(includeHidden, forKey: .key("include_hidden"))
             try container.encode(maxEntries, forKey: .key("max_entries"))
+        case .fsBrowse(let path, let includeHidden, let maxEntries):
+            try container.encode("fs_list", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+            try container.encode(includeHidden, forKey: .key("include_hidden"))
+            try container.encode(maxEntries, forKey: .key("max_entries"))
+            try container.encode(true, forKey: .key("directories_only"))
         case .fsStat(let path):
             try container.encode("fs_stat", forKey: .key("type"))
             try container.encode(path, forKey: .key("path"))

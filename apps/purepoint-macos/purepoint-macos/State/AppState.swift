@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 #else
+import SwiftUI
 import UIKit
 #endif
 import CryptoKit
@@ -89,6 +90,9 @@ final class AppState {
     ) {
         self.service = service
         self.startProject = startProject
+        #if os(iOS)
+        installLifecycleHooks()
+        #endif
     }
 
     var isLoaded: Bool { !projects.isEmpty }
@@ -563,6 +567,43 @@ final class AppState {
         }
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
         _ = semaphore.wait(timeout: .now() + 5.0)
+    }
+    #endif
+
+    #if os(iOS)
+    /// The iPad's replacement for the Mac's `NSApplication` activity and termination hooks:
+    /// the scene phase the iPad App forwards. Installed when the App creates its state, which
+    /// is also before launch-time notification responses arrive, as the Mac's application
+    /// delegate installs the notification delegate.
+    private func installLifecycleHooks() {
+        _ = AgentSignalNotifications.shared
+        AppLifecycleHooks.scenePhaseChanged = { [weak self] phase in
+            self?.scenePhaseChanged(phase)
+        }
+    }
+
+    /// Background: pause polling (pollers wait on `AppActivity`) and save what a quit would
+    /// save, since iOS may end a suspended app without notice. Foreground again: refresh state
+    /// and resume the daemon streams.
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        let returned = AppActivity.shared.apply(phase)
+        if phase == .background {
+            persistSelectedAgent()
+            registry?.saveAll()
+        } else if returned {
+            refreshAfterBackground()
+        }
+    }
+
+    private func refreshAfterBackground() {
+        for machine in machines where machine.state.isDaemonRunning {
+            Task { await machine.refreshProjects() }
+        }
+        for project in managedProjects {
+            project.resumeStreams()
+        }
+        signalNotifications.refreshBadge()
+        updateAgentSignals()
     }
     #endif
 

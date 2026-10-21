@@ -65,6 +65,11 @@ final class ChannelState {
         guard polling == nil else { return }
         polling = Task { [weak self] in
             while !Task.isCancelled {
+                #if os(iOS)
+                // Paused in the background; polls again as soon as the app returns.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
+                #endif
                 await self?.refresh()
                 do { try await Task.sleep(for: .seconds(self?.viewers == 0 ? 15 : 3)) } catch { return }
             }

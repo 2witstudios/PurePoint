@@ -127,9 +127,15 @@ final class DiffState {
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(pollSeconds))
+                #if os(iOS)
+                // Paused in the background; refreshes as soon as the app returns.
+                await AppActivity.shared.untilForeground()
+                #endif
                 guard !Task.isCancelled, let self else { return }
+                #if os(macOS)
                 // Recursive file changes need polling. Hidden/background app work is bounded.
                 guard NSApplication.shared.isActive else { continue }
+                #endif
                 self.refreshLocal()
                 if Date().timeIntervalSince(self.lastPRRefresh) >= 30 { self.refreshPRs() }
             }
