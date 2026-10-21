@@ -366,7 +366,8 @@ jobs:
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
           rm -f "$CERT_PATH"
 
-  # Static pu + pu-engine for Linux servers (installed by scripts/install.sh).
+  # Static pu + pu-engine for Linux servers (installed by scripts/install.sh),
+  # plus the pu-point-guard-lock helper the phone access payload ships.
   # Built natively per arch against musl, so no glibc version floor applies.
   linux:
     needs: version
@@ -405,10 +406,13 @@ jobs:
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      # pu records the release version, which `pu phone` requires the phone
+      # access payload to match exactly.
       - name: Build
         run: cargo build --release --locked --target "$TARGET" -p pu-cli -p pu-engine
         env:
           TARGET: ${{ matrix.target }}
+          PU_RELEASE_VERSION: ${{ needs.version.outputs.raw }}
 
       - name: Package
         id: package
@@ -418,7 +422,8 @@ jobs:
         run: |
           NAME="purepoint-${VERSION}-${TARGET}"
           mkdir -p "dist/${NAME}"
-          cp "target/${TARGET}/release/pu" "target/${TARGET}/release/pu-engine" "dist/${NAME}/"
+          cp "target/${TARGET}/release/pu" "target/${TARGET}/release/pu-engine" \
+            "target/${TARGET}/release/pu-point-guard-lock" "dist/${NAME}/"
           cp LICENSE* README.md "dist/${NAME}/" 2>/dev/null || true
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
@@ -431,6 +436,104 @@ jobs:
           path: |
             dist/${{ steps.package.outputs.name }}.tar.gz
             dist/${{ steps.package.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+
+  # Opt-in phone access for Linux hosts (LPH-002): the Point Guard bridge
+  # payload with the official glibc Node, built natively per arch from the
+  # exact musl pu and lock helper the `linux` job produced. Before upload it
+  # is installed by scripts/install.sh into a throwaway HOME and launched
+  # under an empty environment, both relocated and in place.
+  linux-phone:
+    name: Linux phone access payload (${{ matrix.arch }})
+    needs: [version, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            node_target: linux-x64
+            pu_target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - arch: aarch64
+            node_target: linux-arm64
+            pu_target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.raw }}
+      ARCH: ${{ matrix.arch }}
+      NODE_TARGET: ${{ matrix.node_target }}
+      PU_TARGET: ${{ matrix.pu_target }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # npm only stages the lockfile's packages (scripts off); the payload
+      # ships its own pinned Node, never this one.
+      - name: Install Node for npm
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+
+      - name: Download Linux build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: purepoint-${{ needs.version.outputs.raw }}-${{ matrix.pu_target }}
+          path: ${{ runner.temp }}/pu-build
+
+      - name: Verify and unpack Linux build
+        run: |
+          NAME="purepoint-${VERSION}-${PU_TARGET}"
+          (cd "$RUNNER_TEMP/pu-build" && sha256sum -c "${NAME}.tar.gz.sha256")
+          mkdir -p "$RUNNER_TEMP/pu-unpacked"
+          tar -xzf "$RUNNER_TEMP/pu-build/${NAME}.tar.gz" -C "$RUNNER_TEMP/pu-unpacked"
+          echo "PU_DIR=$RUNNER_TEMP/pu-unpacked/${NAME}" >> "$GITHUB_ENV"
+
+      # The payload records the release version that the linux job compiled
+      # into pu (PU_RELEASE_VERSION); `pu phone` requires an exact match.
+      - name: Package phone access payload
+        run: |
+          PU_CRATE_VERSION="$VERSION"
+          python3 apps/purepoint-mobile/runtime/package-runtime.py --layout dir \
+            --target "$NODE_TARGET" \
+            --out "$RUNNER_TEMP/phone" \
+            --lock-helper "$PU_DIR/pu-point-guard-lock" \
+            --pu-version "$PU_CRATE_VERSION" \
+            --release-version "$VERSION" \
+            --cache "$RUNNER_TEMP/node-cache"
+          echo "PU_CRATE_VERSION=$PU_CRATE_VERSION" >> "$GITHUB_ENV"
+          echo "PHONE_NAME=purepoint-pointguard-${VERSION}-${ARCH}-linux-gnu" >> "$GITHUB_ENV"
+
+      - name: Launch relocated payload in a clean environment
+        run: |
+          "$RUNNER_TEMP/phone/$PHONE_NAME/bin/node" apps/purepoint-mobile/runtime/prove-linux-runtime.mjs \
+            "$RUNNER_TEMP/phone/$PHONE_NAME" "$PU_DIR/pu"
+
+      - name: Install with install.sh into a throwaway HOME and launch in place
+        run: |
+          SMOKE_HOME="$RUNNER_TEMP/smoke-home"
+          mkdir -m 700 "$SMOKE_HOME"
+          env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin \
+            PU_ARCHIVE="$RUNNER_TEMP/pu-build/purepoint-${VERSION}-${PU_TARGET}.tar.gz" \
+            PU_PHONE_ARCHIVE="$RUNNER_TEMP/phone/${PHONE_NAME}.tar.gz" \
+            sh scripts/install.sh
+          INSTALLED="$SMOKE_HOME/.pu/pointguard/$PU_CRATE_VERSION"
+          "$INSTALLED/bin/node" apps/purepoint-mobile/runtime/prove-linux-runtime.mjs \
+            "$INSTALLED" "$SMOKE_HOME/.pu/bin/pu" --in-place
+
+      - name: Upload phone access payload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: purepoint-pointguard-${{ needs.version.outputs.raw }}-${{ matrix.arch }}-linux-gnu
+          path: |
+            ${{ runner.temp }}/phone/purepoint-pointguard-${{ needs.version.outputs.raw }}-${{ matrix.arch }}-linux-gnu.tar.gz
+            ${{ runner.temp }}/phone/purepoint-pointguard-${{ needs.version.outputs.raw }}-${{ matrix.arch }}-linux-gnu.tar.gz.sha256
           if-no-files-found: error
 
   # CycloneDX SBOMs for the Rust binaries and the bundled npm runtime. Holds
@@ -500,7 +603,7 @@ jobs:
   # signatures (and say so); install.sh then relies on build provenance.
   sign-linux:
     name: Sign Linux archives
-    needs: linux
+    needs: [linux, linux-phone]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -557,7 +660,7 @@ jobs:
   # repository code.
   attest:
     name: Attest release artifacts
-    needs: [version, sign-macos, linux, sbom]
+    needs: [version, sign-macos, linux, linux-phone, sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -608,10 +711,13 @@ jobs:
             dist/*.dmg
           sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-pu-engine.cdx.json
 
+      # The DMG and the Linux phone access payloads ship this npm runtime.
       - name: Attest Point Guard npm SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/*.dmg
+          subject-path: |
+            dist/*.dmg
+            dist/purepoint-pointguard-*.tar.gz
           sbom-path: sbom/purepoint-${{ needs.version.outputs.raw }}-point-guard-npm.cdx.json
 
   # The only job with a write token. It runs no build code: it creates the
@@ -621,7 +727,7 @@ jobs:
   # every artifact is signed and attested.
   publish:
     name: Publish release
-    needs: [version, sign-macos, linux, sbom, sign-linux, attest]
+    needs: [version, sign-macos, linux, linux-phone, sbom, sign-linux, attest]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

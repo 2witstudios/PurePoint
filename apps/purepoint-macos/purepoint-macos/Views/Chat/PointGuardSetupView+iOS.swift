@@ -97,7 +97,8 @@ struct PointGuardSetupView: View {
             PointGuardPairingScanner { code in
                 showScanner = false; chat.pair(code)
             }
-            .presentedControlDefaults()
+            // The camera has no content size, so a fitted sheet collapses it to a sliver; give it a page.
+            .font(.body).macControlDefaults().presentationSizing(.page)
         }
     }
 

@@ -223,6 +223,7 @@ export async function openTrustStore({
           enrollmentId,
           status: entry.status,
           expiresAt: entry.expiresAt,
+          ...(entry.deviceId ? { deviceId: entry.deviceId } : {}),
         };
       },
       revokeEnrollment(enrollmentId) {
@@ -275,7 +276,7 @@ export async function openTrustStore({
           );
           if (!entry || entry.status !== "pending" || entry.expiresAt <= now())
             throw new Error(
-              "Enrollment expired, revoked or already used. Scan a new Mac QR code.",
+              "Enrollment expired, revoked or already used. Create a new pairing code on the host.",
             );
           if (state.devices.length >= 256)
             throw new Error(
@@ -303,6 +304,8 @@ export async function openTrustStore({
           await publish(file, next, assertHeld);
           assertHeld();
           state = next;
+          // Reported to the owner only once the device is durable.
+          entry.deviceId = deviceId;
           permissionFences.set(deviceId, "control");
           managementFences.set(deviceId, true);
           return {
@@ -322,6 +325,33 @@ export async function openTrustStore({
           terminals:
             permissionFences.get(device.deviceId) ?? device.terminals ?? "off",
         }));
+      },
+      renameDevice(deviceId, name) {
+        if (
+          typeof name !== "string" ||
+          !name.length ||
+          name.length > 80 ||
+          /[\x00-\x1f\x7f]/.test(name)
+        )
+          return Promise.reject(new Error("Invalid device name"));
+        return serialized(async () => {
+          if (
+            !state.devices.some(
+              (d) => d.deviceId === deviceId && d.revokedAt == null,
+            )
+          )
+            throw new Error("Unknown paired device");
+          const next = {
+            ...state,
+            devices: state.devices.map((d) =>
+              d.deviceId === deviceId ? { ...d, name } : d,
+            ),
+          };
+          await publish(file, next, assertHeld);
+          assertHeld();
+          state = next;
+          return {};
+        });
       },
       setWorkspaceManagement(deviceId, workspaceManagement) {
         if (typeof workspaceManagement !== "boolean")

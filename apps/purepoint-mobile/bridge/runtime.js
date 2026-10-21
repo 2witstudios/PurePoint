@@ -18,9 +18,13 @@ import {
   AdminError,
   setDeviceTerminals,
   setDeviceWorkspaceManagement,
+  renameDevice,
 } from "./admin.js";
+import { platformDefaults, hostLabel, hostCopy } from "./platform.js";
+import { startRemote } from "./remote.js";
 import { LockError } from "./lock-helper.js";
 import { optionalRemoteListener } from "./remote-listener.js";
+import { allowedHost } from "./endpoints.js";
 import { startupFailure } from "./runtime-errors.js";
 import { watchAppLifetime } from "./app-lifetime.js";
 
@@ -37,6 +41,14 @@ function idle(c) {
 }
 const endpoint = (scheme, host, server) =>
   `${scheme}://${host.includes(":") ? "[" + host + "]" : host}:${server.address().port}/v1`;
+/** Remote peers must arrive from the tailnet (or loopback in serve mode). */
+function peerAllowed(mode) {
+  return (raw) => {
+    const address = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+    if (mode === "serve") return address === "127.0.0.1" || address === "::1";
+    return allowedHost(address);
+  };
+}
 /** Wait for the exact owned RPC child, including the legacy close timeout path. */
 async function closeOwnedRpc(rpc) {
   const child = rpc.child;
@@ -55,10 +67,13 @@ async function closeOwnedRpc(rpc) {
   });
 }
 /** App-lifetime managed service; never adopts or signals a process from a readiness file. */
-export async function runManaged(env = process.env) {
-  const directory =
-    env.POINT_GUARD_STATE_DIR ??
-    path.join(os.homedir(), "Library/Application Support/PurePoint/PointGuard");
+export async function runManaged(env = process.env, platform = platformDefaults({ env })) {
+  const directory = env.POINT_GUARD_STATE_DIR ?? platform.stateDirectory;
+  const copy = hostCopy(platform.hostKind);
+  const hostInfo = {
+    hostKind: platform.hostKind,
+    hostLabel: hostLabel(os.hostname(), platform.hostKind),
+  };
   const instanceId = env.POINT_GUARD_INSTANCE_ID ?? randomUUID();
   if (!uuid.test(instanceId))
     throw new Error("Invalid Point Guard launch identity.");
@@ -162,7 +177,8 @@ export async function runManaged(env = process.env) {
         // A replacement can overlap its predecessor's drain. Only kernel
         // acquisition authorizes startup; a live owner still fails after 5s.
         if (
-          env.POINT_GUARD_APP_LIFETIME !== "stdin" ||
+          (env.POINT_GUARD_APP_LIFETIME !== "stdin" &&
+            env.POINT_GUARD_SUPERVISOR !== "systemd") ||
           error.code !== "lock_busy" ||
           Date.now() >= ownershipDeadline
         )
@@ -176,9 +192,7 @@ export async function runManaged(env = process.env) {
     await rm(path.join(directory, "error.json"), { force: true });
     const pu = env.POINT_GUARD_PU_PATH;
     if (!pu || !path.isAbsolute(pu))
-      throw new Error(
-        "Bundled pu CLI path is missing. Reinstall the complete PurePoint app.",
-      );
+      throw new Error(`Bundled pu CLI path is missing. ${copy.reinstall}`);
     await access(pu, constants.X_OK);
     stage = "cwd";
     const cwd = env.PI_MOBILE_CWD
@@ -289,24 +303,39 @@ export async function runManaged(env = process.env) {
       localAdmin: { token: chatToken, clientId: state.value.desktopClientId },
     });
     const nativeChatURL = endpoint("ws", "127.0.0.1", local);
-    let chatURL = null;
-    let remoteRecovery;
+    const port = Number(env.PI_MOBILE_PORT ?? 8787);
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Error("Invalid phone listener port.");
+    const listen = (host, allowPeer) =>
+      serve(controller, {
+        host,
+        port,
+        trust,
+        tls: trust.tls,
+        hostInfo,
+        allowPeer,
+      });
     if (env.PI_MOBILE_HOST) {
-      const port = Number(env.PI_MOBILE_PORT ?? 8787);
-      if (!Number.isInteger(port) || port < 1 || port > 65535)
-        throw new Error("Invalid phone listener port.");
       const result = await optionalRemoteListener(() =>
-        serve(controller, {
-          host: env.PI_MOBILE_HOST,
-          port,
-          trust,
-          tls: trust.tls,
-        }),
+        listen(env.PI_MOBILE_HOST, peerAllowed("interface")),
       );
-      remote = result.server;
-      remoteRecovery = result.remoteRecovery;
-      if (remote) chatURL = endpoint("wss", env.PI_MOBILE_HOST, remote);
+      const server = result.server;
+      const chatURL = server
+        ? endpoint("wss", env.PI_MOBILE_HOST, server)
+        : null;
+      remote = {
+        chatURL: () => chatURL,
+        status: () =>
+          server
+            ? { state: "listening", mode: "explicit" }
+            : { state: "unavailable", ...result.remoteRecovery },
+        shutdown: async () => server?.shutdown(),
+      };
+    } else if (platform.discoverTailnet && env.POINT_GUARD_PHONE !== "off") {
+      // Headless hosts: discover, late-bind and rebind in the background.
+      remote = await startRemote({ listen, port, peerAllowed });
     }
+    const chatURL = () => remote?.chatURL() ?? null;
     const status = () => ({
       phase:
         ownershipLost || controller.error || persistError ? "failed" : "ready",
@@ -314,8 +343,19 @@ export async function runManaged(env = process.env) {
       pid: process.pid,
       contractVersion: 1,
       nativeChatURL,
-      chatURL,
-      ...(remoteRecovery ? { remoteRecovery } : {}),
+      chatURL: chatURL(),
+      ...(remote ? { remote: remote.status() } : {}),
+      ...(remote?.status().state === "unavailable" && remote.status().code
+        ? {
+            remoteRecovery: {
+              code: remote.status().code,
+              message: remote.status().message,
+              recovery: remote.status().recovery,
+            },
+          }
+        : {}),
+      hostKind: hostInfo.hostKind,
+      hostLabel: hostInfo.hostLabel,
       hostId: trust.hostId,
       certificateSHA256: trust.certificateSHA256,
       desktopClientId: state.value.desktopClientId,
@@ -361,6 +401,9 @@ export async function runManaged(env = process.env) {
     };
     checkCanceled();
     admin = await serveAdmin({
+      ...(platform.adminTransport === "unix"
+        ? { socketPath: path.join(directory, "admin", "admin.sock") }
+        : {}),
       token: adminToken,
       dispatch: async (r) => {
         state.assertHeld();
@@ -420,21 +463,23 @@ export async function runManaged(env = process.env) {
               setImmediate(() => shutdown().then(() => process.exit(0)));
               return {};
             });
-          case "pairing.create":
-            if (!chatURL)
+          case "pairing.create": {
+            const current = chatURL();
+            if (!current)
               throw new AdminError(
                 "unreachable",
-                "Connect Tailscale and select this Mac’s tailnet address before pairing.",
+                remote?.status().recovery ?? copy.unreachable,
               );
-            if (r.endpoint !== undefined && r.endpoint !== chatURL)
+            if (r.endpoint !== undefined && r.endpoint !== current)
               throw new AdminError(
                 "endpoint",
                 "Enrollment must use this service’s actual phone endpoint.",
               );
             return trust.createEnrollment({
-              endpoint: chatURL,
+              endpoint: current,
               ttlSeconds: r.ttlSeconds,
             });
+          }
           case "pairing.status":
             return trust.enrollmentStatus(r.enrollmentId);
           case "pairing.revoke":
@@ -446,6 +491,8 @@ export async function runManaged(env = process.env) {
             return await setDeviceWorkspaceManagement(trust, r);
           case "devices.terminals":
             return await setDeviceTerminals(trust, r);
+          case "devices.rename":
+            return await renameDevice(trust, r);
           case "devices.revoke":
             await trust.revokeDevice(r.deviceId);
             return {};
@@ -466,7 +513,7 @@ export async function runManaged(env = process.env) {
       {
         schemaVersion: 1,
         ...status(),
-        adminURL: admin.url,
+        ...(admin.socket ? { adminSocket: admin.socket } : { adminURL: admin.url }),
       },
       state.assertHeld,
     );

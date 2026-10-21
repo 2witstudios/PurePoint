@@ -96,13 +96,13 @@ final class DelayedTrustStore: @unchecked Sendable {
         for _ in 0..<300 where model.snapshot == nil { try await Task.sleep(nanoseconds: 10_000_000) }
         precondition(model.chatGrant == .send && model.snapshot != nil && model.canSend, "Restored chat resyncs the conversation")
         try Data("revoke".utf8).write(to: URL(fileURLWithPath: directory + "/revoke"))
-        for _ in 0..<300 where model.connectionStatus != "Re-pair with your Mac" { try await Task.sleep(nanoseconds: 10_000_000) }
-        precondition(!model.wantsConnectionForChecks && model.connectionStatus == "Re-pair with your Mac", "Revocation closes socket and stops retries until deliberate re-pair")
+        for _ in 0..<300 where model.connectionStatus != "Re-pair needed" { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(!model.wantsConnectionForChecks && model.connectionStatus == "Re-pair needed", "Revocation closes socket and stops retries until deliberate re-pair")
         model.disconnect(); model.setForeground(false); model.setForeground(true)
         precondition(!model.wantsConnectionForChecks && !model.connected, "User disconnect survives foreground")
         let legacy = ChatModel(defaults: defaults, trustLoader: { _ in nil }); legacy.connect()
-        for _ in 0..<100 where legacy.connectionStatus != "Re-pair with your Mac" { try await Task.sleep(nanoseconds: 10_000_000) }
-        precondition(!legacy.wantsConnectionForChecks && legacy.connectionStatus == "Re-pair with your Mac", "Lost/legacy trust never falls back or retries")
+        for _ in 0..<100 where legacy.connectionStatus != "Re-pair needed" { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(!legacy.wantsConnectionForChecks && legacy.connectionStatus == "Re-pair needed", "Lost/legacy trust never falls back or retries")
         print("Trust checks passed: real TLS pin success/mismatch, authoritative identity, saved trust, delayed-save supersession, foreground reconnect and no replay.")
     }
 }

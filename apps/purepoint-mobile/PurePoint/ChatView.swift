@@ -92,7 +92,8 @@ struct ChatView: View {
             }
             .onChange(of: overlays) { _, _ in updateInventoryVisibility() }
             .onChange(of: destination) { _, _ in updateInventoryVisibility() }
-            .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
+            // Only a real background pauses; .inactive (Notification Center, sheets, app switcher) keeps the agent open.
+            .onChange(of: scenePhase) { _, phase in guard phase != .inactive else { return }; model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
             .task {
                 while !Task.isCancelled {
                     model.agentControl.updateSignalBadge()
@@ -142,7 +143,7 @@ struct ChatView: View {
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Button(action: closeSidebar) { Color.black.opacity(0.35).ignoresSafeArea() }.buttonStyle(.plain).accessibilityLabel("Close workspace navigator")
-                        AgentNavigator(model: model.agentControl, destination: destination, hostName: model.selectedMachine?.name ?? "Mac", hostStatus: headerStatus, pointGuard: { model.agentControl.closeScreen(); destination = "pointGuard"; closeSidebar() }, projects: { model.agentControl.closeScreen(); destination = "projects"; closeSidebar() }, open: { entry in model.agentControl.open(machine: entry.machine, agent: entry.agent, context: model.agentControl.contextToken); destination = "agent"; closeSidebar() }, connections: { closeSidebar(); showConnection = true }, close: closeSidebar)
+                        AgentNavigator(model: model.agentControl, destination: destination, hostName: model.selectedMachine?.name ?? "Computer", hostStatus: headerStatus, pointGuard: { model.agentControl.closeScreen(); destination = "pointGuard"; closeSidebar() }, projects: { model.agentControl.closeScreen(); destination = "projects"; closeSidebar() }, open: { entry in model.agentControl.open(machine: entry.machine, agent: entry.agent, context: model.agentControl.contextToken); destination = "agent"; closeSidebar() }, connections: { closeSidebar(); showConnection = true }, close: closeSidebar)
                             .frame(width: min(328, geometry.size.width - 44), height: geometry.size.height)
                             .transition(.move(edge: .leading))
                             .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in if value.translation.width < -60 && abs(value.translation.width) > abs(value.translation.height) { closeSidebar() } })
@@ -169,7 +170,7 @@ struct ChatView: View {
     }
     private var mainContent: some View {
             ZStack {
-              MobileProjectsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Mac", active: destination != "pointGuard", openNavigator: openSidebar)
+              MobileProjectsView(model: model.agentControl, hostName: model.selectedMachine?.name ?? "Computer", active: destination != "pointGuard", openNavigator: openSidebar)
                 .opacity(destination == "pointGuard" ? 0 : 1).disabled(destination == "pointGuard").allowsHitTesting(destination != "pointGuard").accessibilityHidden(destination == "pointGuard")
               VStack(spacing: 0) {
                 if let error = model.error {

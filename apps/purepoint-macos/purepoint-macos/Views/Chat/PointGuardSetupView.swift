@@ -195,7 +195,7 @@ struct PointGuardPhoneView: View {
     var body: some View {
         VStack(spacing: 16) {
             Text("Connect your phone").font(.title2)
-            Text("Open the iPhone app → Connection → Scan Mac QR code. Keep Tailscale connected on both devices.")
+            Text("Open the iPhone app → Connections → Scan pairing code. Keep Tailscale connected on both devices.")
             if service.enrollmentStatus == "consumed" {
                 Label("Phone connected", systemImage: "checkmark.circle.fill")
             } else if let payload = service.enrollment["payload"].text, let image = qr(payload) {

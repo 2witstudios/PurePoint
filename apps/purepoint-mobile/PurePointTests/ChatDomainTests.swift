@@ -75,7 +75,7 @@ final class ChatDomainTests: XCTestCase {
         model.connect()
         model.setForeground(false)
         model.setForeground(true)
-        XCTAssertEqual(model.connectionStatus, "Connecting to your Mac…")
+        XCTAssertEqual(model.connectionStatus, "Connecting to your computer…")
         model.disconnect()
     }
 
@@ -171,5 +171,123 @@ final class ChatDomainTests: XCTestCase {
         XCTAssertFalse(ChatGrant.off.canRead)
         let envelope = try JSONDecoder().decode(WireEnvelope.self, from: Data(#"{"type":"permissions","chat":"off"}"#.utf8))
         XCTAssertEqual(ChatGrant.from(envelope.chat), .off)
+    }
+
+    private func enrollment(endpoint: String = "wss://100.94.14.74:8787/v1", pin: String = String(repeating: "a", count: 64), expiresIn: Int64 = 120000) -> String {
+        "{\"type\":\"pi-mobile-pairing\",\"version\":1,\"endpoint\":\"" + endpoint + "\",\"hostId\":\"550e8400-e29b-41d4-a716-446655440000\",\"certificateSHA256\":\"" + pin + "\",\"enrollmentToken\":\"" + String(repeating: "b", count: 43) + "\",\"expiresAt\":" + String(Int64(Date().timeIntervalSince1970 * 1000) + expiresIn) + "}"
+    }
+    private func failure(_ result: Result<PairingCode, PairingInputFailure>) -> PairingInputFailure? {
+        if case .failure(let failure) = result { return failure }
+        return nil
+    }
+    func testGivenPastedEnrollmentShouldRequireExactPrefixAndApplyScannedValidation() throws {
+        let json = enrollment()
+        let scanned = try PairingCode.read(json, from: .scanned).get()
+        let pasted = try PairingCode.read("purepoint-pair:" + json, from: .pasted).get()
+        XCTAssertEqual(pasted.endpoint, scanned.endpoint)
+        XCTAssertEqual(pasted.hostId, scanned.hostId)
+        XCTAssertEqual(pasted.certificateSHA256, scanned.certificateSHA256)
+        XCTAssertEqual(pasted.enrollmentToken, scanned.enrollmentToken)
+        XCTAssertEqual(try PairingCode.read("\n  purepoint-pair:" + json + " \r\n", from: .pasted).get().hostId, scanned.hostId, "Surrounding whitespace is trimmed")
+
+        XCTAssertEqual(failure(PairingCode.read(json, from: .pasted)), .missingPrefix, "Raw QR JSON is not a paste code")
+        XCTAssertEqual(failure(PairingCode.read("PurePoint-Pair:" + json, from: .pasted)), .missingPrefix)
+        XCTAssertEqual(failure(PairingCode.read("pair:" + json, from: .pasted)), .missingPrefix)
+        XCTAssertEqual(failure(PairingCode.read("x purepoint-pair:" + json, from: .pasted)), .missingPrefix)
+        XCTAssertEqual(failure(PairingCode.read("purepoint-pair: " + json, from: .pasted)), .invalid, "Only surrounding whitespace is trimmed")
+        XCTAssertEqual(failure(PairingCode.read("purepoint-pair:", from: .pasted)), .invalid)
+        XCTAssertEqual(failure(PairingCode.read("purepoint-pair:" + json + String(repeating: " ", count: 4096), from: .pasted)), .oversized, "Size is checked before trimming or parsing")
+        XCTAssertEqual(failure(PairingCode.read("purepoint-pair:" + json, from: .scanned)), .invalid, "QR payloads are unchanged and carry no prefix")
+
+        // Tampered pastes fail the same pin, expiry and endpoint allow-list checks as a scan.
+        for tampered in [enrollment(endpoint: "wss://example.com/v1"), enrollment(endpoint: "ws://100.94.14.74:8787/v1"), enrollment(pin: String(repeating: "a", count: 63)), enrollment(pin: String(repeating: "A", count: 64)), enrollment(expiresIn: -1000), enrollment(expiresIn: 600000), json.replacingOccurrences(of: "\"version\":1", with: "\"version\":2")] {
+            XCTAssertEqual(failure(PairingCode.read("purepoint-pair:" + tampered, from: .pasted)), .invalid)
+            XCTAssertEqual(failure(PairingCode.read(tampered, from: .scanned)), .invalid)
+            XCTAssertNil(PairingCode.parse(tampered))
+        }
+    }
+    func testGivenVerifyResponseShouldReadHostDescriptionStrictlyAndIgnoreUnknownValues() {
+        func verify(_ extra: String) -> HostIdentity {
+            HostIdentity.fromVerify(Data(("{\"version\":1,\"hostId\":\"550e8400-e29b-41d4-a716-446655440000\",\"deviceId\":\"d\",\"clientId\":\"d\"" + extra + "}").utf8))
+        }
+        XCTAssertEqual(verify(""), HostIdentity(), "Older bridges send neither field")
+        XCTAssertEqual(verify(#","hostKind":"linux","hostLabel":"build-box""#), HostIdentity(kind: .linux, label: "build-box"))
+        XCTAssertEqual(verify(#","hostKind":"mac","hostLabel":"Jonos-MacBook-Pro""#), HostIdentity(kind: .mac, label: "Jonos-MacBook-Pro"))
+        XCTAssertEqual(verify(#","hostKind":"windows","hostLabel":"box""#), HostIdentity(kind: nil, label: "box"), "Unknown kinds are absent, not an error")
+        XCTAssertNil(verify(#","hostKind":"Linux""#).kind, "Kinds are exact")
+        XCTAssertNil(verify(#","hostKind":1,"hostLabel":true"#).kind)
+        XCTAssertNil(verify(#","hostKind":1,"hostLabel":true"#).label)
+        XCTAssertEqual(verify(#","hostLabel":""# + String(repeating: "a", count: 63) + "\"").label?.count, 63)
+        for label in ["", "Linux host", "<script>", "build.box", "büro", "a\nb", String(repeating: "a", count: 64)] {
+            let encoded = String(data: try! JSONEncoder().encode(label), encoding: .utf8)!
+            XCTAssertNil(verify(",\"hostKind\":\"linux\",\"hostLabel\":" + encoded).label, "Rejects label " + label.debugDescription)
+        }
+        XCTAssertEqual(HostIdentity.fromVerify(Data("not json".utf8)), HostIdentity())
+        XCTAssertEqual(HostIdentity.fromVerify(Data("[\"linux\"]".utf8)), HostIdentity())
+    }
+    func testGivenHostDescriptionsShouldNameByLabelKeepHostsDistinctAndSurviveRelaunch() throws {
+        let mac = UUID().uuidString, linux = UUID().uuidString
+        var registry = MachineRegistry()
+        _ = registry.remember(hostId: mac, endpoint: "wss://100.100.1.2:8787/v1")
+        _ = registry.remember(hostId: linux, endpoint: "wss://100.100.1.3:8787/v1")
+        XCTAssertEqual(registry.machines.first { $0.id == linux }?.name, "100.100.1.3")
+        XCTAssertFalse(registry.describe(hostId: linux, as: HostIdentity()), "Older bridges change nothing")
+        XCTAssertFalse(registry.describe(hostId: UUID().uuidString, as: HostIdentity(kind: .linux, label: "build-box")), "Only a saved hostId is described")
+        XCTAssertTrue(registry.describe(hostId: mac, as: HostIdentity(kind: .mac, label: "build-box")))
+        XCTAssertTrue(registry.describe(hostId: linux, as: HostIdentity(kind: .linux, label: "build-box")))
+        let byId = Dictionary(uniqueKeysWithValues: registry.machines.map { ($0.id, $0) })
+        XCTAssertEqual(registry.machines.count, 2, "Matching labels never merge hosts")
+        XCTAssertEqual(byId[mac]?.name, "build-box"); XCTAssertEqual(byId[linux]?.name, "build-box")
+        XCTAssertEqual(byId[mac]?.host, HostIdentity(kind: .mac, label: "build-box"))
+        XCTAssertEqual(byId[linux]?.host, HostIdentity(kind: .linux, label: "build-box"))
+        XCTAssertEqual(HostCopy.symbol(byId[linux]?.host.kind), "server.rack")
+        XCTAssertEqual(HostCopy.symbol(byId[mac]?.host.kind), "desktopcomputer")
+        XCTAssertEqual(HostCopy.symbol(nil), "desktopcomputer")
+        XCTAssertTrue(registry.valid)
+
+        let index = try XCTUnwrap(registry.machines.firstIndex { $0.id == linux })
+        registry.machines[index].name = "Home server"
+        XCTAssertTrue(registry.describe(hostId: linux, as: HostIdentity(kind: .linux, label: "renamed-box")))
+        XCTAssertEqual(registry.machines[index].name, "Home server", "A user-chosen name wins over the host label")
+        XCTAssertEqual(registry.machines[index].hostLabel, "renamed-box")
+        _ = registry.remember(hostId: linux, endpoint: "wss://100.100.1.9:8787/v1")
+        XCTAssertEqual(registry.selected?.host, HostIdentity(kind: .linux, label: "renamed-box"), "Re-pair and address changes keep the description")
+
+        let relaunched = try JSONDecoder().decode(MachineRegistry.self, from: JSONEncoder().encode(registry))
+        XCTAssertTrue(relaunched.valid)
+        XCTAssertEqual(relaunched.machines, registry.machines)
+        let legacy = try JSONDecoder().decode(MachineRegistry.self, from: Data(("{\"version\":1,\"selectedId\":\"" + mac + "\",\"machines\":[{\"id\":\"" + mac + "\",\"endpoint\":\"wss://100.100.1.2:8787/v1\",\"name\":\"Desk\",\"stateKey\":\"" + mac + "\"}]}").utf8))
+        XCTAssertTrue(legacy.valid); XCTAssertEqual(legacy.selected?.host, HostIdentity())
+        let future = try JSONDecoder().decode(MachineRegistry.self, from: Data(("{\"version\":1,\"selectedId\":\"" + mac + "\",\"machines\":[{\"id\":\"" + mac + "\",\"endpoint\":\"wss://100.100.1.2:8787/v1\",\"name\":\"Desk\",\"stateKey\":\"" + mac + "\",\"hostKind\":\"windows\",\"hostLabel\":\"bad label\"}]}").utf8))
+        XCTAssertTrue(future.valid, "Unknown saved descriptions never invalidate the list")
+        XCTAssertEqual(future.selected?.host, HostIdentity())
+    }
+    func testGivenHostKindShouldWordRepairHintForThatHost() {
+        let linux = HostCopy.repairHint(kind: .linux, label: "build-box")
+        XCTAssertTrue(linux.contains("`pu phone pair` on build-box"))
+        XCTAssertFalse(linux.contains("Mac"))
+        XCTAssertTrue(HostCopy.repairHint(kind: .linux, label: nil).contains("`pu phone pair` on that computer"))
+        let mac = HostCopy.repairHint(kind: .mac, label: "Desk")
+        XCTAssertTrue(mac.contains("Connect phone") && mac.contains("Mac"))
+        XCTAssertFalse(mac.contains("pu phone pair"))
+        let unknown = HostCopy.repairHint(kind: nil, label: nil)
+        XCTAssertTrue(unknown.contains("Connect phone") && unknown.contains("pu phone pair"), "Without a verified kind, name both ways to create a code")
+    }
+    @MainActor func testGivenLinuxHostTrustLostShouldAskToRunPuPhonePairOnThatHost() async throws {
+        let suite = "connection-check-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let host = UUID().uuidString
+        var registry = MachineRegistry()
+        _ = registry.remember(hostId: host, endpoint: "wss://100.100.1.2:8787/v1")
+        _ = registry.describe(hostId: host, as: HostIdentity(kind: .linux, label: "build-box"))
+        defaults.set(try JSONEncoder().encode(registry), forKey: "pi.machines.v1")
+        let model = ChatModel(defaults: defaults, trustLoader: { _ in nil })
+        XCTAssertEqual(model.selectedMachine?.name, "build-box")
+        model.connect()
+        for _ in 0..<300 where model.connectionStatus != "Re-pair needed" { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(model.connectionStatus, "Re-pair needed")
+        XCTAssertEqual(model.error, "No saved device trust. Run `pu phone pair` on build-box, then scan or paste the new code.")
+        model.disconnect()
     }
 }
