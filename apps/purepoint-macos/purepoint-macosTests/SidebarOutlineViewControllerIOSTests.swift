@@ -81,6 +81,39 @@ struct SidebarOutlineViewControllerIOSTests {
                 == [key(nodes[0]), key(nodes[0].children[0]), key(nodes[0].children[0].children[0]), key(nodes[0].children[1])])
     }
 
+    @Test func givenRowsShouldPointTheChevronAsTheMacOutlineDoes() throws {
+        let (controller, _) = try makeController()
+        // Worktree 0 holds a workspace; worktree 1 is empty.
+        let project = makeProject(root: "/tmp/ios-chevron-\(UUID().uuidString)", worktreeCount: 2)
+        controller.workspacesByProject = [
+            project.projectId: [Workspace.adopting(agentId: "agent-chevron", container: .worktree("0"))]
+        ]
+        controller.rebuildNodes(projects: [project])
+        controller.outlineView.layoutIfNeeded()
+
+        func cell(_ node: SidebarNode) throws -> SidebarRowCell {
+            let index = try #require(visibleIds(controller).firstIndex(of: key(node)))
+            return try #require(controller.outlineView.cellForItem(at: IndexPath(item: index, section: 0)) as? SidebarRowCell)
+        }
+        let nodes = controller.projectNodes[0]
+        let open = try cell(nodes.children[0])
+        let empty = try cell(nodes.children[1])
+        let leaf = try cell(nodes.children[0].children[0])
+
+        // Down when open, right when it has nothing to show, none on a leaf row.
+        #expect(open.accessibilityValue == "Expanded")
+        #expect(open.disclosureButton.transform != .identity)
+        #expect(empty.accessibilityValue == "Collapsed")
+        #expect(empty.disclosureButton.transform == .identity)
+        #expect(!empty.disclosureButton.isHidden)
+        #expect(leaf.disclosureButton.isHidden)
+
+        // Closing the open row turns its chevron right.
+        controller.setExpanded(key(nodes.children[0]), false, animated: false)
+        controller.outlineView.layoutIfNeeded()
+        #expect(try cell(nodes.children[0]).disclosureButton.transform == .identity)
+    }
+
     @Test func givenMachinesShouldShowTheMachinesSectionAndMachineRows() throws {
         let (controller, _) = try makeController()
         let machine = MachineState(machine: Machine(name: "studio", sshHost: "me@studio"), appState: nil, registry: nil)
@@ -225,8 +258,9 @@ struct SidebarOutlineViewControllerIOSTests {
 
         #expect(controller.handleArrowKey(.down))
         #expect(reported.last == .worktree("0"))
-        // Left closes the open worktree row, then climbs to its parent.
-        #expect(controller.handleArrowKey(.left))
+        // The worktree has no rows under it, so it reads closed, as its chevron does: Left
+        // climbs straight to its parent.
+        #expect(controller.projectNodes[0].children[0].children.isEmpty)
         #expect(controller.handleArrowKey(.left))
         #expect(reported.last == .project(project.projectId))
 
