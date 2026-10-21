@@ -254,7 +254,10 @@ final class AddMachineFlow {
         error = failure.localizedDescription
         step = .editing
         Task { await closeSession() }
-        // A key confirmed for a machine that was not saved is not kept.
+        // A key confirmed for a machine that was not saved is not kept, except when the machine
+        // refused the iPad's key: the user installs it and retries without confirming again.
+        // Cancel still drops it.
+        if let refusal = failure as? SSHTransportError, case .authenticationFailed = refusal { return }
         if !saved {
             try? pins.reset(machineId: machineId)
             pinnedFor = nil

@@ -116,6 +116,36 @@ struct AddMachineFlowTests {
         #expect(pins.pinnedKey(machineId: flow.machineId) == nil)
     }
 
+    @Test func aRefusedKeyKeepsThePinSoTheRetryDoesNotAskAgain() async throws {
+        let (flow, pins, saved, fake) = makeFlow()
+        let appState = AppState()
+        await flow.submit(appState: appState)
+        fake.setFailure(SSHTransportError.authenticationFailed(machine: "studio", user: "jono"))
+        await flow.confirmHostKey(appState: appState)
+        #expect(flow.step == .editing)
+        #expect(flow.error?.contains("refused this iPad's SSH key") == true)
+        #expect(pins.pinnedKey(machineId: flow.machineId) == hostKey)
+
+        // The user installs the key and tries again: no second trust prompt.
+        fake.setFailure(nil)
+        await flow.submit(appState: appState)
+        #expect(flow.step == .saved)
+        #expect(saved.machines.count == 1)
+        #expect(pins.pinnedKey(machineId: flow.machineId) == hostKey)
+    }
+
+    @Test func cancellingAfterARefusedKeyDropsThePin() async throws {
+        let (flow, pins, saved, fake) = makeFlow()
+        let appState = AppState()
+        await flow.submit(appState: appState)
+        fake.setFailure(SSHTransportError.authenticationFailed(machine: "studio", user: "jono"))
+        await flow.confirmHostKey(appState: appState)
+        #expect(pins.pinnedKey(machineId: flow.machineId) == hostKey)
+        await flow.cancel()
+        #expect(saved.machines.isEmpty)
+        #expect(pins.pinnedKey(machineId: flow.machineId) == nil)
+    }
+
     @Test func aStoppedDaemonStillSavesTheMachine() async throws {
         let (flow, _, saved, _) = makeFlow { channel, _ in channel.end(.exited(69, stderr: "")) }
         let appState = AppState()
