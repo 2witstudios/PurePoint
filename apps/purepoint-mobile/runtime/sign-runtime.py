@@ -6,9 +6,11 @@ import argparse
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--app', required=True)
 parser.add_argument('--identity', required=True, help='Explicit signing identity; CI uses - for ad-hoc, owner release supplies Developer ID')
+parser.add_argument('--timestamp', action='store_true', help='Request a secure timestamp (required for notarization)')
 args = parser.parse_args()
 app = Path(args.app).resolve()
 identity = args.identity
+sign = ['/usr/bin/codesign', '--force', '--sign', identity, '--options', 'runtime'] + (['--timestamp'] if args.timestamp else [])
 resources = app / 'Contents/Resources/PointGuard'
 entitlements = Path(__file__).with_name('node-entitlements.plist')
 
@@ -21,11 +23,11 @@ for file in resources.rglob('*'):
     with file.open('rb') as stream:
         magic = stream.read(4)
     if magic in [b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe']:
-        run('/usr/bin/codesign', '--force', '--sign', identity, '--options', 'runtime', str(file))
+        run(*sign, str(file))
         run('/usr/bin/codesign', '--verify', '--strict', str(file))
 for name in ['pu', 'point-guard-node', 'point-guard-lock']:
     file = app / 'Contents/Helpers' / name
-    args = ['/usr/bin/codesign', '--force', '--sign', identity, '--options', 'runtime']
+    args = list(sign)
     if name == 'point-guard-node':
         args += ['--entitlements', str(entitlements)]
     run(*args, str(file))

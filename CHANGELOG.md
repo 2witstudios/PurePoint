@@ -4,6 +4,9 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+- Release builds now compile in jobs that hold no secrets, and a separate job in a protected environment signs and notarizes the result. The Sparkle signing tool matches the Sparkle version the app ships (2.9.0) and is checked against a pinned SHA-256. Workflow actions are pinned to commit SHAs. The GitHub release is created once, with all of its assets.
+
 ## [0.5.2] — 2026-10-15
 
 ### Fixed

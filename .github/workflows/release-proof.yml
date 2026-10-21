@@ -14,7 +14,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Record exact candidate and compiler
@@ -23,10 +23,10 @@ jobs:
           git rev-parse HEAD | tee "$RUNNER_TEMP/release-diagnostics/commit.txt"
           xcodebuild -version | tee "$RUNNER_TEMP/release-diagnostics/xcode.txt"
           xcrun swiftc --version | tee "$RUNNER_TEMP/release-diagnostics/swift.txt"
-      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
       - name: Isolate archive Rust output
@@ -90,9 +90,15 @@ jobs:
           done
           python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$app"
           /usr/bin/codesign --verify --deep --strict "$app"
+      # The release signing job re-signs the unsigned build with this script;
+      # an ad-hoc pass proves it covers every nested binary in the bundle.
+      - name: Re-sign archived app inside-out
+        run: |
+          bash .github/scripts/sign-macos-app.sh \
+            "$RUNNER_TEMP/PurePoint.xcarchive/Products/Applications/PurePoint.app" -
       - name: Retain Release compiler diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-archive-diagnostics
           path: ${{ runner.temp }}/release-diagnostics
