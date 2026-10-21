@@ -16,15 +16,27 @@ struct WorkspaceFilesLayout<Content: View>: View {
     }
 
     var body: some View {
-        HSplitView {
-            content()
-                .frame(minWidth: 160, maxWidth: .infinity, maxHeight: .infinity)
-                .layoutPriority(1)
-            if showSidebar {
+        Group {
+            #if os(macOS)
+            HSplitView {
+                content()
+                    .frame(minWidth: 160, maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+                if showSidebar {
+                    WorkspaceFilesSidebar(state: filesState)
+                        .id(filesState.identity)
+                        .frame(minWidth: 240, idealWidth: 360, maxWidth: 640, maxHeight: .infinity)
+                }
+            }
+            #else
+            // The same limits, with a divider the iPad can drag (the iOS `HSplitView` has none).
+            WorkspaceFilesSplit(showSidebar: showSidebar) {
+                content()
+            } sidebar: {
                 WorkspaceFilesSidebar(state: filesState)
                     .id(filesState.identity)
-                    .frame(minWidth: 240, idealWidth: 360, maxWidth: 640, maxHeight: .infinity)
             }
+            #endif
         }
         // Keyed on host and path: a local and a remote root can share a path.
         .onChange(of: WorkspaceFilesState.identity(rootPath: rootPath, host: host)) { _, _ in
