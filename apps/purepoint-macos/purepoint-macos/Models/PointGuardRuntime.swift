@@ -12,7 +12,7 @@ struct PointGuardRuntime: Sendable {
     let node: URL; let pu: URL; let lockHelper: URL; let entry: URL
     static func load(manifestURL: URL) throws -> Self {
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
-        guard manifest.schemaVersion == 1, manifest.contractVersion == 1, manifest.piVersion == "1.1.0",
+        guard manifest.schemaVersion == 1, manifest.contractVersion == 1, manifest.piVersion == "1.3.0",
             ["arm64", "x64", "universal"].contains(manifest.architecture)
         else { throw PiChatError("Unsupported Point Guard package. Install a supported PurePoint update.") }
         let resourceRoot = manifestURL.deletingLastPathComponent().standardizedFileURL

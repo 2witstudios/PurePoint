@@ -1,4 +1,4 @@
-// Disposable native Pi 1.1.0 package resolution; no credentials/model/network needed.
+// Disposable native Pi 1.3.0 package resolution; no credentials/model/network needed.
 import assert from 'node:assert/strict';
 import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,9 +6,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const piRoot = process.argv[2];
-assert.ok(piRoot, 'Pass the explicit installed Pi 1.1.0 package root');
+assert.ok(piRoot, 'Pass the explicit installed Pi 1.3.0 package root');
 const pi = resolve(piRoot);
-assert.equal(JSON.parse(await readFile(join(pi, 'package.json'), 'utf8')).version, '1.1.0');
+assert.equal(JSON.parse(await readFile(join(pi, 'package.json'), 'utf8')).version, '1.3.0');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = await mkdtemp(join(tmpdir(), 'pi-workflows-proof-'));
 const previousHome = process.env.HOME;
@@ -90,7 +90,7 @@ try {
   assert.equal(collisions.length, 1);
   assert.equal(collisions[0].collision.winnerPath, userSkill);
   assert.ok(collisions[0].collision.loserPath.startsWith(override));
-  console.log('PASS Pi 1.1.0 native package/catalog, relocation, reload, symlink dedup, collisions and override; 15 workflows visible without optional dependencies');
+  console.log('PASS Pi 1.3.0 native package/catalog, relocation, reload, symlink dedup, collisions and override; 15 workflows visible without optional dependencies');
 } finally {
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
