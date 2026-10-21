@@ -265,3 +265,44 @@ struct DaemonStreamTransportTests {
         #expect(opens.value == 1)
     }
 }
+
+// MARK: - Endpoint resolution
+
+/// Mutates the process-wide provider hook, so these run one at a time.
+@Suite(.serialized) struct DaemonEndpointTransportTests {
+    private let machineId = UUID(uuidString: "6F1C2B3A-1111-4222-8333-944455556666")!
+
+    @Test func macOSEndpointsResolveToUnixSocketsAtTodaysPaths() {
+        let previous = DaemonEndpoint.transportProvider
+        DaemonEndpoint.transportProvider = nil
+        defer { DaemonEndpoint.transportProvider = previous }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let local = DaemonEndpoint.local
+        #expect(local.transport as? UnixSocketTransport == UnixSocketTransport(socketPath: home + "/.pu/daemon.sock"))
+        #expect(local.makeClient().transport as? UnixSocketTransport == UnixSocketTransport(socketPath: home + "/.pu/daemon.sock"))
+        #expect(local.makeClient().socketPath == DaemonEndpoint.localSocketPath)
+
+        let machinePath = home + "/.pu/machines/6f1c2b3a-1111-4222-8333-944455556666/daemon.sock"
+        let machine = DaemonEndpoint.machine(machineId)
+        #expect(machine.transport as? UnixSocketTransport == UnixSocketTransport(socketPath: machinePath))
+        #expect(machine.makeClient().transport as? UnixSocketTransport == UnixSocketTransport(socketPath: machinePath))
+    }
+
+    @Test func injectedProviderResolvesMachineEndpointsWithoutChangingCallSites() async throws {
+        let previous = DaemonEndpoint.transportProvider
+        let seen = OpenCounter()
+        let id = machineId
+        DaemonEndpoint.transportProvider = { endpoint in
+            _ = seen.increment()
+            #expect(endpoint.machineId == id)
+            return InMemoryTransport(serve: healthDaemon)
+        }
+        defer { DaemonEndpoint.transportProvider = previous }
+
+        let client = DaemonEndpoint.machine(machineId).makeClient()
+        #expect(client.transport is InMemoryTransport)
+        #expect(seen.value == 1)
+        expectHealth(try await client.send(.health))
+    }
+}
