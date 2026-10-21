@@ -89,8 +89,40 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertIn("permissions", job)
                 if "write" in job["permissions"].values():
                     writers.append(name)
-        self.assertEqual(writers, ["publish"])
+        self.assertEqual(writers, ["attest", "publish"])
         self.assertEqual(self.jobs["publish"]["permissions"], {"contents": "write"})
+        # Provenance signing may mint an OIDC token and write attestations, nothing else.
+        self.assertEqual(self.jobs["attest"]["permissions"], {"id-token": "write", "attestations": "write"})
+
+    def test_attestation_job_runs_no_repository_or_build_code(self):
+        attest = self.jobs["attest"]
+        actions = [step["uses"].split("@")[0] for step in steps(attest) if "uses" in step]
+        self.assertEqual(actions, ["actions/download-artifact", "actions/attest-build-provenance"])
+        self.assertNotIn("checkout", json.dumps(attest))
+        self.assertEqual(set(attest["needs"]), {"version", "linux", "linux-phone"})
+        self.assertIn("sha256sum -c", run_text(attest))
+        self.assertEqual(steps(attest)[-1]["with"], {"subject-path": "dist/*.tar.gz"})
+        self.assertTrue({"linux-phone", "attest"} <= set(self.jobs["publish"]["needs"]))
+
+    def test_linux_build_ships_the_lock_helper_and_phone_payload_is_proven(self):
+        self.assertIn("pu-point-guard-lock", run_text(self.jobs["linux"]))
+        phone = self.jobs["linux-phone"]
+        self.assertEqual(phone["permissions"], {"contents": "read"})
+        self.assertEqual(set(phone["needs"]), {"version", "linux"})
+        self.assertEqual(
+            {(leg["arch"], leg["node_target"], leg["runner"]) for leg in phone["strategy"]["matrix"]["include"]},
+            {("x86_64", "linux-x64", "ubuntu-latest"), ("aarch64", "linux-arm64", "ubuntu-24.04-arm")},
+        )
+        text = run_text(phone)
+        self.assertIn("--layout dir", text)
+        self.assertIn('--lock-helper "$PU_DIR/pu-point-guard-lock"', text)
+        self.assertIn("sha256sum -c", text)
+        self.assertIn("prove-linux-runtime.mjs", text)
+        self.assertIn("env -i HOME=", text)
+        self.assertIn("--in-place", text)
+        # No ${{ }} expression is expanded inside a run script.
+        for step in steps(phone):
+            self.assertNotIn("${{", step.get("run", ""))
 
     def test_write_token_reaches_only_the_steps_that_publish(self):
         publish = self.jobs["publish"]
