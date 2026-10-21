@@ -15,6 +15,12 @@ struct SettingsView: View {
             height: PurePointTheme.settingsHeight
         )
         .background(.regularMaterial)
+        #if os(iOS) && DEBUG
+        // `-PUDebugOpen settings/<section>` (Debug launch arguments).
+        .onAppear {
+            if let section = DebugLaunchArguments.current.open?.settingsSection { selectedSection = section }
+        }
+        #endif
     }
 
     // MARK: - Sidebar
@@ -87,8 +93,10 @@ struct SettingsView: View {
                     SettingsHotkeysView()
                 case .display:
                     SettingsDisplayView()
+                #if os(macOS)
                 case .about:
                     SettingsAboutView()
+                #endif
                 }
             }
             .padding(24)
@@ -116,6 +124,11 @@ struct SettingsGroupBoxStyle: GroupBoxStyle {
             VStack(alignment: .leading, spacing: 0) {
                 configuration.content
             }
+            #if os(iOS)
+            // iOS lays a GroupBox's content out at its ideal height, which truncates captions
+            // the Mac wraps; asking for the full height wraps them as on the Mac.
+            .fixedSize(horizontal: false, vertical: true)
+            #endif
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))

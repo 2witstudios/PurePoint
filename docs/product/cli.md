@@ -47,6 +47,7 @@ Key behaviors:
 | `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Deprecated raw terminal diagnostic bytes |
 | `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal. Claude agents get screen-confirmed delivery (full text submitted as one turn, or non-zero exit); no nudge needed |
 | `pu health` | `--json` | Check daemon health |
+| `pu daemon proxy` | honours global `--socket` | Relay stdin/stdout to the daemon socket as one connection, for SSH exec channels. Never starts the daemon (see below) |
 | `pu pulse` | `--json` | Workspace overview (agents, runtimes, git stats) |
 | `pu diff` | `--worktree <id>`, `--stat`, `--json` | Show git diffs across worktrees |
 | `pu watch` | `--interval <ms>` (default 800) | Live TUI dashboard |
@@ -133,3 +134,14 @@ See [Machines over SSH](machines.md) (MACH-003, MACH-006, MACH-008). `pu --machi
 - `PU_SSH` overrides the ssh binary (default `/usr/bin/ssh`); used by tests.
 
 Validation: `crates/pu-cli/tests/machines.rs` drives real CLI processes through a fake `PU_SSH` against an in-process daemon, including a stopped daemon (no local daemon started, no sockets left) and an unreachable host.
+
+## Daemon proxy (`pu daemon proxy`)
+
+See [Machines over SSH](machines.md) (MACH-003). Clients that cannot `ssh -L` a Unix socket (the iPad app) open an SSH exec channel running `pu daemon proxy`; each channel is exactly one daemon connection carrying newline-delimited JSON.
+
+- Connects to the daemon socket (`~/.pu/daemon.sock`, or `--socket`) and copies stdin to the socket and socket output to stdout byte-for-byte. Stdin EOF half-closes the socket's write side and the proxy keeps draining replies; the daemon closing the connection ends the proxy with exit 0, even while stdin is still open. Stdout is flushed before exit.
+- Never starts a daemon: `daemon_ctrl::ensure_daemon` is not on this path. A missing or refusing socket exits 1 with ``error: cannot connect to the daemon at <socket> (<os error>); start it with `pu daemon start` `` on stderr.
+- Stdout carries only daemon bytes. Every diagnostic goes to stderr, and the plugin freshness check is skipped so the proxy has no side work.
+- Implemented in `crates/pu-cli/src/commands/daemon_proxy.rs`.
+
+Validation: unit tests in `daemon_proxy.rs` relay 256 KiB both ways through an echo daemon, check half-close draining and daemon-side close; `crates/pu-cli/tests/daemon_proxy.rs` runs the real binary against a fake protocol daemon and the in-process `pu-engine` daemon (a `{"type":"health"}` line yields exactly the health response line) and against a missing socket (non-zero exit, empty stdout, no daemon started).

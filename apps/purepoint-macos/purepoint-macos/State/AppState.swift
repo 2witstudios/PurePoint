@@ -1,4 +1,9 @@
+#if os(macOS)
 import AppKit
+#else
+import SwiftUI
+import UIKit
+#endif
 import CryptoKit
 import Foundation
 import Observation
@@ -37,11 +42,33 @@ final class AppState {
 
     /// The active project when it is local. Library screens (agent definitions, schedules,
     /// triggers, agent settings) talk to the local daemon only.
+    #if os(macOS)
     var activeLocalProjectRoot: String? {
         guard let activeProjectRoot, !ProjectKey(id: activeProjectRoot).isRemote else {
             return projects.first?.projectRoot
         }
         return activeProjectRoot
+    }
+    #else
+    /// On iPad the library screens talk to the library machine's daemon (IPAD-012), so this is
+    /// the active project's root on that machine, or that machine's first project.
+    var activeLocalProjectRoot: String? {
+        guard let machine = libraryMachine else { return nil }
+        if let activeProjectRoot {
+            let key = ProjectKey(id: activeProjectRoot)
+            if key.machineId == machine.machine.id { return key.root }
+        }
+        return machine.projects.first?.projectRoot
+    }
+    #endif
+
+    /// The project roots the library screens list and create in.
+    var libraryProjectRoots: [String] {
+        #if os(macOS)
+        projects.map(\.projectRoot)
+        #else
+        libraryMachine?.projects.map(\.projectRoot) ?? []
+        #endif
     }
     // ContentView starts on Dashboard before its first selection-change callback.
     var activeSidebarSelection: SidebarSelection? = .nav(.dashboard)
@@ -56,12 +83,23 @@ final class AppState {
     var pendingFocusAgentId: String?
 
     @ObservationIgnored lazy var pointGuardChat = PiChatModel()
+    #if os(macOS)
     @ObservationIgnored lazy var pointGuardService = PointGuardServiceModel()
+    #endif
 
+    #if os(macOS)
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
     var scheduleState = ScheduleState()
     var triggersState = TriggersState()
+    #else
+    /// The machine the library screens use when the selection names none (IPAD-012).
+    var pickedLibraryMachineId: UUID?
+    /// Each machine's library states, made when its library is first shown
+    /// (`AppState+LibraryScope+iOS.swift`).
+    @ObservationIgnored var libraryStatesByMachine: [UUID: LibraryStates] = [:]
+    @ObservationIgnored lazy var noMachineLibraryStates = LibraryStates(endpoint: nil)
+    #endif
 
     weak var registry: WorkspaceRegistry?
 
@@ -70,7 +108,9 @@ final class AppState {
 
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
+    #if os(macOS)
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
+    #endif
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
 
     private static let openProjectsKey = "PurePointOpenProjects"
@@ -81,6 +121,9 @@ final class AppState {
     ) {
         self.service = service
         self.startProject = startProject
+        #if os(iOS)
+        installLifecycleHooks()
+        #endif
     }
 
     var isLoaded: Bool { !projects.isEmpty }
@@ -183,7 +226,10 @@ final class AppState {
 
     // MARK: - Project Management
 
+    /// Open a project on this Mac. iOS has no local machine: every iPad project is
+    /// machine-backed and arrives through its `MachineState`, so a local root never opens.
     func openProject(_ root: String) {
+        #if os(macOS)
         guard !projects.contains(where: { $0.projectRoot == root }) else { return }
 
         let project = pointGuardProjects.removeValue(forKey: root)
@@ -196,6 +242,7 @@ final class AppState {
         startBinaryWatcherIfNeeded()
 
         persistOpenProjects()
+        #endif
     }
 
     /// Returns true when the root is no longer managed and its local files can be discarded.
@@ -284,7 +331,7 @@ final class AppState {
         do {
             registered = try MachineRegistryStore.load()
         } catch {
-            daemonError = "Could not read machines from ~/.pu/machines.json: \(error.localizedDescription)"
+            daemonError = "Could not read machines from \(MachineRegistryStore.displayPath): \(error.localizedDescription)"
             return
         }
         for machine in registered {
@@ -320,10 +367,10 @@ final class AppState {
     /// The registry update takes a file lock shared with `pu machine`, so it runs off the
     /// main thread.
     @discardableResult
-    func addMachine(name: String, sshHost: String) async throws -> MachineState {
+    func addMachine(name: String, sshHost: String, id: UUID = UUID()) async throws -> MachineState {
         let machine = try await Task.detached {
             try MachineRegistryStore.update { machines in
-                try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
+                try MachineRegistryStore.add(name: name, sshHost: sshHost, id: id, to: &machines)
             }
         }.value
         // The watcher may have reloaded between the registry write and this resume, adding
@@ -346,13 +393,17 @@ final class AppState {
         machines.removeAll { $0 === state }
         let id = state.machine.id
         let name = state.machine.name
+        #if os(iOS)
+        // A removed machine's host key is trusted no longer (REQ-IPAD-026).
+        try? HostKeyPinStore.shared.reset(machineId: id)
+        #endif
         Task {
             do {
                 try await Task.detached {
                     try MachineRegistryStore.update { machines in machines.removeAll { $0.id == id } }
                 }.value
             } catch {
-                daemonError = "Could not remove \(name) from ~/.pu/machines.json: \(error.localizedDescription)"
+                daemonError = "Could not remove \(name) from \(MachineRegistryStore.displayPath): \(error.localizedDescription)"
             }
         }
         if let active = activeProjectRoot, ProjectKey(id: active).machineId == id {
@@ -401,6 +452,7 @@ final class AppState {
     private func ensurePointGuardProject(root: String) {
         pointGuardFolders.insert(root)
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
+        #if os(macOS)
         guard projectState(forRoot: root) == nil else { return }
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
@@ -409,6 +461,7 @@ final class AppState {
         guard !isTooBroadProjectRoot(root) else { return }
         startProject(project)
         startBinaryWatcherIfNeeded()
+        #endif
     }
 
     @discardableResult
@@ -501,6 +554,7 @@ final class AppState {
 
     // MARK: - Lifecycle
 
+    #if os(macOS)
     /// Synchronously suspend all agents and shut down daemon.
     /// Must complete before the process exits — uses DispatchSemaphore to block.
     func shutdownWithSuspend() {
@@ -527,7 +581,7 @@ final class AppState {
         let projectRoots = localManagedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            let client = DaemonClient()
+            let client = DaemonEndpoint.local.makeClient()
             // Only an instance that owns the daemon stops anything. A second app
             // instance attached to a shared daemon must leave the owner's agents
             // running: suspending them would strand them, since that daemon stays
@@ -545,6 +599,47 @@ final class AppState {
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
         _ = semaphore.wait(timeout: .now() + 5.0)
     }
+    #endif
+
+    #if os(iOS)
+    /// The iPad's replacement for the Mac's `NSApplication` activity and termination hooks:
+    /// the scene phase the iPad App forwards. Installed when the App creates its state, which
+    /// is also before launch-time notification responses arrive, as the Mac's application
+    /// delegate installs the notification delegate.
+    private func installLifecycleHooks() {
+        _ = AgentSignalNotifications.shared
+        AppLifecycleHooks.scenePhaseChanged = { [weak self] phase in
+            self?.scenePhaseChanged(phase)
+        }
+    }
+
+    /// Background: pause polling (pollers wait on `AppActivity`) and save what a quit would
+    /// save, since iOS may end a suspended app without notice. Foreground again: refresh state
+    /// and resume the daemon streams.
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        let returned = AppActivity.shared.apply(phase)
+        if phase == .background {
+            persistSelectedAgent()
+            registry?.saveAll()
+        } else if returned {
+            refreshAfterBackground()
+        }
+    }
+
+    private func refreshAfterBackground() {
+        for machine in machines {
+            machine.checkAfterForeground()
+        }
+        for machine in machines where machine.state.isDaemonRunning {
+            Task { await machine.refreshProjects() }
+        }
+        for project in managedProjects {
+            project.resumeStreams()
+        }
+        signalNotifications.refreshBadge()
+        updateAgentSignals()
+    }
+    #endif
 
     // MARK: - Selection Persistence
 
@@ -590,6 +685,7 @@ final class AppState {
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
     }
 
+    #if os(macOS)
     private func startBinaryWatcherIfNeeded() {
         guard binaryWatcher == nil, let binPath = DaemonLifecycle.findBinary() else { return }
         binaryWatcher = ManifestWatcher(path: binPath) { [weak self] in
@@ -611,6 +707,7 @@ final class AppState {
             }
         }
     }
+    #endif
 }
 
 extension AppState {
@@ -634,7 +731,12 @@ extension AppState {
         if let projectId = registry.projectRoot(forWorkspace: workspaceId), ProjectKey(id: projectId).isRemote {
             return UnavailableProjectHost()
         }
+        #if os(macOS)
         return LocalProjectHost.shared
+        #else
+        // No local machine: a workspace without a project has no files to reach.
+        return UnavailableProjectHost()
+        #endif
     }
 
     /// The daemon owning an agent, so terminals attach to the right machine.

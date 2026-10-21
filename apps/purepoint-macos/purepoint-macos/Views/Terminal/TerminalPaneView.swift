@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
 import SwiftTerm
@@ -32,7 +33,7 @@ class TerminalPaneNSView: NSView {
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; remote agents attach over their machine.
-    var client = DaemonClient() {
+    var client = DaemonEndpoint.local.makeClient() {
         didSet {
             terminal?.attachmentClient = client
             terminal?.usesRemoteHost = !isLocalClient
@@ -247,3 +248,4 @@ class TerminalPaneNSView: NSView {
         terminal?.tearDown()
     }
 }
+#endif

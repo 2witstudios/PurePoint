@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 class EditorTextView: NSTextView {
@@ -50,3 +51,4 @@ class EditorTextView: NSTextView {
         onContentChanged?(string)
     }
 }
+#endif

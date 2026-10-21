@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 /// Subscribes to grid command events from the daemon and dispatches them to WorkspaceRegistry.
 /// Modeled after DaemonAttachSession — actor isolation serializes writes.
@@ -9,10 +8,10 @@ actor DaemonGridSubscription {
     let projectId: String
     private let client: DaemonClient
     private weak var registry: WorkspaceRegistry?
-    private var connection: NWConnection?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
 
-    init(projectRoot: String, projectId: String? = nil, registry: WorkspaceRegistry, client: DaemonClient = DaemonClient()) {
+    init(projectRoot: String, projectId: String? = nil, registry: WorkspaceRegistry, client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.projectRoot = projectRoot
         self.projectId = projectId ?? projectRoot
         self.registry = registry
@@ -35,6 +34,16 @@ actor DaemonGridSubscription {
             } catch is CancellationError {
                 break
             } catch {
+                #if os(iOS)
+                // A suspended app loses its SSH streams: reconnect when it returns to the foreground,
+                // without spending retries while it is in the background.
+                if await AppActivity.shared.isInBackground {
+                    await AppActivity.shared.untilForeground()
+                    retries = 0
+                    backoff = 500_000_000
+                    continue
+                }
+                #endif
                 retries += 1
                 guard !stopped, retries <= maxRetries else { break }
                 do {
@@ -59,7 +68,7 @@ actor DaemonGridSubscription {
     /// Stop the subscription.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -69,7 +78,7 @@ actor DaemonGridSubscription {
         let reg = self.registry
 
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        self.connection?.close()
         self.connection = conn
 
         // Send subscribe request

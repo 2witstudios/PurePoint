@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftTerm
 
@@ -534,3 +535,4 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         }
     }
 }
+#endif

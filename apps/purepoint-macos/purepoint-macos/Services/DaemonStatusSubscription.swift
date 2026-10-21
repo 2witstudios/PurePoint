@@ -1,11 +1,10 @@
 import Foundation
-import Network
 
 /// Subscribes to status events from the daemon and delivers parsed models.
 /// Modeled after DaemonGridSubscription — actor isolation serializes writes.
 actor DaemonStatusSubscription {
     let projectRoot: String
-    private var connection: NWConnection?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
     /// Set once a subscription is established. Losing an established stream
     /// means the daemon went away; even if the socket answers again it may be a
@@ -17,7 +16,7 @@ actor DaemonStatusSubscription {
 
     private let client: DaemonClient
 
-    init(projectRoot: String, client: DaemonClient = DaemonClient()) {
+    init(projectRoot: String, client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.projectRoot = projectRoot
         self.client = client
     }
@@ -48,6 +47,16 @@ actor DaemonStatusSubscription {
             } catch is DaemonStatusError {
                 break
             } catch {
+                #if os(iOS)
+                // A suspended app loses its SSH streams: reconnect when it returns to the foreground,
+                // without spending retries or declaring the daemon lost while it is in the background.
+                if await AppActivity.shared.isInBackground {
+                    await AppActivity.shared.untilForeground()
+                    retries = 0
+                    backoff = 500_000_000
+                    continue
+                }
+                #endif
                 retries += 1
                 guard !stopped, retries <= maxRetries else { break }
                 if subscribed || retries == Self.retriesBeforeDaemonLost, let onDaemonLost {
@@ -67,7 +76,7 @@ actor DaemonStatusSubscription {
     /// Stop the subscription.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -77,7 +86,7 @@ actor DaemonStatusSubscription {
         onEvent: @escaping @MainActor ([WorktreeModel], [AgentModel]) -> Void
     ) async throws {
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        self.connection?.close()
         self.connection = conn
 
         try await DaemonClient.write(.subscribeStatus(projectRoot: projectRoot), to: conn)

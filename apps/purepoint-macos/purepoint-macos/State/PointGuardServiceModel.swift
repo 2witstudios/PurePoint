@@ -1,3 +1,4 @@
+#if os(macOS)
 import Combine
 import Foundation
 
@@ -460,3 +461,4 @@ enum PointGuardPhoneAccess {
         }
     }
 }
+#endif

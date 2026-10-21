@@ -17,6 +17,11 @@ enum PurePointTheme {
     // MARK: - Window
     static let windowMinWidth: CGFloat = 700
     static let windowMinHeight: CGFloat = 400
+    #if os(iOS)
+    /// The iPad window's minimum width: the Mac's, narrowed to a half-screen split of a 13"
+    /// iPad (688pt) so split view still offers halves (`WindowChrome+iOS.swift`).
+    static let iPadWindowMinWidth: CGFloat = 688
+    #endif
     static let windowDefaultWidth: CGFloat = 1000
     static let windowDefaultHeight: CGFloat = 700
 

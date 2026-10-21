@@ -57,7 +57,12 @@ struct SettingsAgentsView: View {
                     }
                 }
             } label: {
+                #if os(macOS)
                 Label("Machine Settings", systemImage: "desktopcomputer")
+                #else
+                // Names the machine whose daemon these settings change (IPAD-012).
+                Label("Machine Settings — \(appState.libraryMachine?.machine.name ?? "No machine")", systemImage: "desktopcomputer")
+                #endif
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
             if let projectRoot = appState.activeLocalProjectRoot {
@@ -70,7 +75,12 @@ struct SettingsAgentsView: View {
                 )
             }
         }
+        #if os(macOS)
         .task { await state.loadGlobalSettings() }
+        #else
+        // Reloads when the library machine changes (IPAD-012).
+        .task(id: appState.libraryScopeId) { await state.loadGlobalSettings() }
+        #endif
     }
 }
 

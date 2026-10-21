@@ -168,7 +168,7 @@ struct TriggerCreationSheet: View {
                 Task {
                     await state.saveTrigger(
                         projectRoot: saveRoot,
-                        projectRoots: appState.projects.map(\.projectRoot),
+                        projectRoots: appState.libraryProjectRoots,
                         name: name.isEmpty ? "Untitled Trigger" : name,
                         description: description.isEmpty ? nil : description,
                         on: event.rawValue,
@@ -180,6 +180,10 @@ struct TriggerCreationSheet: View {
                 }
             }
             .keyboardShortcut(.defaultAction)
+            #if os(iOS)
+            // The Mac draws the default button prominent on its own.
+            .buttonStyle(.borderedProminent)
+            #endif
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 20)

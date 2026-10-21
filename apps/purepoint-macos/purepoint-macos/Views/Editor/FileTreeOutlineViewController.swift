@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 @MainActor
@@ -251,3 +252,4 @@ extension FileTreeOutlineViewController: NSMenuDelegate {
         NSPasteboard.general.setString(node.relativePath, forType: .string)
     }
 }
+#endif

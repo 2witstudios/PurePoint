@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Neon
 import SwiftTreeSitter
 import TreeSitterSwift
@@ -27,7 +31,11 @@ import TreeSitterXML
 
 @MainActor
 final class SyntaxHighlightManager {
+    #if os(macOS)
     private weak var textView: NSTextView?
+    #else
+    private weak var textView: UITextView?
+    #endif
     private var highlighter: TextViewHighlighter?
     private var currentLanguage: EditorLanguage = .plaintext
     private let fontSize: CGFloat
@@ -36,6 +44,7 @@ final class SyntaxHighlightManager {
     private static var languageConfigs: [EditorLanguage: LanguageConfiguration] = [:]
     private static let regularFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private static let boldFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+    #if os(macOS)
     private static let italicFont: NSFont = {
         NSFontManager.shared.convert(regularFont, toHaveTrait: .italicFontMask)
     }()
@@ -44,6 +53,20 @@ final class SyntaxHighlightManager {
         self.textView = textView
         self.fontSize = fontSize
     }
+    #else
+    private static let italicFont: NSFont = {
+        guard let descriptor = regularFont.fontDescriptor.withSymbolicTraits(.traitItalic) else { return regularFont }
+        return NSFont(descriptor: descriptor, size: regularFont.pointSize)
+    }()
+
+    /// Highlights a TextKit 2 `UITextView` through Neon's `TextViewHighlighter`, which styles
+    /// with the text layout manager's rendering attributes (the TextKit 2 counterpart of the
+    /// Mac's temporary attributes).
+    init(textView: UITextView, fontSize: CGFloat = 13) {
+        self.textView = textView
+        self.fontSize = fontSize
+    }
+    #endif
 
     func setLanguage(_ language: EditorLanguage) {
         guard language != currentLanguage else { return }
@@ -57,6 +80,7 @@ final class SyntaxHighlightManager {
 
     // MARK: - Private
 
+    #if os(macOS)
     private func rebuildHighlighter() {
         highlighter = nil
 
@@ -113,6 +137,61 @@ final class SyntaxHighlightManager {
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: range)
     }
+    #else
+    private func rebuildHighlighter() {
+        highlighter = nil
+
+        guard let textView else { return }
+
+        if textView.text.utf8.count > Self.maxHighlightSize {
+            clearRenderingAttributes()
+            return
+        }
+
+        guard let langConfig = Self.languageConfiguration(for: currentLanguage) else {
+            clearRenderingAttributes()
+            return
+        }
+
+        do {
+            let config = TextViewHighlighter.Configuration(
+                languageConfiguration: langConfig,
+                attributeProvider: { [fontSize] token in
+                    var attributes = Self.attributeProvider(token)
+                    if let font = attributes[.font] as? NSFont {
+                        attributes[.font] = font.withSize(fontSize)
+                    }
+                    return attributes
+                },
+                languageProvider: { name in
+                    Self.languageConfigurationForInjection(name)
+                },
+                locationTransformer: { [weak textView] offset in
+                    guard let textView else { return nil }
+                    let string = textView.textStorage.string as NSString
+                    guard offset <= string.length else { return nil }
+                    let head = string.substring(to: offset)
+                    let lines = head.components(separatedBy: "\n")
+                    let row = lines.count - 1
+                    let col = (lines.last ?? "").utf16.count
+                    return Point(row: row, column: col)
+                }
+            )
+            highlighter = try TextViewHighlighter(textView: textView, configuration: config)
+        } catch {
+            clearRenderingAttributes()
+        }
+    }
+
+    private func clearRenderingAttributes() {
+        guard let textView, let layoutManager = textView.textLayoutManager,
+            !textView.textStorage.string.isEmpty
+        else { return }
+        let range = layoutManager.documentRange
+        layoutManager.removeRenderingAttribute(.foregroundColor, for: range)
+        layoutManager.removeRenderingAttribute(.font, for: range)
+    }
+    #endif
 
     // MARK: - Language Configuration Registry
 
@@ -377,3 +456,58 @@ final class SyntaxHighlightManager {
         return [.font: font, .foregroundColor: color]
     }
 }
+
+#if os(iOS)
+// MARK: - Highlight runs for Core Text views
+
+extension SyntaxHighlightManager {
+    /// One highlighted token: the attributes the text view highlighter would apply to `range`.
+    struct HighlightRun {
+        let range: NSRange
+        let attributes: [NSAttributedString.Key: Any]
+    }
+
+    /// The highlights for `text` as attribute runs, for views that draw their own text (the
+    /// iPad's Core Text code bodies) and so have no text view for `TextViewHighlighter` to
+    /// style. Same queries, injections and token attributes as the text view path.
+    static func highlightRuns(in text: String, language: EditorLanguage, fontSize: CGFloat) -> [HighlightRun] {
+        guard text.utf8.count <= maxHighlightSize, let config = languageConfiguration(for: language) else {
+            return []
+        }
+        return highlightRuns(in: text, offset: 0, config: config, fontSize: fontSize, depth: 0)
+    }
+
+    private static func highlightRuns(
+        in text: String, offset: Int, config: LanguageConfiguration, fontSize: CGFloat, depth: Int
+    ) -> [HighlightRun] {
+        let parser = Parser()
+        guard (try? parser.setLanguage(config.language)) != nil, let tree = parser.parse(text) else { return [] }
+        let context = Predicate.Context(string: text)
+        var runs: [HighlightRun] = []
+        if let query = config.queries[.highlights] {
+            for highlight in query.execute(in: tree).resolve(with: context).highlights() {
+                var attributes = attributeProvider(Token(name: highlight.name, range: highlight.range))
+                if let font = attributes[.font] as? NSFont {
+                    attributes[.font] = font.withSize(fontSize)
+                }
+                runs.append(
+                    HighlightRun(
+                        range: NSRange(location: highlight.range.location + offset, length: highlight.range.length),
+                        attributes: attributes))
+            }
+        }
+        // Embedded languages (a script in HTML, code in Markdown), one level deep at a time.
+        guard depth < 3, let injections = config.queries[.injections] else { return runs }
+        let string = text as NSString
+        for injection in injections.execute(in: tree).resolve(with: context).injections(with: context.textProvider) {
+            guard let injected = languageConfigurationForInjection(injection.name),
+                NSMaxRange(injection.range) <= string.length, injection.range.length > 0
+            else { continue }
+            runs += highlightRuns(
+                in: string.substring(with: injection.range), offset: offset + injection.range.location,
+                config: injected, fontSize: fontSize, depth: depth + 1)
+        }
+        return runs
+    }
+}
+#endif

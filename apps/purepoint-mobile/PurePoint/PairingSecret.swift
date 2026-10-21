@@ -2,7 +2,7 @@ import Foundation
 import Security
 import CryptoKit
 
-struct TrustedHost: Codable, Sendable {
+nonisolated struct TrustedHost: Codable, Sendable {
     let version: Int
     let endpoint: String
     let hostId: String
@@ -14,7 +14,13 @@ struct TrustedHost: Codable, Sendable {
         version == 1 && ConnectionAddress.url(endpoint)?.scheme == "wss" && UUID(uuidString: hostId) != nil && UUID(uuidString: deviceId) != nil && clientId == deviceId && certificateSHA256.count == 64 && certificateSHA256.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } && credential.utf8.count == 43 && credential.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }
     }
 }
-enum PairingSecret {
+nonisolated enum PairingSecret {
+    // The iPad app shares this file (PUREPOINT_IPAD); its messages name the iPad.
+    #if PUREPOINT_IPAD
+    static let device = "iPad"
+    #else
+    static let device = "phone"
+    #endif
     private static func query(endpoint: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PiMobile.TrustedHost.v1", kSecAttrAccount as String: endpoint]
     }
@@ -26,17 +32,17 @@ enum PairingSecret {
         let value: [String: Any] = [kSecValueData as String: Data("pending".utf8), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
         var status = SecItemUpdate(identity as CFDictionary, value as CFDictionary)
         if status == errSecItemNotFound { status = SecItemAdd(identity.merging(value) { _, new in new } as CFDictionary, nil) }
-        guard status == errSecSuccess else { throw MobileError("Could not begin safe Mac trust storage. Unlock this phone and try again.") }
+        guard status == errSecSuccess else { throw MobileError("Could not begin safe Mac trust storage. Unlock this \(device) and try again.") }
     }
     static func finishTrustChange(endpoint: String) throws {
         let status = SecItemDelete(pendingQuery(endpoint: endpoint) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not finalize Mac trust. Unlock this phone and re-pair deliberately.") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not finalize Mac trust. Unlock this \(device) and re-pair deliberately.") }
     }
     static func readTrust(endpoint: String) throws -> TrustedHost? {
         let status = SecItemCopyMatching(pendingQuery(endpoint: endpoint) as CFDictionary, nil)
         guard status == errSecItemNotFound else {
             if status == errSecSuccess { throw TrustFailure("Mac pairing was interrupted before trust finalized. Scan a new QR code deliberately.") }
-            throw MobileError("Unlock this phone to access its saved Mac trust, then reconnect.")
+            throw MobileError("Unlock this \(device) to access its saved Mac trust, then reconnect.")
         }
         return try readTrustRecord(endpoint: endpoint)
     }
@@ -46,7 +52,7 @@ enum PairingSecret {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(attributes as CFDictionary, &item)
         if status == errSecItemNotFound { return nil } // Legacy PiMobile.Pairing strings never become trust.
-        guard status == errSecSuccess else { throw MobileError("Unlock this phone to access its saved Mac trust, then reconnect.") }
+        guard status == errSecSuccess else { throw MobileError("Unlock this \(device) to access its saved Mac trust, then reconnect.") }
         guard let data = item as? Data, let record = try? JSONDecoder().decode(TrustedHost.self, from: data), record.valid, record.endpoint == endpoint else { throw TrustFailure("Saved Mac trust is invalid. Scan a new Mac QR code deliberately.") }
         return record
     }
@@ -57,11 +63,11 @@ enum PairingSecret {
         var attributes = query(endpoint: endpoint); attributes[kSecReturnData as String] = true
         var item: CFTypeRef?
         let status = SecItemCopyMatching(attributes as CFDictionary, &item)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace Mac trust.") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Unlock this \(device) to safely replace Mac trust.") }
         let previous = item as? Data
         guard status == errSecItemNotFound || previous != nil else { throw MobileError("Could not preserve previous Mac trust.") }
         let pending = SecItemCopyMatching(pendingQuery(endpoint: endpoint) as CFDictionary, nil)
-        guard pending == errSecSuccess || pending == errSecItemNotFound else { throw MobileError("Unlock this phone to safely replace Mac trust.") }
+        guard pending == errSecSuccess || pending == errSecItemNotFound else { throw MobileError("Unlock this \(device) to safely replace Mac trust.") }
         let wasPending = pending == errSecSuccess
         return {
             if let previous { try writeTrustData(previous, endpoint: endpoint) } else { try removeTrust(endpoint: endpoint) }
@@ -77,7 +83,7 @@ enum PairingSecret {
     }
     static func removeTrust(endpoint: String) throws {
         let status = SecItemDelete(query(endpoint: endpoint) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not discard canceled Mac trust. Unlock this phone and try again.") }
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw MobileError("Could not discard canceled Mac trust. Unlock this \(device) and try again.") }
     }
     static func saveTrust(_ record: TrustedHost) throws {
         guard record.valid else { throw TrustFailure("The Mac returned invalid device trust. Scan a new QR code.") }
@@ -86,7 +92,7 @@ enum PairingSecret {
 }
 // Invalidation is immediate. All writes and rollback run on one queue; a canceled
 // enrollment cannot leave a credential behind or overwrite a subsequent enrollment.
-final class PairingTrustWriter: @unchecked Sendable {
+nonisolated final class PairingTrustWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "pointguard.trust.commit", qos: .utility)
     private let lock = NSLock()
     private var generation = 0
@@ -151,19 +157,19 @@ final class PairingTrustWriter: @unchecked Sendable {
         }
     }
 }
-struct MobileError: LocalizedError {
+nonisolated struct MobileError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
 }
-struct TrustFailure: LocalizedError {
+nonisolated struct TrustFailure: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
 }
 
 // Dedicated session: no shared connection pool, redirects, cookies or challenge fallback.
-final class PinnedHostSession: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
+nonisolated final class PinnedHostSession: NSObject, URLSessionDelegate, URLSessionTaskDelegate, @unchecked Sendable {
     private let pin: String
     private let host: String
     private let lock = NSLock()

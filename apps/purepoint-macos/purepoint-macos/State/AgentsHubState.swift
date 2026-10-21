@@ -31,7 +31,7 @@ final class AgentsHubState {
 
     @ObservationIgnored private let client: DaemonClient
 
-    init(client: DaemonClient = DaemonClient()) {
+    init(client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.client = client
     }
 

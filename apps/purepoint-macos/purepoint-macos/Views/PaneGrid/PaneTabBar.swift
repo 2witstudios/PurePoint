@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// The strip at the top of every pane: its tabs, then the pane's actions.
@@ -98,10 +102,11 @@ struct PaneTabBar: View {
     }
 
     private func closePane() {
-        guard let pane,
-            TabCloseConfirmation.confirm(closing: pane.tabs, in: workspaceId, appState: appState, registry: registry)
-        else { return }
-        registry.closePane(workspaceId: workspaceId, leafId: leafId)
+        guard let pane else { return }
+        TabCloseConfirmation.close(pane.tabs, in: workspaceId, appState: appState, registry: registry) {
+            [registry, workspaceId, leafId] in
+            registry.closePane(workspaceId: workspaceId, leafId: leafId)
+        }
     }
 }
 
@@ -158,6 +163,7 @@ private struct PaneTab: View {
         .onTapGesture { registry.selectTab(workspaceId: workspaceId, surfaceId: surface.id) }
         .onMiddleClick { close() }
         .help(helpText)
+        #if os(macOS)
         .draggable(TabDragPayload.string(for: surface.id)) {
             Text(title).font(.system(size: 12)).padding(6)
         }
@@ -170,6 +176,16 @@ private struct PaneTab: View {
         } isTargeted: {
             isDropTargeted = $0
         }
+        #else
+        // UIKit drag and drop (and the tab's taps and hover) on iPad; dropping inserts before it.
+        .overlay {
+            TabDragDropInteraction(
+                surfaceId: surface.id, title: title, closeVisible: isActive || isHovered,
+                isHovered: $isHovered, isDropTargeted: $isDropTargeted,
+                onSelect: { registry.selectTab(workspaceId: workspaceId, surfaceId: surface.id) },
+                onDrop: { moved in registry.moveTab(workspaceId: workspaceId, surfaceId: moved, before: surface.id) })
+        }
+        #endif
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel(helpText)
@@ -247,9 +263,10 @@ private struct PaneTab: View {
     }
 
     private func close() {
-        guard TabCloseConfirmation.confirm(closing: [surface], in: workspaceId, appState: appState, registry: registry)
-        else { return }
-        registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
+        TabCloseConfirmation.close([surface], in: workspaceId, appState: appState, registry: registry) {
+            [registry, workspaceId, surface] in
+            registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
+        }
     }
 }
 
@@ -290,9 +307,33 @@ enum TabDragPayload {
 /// a whole pane goes — more than one running agent (one is what closing a tab does anyway).
 @MainActor
 enum TabCloseConfirmation {
-    static func confirm(
+    /// Run `close` once the user agreed, or at once when closing loses nothing. The Mac asks
+    /// with a modal alert; the iPad, which has no modal run loop, closes from the alert's
+    /// button instead.
+    static func close(
+        _ tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry,
+        perform close: @escaping @MainActor () -> Void
+    ) {
+        #if os(macOS)
+        guard confirm(closing: tabs, in: workspaceId, appState: appState, registry: registry) else { return }
+        close()
+        #else
+        let reasons = reasons(closing: tabs, in: workspaceId, appState: appState, registry: registry)
+        guard !reasons.isEmpty else {
+            close()
+            return
+        }
+        if var presenter = NSApp.keyWindow?.rootViewController {
+            while let presented = presenter.presentedViewController { presenter = presented }
+            presenter.present(alert(closing: tabs.count, reasons: reasons, close: close), animated: true)
+        }
+        #endif
+    }
+
+    /// What closing `tabs` would lose, or nothing when it needs no confirmation.
+    static func reasons(
         closing tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry
-    ) -> Bool {
+    ) -> [String] {
         let running = tabs.compactMap(\.content.agentId).filter {
             appState.agent(byId: $0)?.status.isAlive ?? false
         }
@@ -303,13 +344,22 @@ enum TabCloseConfirmation {
             else { return nil }
             return session.editor.currentFile?.name ?? "a file"
         }
-        guard running.count > 1 || !unsaved.isEmpty else { return true }
+        guard running.count > 1 || !unsaved.isEmpty else { return [] }
 
         var reasons: [String] = []
         if running.count > 1 { reasons.append("\(running.count) running agents will be stopped.") }
         if !unsaved.isEmpty {
             reasons.append("Unsaved changes to \(unsaved.joined(separator: ", ")) will be lost.")
         }
+        return reasons
+    }
+
+    #if os(macOS)
+    static func confirm(
+        closing tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry
+    ) -> Bool {
+        let reasons = reasons(closing: tabs, in: workspaceId, appState: appState, registry: registry)
+        guard !reasons.isEmpty else { return true }
 
         let alert = NSAlert()
         alert.messageText = tabs.count > 1 ? "Close this pane?" : "Close this tab?"
@@ -319,6 +369,19 @@ enum TabCloseConfirmation {
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
+    #else
+    /// The Mac's confirmation as a UIKit alert: the close button runs `close`.
+    static func alert(
+        closing count: Int, reasons: [String], close: @escaping @MainActor () -> Void
+    ) -> UIAlertController {
+        let alert = UIAlertController(
+            title: count > 1 ? "Close this pane?" : "Close this tab?",
+            message: reasons.joined(separator: " "), preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: count > 1 ? "Close Pane" : "Close Tab", style: .destructive) { _ in close() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        return alert
+    }
+    #endif
 }
 
 private struct MiddleClickModifier: ViewModifier {
@@ -329,6 +392,7 @@ private struct MiddleClickModifier: ViewModifier {
     }
 }
 
+#if os(macOS)
 /// Catches only the middle mouse button; every other event passes through to SwiftUI.
 private struct MiddleClickCatcher: NSViewRepresentable {
     let action: () -> Void
@@ -355,6 +419,15 @@ private struct MiddleClickCatcher: NSViewRepresentable {
         }
     }
 }
+#else
+/// UIKit delivers no middle-button clicks to a view, so on iOS the catcher is a no-op and the
+/// tab keeps its close button.
+private struct MiddleClickCatcher: View {
+    let action: () -> Void
+
+    var body: some View { EmptyView() }
+}
+#endif
 
 extension View {
     fileprivate func onMiddleClick(perform action: @escaping () -> Void) -> some View {

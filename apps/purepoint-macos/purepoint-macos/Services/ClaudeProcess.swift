@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 actor ClaudeProcess: ClaudeProcessProvider {
@@ -164,3 +165,4 @@ enum ClaudeProcessError: Error, LocalizedError {
         }
     }
 }
+#endif

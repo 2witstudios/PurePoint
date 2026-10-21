@@ -49,7 +49,9 @@ final class ProjectState: Identifiable {
     @ObservationIgnored weak var appState: AppState?
 
     @ObservationIgnored private let service: any WorkspaceService
+    #if os(macOS)
     @ObservationIgnored private var manifestWatcher: ManifestWatcher?
+    #endif
     @ObservationIgnored private var gridSubscription: DaemonGridSubscription?
     @ObservationIgnored private var statusSubscription: DaemonStatusSubscription?
     @ObservationIgnored private var statusSubscriptionTask: Task<Void, Never>?
@@ -68,6 +70,7 @@ final class ProjectState: Identifiable {
     /// How long to keep retrying daemon start + init before surfacing an error.
     private static let daemonConnectBudget: Duration = .seconds(20)
 
+    #if os(macOS)
     init(
         projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil,
         endpoint: DaemonEndpoint = .local, host: any ProjectHost = LocalProjectHost.shared
@@ -89,16 +92,43 @@ final class ProjectState: Identifiable {
         self.service = service
         self.registry = registry
     }
+    #else
+    /// iOS has no local machine: every project names its machine endpoint and a
+    /// `DaemonProjectHost` on it.
+    init(
+        projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil,
+        endpoint: DaemonEndpoint, host: any ProjectHost
+    ) {
+        let key = ProjectKey(machineId: endpoint.machineId, root: projectRoot)
+        let client = endpoint.makeClient()
+        self.projectRoot = projectRoot
+        self.key = key
+        self.endpoint = endpoint
+        self.client = client
+        self.host = host
+        self.git = host.isLocal ? GitService.shared : GitService(host: host)
+        self.remoteLayoutSaver = endpoint.isLocal ? nil : RemoteLayoutSaver(projectRoot: projectRoot, host: host)
+        self.channel =
+            channel
+            ?? (endpoint.isLocal
+                ? ChannelState(projectRoot: projectRoot)
+                : ChannelState(projectRoot: projectRoot, defaultsScope: key.id) { try await client.send($0) })
+        self.service = service
+        self.registry = registry
+    }
+    #endif
 
     // MARK: - Lifecycle
 
     func startWatching() {
+        #if os(macOS)
         guard endpoint.isLocal else {
             startWatchingRemote()
             return
         }
         let root = projectRoot
         let svc = service
+        let client = self.client
 
         openTask?.cancel()
         refreshTask?.cancel()
@@ -118,7 +148,7 @@ final class ProjectState: Identifiable {
             while true {
                 do {
                     try await DaemonLifecycle.ensureDaemon()
-                    let response = try await DaemonClient().send(.initProject(projectRoot: root))
+                    let response = try await client.send(.initProject(projectRoot: root))
                     if case .error(let code, let message) = response {
                         // At its connection limit: transient, so back off and retry.
                         if code == "BUSY" { throw DaemonClientError.busy }
@@ -166,6 +196,9 @@ final class ProjectState: Identifiable {
             }
             self.resumeSuspendedAgents()
         }
+        #else
+        startWatchingRemote()
+        #endif
     }
 
     /// A remote daemon is never started or initialized from here (MACH-003): the machine's
@@ -178,8 +211,10 @@ final class ProjectState: Identifiable {
         openTask?.cancel()
         refreshTask?.cancel()
         resubscribeTask?.cancel()
+        #if os(macOS)
         manifestWatcher?.stop()
         manifestWatcher = nil
+        #endif
         hasLoadedWorktrees = false
 
         startRemoteLayoutRestore()
@@ -279,9 +314,25 @@ final class ProjectState: Identifiable {
         statusSubscription = nil
         Task { await currentGrid?.stop() }
         Task { await currentStatus?.stop() }
+        #if os(macOS)
         manifestWatcher?.stop()
         manifestWatcher = nil
+        #endif
     }
+
+    #if os(iOS)
+    /// Re-open the daemon streams and re-read status after the app was in the background,
+    /// where iOS suspends it and its SSH streams drop or stall. Nothing to do for a project
+    /// that is not being watched.
+    func resumeStreams() {
+        guard !isUnavailable, statusSubscription != nil || gridSubscription != nil else { return }
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
+        startGridSubscription()
+        startStatusSubscription()
+        refresh()
+    }
+    #endif
 
     // MARK: - Data
 
@@ -595,6 +646,10 @@ final class ProjectState: Identifiable {
                         self.resubscribeTask?.cancel()
                         self.resubscribeTask = Task { [weak self] in
                             do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                            #if os(iOS)
+                            await AppActivity.shared.untilForeground()
+                            if Task.isCancelled { return }
+                            #endif
                             self?.startWatching()
                         }
                     } else {

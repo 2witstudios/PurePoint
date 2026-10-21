@@ -21,6 +21,11 @@ final class MachineState: Identifiable {
     /// anything that has to tell the two apart — the sidebar replaying which rows are closed
     /// — reads this instead.
     private(set) var hasLoadedProjects = false
+    #if os(iOS)
+    /// The host key the last connect refused: one to confirm on first use, or one that
+    /// differs from the pin (IPAD-009). Nil once a connect passes the host-key check.
+    private(set) var hostKeyRefusal: SSHTrustError?
+    #endif
 
     /// Whether this machine answers for the rows it shows: its daemon is running and has
     /// reported its list at least once. A machine that is connecting, offline, or whose
@@ -74,6 +79,22 @@ final class MachineState: Identifiable {
     @MainActor
     private static func makeConnection(for state: MachineState, generation: Int) -> MachineConnection {
         let owner = WeakMachineState()
+        #if os(iOS)
+        let connection = MachineConnection(
+            machine: state.machine,
+            onTrust: { refusal in
+                Task { @MainActor in
+                    guard owner.value?.connectionGeneration == generation else { return }
+                    owner.value?.applyHostKeyRefusal(refusal)
+                }
+            },
+            onState: { newState in
+                Task { @MainActor in
+                    guard owner.value?.connectionGeneration == generation else { return }
+                    owner.value?.apply(newState)
+                }
+            })
+        #else
         let connection = MachineConnection(machine: state.machine) { newState in
             Task { @MainActor in
                 // Ignore callbacks from a superseded connection.
@@ -81,12 +102,20 @@ final class MachineState: Identifiable {
                 owner.value?.apply(newState)
             }
         }
+        #endif
         owner.value = state
         return connection
     }
 
     var statusText: String {
-        switch state {
+        #if os(iOS)
+        switch hostKeyRefusal {
+        case .hostKeyChanged?: return "Host key changed"
+        case .hostKeyUnconfirmed?: return "Confirm host key"
+        case nil: break
+        }
+        #endif
+        return switch state {
         case .disconnected: "Disconnected"
         case .connecting: "Connecting…"
         case .connected(.running):
@@ -196,6 +225,64 @@ final class MachineState: Identifiable {
         }
     }
 
+    #if os(iOS)
+    // MARK: - Host key (IPAD-009)
+
+    private func applyHostKeyRefusal(_ refusal: SSHTrustError?) {
+        hostKeyRefusal = refusal
+        #if DEBUG
+        if case .hostKeyUnconfirmed? = refusal, DebugLaunchArguments.current.trustHostKey {
+            confirmHostKey()
+        }
+        #endif
+    }
+
+    /// The user confirmed the host key the machine presented on first use: pin it and connect.
+    func confirmHostKey() {
+        guard case .hostKeyUnconfirmed(let key)? = hostKeyRefusal else { return }
+        do {
+            try HostKeyPinStore.shared.pin(key, machineId: machine.id)
+        } catch {
+            actionError = "Could not trust the host key of \(machine.name): \(error.localizedDescription)"
+            return
+        }
+        hostKeyRefusal = nil
+        reconnectNow()
+    }
+
+    /// Reset Host Key: forget the pin so the next connection asks for confirmation again. Only
+    /// a deliberate user action calls this; a changed key never clears its pin by itself.
+    func resetHostKey() {
+        do {
+            try HostKeyPinStore.shared.reset(machineId: machine.id)
+        } catch {
+            actionError = "Could not reset the host key of \(machine.name): \(error.localizedDescription)"
+            return
+        }
+        hostKeyRefusal = nil
+        reconnectNow()
+    }
+
+    /// Connect again at once (a trusted or reset host key, an imported identity).
+    func reconnectNow() {
+        Self.setUserDisconnected(machine.id, false)
+        isUserDisconnecting = false
+        let connection = self.connection!
+        let pending = disconnectTask
+        Task {
+            await pending?.value
+            await connection.reconnectNow()
+        }
+    }
+
+    /// Back from the background: check the SSH connection still answers, and replace it if
+    /// not (`MachineConnection.checkAfterForeground`).
+    func checkAfterForeground() {
+        let connection = self.connection!
+        Task { await connection.checkAfterForeground() }
+    }
+    #endif
+
     private func apply(_ newState: MachineConnectionState) {
         // Reports still in flight from a connection the user closed must not reopen it.
         if isUserDisconnecting, newState != .disconnected { return }
@@ -221,6 +308,11 @@ final class MachineState: Identifiable {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
+                #if os(iOS)
+                // Paused in the background; the return to the foreground refreshes at once.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
+                #endif
                 await self?.refreshProjects()
                 do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
@@ -308,6 +400,13 @@ final class MachineState: Identifiable {
             forget(project)
             projects.removeAll { $0 === project }
         }
+    }
+
+    /// Show a hidden project again; it reappears with the next project refresh.
+    func unhideProject(root: String) {
+        guard hiddenRoots.remove(root) != nil else { return }
+        hiddenCountRevision += 1
+        UserDefaults.standard.set(Array(hiddenRoots), forKey: Self.hiddenKey(machine.id))
     }
 
     /// Drop every project, returning the savers whose queued layout writes should be flushed

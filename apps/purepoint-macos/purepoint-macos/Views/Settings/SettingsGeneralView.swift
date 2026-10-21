@@ -42,10 +42,13 @@ struct SettingsGeneralView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                // A login item is a Mac concept; the iPad hides the row (REQ-IPAD-040).
+                #if os(macOS)
                 Divider()
 
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                     .padding(.vertical, 8)
+                #endif
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
 
@@ -119,7 +122,7 @@ struct SettingsGeneralView: View {
             .foregroundStyle(.secondary)
         }
         .task {
-            await appState.agentsHubState.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            await appState.agentsHubState.loadAll(projectRoots: appState.libraryProjectRoots)
         }
     }
 }

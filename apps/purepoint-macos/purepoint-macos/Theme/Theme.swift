@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 nonisolated enum Theme {
     // MARK: - Text
@@ -43,6 +47,7 @@ nonisolated enum Theme {
     private static func adaptive(
         dark: (CGFloat, CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat, CGFloat)
     ) -> NSColor {
+        #if os(macOS)
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
                 return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: dark.3)
@@ -50,9 +55,19 @@ nonisolated enum Theme {
                 return NSColor(srgbRed: light.0, green: light.1, blue: light.2, alpha: light.3)
             }
         }
+        #else
+        NSColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: dark.3)
+            } else {
+                return NSColor(srgbRed: light.0, green: light.1, blue: light.2, alpha: light.3)
+            }
+        }
+        #endif
     }
 
     private static func darkOnly(_ dark: (CGFloat, CGFloat, CGFloat), alpha: CGFloat = 1.0, light: NSColor) -> NSColor {
+        #if os(macOS)
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
                 return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: alpha)
@@ -60,9 +75,19 @@ nonisolated enum Theme {
                 return light
             }
         }
+        #else
+        NSColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: alpha)
+            } else {
+                return light
+            }
+        }
+        #endif
     }
 
     private static func adaptiveGray(dark: CGFloat, light: CGFloat) -> NSColor {
+        #if os(macOS)
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
                 return NSColor(white: dark, alpha: 1.0)
@@ -70,5 +95,14 @@ nonisolated enum Theme {
                 return NSColor(white: light, alpha: 1.0)
             }
         }
+        #else
+        NSColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return NSColor(white: dark, alpha: 1.0)
+            } else {
+                return NSColor(white: light, alpha: 1.0)
+            }
+        }
+        #endif
     }
 }

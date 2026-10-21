@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 nonisolated enum ClaudeConversationIndex {
@@ -493,3 +494,4 @@ nonisolated internal extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
+#endif
