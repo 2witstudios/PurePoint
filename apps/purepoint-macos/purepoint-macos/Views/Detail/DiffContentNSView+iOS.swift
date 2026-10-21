@@ -2,16 +2,16 @@
 import SwiftUI
 import UIKit
 
-/// Placeholder twin of the Mac diff body view, with the same initializer, update and measuring
-/// API. The Core Text diff rendering replaces it (IPAD-6.7).
-class DiffContentNSView: UIView {
+/// iOS twin of the Mac diff body: the same `DiffTextRendering` text — per-line addition,
+/// deletion and context colours, right-aligned line-number gutters and tab-stop alignment —
+/// laid out and drawn with Core Text, selectable like the Mac's read-only text view.
+class DiffContentNSView: CoreTextBodyView {
     private var hunks: [Hunk] = []
-    private let placeholderHeight: CGFloat = 44
 
     init(hunks: [Hunk]) {
         self.hunks = hunks
-        super.init(frame: .zero)
-        NotYetOnIPad.addLabel("DiffContentNSView", to: self)
+        super.init(inset: DiffTextRendering.diffInset, padding: DiffTextRendering.diffLineFragmentPadding)
+        renderDiff()
     }
 
     required init?(coder: NSCoder) {
@@ -19,15 +19,38 @@ class DiffContentNSView: UIView {
     }
 
     func update(hunks: [Hunk]) {
+        guard hunks != self.hunks else { return }
         self.hunks = hunks
+        renderDiff()
     }
 
+    private func renderDiff() {
+        text = DiffTextRendering.diffAttributedString(hunks: hunks)
+    }
+
+    /// Measure bounded pages at the proposed width, never the initial zero-width frame.
     func height(for width: CGFloat) -> CGFloat {
-        placeholderHeight
+        guard width > 0 else { return 20 }
+        return textHeight(for: width)
     }
 
     override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: placeholderHeight)
+        CGSize(width: UIView.noIntrinsicMetric, height: bounds.width > 0 ? height(for: bounds.width) : 20)
+    }
+
+    /// The card background, then each line fragment's `.backgroundColor` run across the line,
+    /// as TextKit fills a background-coloured line through its newline.
+    override func drawBackground(_ layout: CoreTextLayout, in rect: CGRect) {
+        Theme.cardBackground.setFill()
+        UIRectFill(rect)
+        let padding = DiffTextRendering.diffLineFragmentPadding
+        for line in layout.lines where line.frame.intersects(rect) {
+            guard line.range.location < text.length,
+                let color = text.attribute(.backgroundColor, at: line.range.location, effectiveRange: nil) as? UIColor
+            else { continue }
+            color.setFill()
+            UIRectFill(line.frame.insetBy(dx: padding, dy: 0))
+        }
     }
 }
 

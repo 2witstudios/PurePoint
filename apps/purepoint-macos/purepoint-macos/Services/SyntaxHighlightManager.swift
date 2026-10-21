@@ -400,3 +400,58 @@ final class SyntaxHighlightManager {
         return [.font: font, .foregroundColor: color]
     }
 }
+
+#if os(iOS)
+// MARK: - Highlight runs for Core Text views
+
+extension SyntaxHighlightManager {
+    /// One highlighted token: the attributes the text view highlighter would apply to `range`.
+    struct HighlightRun {
+        let range: NSRange
+        let attributes: [NSAttributedString.Key: Any]
+    }
+
+    /// The highlights for `text` as attribute runs, for views that draw their own text (the
+    /// iPad's Core Text code bodies) and so have no text view for `TextViewHighlighter` to
+    /// style. Same queries, injections and token attributes as the text view path.
+    static func highlightRuns(in text: String, language: EditorLanguage, fontSize: CGFloat) -> [HighlightRun] {
+        guard text.utf8.count <= maxHighlightSize, let config = languageConfiguration(for: language) else {
+            return []
+        }
+        return highlightRuns(in: text, offset: 0, config: config, fontSize: fontSize, depth: 0)
+    }
+
+    private static func highlightRuns(
+        in text: String, offset: Int, config: LanguageConfiguration, fontSize: CGFloat, depth: Int
+    ) -> [HighlightRun] {
+        let parser = Parser()
+        guard (try? parser.setLanguage(config.language)) != nil, let tree = parser.parse(text) else { return [] }
+        let context = Predicate.Context(string: text)
+        var runs: [HighlightRun] = []
+        if let query = config.queries[.highlights] {
+            for highlight in query.execute(in: tree).resolve(with: context).highlights() {
+                var attributes = attributeProvider(Token(name: highlight.name, range: highlight.range))
+                if let font = attributes[.font] as? NSFont {
+                    attributes[.font] = font.withSize(fontSize)
+                }
+                runs.append(
+                    HighlightRun(
+                        range: NSRange(location: highlight.range.location + offset, length: highlight.range.length),
+                        attributes: attributes))
+            }
+        }
+        // Embedded languages (a script in HTML, code in Markdown), one level deep at a time.
+        guard depth < 3, let injections = config.queries[.injections] else { return runs }
+        let string = text as NSString
+        for injection in injections.execute(in: tree).resolve(with: context).injections(with: context.textProvider) {
+            guard let injected = languageConfigurationForInjection(injection.name),
+                NSMaxRange(injection.range) <= string.length, injection.range.length > 0
+            else { continue }
+            runs += highlightRuns(
+                in: string.substring(with: injection.range), offset: offset + injection.range.location,
+                config: injected, fontSize: fontSize, depth: depth + 1)
+        }
+        return runs
+    }
+}
+#endif
