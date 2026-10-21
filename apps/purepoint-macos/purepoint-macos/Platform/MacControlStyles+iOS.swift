@@ -263,15 +263,37 @@ extension View {
     }
 }
 
-/// UIKit appearance the Mac controls need that SwiftUI cannot set: the segmented control's
-/// 13pt titles (iOS uses 15pt). Its height stays UIKit's: UISegmentedControl ignores a
-/// SwiftUI frame. Installed once at launch.
+/// UIKit appearance the Mac controls need that SwiftUI cannot set, installed once at launch:
+/// - the segmented control's 13pt titles (iOS uses 15pt); its height stays UIKit's, since
+///   UISegmentedControl ignores a SwiftUI frame;
+/// - the slider's Mac-sized 20pt knob (iOS draws a 28pt one over a taller track).
 @MainActor
 enum MacControlAppearance {
     static func install() {
         let segmented = UISegmentedControl.appearance()
         segmented.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 13)], for: .normal)
         segmented.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 13, weight: .medium)], for: .selected)
+
+        let knob = sliderKnob()
+        UISlider.appearance().setThumbImage(knob, for: .normal)
+        UISlider.appearance().setThumbImage(knob, for: .highlighted)
+    }
+
+    /// A white 20pt knob with the Mac's hairline edge and soft shadow, drawn with room for it.
+    private static func sliderKnob() -> UIImage {
+        let side: CGFloat = 20, pad: CGFloat = 3
+        let size = CGSize(width: side + pad * 2, height: side + pad * 2)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let rect = CGRect(x: pad, y: pad, width: side, height: side)
+            let cg = context.cgContext
+            cg.setShadow(offset: CGSize(width: 0, height: 0.5), blur: 2, color: UIColor.black.withAlphaComponent(0.3).cgColor)
+            UIColor.white.setFill()
+            cg.fillEllipse(in: rect)
+            cg.setShadow(offset: .zero, blur: 0, color: nil)
+            UIColor.black.withAlphaComponent(0.12).setStroke()
+            cg.setLineWidth(0.5)
+            cg.strokeEllipse(in: rect.insetBy(dx: 0.25, dy: 0.25))
+        }
     }
 }
 #endif
