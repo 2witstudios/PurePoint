@@ -4,6 +4,31 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+- Paste an image (Cmd+V) into any agent's terminal, or drop files on a remote agent's terminal, and the macOS app uploads it to the agent's machine and types its path there, so remote agents can see screenshots. Uploads are kept in `~/.pu/attachments` on that machine for 7 days.
+
+### Changed
+- The daemon protocol is now version 12, for the new `attach_file` request. Update PurePoint on every machine and restart its daemon.
+- Release builds now compile in jobs that hold no secrets, and a separate job in a protected environment signs and notarizes the result. The Sparkle signing tool matches the Sparkle version the app ships (2.9.0) and is checked against a pinned SHA-256. Workflow actions are pinned to commit SHAs. The GitHub release is created once, with all of its assets.
+- **Breaking: agents now launch without permission-skipping flags by default.** Claude Code used to start with `--dangerously-skip-permissions` and Codex with `--sandbox workspace-write --ask-for-approval on-request` whenever a project didn't set `launchArgs`. Now every agent launches with its bare command (`claude`, `codex`, `opencode`) and follows the tool's own approval settings. Worktrees isolate git state, not your filesystem or network, so skipping approvals is now something you opt into. To keep auto mode for yourself in every project, add it once to `~/.pu/agent-settings.yaml` (or Settings → Agents → Launch args for all projects):
+  ```yaml
+  launchArgs:
+    claude: "--dangerously-skip-permissions"
+  ```
+  Projects that already set `launchArgs` are unaffected.
+- `launchArgs` is now one free-form string, split like a shell command line (`launchArgs: "--model opus --append-system-prompt 'be terse'"`), so new or renamed CLI flags work without a PurePoint update. Existing list values (`launchArgs: [..]`, `launchArgs: []`) still load the same; PurePoint writes the string form when it saves. A project value, even `""`, takes precedence over the machine-level one.
+- `pu spawn --no-auto` now launches the bare command and ignores project and machine-level launch args. `--agent-args` still apply. The choice is saved with the agent, so it still launches bare after `pu bench`/`pu play`, suspend/resume or a daemon restart.
+- The daemon protocol is now version 11 because the launch args request and response shapes changed. Restart the daemon after updating (`pu` and the macOS app reject a v10 daemon with update guidance instead of appearing to save launch args that an old daemon drops).
+- Settings → Agents replaces the per-flag pickers for Claude, Codex and OpenCode with one launch args field per agent next to its command, for this project and for all projects. Codex YOLO for all projects is unchanged.
+- **Breaking:** `pu` no longer searches `PATH` or `~/.cargo/bin` when it auto-starts the daemon. It starts the `pu-engine` beside itself, then `~/.pu/bin/pu-engine`; a `pu` inside the macOS app starts only the app's own engine. To run another build, set `PU_ENGINE_PATH` to its path (or to a name to look up on `PATH`). The chosen binary must be owned by you or root (or, for the app's own engine, by whoever owns the app) and not writable by group or others. If none qualifies, the error says why each candidate was refused.
+- The macOS app now installs `pu-engine` next to `pu` in `~/.pu/bin`, so `~/.pu/bin/pu` can start the daemon when the app isn't running. Both are copied to a temporary file and renamed into place, so a daemon running from `~/.pu/bin` is never modified underneath itself.
+- The daemon socket is now always owner-only (0600) and the daemon accepts connections only from processes running as its own user. `~/.pu` is kept at mode 0700, and the daemon refuses to start if another user owns it.
+- A request line over 1 MB now gets a `FRAME_TOO_LARGE` error and closes the connection, instead of a `PARSE_ERROR` that left the rest of the line to be read as the next request. This holds whatever bytes the line contains. Unreadable (non-UTF-8) input inside an attach, grid or status stream also closes the connection. A connection that sends no request within 30 seconds is closed.
+
+### Fixed
+- `$HOME`, `/` and ancestors of `$HOME` are never registered as projects, even when an older version left `~/.pu/manifest.json` behind. Such entries are removed from the project registry when the daemon starts. Requests that would create or change something under such a root (`init`, `spawn`, worktrees, templates, schedules and the rest) now fail with `project_root_not_allowed`. If an older version recorded agents under `$HOME`, you can still see, read and kill them there (`status`, `read`, `kill`). Move ongoing work to a real project directory.
+- Request lines that arrive in several pieces while an attach or grid stream is sending output are no longer cut short.
+
 ## [0.5.2] — 2026-10-15
 
 ### Fixed

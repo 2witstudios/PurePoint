@@ -439,3 +439,20 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
 private extension PiJSONValue {
     var values: [PiJSONValue] { if case .array(let values) = self { return values }; return [] }
 }
+
+/// What a paired device's grants allow, including Point Guard chat, which follows them:
+/// Point Guard has a shell and the `pu` CLI, so sending to it is full control.
+enum PointGuardPhoneAccess {
+    static func summary(terminals: String, workspaceManagement: Bool) -> String {
+        switch terminals {
+        case "control" where workspaceManagement:
+            return "Full control: agents, terminals, workspaces and chatting with Point Guard, which can run commands and manage agents on this Mac."
+        case "control":
+            return "Controls agent terminals and reads Point Guard chat. Sending to Point Guard also needs Workspace management."
+        case "view":
+            return "Views agents and terminals and reads Point Guard chat. Cannot type, manage workspaces or send to Point Guard."
+        default:
+            return "No access to agents, terminals or Point Guard chat."
+        }
+    }
+}

@@ -315,7 +315,7 @@ struct HealthProbeTests {
 
 struct DaemonProjectHostRequestTests {
     @Test func givenProtocolShouldBeCurrentVersion() {
-        #expect(DaemonProtocol.version == 11)
+        #expect(DaemonProtocol.version == 12)
     }
 
     @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {

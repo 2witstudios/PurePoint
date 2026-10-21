@@ -6,10 +6,12 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 
 | Property | Value |
 |---|---|
-| Socket path | `~/.pu/daemon.sock` |
-| Protocol version | 7 |
+| Socket path | `~/.pu/daemon.sock` (mode 0600; the daemon keeps `~/.pu` at 0700) |
+| Access | Only processes running as the daemon's user: every accepted connection's peer uid must equal the daemon's effective uid, or it is closed |
+| Protocol version | 11 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
-| Max message size | 1 MB (1,048,576 bytes) |
+| Max message size | 1 MB (1,048,576 bytes); a longer line gets one `FRAME_TOO_LARGE` error and the connection is closed |
+| First request | Must arrive within 30 seconds of connecting, or the connection is closed |
 | Max connections | 1024 (semaphore-limited; further connections get one `BUSY` error line and are closed) |
 | Client timeout | 30 seconds |
 | Binary data | Hex-encoded within JSON |
@@ -35,7 +37,8 @@ Responses use the same `"type"` field convention. Error responses have `"type": 
 
 | Code | When |
 |---|---|
-| `PARSE_ERROR` | Malformed JSON request |
+| `PARSE_ERROR` | Malformed JSON request (the connection stays open) |
+| `FRAME_TOO_LARGE` | Request line over 1 MB; the connection is closed right after |
 | `AGENT_NOT_FOUND` | Agent ID does not exist |
 | `WORKTREE_NOT_FOUND` | Worktree ID does not exist |
 | `NOT_FOUND` | Template, agent def, swarm def, schedule, or trigger not found |
@@ -71,7 +74,7 @@ Inventory returns `type: inventory`, observation time, optional project scope (n
 
 ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree_id. Legacy Status (with agent_id), Kill (single agent), Suspend (single agent), Resume, Rename and AssignTrigger accept an empty project_root for daemon ownership resolution. Explicit roots constrain ownership. Bulk requests require a root. Duplicate durable IDs return AMBIGUOUS_AGENT; a live session owned by another project returns AGENT_OWNERSHIP_CONFLICT; an incomplete durable inventory returns INVENTORY_INCOMPLETE when a known live owner cannot resolve the ID. Standalone shells support status/logs/input/attach/kill and reject resumable project operations with UNSUPPORTED_AGENT_OPERATION.
 
-Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
+Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
 
 ### Health
 
@@ -85,7 +88,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 9,
+  "protocol_version": 11,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }
@@ -118,17 +121,66 @@ Read agent configuration for a project.
 {
   "type": "config_report",
   "default_agent": "claude",
-  "agents": {"claude": {"name": "claude", "command": "claude", ...}}
+  "terminal_available": true,
+  "agents": [
+    {
+      "id": "claude",
+      "name": "claude",
+      "command": "claude",
+      "launch_args": null,
+      "resolved_launch_args": ["--model", "opus"],
+      "interactive": true,
+      "project_launch_args": null,
+      "machine_launch_args": "--model opus",
+      "resolved_command": "claude --model opus"
+    }
+  ]
 }
 ```
 
+`launch_args` is the project value as a list (`null` when unset).
+`project_launch_args` and `machine_launch_args` are the project and
+machine-level values in their string form, omitted when unset.
+`policy_launch_args` is present when Codex YOLO for all projects rewrites the
+args, and then overrides both. `resolved_launch_args` is what spawn and resume
+append (policy, else project, else machine, else none), and `resolved_command`
+previews the command line. The three string
+fields were added additively; older clients ignore them.
+
 ### UpdateAgentConfig
 
-Update launch args for an agent type.
+Set or clear the project launch args for an agent type.
 
-**Request**: `{"type": "update_agent_config", "project_root": "/path", "agent_name": "claude", "launch_args": ["--verbose"]}`
+**Request**: `{"type": "update_agent_config", "project_root": "/path", "agent_name": "claude", "launch_args": "--model opus --append-system-prompt 'be terse'"}`
 
-**Response**: `{"type": "ok"}`
+`launch_args` is a shell-style string or a list of strings; `null` clears the
+project value so the machine-level args (or none) apply. An unbalanced quote is
+rejected. The project config is written with the string form.
+
+**Response**: `config_report` for the updated config.
+
+### GetGlobalAgentSettings / UpdateGlobalAgentSettings
+
+Read or update the machine settings in `~/.pu/agent-settings.yaml`.
+
+**Request**: `{"type": "update_global_agent_settings", "launch_args": {"claude": "--dangerously-skip-permissions"}}`
+
+All fields are optional and omitted ones keep their stored value: `codex_yolo`
+(bool), `agent_status_tracking` (bool), and `launch_args` (agent type →
+launch args string; a blank string removes that agent's entry, unknown agent
+types and unbalanced quotes are rejected without saving).
+
+**Response**: `{"type": "global_agent_settings_report", "codex_yolo": false, "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
+
+`launch_args` defaults to `{}`. A daemon that omits it predates protocol v11
+and does not save machine-level launch args.
+
+**Protocol v11:** `update_agent_config.launch_args` takes a shell-style string
+(v10 daemons accept only a list), `update_global_agent_settings` and
+`global_agent_settings_report` carry machine-level `launch_args`, and each
+`config_report` agent adds `project_launch_args`, `machine_launch_args` and
+`resolved_command`. Clients that require an exact version match reject a v10
+daemon; restart the daemon after updating.
 
 ## Agent lifecycle
 
@@ -156,7 +208,7 @@ Spawn a new agent, optionally in a new worktree.
 }
 ```
 
-The `trigger` field optionally binds a trigger by name to the spawned agent.
+`no_auto: true` launches the agent's bare command, ignoring project and machine-level launch args; `extra_args` still apply. The `trigger` field optionally binds a trigger by name to the spawned agent.
 
 **Response**:
 ```json

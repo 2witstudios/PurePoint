@@ -96,6 +96,7 @@ for (const name of ["A", "B"]) {
   const enrollment = trust.createEnrollment({ endpoint });
   const device = await trust.enroll({ enrollmentToken: JSON.parse(enrollment.payload).enrollmentToken, name: "Fixture phone" });
   await trust.setTerminals(device.deviceId, "control");
+  await trust.setWorkspaceManagement(device.deviceId, true);
   await writeFile(path.join(directory, `${name}.json`), JSON.stringify({ ...device, endpoint, certificateSHA256: trust.certificateSHA256 }));
   await writeFile(path.join(directory, `${name}-used.json`), enrollment.payload);
   await writeFile(path.join(directory, `${name}-qr.json`), trust.createEnrollment({ endpoint }).payload);

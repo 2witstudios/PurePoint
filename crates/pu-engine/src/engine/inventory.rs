@@ -7,6 +7,7 @@ use pu_core::protocol::*;
 use pu_core::types::{AgentEntry, AgentStatus};
 
 use super::Engine;
+use super::fs_ops::is_too_broad_project_root;
 
 impl Engine {
     /// Production daemons persist inventory beside their socket. `new()` remains
@@ -23,6 +24,19 @@ impl Engine {
                 "project registry roots must be absolute",
             ));
         }
+        // `/`, `$HOME` and its ancestors are never projects, whatever an older
+        // daemon recorded; drop them from the registry on disk too.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let count = projects.len();
+        let projects: Vec<String> = projects
+            .into_iter()
+            .filter(|root| !is_too_broad_project_root(Path::new(root), home.as_deref()))
+            .collect();
+        if projects.len() != count
+            && let Err(e) = write_registry(&path, &projects)
+        {
+            tracing::warn!("failed to rewrite project registry: {e}");
+        }
         let mut engine = Self::new();
         engine.project_registry_path = Some(path);
         *engine.registered_projects.lock().unwrap() = projects.into_iter().collect();
@@ -30,6 +44,17 @@ impl Engine {
     }
 
     pub(super) async fn register_project(&self, root: &str) -> Result<(), Response> {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        self.register_project_with_home(root, home).await
+    }
+
+    /// Registers an initialized project, except one too broad to be a project
+    /// (`/`, `home` or an ancestor of it), which is skipped without error.
+    async fn register_project_with_home(
+        &self,
+        root: &str,
+        home: Option<PathBuf>,
+    ) -> Result<(), Response> {
         // Serialize durable updates without holding the inventory mutex over
         // filesystem I/O; health and queries can keep reading the old snapshot.
         let update = self.project_registry_updates.clone().lock_owned().await;
@@ -40,6 +65,9 @@ impl Engine {
             // Keep serialization even if the awaiting request is cancelled.
             let _update = update;
             let root = Path::new(&root).canonicalize()?;
+            if is_too_broad_project_root(&root, home.as_deref()) {
+                return Ok(());
+            }
             // Registration is only valid for readable, initialized projects.
             manifest::read_manifest(&root).map_err(std::io::Error::other)?;
             let root = root.to_string_lossy().into_owned();
@@ -55,20 +83,7 @@ impl Engine {
             next.push(root.clone());
             next.sort();
             if let Some(path) = registry {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let temporary = path.with_extension("json.tmp");
-                let write = || -> std::io::Result<()> {
-                    use std::io::Write;
-                    let mut file = std::fs::File::create(&temporary)?;
-                    file.write_all(&serde_json::to_vec_pretty(&next)?)?;
-                    file.sync_all()?;
-                    std::fs::rename(&temporary, &path)
-                };
-                write().inspect_err(|_| {
-                    let _ = std::fs::remove_file(&temporary);
-                })?;
+                write_registry(&path, &next)?;
             }
             projects
                 .lock()
@@ -110,6 +125,7 @@ impl Engine {
             _ => None,
         };
         let is_init = matches!(request, Request::Init { .. });
+        let legacy_root_use = allowed_on_too_broad_root(request);
         if let Some(root) = request.project_root_mut() {
             if root.is_empty() {
                 let Some(id) = targeted.as_deref() else {
@@ -131,6 +147,8 @@ impl Engine {
             {
                 *root = canonical.to_string_lossy().into_owned();
             }
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            check_project_root_scope(root, legacy_root_use, home.as_deref())?;
             if let Some(id) = targeted.as_deref() {
                 self.validate_live_owner(id, root).await?;
             }
@@ -523,6 +541,59 @@ impl Engine {
     }
 }
 
+/// Requests that may still name a root too broad to be a project (`/`,
+/// `$HOME` or an ancestor). An older version could record agents under
+/// `$HOME` through `~/.pu/manifest.json`; these let users see, read and stop
+/// them, but nothing new is created there.
+fn allowed_on_too_broad_root(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Status { .. }
+            | Request::SubscribeStatus { .. }
+            | Request::Read { .. }
+            | Request::ChannelRead { .. }
+            | Request::Kill { .. }
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn check_project_root_scope(
+    root: &str,
+    legacy_root_use: bool,
+    home: Option<&Path>,
+) -> Result<(), Response> {
+    if legacy_root_use || !is_too_broad_project_root(Path::new(root), home) {
+        return Ok(());
+    }
+    Err(project_root_not_allowed(root))
+}
+
+pub(super) fn project_root_not_allowed(root: &str) -> Response {
+    Response::Error {
+        code: "project_root_not_allowed".into(),
+        message: format!(
+            "{root} is /, $HOME or an ancestor of $HOME; register a project directory instead"
+        ),
+    }
+}
+
+fn write_registry(path: &Path, projects: &[String]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(&serde_json::to_vec_pretty(projects)?)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,6 +698,86 @@ mod tests {
             1
         );
         assert_eq!(engine.sessions.lock().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn given_home_with_a_manifest_should_never_be_registered() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+        std::fs::create_dir_all(tmp.path().join("home/.pu")).unwrap();
+        let home = tmp.path().join("home").canonicalize().unwrap();
+        // `~/.pu` doubles as the global dir, so `$HOME` can look initialized.
+        manifest::write_manifest(&home, &Manifest::new(home.to_string_lossy().into_owned()))
+            .unwrap();
+        let engine = Engine::with_project_registry(path.clone()).unwrap();
+        for root in [home.clone(), home.parent().unwrap().to_path_buf()] {
+            engine
+                .register_project_with_home(&root.to_string_lossy(), Some(home.clone()))
+                .await
+                .unwrap();
+        }
+        assert!(engine.registered_projects().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn given_too_broad_root_should_refuse_creating_ops_but_allow_legacy_cleanup() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path().canonicalize().unwrap().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let root = home.to_string_lossy().into_owned();
+        let spawn: Request = serde_json::from_value(serde_json::json!({
+            "type": "spawn", "project_root": root, "prompt": "",
+        }))
+        .unwrap();
+        for refused in [
+            spawn,
+            Request::Init {
+                project_root: root.clone(),
+            },
+            Request::CreateWorktree {
+                project_root: root.clone(),
+                name: None,
+                base: None,
+            },
+        ] {
+            let allowed = allowed_on_too_broad_root(&refused);
+            assert!(matches!(
+                check_project_root_scope(&root, allowed, Some(&home)),
+                Err(Response::Error { code, .. }) if code == "project_root_not_allowed"
+            ));
+        }
+        for cleanup in [
+            Request::Status {
+                project_root: root.clone(),
+                agent_id: None,
+            },
+            Request::Kill {
+                project_root: root.clone(),
+                target: KillTarget::All,
+                exclude: vec![],
+            },
+        ] {
+            let allowed = allowed_on_too_broad_root(&cleanup);
+            assert!(check_project_root_scope(&root, allowed, Some(&home)).is_ok());
+        }
+        // An ordinary project is unaffected.
+        let project = home.join("code").to_string_lossy().into_owned();
+        assert!(check_project_root_scope(&project, false, Some(&home)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn given_registry_listing_a_too_broad_root_should_purge_it_on_load() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project = tmp.path().canonicalize().unwrap().join("project");
+        let project = project.to_string_lossy().into_owned();
+        let path = tmp.path().join("registry.json");
+        std::fs::write(&path, serde_json::to_vec(&["/", project.as_str()]).unwrap()).unwrap();
+
+        let engine = Engine::with_project_registry(path.clone()).unwrap();
+        assert_eq!(engine.registered_projects(), vec![project.clone()]);
+        let stored: Vec<String> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored, vec![project]);
     }
 
     #[tokio::test]

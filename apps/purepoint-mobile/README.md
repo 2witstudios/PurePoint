@@ -1,6 +1,6 @@
 # PurePoint Mobile
 
-Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; the Agents surface shows delegated PurePoint workers and ordinary Shell panes across this Mac and connected machines, separately from Point Guard chat. Each paired phone defaults to Agents and terminals Off; the Mac owner can grant View or Control in Connect phone settings. Remote agents require this Mac, its bridge, and its existing machine forwards to remain connected. The phone never uses SSH.
+Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; the Agents surface shows delegated PurePoint workers and ordinary Shell panes across this Mac and connected machines, separately from Point Guard chat. Each paired phone defaults to Agents and terminals Off; the Mac owner can grant View or Control in Connect phone settings. The same grants decide Point Guard chat access (see below). Remote agents require this Mac, its bridge, and its existing machine forwards to remain connected. The phone never uses SSH.
 
 ## Setup with the Mac app
 
@@ -16,7 +16,7 @@ The service runs for the Mac app lifetime. Restart/update restores selected nati
 
 The lockfile pins vanilla `@earendil-works/pi-coding-agent` **1.1.0** and `ws` **8.22.0**. Development requires Node22.19+ and `npm ci --ignore-scripts`; this is separate from end-user installation. Do not globally install the harness or overwrite running pu binaries. The managed launcher uses bundled versioned support/instructions and explicit CLI routing; existing native Pi resources remain compatible. Cross-project operations use `PU_PROJECT_ROOT=/absolute/project pu ...` or an explicit cwd, never an inherited builder identity.
 
-`runtime/package-runtime.py` stages the supported Node22.23.3, complete production graph and pu helper into an app artifact. `runtime/sign-runtime.py` signs nested code before the outer app, with Node JIT entitlement. Nonpublishing CI verifies arm64, x64 and universal resources, signatures and relocated empty-HOME/stripped-PATH launch, then state-preserving bundle replacement. Ad-hoc proof does not establish Developer ID/notarization or physical-device acceptance. The normative [setup/trust contract](../../docs/product/point-guard-setup.md) defines private state and listener/admin boundaries.
+`runtime/package-runtime.py` stages the supported Node22.23.3, complete production graph and pu helper into an app artifact. `runtime/sign-runtime.py` signs nested code before the outer app, with Node JIT entitlement. Nonpublishing CI (arm64 on pull requests that touch packaging inputs; x64 and universal on `main`, nightly and manual runs) verifies arm64, x64 and universal resources, signatures and relocated empty-HOME/stripped-PATH launch, then state-preserving bundle replacement. Ad-hoc proof does not establish Developer ID/notarization or physical-device acceptance. The normative [setup/trust contract](../../docs/product/point-guard-setup.md) defines private state and listener/admin boundaries.
 
 ## iPhone / Xcode — owner-run
 
@@ -95,7 +95,7 @@ plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
 
 Node tests include byte-fragmented JSONL/Unicode framing, bounded projection, branch/compaction history, child failures, ID correlation, queue ordering and stale Stop races, reconnect partials/dialogs/editor offers, concurrent clients/authentication, a full real fixture WebSocket→RPC flow, read-only native-session browsing with a byte-for-byte unchanged source file, skill discovery, and the **actual published vanilla runtime** in an isolated temporary config with no owner credentials/model calls. Native skill loading is checked against the pinned runtime. TypeScript checks the JS bridge. Standalone Swift logic runs and model/Keychain typecheck use the Mac SDK.
 
-GitHub Actions runs bridge tests and typechecking, standalone Swift logic/responsiveness/recovery checks, and iOS simulator XCTest for mobile changes. The required `Build & Test` check reports on every PR and requires all applicable component jobs to pass; unrelated changes skip component jobs without leaving the required status pending. macOS/Rust changes retain the desktop build and test job. Physical-device and visual acceptance remain owner checks.
+GitHub Actions runs bridge tests and typechecking, standalone Swift logic/responsiveness/recovery checks, and iOS simulator XCTest for mobile changes; see [CI routing](../../docs/contributing/testing.md#ci-routing). The required `Build & Test` check reports on every PR and requires all applicable component jobs to pass; unrelated changes skip component jobs without leaving the required status pending. macOS/Rust changes retain the desktop build and test job. Physical-device and visual acceptance remain owner checks.
 
 Owner acceptance checks:
 
@@ -121,7 +121,17 @@ See [the researched contract and requirements](docs/contract.md) and [validation
 
 ## Workspace management authorization and recovery
 
-Connect phone settings has a separate **Workspace management** toggle, default off for every new or previously paired device. Mutations also require **Agents and terminals: Control**. View can browse registered projects, empty workspaces, worktrees and agents; Off denies fleet metadata. Registered machine IDs scope all project paths and agent/worktree IDs. No phone command, cwd, environment, SSH or arbitrary IPC passthrough exists.
+Connect phone settings has a separate **Workspace management** toggle, default off for every new or previously paired device. Mutations also require **Agents and terminals: Control**. View can browse registered projects, empty workspaces, worktrees and agents; Off denies the phone's direct fleet requests (`agents`, terminals, workspace operations). Registered machine IDs scope all project paths and agent/worktree IDs. No phone command, cwd, environment, SSH or arbitrary IPC passthrough exists. Point Guard chat follows the same grants, because Point Guard can list, message, spawn and stop agents on request.
+
+## Point Guard chat access
+
+Point Guard has a shell and the `pu` CLI, so chatting with it is effectively full control of this Mac. Chat access therefore follows the existing grants instead of a separate toggle:
+
+- **Agents and terminals: Off**: no chat. The bridge rejects every chat operation and sends the device no conversation snapshots or editor offers. The app locks chat with an explanation.
+- **View**, or **Control** without Workspace management: read-only chat. The device can view the live conversation and history (`sync`, `sessions`, `history`) but cannot send, steer, stop, start or resume conversations, or answer extension prompts. The app shows the transcript with the composer replaced by an explanation. Read-only chat still shows whatever Point Guard reports about agents and this Mac.
+- **Control and Workspace management**: full chat, so the device can ask Point Guard to run commands and manage agents on this Mac.
+
+There is no separate chat field in device trust; existing devices get exactly the chat access their current grants imply. Changes apply live: a downgrade stops broadcasts and rejects in-flight and further chat requests immediately, an upgrade applies after the trust write, and the app updates without reconnecting.
 
 New agent supports explicit project root, existing worktree or deliberate new worktree. New terminal uses scoped daemon Spawn terminal, writes the manifest, and appears in that workspace. Catalog availability is an executable hint using the daemon's login PATH and project-root cwd; a worktree-relative command, wrapper or runtime may still fail. Older daemons lacking additive canonical catalog fields show unsupported launch capability rather than guessed choices.
 

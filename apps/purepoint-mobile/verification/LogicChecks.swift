@@ -1,6 +1,14 @@
 import Foundation
 @main struct LogicChecks {
     static func main() {
+        // Point Guard chat access: unknown values fail closed; bridges that predate it allowed full chat.
+        precondition(ChatGrant.from("send") == .send && ChatGrant.from("read") == .read && ChatGrant.from("off") == .off)
+        precondition(ChatGrant.from("admin") == .off && ChatGrant.from("Send") == .off && ChatGrant.from("") == .off)
+        precondition(ChatGrant.from(nil) == .send)
+        precondition(ChatGrant.read.canRead && !ChatGrant.read.canSend && !ChatGrant.off.canRead && ChatGrant.send.canSend)
+        precondition(ChatGrant.send.explanation == nil && ChatGrant.read.explanation != nil && ChatGrant.off.explanation != nil)
+        let grantEnvelope = try! JSONDecoder().decode(WireEnvelope.self, from: Data(#"{"type":"permissions","terminals":"off","chat":"read"}"#.utf8))
+        precondition(ChatGrant.from(grantEnvelope.chat) == .read)
         var draft = DraftState(text: "First")
         let submitted = draft.takeSubmission(); draft.text = "Later"; draft.restore(submitted)
         precondition(draft.text == "Later\n\nFirst")

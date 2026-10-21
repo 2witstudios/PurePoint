@@ -93,32 +93,43 @@ struct PointGuardSetupView: View {
                             Spacer()
                             Button("Connect phone") { showPhone = true; Task { await service.connectPhone() } }
                         }
+                        Text("Point Guard chat follows these grants: View reads it, and sending needs Control and Workspace management because Point Guard can run commands and manage agents on this Mac.")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         ForEach(service.devices.indices, id: \.self) { index in
                             let device = service.devices[index]
-                            HStack {
-                                Text(device["name"].text ?? "Phone")
-                                Spacer()
+                            let terminals = device["terminals"].text ?? "off"
+                            let manages: Bool = { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false }()
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(device["name"].text ?? "Phone")
+                                    Spacer()
+                                    if case .null = device["revokedAt"] {
+                                        Picker("Agents and terminals", selection: Binding(
+                                            get: { device["terminals"].text ?? "off" },
+                                            set: { permission in
+                                                if let id = device["deviceId"].text { Task { await service.setTerminalPermission(id, permission: permission) } }
+                                            }
+                                        )) {
+                                            Text("Off").tag("off")
+                                            Text("View").tag("view")
+                                            Text("Control").tag("control")
+                                        }.frame(maxWidth: 260)
+                                        .help("View includes reading Point Guard chat. Control adds typing in agent terminals.")
+                                        Toggle("Workspace management and chat", isOn: Binding(
+                                            get: { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false },
+                                            set: { allowed in
+                                                if let id = device["deviceId"].text { Task { await service.setWorkspaceManagement(id, allowed: allowed) } }
+                                            }
+                                        ))
+                                        .help("Requires Agents and terminals: Control. Allows spawning, renaming and stopping agents in registered projects, and chatting with Point Guard, which can run commands and manage agents on this Mac.")
+                                        Button("Require re-pair") { if let id = device["deviceId"].text { Task { await service.rotateDevice(id) } } }
+                                        Button("Revoke") { if let id = device["deviceId"].text { Task { await service.revokeDevice(id) } } }
+                                    } else { Text("Revoked").foregroundStyle(.secondary) }
+                                }
                                 if case .null = device["revokedAt"] {
-                                    Picker("Agents and terminals", selection: Binding(
-                                        get: { device["terminals"].text ?? "off" },
-                                        set: { permission in
-                                            if let id = device["deviceId"].text { Task { await service.setTerminalPermission(id, permission: permission) } }
-                                        }
-                                    )) {
-                                        Text("Off").tag("off")
-                                        Text("View").tag("view")
-                                        Text("Control").tag("control")
-                                    }.frame(maxWidth: 260)
-                                    Toggle("Workspace management", isOn: Binding(
-                                        get: { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false },
-                                        set: { allowed in
-                                            if let id = device["deviceId"].text { Task { await service.setWorkspaceManagement(id, allowed: allowed) } }
-                                        }
-                                    ))
-                                    .help("Requires Agents and terminals: Control. Allows spawning, renaming and stopping agents in registered projects.")
-                                    Button("Require re-pair") { if let id = device["deviceId"].text { Task { await service.rotateDevice(id) } } }
-                                    Button("Revoke") { if let id = device["deviceId"].text { Task { await service.revokeDevice(id) } } }
-                                } else { Text("Revoked").foregroundStyle(.secondary) }
+                                    Text(PointGuardPhoneAccess.summary(terminals: terminals, workspaceManagement: manages))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }.padding(8)

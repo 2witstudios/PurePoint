@@ -35,6 +35,45 @@ fn sibling_path(socket_path: &Path, ext: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Create the directory that holds `socket_path`, missing parents at mode 0700.
+///
+/// When that directory is the global `~/.pu`, it also holds the registry,
+/// config and logs, so it is forced to 0700 (repairing a group- or
+/// other-accessible one), and a `~/.pu` owned by another user is refused.
+/// Other existing directories are left as they are; the socket itself is
+/// owner-only either way.
+pub fn prepare_socket_dir(socket_path: &Path, global_dir: Option<&Path>) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let Some(dir) = socket_path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    if global_dir != Some(dir) {
+        if !dir.exists() {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)?;
+        }
+        return Ok(());
+    }
+    match std::fs::metadata(dir) {
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        Ok(meta) if meta.uid() != unsafe { libc::geteuid() } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("{} is owned by another user", dir.display()),
+            ));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    pu_core::machines::ensure_private_dir(dir).map_err(std::io::Error::other)
+}
+
 /// Take the daemon lock for `socket_path` without blocking.
 ///
 /// Returns `Ok(None)` when another live daemon already holds it. Every daemon
@@ -112,6 +151,60 @@ pub fn is_process_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn given_missing_global_dir_should_create_it_owner_only() {
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join(".pu");
+        prepare_socket_dir(&global.join("daemon.sock"), Some(&global)).unwrap();
+        assert_eq!(mode(&global), 0o700);
+    }
+
+    #[test]
+    fn given_shared_global_dir_should_repair_it_to_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join(".pu");
+        for shared in [0o755, 0o775, 0o777] {
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::set_permissions(&global, std::fs::Permissions::from_mode(shared)).unwrap();
+            prepare_socket_dir(&global.join("daemon.sock"), Some(&global)).unwrap();
+            assert_eq!(mode(&global), 0o700, "from {shared:o}");
+        }
+    }
+
+    #[test]
+    fn given_global_dir_owned_by_another_user_should_refuse() {
+        // Any directory we do not own will do: `/` is root's (skip as root).
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let root = Path::new("/");
+        let err = prepare_socket_dir(&root.join("daemon.sock"), Some(root)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn given_custom_socket_dir_should_create_missing_but_keep_existing_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join(".pu");
+        let fresh = tmp.path().join("fresh");
+        prepare_socket_dir(&fresh.join("pu.sock"), Some(&global)).unwrap();
+        assert_eq!(mode(&fresh), 0o700);
+
+        let existing = tmp.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
+        prepare_socket_dir(&existing.join("pu.sock"), Some(&global)).unwrap();
+        assert_eq!(mode(&existing), 0o755);
+        assert!(!global.exists());
+    }
 
     #[test]
     fn given_claim_pid_file_should_contain_current_pid() {

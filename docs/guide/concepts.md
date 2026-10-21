@@ -14,12 +14,14 @@ An agent is a process running in a PTY (pseudo-terminal) inside a worktree. Agen
 
 ### Agent types
 
-| Type | Command | Default behavior | Description |
+| Type | Command | Default launch args | Description |
 |---|---|---|---|
-| `claude` | `claude` | `--dangerously-skip-permissions` | Claude Code CLI |
-| `codex` | `codex` | `--sandbox workspace-write --ask-for-approval on-request` | OpenAI Codex CLI |
+| `claude` | `claude` | (none) | Claude Code CLI |
+| `codex` | `codex` | (none) | OpenAI Codex CLI |
 | `opencode` | `opencode` | (none) | OpenCode CLI |
 | `terminal` | `$SHELL` | (none) | Plain terminal, no AI |
+
+Agents launch with the bare command. Add your own flags, including auto mode, with `launchArgs` per project or for all projects in `~/.pu/agent-settings.yaml`; see [Configuration](configuration.md#customizing-launch-args).
 
 ### Agent status
 
