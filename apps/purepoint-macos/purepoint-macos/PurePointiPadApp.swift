@@ -37,6 +37,7 @@ struct PurePointiPadApp: App {
                     }
                     hotkeyMonitor.keyBindingState = keyBindingState
                     hotkeyMonitor.start()
+                    CommandPalettePanel.registerPresenter()
                     appState.loadMachines()
                 }
         }
