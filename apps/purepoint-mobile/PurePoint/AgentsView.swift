@@ -187,7 +187,7 @@ private struct AgentControlBar: View {
                 composerRow(token)
                 if model.rawTyping && model.controlEnabled { rawRow(token) }
             } else {
-                Label(model.sendExplanation ?? "Terminal access is view only. Enable control on your Mac.", systemImage: "eye")
+                Label(model.sendExplanation ?? "Terminal access is view only. Enable control on the computer you paired with.", systemImage: "eye")
                     .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 16)
             }
         }
@@ -315,7 +315,7 @@ private struct AgentPromptRecoveries: View {
 struct AgentNavigator: View {
     @ObservedObject var model: AgentControlModel
     let destination: String
-    var hostName = "Mac"
+    var hostName = "Computer"
     var hostStatus = ""
     let pointGuard: () -> Void
     let projects: () -> Void
@@ -347,7 +347,7 @@ struct AgentNavigator: View {
                         Image(systemName: "folder").font(.body).foregroundStyle(Color.accentColor)
                     }
                     if model.permission == .off {
-                        NoticeBanner(text: "Terminal access is off. Enable it in Connect Phone on your Mac.", systemImage: "lock.fill", tint: .secondary).padding(.top, 16)
+                        NoticeBanner(text: "Terminal access is off. Enable it on the computer you paired with (Connect phone on a Mac, pu phone on Linux).", systemImage: "lock.fill", tint: .secondary).padding(.top, 16)
                     }
                     if let error = model.error { NoticeBanner(text: error).padding(.top, 12) }
                     shortcutSection("Pinned", entries: model.pinnedShortcuts)
@@ -553,7 +553,7 @@ struct MobileProjectsView: View {
             listNotices
             ForEach(model.machines) { machine in machineSection(machine) }
             if model.machines.isEmpty && !model.loading && model.connected && model.permission != .off {
-                ContentUnavailableView("No machines", systemImage: "desktopcomputer", description: Text("Pull to refresh, or register a project with pu on your Mac.")).padding(.top, 40)
+                ContentUnavailableView("No machines", systemImage: "desktopcomputer", description: Text("Pull to refresh, or register a project with pu on your computer.")).padding(.top, 40)
             }
             if model.loading && model.machines.isEmpty { ProgressView("Loading projects").frame(maxWidth: .infinity).padding(.top, 40) }
         }.scrollTargetLayout().padding(.horizontal, 16).padding(.vertical, 12) }
@@ -566,7 +566,7 @@ struct MobileProjectsView: View {
         return "\(machines) machine\(machines == 1 ? "" : "s") · \(agents) agent\(agents == 1 ? "" : "s") · via \(hostName)"
     }
     @ViewBuilder private var listNotices: some View {
-        if model.permission == .off { NoticeBanner(text: "Terminal access is off. Enable viewing or control in Connect Phone on your Mac.", systemImage: "lock.fill", tint: .secondary) }
+        if model.permission == .off { NoticeBanner(text: "Terminal access is off. Enable viewing or control on the computer you paired with (Connect phone on a Mac, pu phone on Linux).", systemImage: "lock.fill", tint: .secondary) }
         if !model.connected { NoticeBanner(text: "Bridge disconnected. Cached work is unavailable.", systemImage: "wifi.slash") }
         if let error = model.error { NoticeBanner(text: error) }
     }
@@ -867,7 +867,7 @@ struct WorkspaceLaunchForm: View {
                     if loading { ProgressView("Loading authenticated options") }
                     if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
                     if needsCatalog && catalog == nil { Button("Reload launch options") { Task { await loadCatalog() } }.disabled(loading) }
-                    if !model.canManage { Text("Control and workspace management permission required on this Mac.").foregroundStyle(.orange) }
+                    if !model.canManage { Text("Control and workspace management permission required on this computer.").foregroundStyle(.orange) }
                     if let id = draft.operationId {
                         Text("\(draft.state ?? "uncertain"): \(draft.message ?? "Check status and Projects before starting anything else.")").textSelection(.enabled)
                         Text("Operation: \(id)").font(.caption).textSelection(.enabled)
