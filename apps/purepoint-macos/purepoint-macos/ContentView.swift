@@ -7,7 +7,11 @@ struct ContentView: View {
     @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
     @State private var sidebarVisible = true
+    #if os(macOS)
     @State private var sidebarOutlineView: NSOutlineView?
+    #else
+    @State private var sidebarOutlineView: UIView?
+    #endif
     /// A focus request that arrived while the sidebar was hidden, waiting for its outline view to join a window.
     @State private var sidebarFocusPending = false
 
@@ -76,7 +80,11 @@ struct ContentView: View {
                 SettingsView()
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+                    #if os(macOS)
                     .onExitCommand { appState.showSettings = false }
+                    #else
+                    .onKeyPress(.escape) { appState.showSettings = false; return .handled }
+                    #endif
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
@@ -85,6 +93,8 @@ struct ContentView: View {
             guard let action = notification.userInfo?["action"] as? HotkeyAction else { return }
             handleHotkeyAction(action)
         }
+        // The iPad never hosts Point Guard, so it has no hosted working directory (IPAD-011).
+        #if os(macOS)
         .onReceive(appState.pointGuardService.$activeCwd.removeDuplicates()) { cwd in
             let root = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd).standardizedFileURL.path
             guard root != appState.pointGuardRoot else { return }
@@ -93,6 +103,7 @@ struct ContentView: View {
                 appState.activatePointGuardWorkspace()
             }
         }
+        #endif
         .onChange(of: appState.pendingSignalDestination) { _, _ in
             selectSignalDestination()
         }
@@ -193,10 +204,15 @@ struct ContentView: View {
 
         case .focusContent:
             // Find the terminal in the current view and focus it
+            #if os(macOS)
             DispatchQueue.main.async {
                 guard let window = NSApp.keyWindow else { return }
                 focusTerminalInWindow(window)
             }
+            #else
+            // iOS locates the focused terminal without walking NSView trees (IPAD-6.13).
+            break
+            #endif
 
         case .toggleSidebar:
             withAnimation {
@@ -231,6 +247,7 @@ struct ContentView: View {
         }
     }
 
+    #if os(macOS)
     private func focusTerminalInWindow(_ window: NSWindow) {
         // Walk the view hierarchy to find a visible terminal pane.
         func findTerminalPane(in view: NSView) -> TerminalPaneNSView? {
@@ -250,4 +267,5 @@ struct ContentView: View {
         else { return }
         pane.focusTerminal()
     }
+    #endif
 }

@@ -5,7 +5,11 @@ struct SidebarView: View {
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
     @Environment(TerminalViewCache.self) private var viewCache
+    #if os(macOS)
     var onOutlineViewReady: ((NSOutlineView) -> Void)?
+    #else
+    var onOutlineViewReady: ((UIView) -> Void)?
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {

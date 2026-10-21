@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import OSLog
 import SwiftUI
@@ -38,3 +39,4 @@ private final class WindowChromeView: NSView {
     // Purely a window hook; never take clicks from the content above it.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
+#endif
