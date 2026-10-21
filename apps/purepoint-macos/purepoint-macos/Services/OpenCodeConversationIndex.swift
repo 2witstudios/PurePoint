@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 nonisolated enum OpenCodeConversationIndex {
@@ -112,3 +113,4 @@ nonisolated enum OpenCodeConversationIndex {
         return nil
     }
 }
+#endif

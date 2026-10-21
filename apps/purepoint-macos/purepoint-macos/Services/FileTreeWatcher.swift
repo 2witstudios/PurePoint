@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Watches multiple directories for file system changes using GCD DispatchSource.
@@ -92,3 +93,4 @@ nonisolated final class FileTreeWatcher: @unchecked Sendable {
         }
     }
 }
+#endif

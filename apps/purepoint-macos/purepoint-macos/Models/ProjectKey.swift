@@ -55,7 +55,12 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
     }
 
     static var localSocketPath: String {
+        #if os(macOS)
         FileManager.default.homeDirectoryForCurrentUser.path + "/.pu/daemon.sock"
+        #else
+        // iOS has no local daemon; this path inside the app container never answers.
+        NSHomeDirectory() + "/.pu/daemon.sock"
+        #endif
     }
 
     static func machine(_ id: UUID) -> DaemonEndpoint {
@@ -85,7 +90,11 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
 
 /// Filesystem locations shared with the CLI (`crates/pu-core/src/paths.rs`).
 nonisolated enum MachinePaths {
+    #if os(macOS)
     static var puDirectory: String { FileManager.default.homeDirectoryForCurrentUser.path + "/.pu" }
+    #else
+    static var puDirectory: String { NSHomeDirectory() + "/.pu" }
+    #endif
     static var registryPath: String { puDirectory + "/machines.json" }
     static var machinesDirectory: String { puDirectory + "/machines" }
 

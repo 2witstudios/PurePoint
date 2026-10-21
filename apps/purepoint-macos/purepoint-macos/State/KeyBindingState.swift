@@ -66,13 +66,16 @@ final class KeyBindingState {
         return nil
     }
 
-    /// Reverse lookup: find which action matches an NSEvent
+    #if os(macOS)
+    /// Reverse lookup: find which action matches an NSEvent. iOS delivers bindings as
+    /// `UIKeyCommand`s instead (IPAD-6.11, IPAD-6.12).
     func action(for event: NSEvent) -> HotkeyAction? {
         for (action, binding) in bindings {
             if binding.matches(event) { return action }
         }
         return nil
     }
+    #endif
 
     // MARK: - Mutations
 

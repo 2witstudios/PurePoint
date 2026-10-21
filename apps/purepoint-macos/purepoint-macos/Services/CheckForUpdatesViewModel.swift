@@ -1,3 +1,4 @@
+#if os(macOS)
 import Combine
 import Sparkle
 
@@ -21,3 +22,4 @@ final class CheckForUpdatesViewModel: ObservableObject {
         updaterController.checkForUpdates(nil)
     }
 }
+#endif

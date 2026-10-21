@@ -55,6 +55,7 @@ nonisolated enum MachineConnectionState: Equatable, Sendable {
     var isDaemonRunning: Bool { self == .connected(.running) }
 }
 
+#if os(macOS)
 /// The exact ssh command lines from machines.md. The system ssh supplies identity, agent,
 /// Keychain and config (MACH-001); every value is one argv element, never a shell string.
 nonisolated enum MachineSSH {
@@ -646,3 +647,4 @@ actor MachineConnection {
         onState(state)
     }
 }
+#endif

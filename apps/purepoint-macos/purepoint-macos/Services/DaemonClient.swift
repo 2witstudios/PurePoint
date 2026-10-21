@@ -13,7 +13,11 @@ nonisolated final class DaemonClient: @unchecked Sendable {
         let socketPath =
             socketPath
             ?? {
+                #if os(macOS)
                 let home = FileManager.default.homeDirectoryForCurrentUser.path
+                #else
+                let home = NSHomeDirectory()
+                #endif
                 return "\(home)/.pu/daemon.sock"
             }()
         self.socketPath = socketPath

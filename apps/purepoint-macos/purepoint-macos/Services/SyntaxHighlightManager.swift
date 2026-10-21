@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Neon
 import SwiftTreeSitter
 import TreeSitterSwift
@@ -27,8 +31,10 @@ import TreeSitterXML
 
 @MainActor
 final class SyntaxHighlightManager {
+    #if os(macOS)
     private weak var textView: NSTextView?
     private var highlighter: TextViewHighlighter?
+    #endif
     private var currentLanguage: EditorLanguage = .plaintext
     private let fontSize: CGFloat
 
@@ -36,6 +42,7 @@ final class SyntaxHighlightManager {
     private static var languageConfigs: [EditorLanguage: LanguageConfiguration] = [:]
     private static let regularFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     private static let boldFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+    #if os(macOS)
     private static let italicFont: NSFont = {
         NSFontManager.shared.convert(regularFont, toHaveTrait: .italicFontMask)
     }()
@@ -44,6 +51,18 @@ final class SyntaxHighlightManager {
         self.textView = textView
         self.fontSize = fontSize
     }
+    #else
+    private static let italicFont: NSFont = {
+        guard let descriptor = regularFont.fontDescriptor.withSymbolicTraits(.traitItalic) else { return regularFont }
+        return NSFont(descriptor: descriptor, size: regularFont.pointSize)
+    }()
+
+    /// The text view binding (Neon's `TextViewHighlighter` over `UITextView`) arrives with the
+    /// iOS editor (IPAD-6.5). Until then the manager tracks the language and highlights nothing.
+    init(fontSize: CGFloat = 13) {
+        self.fontSize = fontSize
+    }
+    #endif
 
     func setLanguage(_ language: EditorLanguage) {
         guard language != currentLanguage else { return }
@@ -57,6 +76,7 @@ final class SyntaxHighlightManager {
 
     // MARK: - Private
 
+    #if os(macOS)
     private func rebuildHighlighter() {
         highlighter = nil
 
@@ -113,6 +133,9 @@ final class SyntaxHighlightManager {
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: range)
     }
+    #else
+    private func rebuildHighlighter() {}
+    #endif
 
     // MARK: - Language Configuration Registry
 

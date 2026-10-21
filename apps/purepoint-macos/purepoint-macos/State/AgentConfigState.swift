@@ -17,6 +17,7 @@ final class AgentConfigState {
     @ObservationIgnored private let ensureDaemon: () async throws -> Void
     @ObservationIgnored private let sendRequest: (DaemonRequest) async throws -> DaemonResponse
 
+    #if os(macOS)
     init(
         ensureDaemon: @escaping () async throws -> Void = { try await DaemonLifecycle.ensureDaemon() },
         sendRequest: ((DaemonRequest) async throws -> DaemonResponse)? = nil
@@ -25,6 +26,18 @@ final class AgentConfigState {
         let client = DaemonClient()
         self.sendRequest = sendRequest ?? { try await client.send($0) }
     }
+    #else
+    /// iOS has no local daemon to start. Until agent settings target the selected machine's
+    /// daemon (IPAD-012), requests report that no daemon is running.
+    init(
+        ensureDaemon: @escaping () async throws -> Void = { throw DaemonClientError.notRunning },
+        sendRequest: ((DaemonRequest) async throws -> DaemonResponse)? = nil
+    ) {
+        self.ensureDaemon = ensureDaemon
+        let client = DaemonClient()
+        self.sendRequest = sendRequest ?? { try await client.send($0) }
+    }
+    #endif
 
     func loadGlobalSettings() async {
         await sendGlobalSettings(.getGlobalAgentSettings)

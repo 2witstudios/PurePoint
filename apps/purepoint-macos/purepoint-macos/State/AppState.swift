@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import CryptoKit
 import Foundation
 import Observation
@@ -56,7 +60,9 @@ final class AppState {
     var pendingFocusAgentId: String?
 
     @ObservationIgnored lazy var pointGuardChat = PiChatModel()
+    #if os(macOS)
     @ObservationIgnored lazy var pointGuardService = PointGuardServiceModel()
+    #endif
 
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
@@ -70,7 +76,9 @@ final class AppState {
 
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
+    #if os(macOS)
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
+    #endif
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
 
     private static let openProjectsKey = "PurePointOpenProjects"
@@ -183,7 +191,10 @@ final class AppState {
 
     // MARK: - Project Management
 
+    /// Open a project on this Mac. iOS has no local machine: every iPad project is
+    /// machine-backed and arrives through its `MachineState`, so a local root never opens.
     func openProject(_ root: String) {
+        #if os(macOS)
         guard !projects.contains(where: { $0.projectRoot == root }) else { return }
 
         let project = pointGuardProjects.removeValue(forKey: root)
@@ -196,6 +207,7 @@ final class AppState {
         startBinaryWatcherIfNeeded()
 
         persistOpenProjects()
+        #endif
     }
 
     /// Returns true when the root is no longer managed and its local files can be discarded.
@@ -401,6 +413,7 @@ final class AppState {
     private func ensurePointGuardProject(root: String) {
         pointGuardFolders.insert(root)
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
+        #if os(macOS)
         guard projectState(forRoot: root) == nil else { return }
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
@@ -409,6 +422,7 @@ final class AppState {
         guard !isTooBroadProjectRoot(root) else { return }
         startProject(project)
         startBinaryWatcherIfNeeded()
+        #endif
     }
 
     @discardableResult
@@ -501,6 +515,7 @@ final class AppState {
 
     // MARK: - Lifecycle
 
+    #if os(macOS)
     /// Synchronously suspend all agents and shut down daemon.
     /// Must complete before the process exits — uses DispatchSemaphore to block.
     func shutdownWithSuspend() {
@@ -545,6 +560,7 @@ final class AppState {
         // Timeout after 5s — don't hang indefinitely if daemon is unresponsive
         _ = semaphore.wait(timeout: .now() + 5.0)
     }
+    #endif
 
     // MARK: - Selection Persistence
 
@@ -590,6 +606,7 @@ final class AppState {
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
     }
 
+    #if os(macOS)
     private func startBinaryWatcherIfNeeded() {
         guard binaryWatcher == nil, let binPath = DaemonLifecycle.findBinary() else { return }
         binaryWatcher = ManifestWatcher(path: binPath) { [weak self] in
@@ -611,6 +628,7 @@ final class AppState {
             }
         }
     }
+    #endif
 }
 
 extension AppState {
@@ -634,7 +652,12 @@ extension AppState {
         if let projectId = registry.projectRoot(forWorkspace: workspaceId), ProjectKey(id: projectId).isRemote {
             return UnavailableProjectHost()
         }
+        #if os(macOS)
         return LocalProjectHost.shared
+        #else
+        // No local machine: a workspace without a project has no files to reach.
+        return UnavailableProjectHost()
+        #endif
     }
 
     /// The daemon owning an agent, so terminals attach to the right machine.

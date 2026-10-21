@@ -1,6 +1,10 @@
 import Foundation
 import Observation
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 nonisolated enum DiffTab: String, CaseIterable {
     case branch = "Branch Changes"
@@ -66,7 +70,9 @@ final class DiffState {
         self.summariesOnly = summariesOnly
     }
 
+    #if os(macOS)
     private var watcher: WorktreeWatcher?
+    #endif
     private var path: String?
     private var branch: String?
     private var requestedBase: String?
@@ -110,11 +116,13 @@ final class DiffState {
         // Explicitly driven callers can own refresh timing without background races.
         guard observeChanges else { return }
         // Metadata watching is local-only; remote worktrees rely on the polling below.
+        #if os(macOS)
         if git.host.isLocal {
             watcher = WorktreeWatcher(worktreePath: path) { [weak self] in
                 Task { @MainActor in self?.refreshLocal() }
             }
         }
+        #endif
         let pollSeconds = git.host.isLocal ? 2 : 5
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -255,7 +263,9 @@ final class DiffState {
     func stopWatching() {
         generation = UUID()
         path = nil
+        #if os(macOS)
         watcher?.stop(); watcher = nil
+        #endif
         localTask?.cancel(); localTask = nil; prTask?.cancel(); prTask = nil
         commitTask?.cancel(); commitTask = nil; prDiffTask?.cancel(); prDiffTask = nil
         pollingTask?.cancel(); pollingTask = nil

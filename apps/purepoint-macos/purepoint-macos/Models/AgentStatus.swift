@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 enum AgentStatus: String, CaseIterable, Codable, Sendable {
     // Current observable states
