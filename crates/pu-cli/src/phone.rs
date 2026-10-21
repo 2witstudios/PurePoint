@@ -480,7 +480,7 @@ mod tests {
         let (status, value) = parse_http_response(plain).unwrap();
         assert_eq!(status, 200);
         assert_eq!(value["result"]["a"], 1);
-        let chunked = b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{\"ok\"\r\n6\r\n:false}\r\n0\r\n\r\n";
+        let chunked = b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n{\"ok\"\r\n7\r\n:false}\r\n0\r\n\r\n";
         let (status, value) = parse_http_response(chunked).unwrap();
         assert_eq!(status, 401);
         assert_eq!(value["ok"], false);
