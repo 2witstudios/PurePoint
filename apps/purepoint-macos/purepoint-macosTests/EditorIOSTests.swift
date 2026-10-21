@@ -141,5 +141,28 @@ import UIKit
         #expect(editor.editorTextView.frame.minX == 40)
     }
 
+    // MARK: - Markdown preview
+
+    @Test func remotePreviewsNeverUseFileURLs() {
+        let remote = MarkdownPreviewView.baseURL(directory: "/srv/docs", isRemote: true)
+        #expect(remote?.absoluteString == "purepoint-remote://files/srv/docs/")
+        let local = MarkdownPreviewView.baseURL(directory: "/srv/docs", isRemote: false)
+        #expect(local?.isFileURL == true)
+        #expect(MarkdownPreviewView.baseURL(directory: nil, isRemote: true) == nil)
+    }
+
+    @Test func linksOpenExternallyOrAsFilesBelowTheDocument() throws {
+        let web = try #require(URL(string: "https://example.com"))
+        #expect(MarkdownPreviewView.linkAction(for: web, baseDirectory: "/srv/docs") == .openExternally(web))
+        let mail = try #require(URL(string: "mailto:a@example.com"))
+        #expect(MarkdownPreviewView.linkAction(for: mail, baseDirectory: nil) == .openExternally(mail))
+
+        let sibling = try #require(URL(string: "purepoint-remote://files/srv/docs/guide.md"))
+        #expect(MarkdownPreviewView.linkAction(for: sibling, baseDirectory: "/srv/docs") == .openFile("/srv/docs/guide.md"))
+        let escape = try #require(URL(string: "purepoint-remote://files/srv/docs/../secret.md"))
+        #expect(MarkdownPreviewView.linkAction(for: escape, baseDirectory: "/srv/docs") == .ignore)
+        let script = try #require(URL(string: "javascript:alert(1)"))
+        #expect(MarkdownPreviewView.linkAction(for: script, baseDirectory: "/srv/docs") == .ignore)
+    }
 }
 #endif
