@@ -27,6 +27,8 @@ struct PurePointiPadApp: App {
                 .environment(registry)
                 .environment(keyBindingState)
                 .preferredColorScheme(settingsState.appearance.colorScheme)
+                // The Mac's 13pt default for text that names no font (MacTextStyles+iOS.swift).
+                .font(.body)
                 .onAppear {
                     appState.registry = registry
                     viewCache.agentStatus = { [weak appState] agentId in
