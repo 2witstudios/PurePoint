@@ -72,8 +72,8 @@ pub fn save_global_agent_settings(
     let path = dir.join("agent-settings.yaml");
     let lock = std::fs::File::create(path.with_extension("yaml.lock"))?;
     FileExt::lock(&lock)?;
-    // A malformed file is replaced rather than blocking every future save.
-    let mut settings = load_global_agent_settings().unwrap_or_default();
+    // A malformed file is an error, never silently replaced: it would erase every stored setting.
+    let mut settings = load_global_agent_settings()?;
     if let Some(enabled) = update.codex_yolo {
         settings.codex_yolo = enabled;
     }
@@ -436,6 +436,30 @@ mod tests {
         std::fs::create_dir(home.0.path().join(".pu/agent-settings.yaml.tmp")).unwrap();
         assert!(save_global_agent_settings(yolo(false)).is_err());
         assert!(load_global_agent_settings().unwrap().codex_yolo);
+    }
+
+    #[test]
+    fn given_malformed_machine_settings_should_refuse_save_and_keep_file() {
+        for content in [
+            "codexYolo: true\nlaunchArgs: [broken",
+            "codexYolo: true\nlaunchArgs:\n  claude: \"--append-system-prompt 'oops\"\n",
+        ] {
+            // given
+            let home = TestHome::new();
+            let path = home.0.path().join(".pu/agent-settings.yaml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            // when
+            let result = save_global_agent_settings(GlobalAgentSettingsUpdate {
+                launch_args: [("codex".to_string(), "--search".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+            // then
+            assert!(result.is_err(), "save should fail for {content:?}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        }
     }
 
     #[test]
