@@ -4,13 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Pull requests skip packaging proofs their changes cannot affect and the
+  # Intel legs; main, the nightly run and manual runs prove everything.
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request runs are cancelled; main, nightly and manual
+  # runs each finish their full proof.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -23,6 +30,11 @@ jobs:
     outputs:
       macos: ${{ steps.paths.outputs.macos }}
       mobile: ${{ steps.paths.outputs.mobile }}
+      mobile_swift: ${{ steps.paths.outputs.mobile_swift }}
+      packaging: ${{ steps.paths.outputs.packaging }}
+      release_archive: ${{ steps.paths.outputs.release_archive }}
+      universal: ${{ steps.paths.outputs.universal }}
+      runtime_targets: ${{ steps.paths.outputs.runtime_targets }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,7 +81,7 @@ jobs:
   mobile-swift:
     name: Mobile Swift & iOS tests
     needs: changes
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.mobile_swift == 'true'
     runs-on: macos-26
     timeout-minutes: 20
     defaults:
@@ -261,15 +273,11 @@ jobs:
   runtime-package:
     name: Point Guard package (${{ matrix.architecture }})
     needs: changes
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.packaging == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-26
-            architecture: arm64
-          - runner: macos-26-intel
-            architecture: x64
+        include: ${{ fromJSON(needs.changes.outputs.runtime_targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
@@ -313,7 +321,7 @@ jobs:
   runtime-universal:
     name: Point Guard universal package (${{ matrix.architecture }})
     needs: [changes, runtime-package]
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.universal == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -378,7 +386,7 @@ jobs:
 
   release-archive:
     needs: changes
-    if: needs.changes.outputs.macos == 'true'
+    if: needs.changes.outputs.release_archive == 'true'
     uses: ./.github/workflows/release-proof.yml
 
   build-and-test:
@@ -393,6 +401,4 @@ jobs:
       - name: Require every applicable check to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python3 .github/scripts/ci.py gate
-          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert all(r[j]["result"]==expected for j in ["runtime-package","runtime-universal","runtime-rust"]), {j:r[j] for j in ["runtime-package","runtime-universal","runtime-rust"]}'
+        run: python3 .github/scripts/ci.py gate
