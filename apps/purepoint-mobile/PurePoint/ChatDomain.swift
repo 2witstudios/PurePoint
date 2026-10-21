@@ -262,7 +262,9 @@ struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; va
 /// Control with Workspace management sends. The bridge enforces it; the app mirrors it.
 enum ChatGrant: String, Sendable {
     case off, read, send
-    /// Bridges that predate chat gating send no value and allowed full chat; unknown values fail closed.
+    /// A missing value means an older bridge that predates chat gating, which allowed full chat, so the
+    /// UI stays as it was. This only shapes the UI: the bridge enforces chat access on every request.
+    /// Unknown values fail closed.
     static func from(_ raw: String?) -> ChatGrant { raw.map { ChatGrant(rawValue: $0) ?? .off } ?? .send }
     var canRead: Bool { self != .off }
     var canSend: Bool { self == .send }
