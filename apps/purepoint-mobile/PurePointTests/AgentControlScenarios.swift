@@ -109,6 +109,46 @@ import Foundation
             "Old stream must never close a same-named stream on another host")
     }
 
+    static func reconnectReopensDroppedAgentOnlyOnSameHost() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        try await open(model, bridge); try finishOpen(bridge)
+        try await wait { model.streamId != nil }
+        let scope = model.selected
+        model.transport(host: "host-a", connected: false)
+        try check(model.selected == nil, "A transport drop closes the screen")
+        model.transport(host: "host-a", connected: true, request: bridge.request)
+        try await wait { !bridge.opens.isEmpty }
+        try check(model.selected == scope, "Reconnecting to the same host reopens the dropped agent")
+        try finishOpen(bridge, id: "resumed")
+        try await wait { model.streamId == "resumed" }
+
+        model.closeScreen()
+        model.transport(host: "host-a", connected: false)
+        model.transport(host: "host-a", connected: true, request: bridge.request)
+        try await wait { bridge.operations.filter { $0.0 == "agents" }.count == 3 && !model.loading }
+        try check(model.selected == nil && bridge.opens.isEmpty, "A deliberate close is never undone by reconnect")
+
+        try await open(model, bridge); try finishOpen(bridge, id: "again")
+        try await wait { model.streamId == "again" }
+        model.transport(host: "host-a", connected: false)
+        model.transport(host: "host-b", connected: true, request: bridge.request)
+        try await wait { bridge.operations.filter { $0.0 == "agents" }.count == 4 && !model.loading }
+        try check(model.selected == nil && bridge.opens.isEmpty, "Another host never reopens the dropped agent")
+    }
+
+    static func reconnectSkipsDroppedAgentMissingFromInventory() async throws {
+        let (model, bridge, defaults, suite) = try await setup()
+        defer { model.transport(host: "", connected: false); defaults.removePersistentDomain(forName: suite) }
+        try await open(model, bridge); try finishOpen(bridge)
+        try await wait { model.streamId != nil }
+        model.transport(host: "host-a", connected: false)
+        bridge.inventory = bridge.inventory.replacingOccurrences(of: #""id":"a""#, with: #""id":"b""#)
+        model.transport(host: "host-a", connected: true, request: bridge.request)
+        try await wait { model.machines.first?.agents.first?.id == "b" }
+        try check(model.selected == nil && bridge.opens.isEmpty, "A vanished agent is never reopened")
+    }
+
     static func failedOriginalAndNewerDraftSurviveNavigationHostChangeAndRelaunch() async throws {
         for outcome in ["failed", "blocked", "uncertain"] {
             let (model, bridge, defaults, suite) = try await setup()
