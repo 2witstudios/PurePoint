@@ -136,7 +136,8 @@ enum PiMarkdownBlocks {
         flush(); return result
     }
 }
-enum PiConnectionAddress {
+// Nonisolated so the iPad's shared device-trust record can validate endpoints off the main actor.
+nonisolated enum PiConnectionAddress {
     static func url(_ input: String) -> URL? {
         guard let url = URL(string: input.trimmingCharacters(in: .whitespacesAndNewlines)),
             ["ws", "wss"].contains(url.scheme?.lowercased() ?? ""), let host = url.host?.lowercased(),
@@ -308,6 +309,8 @@ enum PiJSONValue: Codable, Sendable {
 }
 struct PiWireEnvelope: Decodable, Sendable {
     let type: String; var id: String?; var ok: Bool?; var data: PiJSONValue?; var error: String?; var text: String?
+    /// A paired device's terminals grant, on `permissions` records.
+    var terminals: String?
 }
 
 // A serial utility queue keeps encoding/file IO away from keyboard and rendering.

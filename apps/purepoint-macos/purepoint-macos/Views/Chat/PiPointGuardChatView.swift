@@ -1,5 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#endif
 
 /// Native presentation of the same authoritative Pi session used by the phone.
 struct PiPointGuardChatView: View {
@@ -19,6 +22,10 @@ struct PiPointGuardChatView: View {
     @State private var transcriptWindow = PiTranscriptWindow()
     @State private var showFiles = false
     @State private var importingAttachment = false
+    #if os(iOS)
+    @State private var showPhotos = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    #endif
     @FocusState private var composerFocused: Bool
     @Environment(AppState.self) private var appState
 
@@ -50,11 +57,15 @@ struct PiPointGuardChatView: View {
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: Theme.chatBackground))
-        // The iPad attaches through PhotosPicker and fileImporter with these limits (IPAD-8.3).
-        #if os(macOS)
+        // The iPad also attaches photos through PhotosPicker, with the same limits (IPAD-8.3).
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
             result in
             importAttachment(result)
+        }
+        #if os(iOS)
+        .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, item in
+            if let item { importPhoto(item) }
         }
         #endif
         .task { if model.connected { await model.loadConversations() } }
@@ -382,6 +393,23 @@ struct PiPointGuardChatView: View {
                     }
                     .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
                     .accessibilityLabel("Add attachment").help("Attach an image, text file, or PDF")
+                    #else
+                    // The same plus control; touch and pointer pick photos or files from its menu.
+                    Menu {
+                        Button("Photos", systemImage: "photo") { showPhotos = true }
+                        Button("Files", systemImage: "folder") { showFiles = true }
+                    } label: {
+                        Group {
+                            if importingAttachment {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "plus").font(.system(size: 18))
+                            }
+                        }.frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
+                    .accessibilityLabel("Add attachment").help("Attach a photo, image, text file, or PDF")
                     #endif
                     Spacer(minLength: 0)
                     if model.busy {
@@ -451,7 +479,6 @@ struct PiPointGuardChatView: View {
         }
     }
 
-    #if os(macOS)
     private func importAttachment(_ result: Result<URL, Error>) {
         let draftKey = model.draftKey
         Task {
@@ -471,6 +498,31 @@ struct PiPointGuardChatView: View {
                 if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError {
                     model.error = error.localizedDescription
                 }
+            }
+        }
+    }
+
+    #if os(iOS)
+    private func importPhoto(_ item: PhotosPickerItem) {
+        let draftKey = model.draftKey
+        Task {
+            importingAttachment = true
+            defer { importingAttachment = false; selectedPhoto = nil }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw PiComposerError("This photo could not be opened.")
+                }
+                let file = try await Task.detached(priority: .userInitiated) {
+                    try PiAttachmentImport.image(data, name: "Photo.jpg")
+                }.value
+                guard model.draftKey == draftKey else {
+                    model.error = "The conversation changed. Attach the photo again to your current draft."
+                    return
+                }
+                model.addAttachment(file)
+                composerFocused = true
+            } catch {
+                model.error = error.localizedDescription
             }
         }
     }

@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Connection controls live in the standard tab strip; history controls stay in the sidebar.
 struct PointGuardPaneControls: View {
@@ -41,6 +44,9 @@ struct PointGuardPaneControls: View {
             .accessibilityLabel("Point Guard options")
         }
         .buttonStyle(.plain).foregroundStyle(.secondary)
+        #if os(iOS) && DEBUG
+        .onAppear { if DebugLaunchArguments.current.pointGuardSetup { showSetup = true } }
+        #endif
         .sheet(isPresented: $showSetup) {
             VStack(spacing: 0) {
                 HStack {
@@ -57,6 +63,10 @@ struct PointGuardPaneControls: View {
                     #endif
                 }
             }.frame(width: 620, height: 650)
+            #if os(iOS)
+            // The strip forces a dark scheme; the sheet follows the window like a Mac sheet window.
+            .environment(\.colorScheme, Self.windowColorScheme)
+            #endif
         }
         #if os(macOS)
         .sheet(isPresented: $showPhone) {
@@ -64,4 +74,12 @@ struct PointGuardPaneControls: View {
         }
         #endif
     }
+
+    #if os(iOS)
+    private static var windowColorScheme: ColorScheme {
+        let style = UIApplication.shared.connectedScenes.lazy
+            .compactMap { ($0 as? UIWindowScene)?.traitCollection.userInterfaceStyle }.first
+        return style == .dark ? .dark : .light
+    }
+    #endif
 }

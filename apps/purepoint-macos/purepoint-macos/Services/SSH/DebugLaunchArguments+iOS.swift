@@ -13,14 +13,19 @@ import Observation
 /// - `-PUDebugTrustHostKey YES` confirms a first-use host key as if the user tapped Trust.
 /// - `-PUDebugSelectAgent <agent id>` selects the workspace holding that agent, as if the
 ///   user clicked its sidebar row.
+/// - `-PUDebugPointGuardPairingCode '<QR JSON>'` pairs Point Guard with that Mac enrollment
+///   code, as if the user scanned it.
+/// - `-PUDebugPointGuardSetup YES` opens Point Guard setup from the pane controls.
 struct DebugLaunchArguments {
     var addMachine: (sshHost: String, name: String?)?
     var trustHostKey = false
     var selectAgent: String?
+    var pointGuardPairingCode: String?
+    var pointGuardSetup = false
 
     static let current = DebugLaunchArguments(defaults: .standard)
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults, arguments: [String] = ProcessInfo.processInfo.arguments) {
         if let value = defaults.string(forKey: "PUDebugAddMachine"), !value.isEmpty {
             let parts = value.split(separator: ",", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             addMachine = (parts[0], parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil)
@@ -29,6 +34,13 @@ struct DebugLaunchArguments {
         if let value = defaults.string(forKey: "PUDebugSelectAgent"), !value.isEmpty {
             selectAgent = value
         }
+        // Read raw: the defaults argument domain parses a JSON object as a property list.
+        if let index = arguments.firstIndex(of: "-PUDebugPointGuardPairingCode"), arguments.indices.contains(index + 1),
+            !arguments[index + 1].isEmpty
+        {
+            pointGuardPairingCode = arguments[index + 1]
+        }
+        pointGuardSetup = defaults.bool(forKey: "PUDebugPointGuardSetup")
     }
 
     /// The workspace holding the `-PUDebugSelectAgent` agent, once a machine's layout lists it.

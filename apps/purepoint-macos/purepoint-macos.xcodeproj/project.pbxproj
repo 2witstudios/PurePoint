@@ -37,6 +37,7 @@
 		FBAD00182F80000000000000 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001; };
 		FBAD00192F80000000000000 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990002; };
 		FBAD001A2F80000000000000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000; };
+		FBAD001B2F80000000000000 /* PairingSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAD001C2F80000000000000 /* PairingSecret.swift */; };
 		FBAD02002F80000000000000 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01002F80000000000000 /* SwiftTerm */; };
 		FBAD02012F80000000000000 /* TreeSitterPHP in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01012F80000000000000 /* TreeSitterPHP */; };
 		FBAD02022F80000000000000 /* TreeSitterMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01022F80000000000000 /* TreeSitterMarkdown */; };
@@ -91,6 +92,7 @@
 		AA1122334455667788990001 /* ChatMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdownView.swift; path = ../shared/ChatMarkdown/ChatMarkdownView.swift; sourceTree = SOURCE_ROOT; };
 		AA1122334455667788990002 /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatBubble.swift; path = ../shared/ChatMarkdown/ChatBubble.swift; sourceTree = SOURCE_ROOT; };
 		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
+		FBAD001C2F80000000000000 /* PairingSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PairingSecret.swift; path = ../purepoint-mobile/PurePoint/PairingSecret.swift; sourceTree = SOURCE_ROOT; };
 		FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "purepoint-macos.app"; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFC72F53F1FE00F8E0A1 /* purepoint-macosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFD12F53F1FE00F8E0A1 /* purepoint-macosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -248,6 +250,7 @@
 				AA1122334455667788990001 /* ChatMarkdownView.swift */,
 				AA1122334455667788990002 /* ChatBubble.swift */,
 				AA1122334455667788990000 /* ChatMarkdown.swift */,
+				FBAD001C2F80000000000000 /* PairingSecret.swift */,
 				FBC7CFBC2F53F1FD00F8E0A1 /* purepoint-macos */,
 				FBC7CFCA2F53F1FE00F8E0A1 /* purepoint-macosTests */,
 				FBC7CFD42F53F1FE00F8E0A1 /* purepoint-macosUITests */,
@@ -614,6 +617,7 @@
 				FBAD00182F80000000000000 /* ChatMarkdownView.swift in Sources */,
 				FBAD00192F80000000000000 /* ChatBubble.swift in Sources */,
 				FBAD001A2F80000000000000 /* ChatMarkdown.swift in Sources */,
+				FBAD001B2F80000000000000 /* PairingSecret.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -951,6 +955,7 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "PUREPOINT_IPAD $(inherited)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -986,6 +991,7 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "PUREPOINT_IPAD $(inherited)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;

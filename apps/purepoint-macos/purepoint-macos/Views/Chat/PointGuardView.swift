@@ -44,6 +44,8 @@ struct PointGuardView: View {
         // The iPad connects the chat to a paired Mac rather than starting a host (IPAD-8.1).
         #if os(macOS)
         .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+        #else
+        .task { appState.pointGuardChat.connect() }
         #endif
         .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
             // The workspace owns this shared setting once, even when a terminal
