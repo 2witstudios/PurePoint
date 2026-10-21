@@ -230,6 +230,8 @@ Debug builds (`#if DEBUG`) take launch arguments that let scripts connect a simu
 | `-PUDebugTrustHostKey YES` | Confirms a first-use host key as if the user tapped Trust and Connect, both in Add Machine and for registered machines that ask. A changed host key is still refused (IPAD-009). |
 | `-PUDebugSelectAgent <agent id>` | Selects the workspace holding that agent once a machine's layout lists it, as if the user clicked its sidebar row, so its terminal opens. Gives up after a minute. |
 | `-PUDebugTerminalInput "<keys>"` | Types the keys into the first terminal that shows output, through the same input path as the keyboard, 1.5 s after that output. Text is typed as is; `<Enter>`, `<Esc>`, `<Tab>`, `<BS>`, `<Up>`, `<Down>`, `<Left>`, `<Right>`, `<C-x>` (Ctrl) and `<M-x>` (Alt) are keys. |
+| `-PUDebugPointGuardPairingCode '<QR JSON>'` | Pairs Point Guard with that Mac enrollment code (QR v1, PGSET-004) through the same path as a scanned QR, since the simulator has no camera. An expired or invalid code shows the pairing error. |
+| `-PUDebugPointGuardSetup YES` | Opens Point Guard setup from the pane controls, as if the user chose Setup. |
 
 `apps/purepoint-macos/scripts/ipad-test-sshd.sh start <worktree> [--port N] [--sim <udid>]` runs a throwaway sshd for these:
 - It is the system's `/usr/sbin/sshd` binary, run unprivileged on 127.0.0.1 only, with its own host key, `authorized_keys` and config in a temp dir. It never touches `~/.ssh` or the system sshd.

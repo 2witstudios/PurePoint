@@ -2,6 +2,9 @@
 import Combine
 import Foundation
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 // UserDefaults is thread-safe; the immutable reference is shared with the utility writer.
 private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefaults }
@@ -41,6 +44,24 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
     @Published var editorOffer: String?
     @Published var changingSession = false
     @Published var endpoint = ""
+    #if os(iOS)
+    /// Macs this iPad has paired with; `endpoint` follows the selected one (IPAD-011).
+    @Published private(set) var pairedMacs = PiPairedMacs()
+    @Published private(set) var pairing = false
+    @Published var pairingError: String?
+    /// Set when the Mac revoked this iPad or its certificate changed; only a new QR clears it.
+    @Published private(set) var repairRequired = false
+    /// The bridge's Off/View/Control agents-and-terminals grant for this iPad.
+    @Published private(set) var terminalsGrant: String?
+    var trustStore = PiTrustStore.keychain { didSet { trustWriter = trustStore.writer() } }
+    var bridge = PiBridgeClient.live
+    private lazy var trustWriter = trustStore.writer()
+    private var pairedMacsUnavailable = false
+    private var hostSession: URLSession?
+    private var hostPin: PinnedHostSession?
+    private var pairingTask: Task<Void, Never>?
+    private var pairingGeneration = 0
+    #endif
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
@@ -73,6 +94,12 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
 
     private(set) var clientId: String
 
+    #if os(iOS)
+    nonisolated static let localDevice = "iPad"
+    #else
+    nonisolated static let localDevice = "Mac"
+    #endif
+
     private let defaults: PiRecoveryPreferences
 
     init(defaults: UserDefaults = .standard) {
@@ -80,7 +107,12 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         self.defaults = defaults
         clientId = defaults.value.string(forKey: "pointguard.clientId") ?? UUID().uuidString
         defaults.value.set(clientId, forKey: "pointguard.clientId")
+        #if os(iOS)
+        if let saved = PiPairedMacs.load(defaults.value) { pairedMacs = saved } else { pairedMacsUnavailable = true }
+        endpoint = pairedMacs.selected?.endpoint ?? ""
+        #else
         endpoint = defaults.value.string(forKey: "pointguard.endpoint") ?? ""
+        #endif
         drafts = defaults.value.dictionary(forKey: "pointguard.drafts") as? [String: String] ?? [:]
         let savedCanceledIds = defaults.value.stringArray(forKey: "pointguard.canceledIds") ?? []
         canceledIdHistory = Self.recentCanceledIds(savedCanceledIds)
@@ -108,6 +140,12 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             self.recoveryLoaded = true
             self.saveSubmissions(); self.saveAttachmentDraft()
         }
+        #if os(iOS)
+        if pairedMacsUnavailable {
+            error = "Saved Mac list could not be read. Pair with your Mac again to reconnect."
+        }
+        observeLifecycle(); pairFromLaunchArguments()
+        #endif
     }
     private static func recentCanceledIds(_ ids: [String]) -> [String] {
         var seen = Set<String>()
@@ -150,7 +188,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             } catch {
                 Task { @MainActor [weak self] in
                     if self?.error?.hasPrefix("Message not sent:") != true {
-                        self?.error = "Could not save message recovery on this Mac."
+                        self?.error = "Could not save message recovery on this \(Self.localDevice)."
                     }
                 }
             }
@@ -166,7 +204,8 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         writer.schedule(key: "attachments") { [weak self] in
             do { try PiLocalRecoveryStore.save(value, name: "attachment-drafts") } catch {
                 Task { @MainActor [weak self] in
-                    self?.error = "Could not save attachments on this Mac. Keep the app open until sending."
+                    self?.error =
+                        "Could not save attachments on this \(Self.localDevice). Keep the app open until sending."
                 }
             }
         }
@@ -177,6 +216,8 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         }
         attachments.append(file)
     }
+    // The Mac's local bridge pairs by shared secret; the iPad only pairs by QR enrollment (IPAD-011).
+    #if os(macOS)
     func bindManagedConnection(endpoint: String, secret: String, clientId: String) {
         guard UUID(uuidString: clientId) != nil else { error = "Invalid managed desktop identity."; return }
         disconnect()
@@ -199,8 +240,12 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false;
         wantsConnection = true; connect()
     }
+    #endif
     func connect() {
         guard !demo, foreground, socket == nil else { return }
+        #if os(iOS)
+        connectPairedMac()
+        #else
         guard let url = PiConnectionAddress.url(endpoint) else {
             if !endpoint.isEmpty {
                 error =
@@ -220,14 +265,22 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             guard self.foreground, self.wantsConnection, self.endpoint == address, self.socket == nil else { return }
             self.startConnection(url: url, secret: secret)
         }
+        #endif
     }
     private func startConnection(url: URL, secret: String) {
         guard !secret.isEmpty else { error = "Add the pairing secret in Connection settings."; return }
         wantsConnection = true; retryTask?.cancel(); generation += 1; let current = generation
         cursor.reset(); connectionStatus = "Connecting to Point Guard…"; error = nil
+        #if os(iOS)
+        // The pinned session that verified this Mac carries the credential; never the shared session.
+        guard let session = hostSession else { requirePairing("Pair with your Mac before connecting."); return }
+        let request = PiBridgeTrust.socketRequest(url: url, credential: secret, clientId: clientId)
+        let task = session.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024;
+        #else
         var request = URLRequest(url: url); request.setValue("Bearer " + secret, forHTTPHeaderField: "Authorization")
         request.setValue(clientId, forHTTPHeaderField: "X-PointGuard-Client-ID")
         let task = URLSession.shared.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024;
+        #endif
         socket = task; task.resume()
         receiveTask = Task { [weak self] in
             do {
@@ -247,7 +300,11 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
                 }
             } catch {
                 guard let self, current == self.generation else { return };
+                #if os(iOS)
+                self.socketFailed(closeCode: task.closeCode.rawValue, reason: error.localizedDescription)
+                #else
                 self.connectionLost(error.localizedDescription)
+                #endif
             }
         }
         Task { [weak self] in
@@ -264,13 +321,20 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         if active {
             if wantsConnection { connect() }
         } else {
-            writer.flush(); detach(); connectionStatus = "Paused on this Mac · Point Guard continues on your Mac"
+            #if os(iOS)
+            cancelPairing()
+            #endif
+            writer.flush(); detach()
+            connectionStatus = "Paused on this \(Self.localDevice) · Point Guard continues on your Mac"
         }
     }
     func disconnect() { wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected" }
     private func detach() {
         generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel();
         receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
+        #if os(iOS)
+        hostSession?.invalidateAndCancel(); hostSession = nil; hostPin = nil
+        #endif
         let outstanding = pending; pending = [:]; for timeout in timeouts.values { timeout.cancel() }; timeouts = [:]
         for continuation in outstanding.values {
             continuation.resume(
@@ -281,8 +345,12 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
     }
     private func connectionLost(_ reason: String) {
         detach(); connectionStatus = "Connection lost · Point Guard continues on your Mac";
+        #if os(iOS)
+        error = reason + " Check PurePoint on your Mac and Tailscale."
+        #else
         error =
             reason + " Check the Mac bridge, Tailscale, pairing secret, and the bridge address and pairing secret."
+        #endif
         guard foreground, wantsConnection else { return }
         let delay = retryDelay; retryDelay = min(retryDelay * 2, 30)
         retryTask = Task { [weak self] in
@@ -296,6 +364,12 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         case .snapshot(let state, let rows): try apply(state, rows: rows); return
         case .envelope(let envelope): record = envelope
         }
+        #if os(iOS)
+        // A paired device hears its terminals grant. The iPad reaches agents over SSH, never
+        // through the bridge, so terminal records are not requested and are ignored.
+        if record.type == "permissions" { terminalsGrant = record.terminals; return }
+        if record.type.hasPrefix("terminal.") { return }
+        #endif
         switch record.type {
         case "receipt":
             guard let id = record.id, let continuation = pending.removeValue(forKey: id) else { return }
@@ -432,7 +506,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
                 try await writer.writeAndConfirm { try PiLocalRecoveryStore.save(receipts, name: "submissions") }
             } catch {
                 let guidance =
-                    "Message not sent: could not save recovery on this Mac. Free storage, then restore the saved message and try again. Keep the app open to retain its text and files."
+                    "Message not sent: could not save recovery on this \(Self.localDevice). Free storage, then restore the saved message and try again. Keep the app open to retain its text and files."
                 updateSubmission(id, status: guidance, recoverable: true); self.error = guidance
                 return
             }
@@ -563,3 +637,178 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             queue: [], dialogs: [], notices: [])
     }
 }
+
+#if os(iOS)
+/// The iPad is a paired client of a Mac's bridge: QR enrollment, then pinned WSS with the
+/// device credential, exactly as the iPhone app connects (IPAD-011, REQ-IPAD-032–036).
+extension PiChatModel {
+    func pair(_ code: PiEnrollmentCode) {
+        guard code.isCurrent() else { pairingError = "This QR expired. Create a new code on your Mac."; return }
+        pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration)
+        let attempt = pairingGeneration
+        let bridge = bridge
+        let writer = trustWriter
+        pairing = true; pairingError = nil
+        pairingTask = Task { [weak self] in
+            let pin = PinnedHostSession(endpoint: code.endpoint, certificateSHA256: code.certificateSHA256)
+            let session = pin.makeSession()
+            defer { session.invalidateAndCancel() }
+            do {
+                let saved = try await bridge.enroll(code, session)
+                guard saved.valid, saved.endpoint == code.endpoint, saved.hostId == code.hostId,
+                    saved.certificateSHA256 == code.certificateSHA256
+                else { throw TrustFailure("The Mac returned mismatched device trust. Scan a new QR code.") }
+                guard let self, !Task.isCancelled, attempt == self.pairingGeneration else { return }
+                try await writer.commit(saved, generation: attempt)
+                guard !Task.isCancelled, attempt == self.pairingGeneration, writer.accept(generation: attempt) else {
+                    return
+                }
+                self.pairing = false; self.pairingTask = nil
+                self.pairedMacsUnavailable = false
+                let machine = self.pairedMacs.remember(hostId: saved.hostId, endpoint: saved.endpoint)
+                self.activate(machine)
+            } catch {
+                guard let self, attempt == self.pairingGeneration else { return }
+                self.pairing = false; self.pairingTask = nil
+                self.pairingError =
+                    pin.identityRejected
+                    ? "Mac certificate does not match this QR. Scan a new code deliberately."
+                    : "Pairing failed. " + error.localizedDescription
+                        + " Create a new Mac QR code; enrollment is never replayed."
+            }
+        }
+    }
+
+    func cancelPairing() {
+        pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration)
+        pairingTask = nil; pairing = false; pairingError = nil
+    }
+
+    /// Switches to a saved Mac and reconnects with its stored trust.
+    func selectMac(_ id: String) {
+        guard let machine = pairedMacs.machines.first(where: { $0.id == id }) else { return }
+        cancelPairing()
+        pairedMacs.selectedId = machine.id
+        activate(machine)
+    }
+
+    func renameMac(_ id: String, name: String) {
+        pairedMacs.rename(id, to: name); pairedMacs.save(defaults.value)
+    }
+
+    /// Removes the Mac and its device credential from this iPad. The Mac still lists the device
+    /// until it is revoked there.
+    func forgetMac(_ id: String) {
+        guard let machine = pairedMacs.machines.first(where: { $0.id == id }) else { return }
+        let wasSelected = pairedMacs.selectedId == id
+        if wasSelected { disconnect() }
+        do { try trustStore.remove(machine.endpoint) } catch { self.error = error.localizedDescription; return }
+        pairedMacs.forget(id); pairedMacs.save(defaults.value)
+        if wasSelected {
+            if let next = pairedMacs.selected { activate(next) } else { activate(nil) }
+        }
+    }
+
+    private func activate(_ machine: PiPairedMac?) {
+        saveDraft(); saveAttachmentDraft(); disconnect()
+        endpoint = machine?.endpoint ?? ""; pairedMacs.save(defaults.value)
+        snapshot = nil; conversations = []; browsing = nil; editorOffer = nil; terminalsGrant = nil
+        repairRequired = false; error = nil
+        draft = drafts[draftKey] ?? ""; attachments = attachmentDrafts[draftKey] ?? []; demo = false
+        guard machine != nil else { return }
+        wantsConnection = true; connect()
+    }
+
+    /// Loads the selected Mac's trust, pins its certificate and verifies the device before the
+    /// credential reaches the WSS endpoint. A Mac that requires re-pairing never reconnects on its
+    /// own, not even from a pending retry; pairing or choosing a Mac clears that state.
+    fileprivate func connectPairedMac() {
+        guard !pairedMacsUnavailable, !repairRequired, connectionTask == nil else { return }
+        guard let url = PiConnectionAddress.url(endpoint), url.scheme == "wss" else {
+            if !endpoint.isEmpty { requirePairing("Saved Mac address is invalid. Scan a new Mac QR code.") }
+            return
+        }
+        wantsConnection = true; retryTask?.cancel()
+        let address = endpoint
+        let store = trustStore
+        let bridge = bridge
+        let writer = trustWriter
+        generation += 1; let current = generation
+        connectionStatus = "Connecting to your Mac…"
+        connectionTask = Task { [weak self] in
+            await self?.recoveryTask?.value
+            await writer.drain()
+            var session: URLSession?
+            var pin: PinnedHostSession?
+            do {
+                let loaded = try await Task.detached(priority: .userInitiated) { try store.load(address) }.value
+                guard let saved = loaded else { throw TrustFailure("No saved device trust. Scan a new Mac QR code.") }
+                guard let self, !Task.isCancelled, current == self.generation else { return }
+                guard saved.valid, saved.endpoint == address else {
+                    throw TrustFailure("Saved Mac trust is invalid. Scan a new QR code deliberately.")
+                }
+                if let selected = self.pairedMacs.selected, selected.id != saved.hostId {
+                    throw TrustFailure("Selected Mac identity changed. Scan a new QR code deliberately.")
+                }
+                let delegate = PinnedHostSession(endpoint: address, certificateSHA256: saved.certificateSHA256)
+                let connection = delegate.makeSession()
+                session = connection; pin = delegate
+                try await bridge.verify(saved, connection)
+                guard !Task.isCancelled, current == self.generation, self.foreground, self.wantsConnection,
+                    self.endpoint == address
+                else { connection.invalidateAndCancel(); return }
+                self.connectionTask = nil; self.clientId = saved.clientId
+                self.hostSession = connection; self.hostPin = delegate
+                self.startConnection(url: url, secret: saved.credential)
+            } catch {
+                session?.invalidateAndCancel()
+                guard let self, !Task.isCancelled, current == self.generation else { return }
+                self.connectionTask = nil
+                if pin?.identityRejected == true {
+                    self.requirePairing("Mac certificate changed. Scan a new QR code deliberately.")
+                } else if error is TrustFailure {
+                    self.requirePairing(error.localizedDescription)
+                } else {
+                    self.connectionLost(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// A revoked device (close 4001) or a changed certificate needs a new QR; anything else retries.
+    func socketFailed(closeCode: Int, reason: String) {
+        if PiBridgeTrust.requiresRepair(closeCode: closeCode, identityRejected: hostPin?.identityRejected == true) {
+            requirePairing("Mac trust changed or this iPad was revoked. Scan a new QR code deliberately.")
+        } else {
+            connectionLost(reason)
+        }
+    }
+
+    /// Stops reconnecting until the user pairs again from a fresh QR (REQ-IPAD-034).
+    fileprivate func requirePairing(_ reason: String) {
+        wantsConnection = false; retryTask?.cancel(); detach()
+        repairRequired = true; terminalsGrant = nil
+        connectionStatus = "Re-pair with your Mac"; error = reason
+    }
+
+    fileprivate func observeLifecycle() {
+        let center = NotificationCenter.default
+        _ = center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated { self?.setForeground(false) }
+        }
+        _ = center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated { self?.setForeground(true) }
+        }
+    }
+
+    /// Simulator pairing without a camera (DEBUG): `-PUDebugPointGuardPairingCode '<QR JSON>'` takes
+    /// the same path as a scanned code.
+    fileprivate func pairFromLaunchArguments() {
+        #if DEBUG
+        guard let text = DebugLaunchArguments.current.pointGuardPairingCode else { return }
+        if let code = PiEnrollmentCode.parse(text) { pair(code) }
+        else { pairingError = "The launch pairing code is expired or invalid." }
+        #endif
+    }
+}
+#endif
