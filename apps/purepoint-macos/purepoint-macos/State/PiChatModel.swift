@@ -89,6 +89,10 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         connected && browsing == nil && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty)
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
+    /// A play sends its own text, so it needs an idle live session but not a draft.
+    var canSendPlay: Bool {
+        connected && snapshot != nil && browsing == nil && snapshot?.error == nil && !changingSession && !busy
+    }
     var draftKey: String { endpoint + ":" + (snapshot?.sessionId ?? "local") }
     var recoverable: [PiSubmission] { submissions.filter { $0.recoverable } }
 
@@ -477,13 +481,20 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
         }
     }
     func submit(mode: String) {
-        guard canSend, let state = snapshot else { return }
+        guard canSend else { return }
+        send(text: draft, files: attachments, mode: mode, fromDraft: true)
+    }
+    /// Sends a Point Guard play's prompt, leaving any half-typed draft in place.
+    func submit(play text: String) {
+        guard canSendPlay, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        send(text: text, files: [], mode: "send", fromDraft: false)
+    }
+    private func send(text: String, files: [PiComposerAttachment], mode: String, fromDraft: Bool) {
+        guard let state = snapshot else { return }
         guard submissions.filter({ $0.recoverable || $0.status == "Sending" }).count < 50 else {
             error = "Message recovery is full. Restore or dismiss a saved recovery before sending another message."
             return
         }
-        let text = draft
-        let files = attachments
         let content: PiComposerPayload
         do { content = try PiComposerPayload.make(text: text, attachments: files) } catch {
             self.error = error.localizedDescription; return
@@ -496,7 +507,7 @@ private struct PiRecoveryPreferences: @unchecked Sendable { let value: UserDefau
             PiSubmission(
                 id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false,
                 attachments: files));
-        draft = ""; attachments = []
+        if fromDraft { draft = ""; attachments = [] }
         Task {
             // Hydration and confirmed persistence precede any transmission, while
             // the composer remains editable. Sending receipts cannot be dismissed.
