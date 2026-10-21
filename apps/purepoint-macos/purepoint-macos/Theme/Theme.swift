@@ -13,6 +13,10 @@ nonisolated enum Theme {
     /// (drawn in the terminal's color) reads as attached to the content below it. Not
     /// adaptive: the terminal is dark in both appearances, and the strip belongs to it.
     static let tabBarBackground = NSColor(srgbRed: 0.08, green: 0.08, blue: 0.09, alpha: 1.0)
+    /// The iPad's status-bar band above the detail column. In dark mode it continues the tab
+    /// strip below it, as the Mac's strip reaches its title bar; the window's own dark fill
+    /// (`systemBackground`) is pure black and reads as a bar between the sidebars.
+    static let statusBarBand = darkOnly((0.08, 0.08, 0.09), light: .windowBackgroundColor)
 
     // MARK: - Point Guard Chat
     /// In dark mode the chat sits on the terminal's color so its active tab reads as attached,
