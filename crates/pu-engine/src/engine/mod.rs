@@ -1237,6 +1237,43 @@ mod tests {
     }
 
     #[test]
+    fn given_terminal_build_resume_with_machine_launch_args_should_include_them() {
+        // given — the owner configured a login shell for every project
+        let engine = Engine::new();
+        let mut agent_cfg = agent_cfg("terminal", None);
+        agent_cfg.command = "shell".into();
+        agent_cfg.machine_launch_args = Some(vec!["-l".into()]);
+
+        // when
+        let (cmd, args, sid) = engine
+            .build_resume_command("terminal", &agent_cfg, None)
+            .unwrap();
+
+        // then — resume restarts the shell with the same options as spawn
+        assert_eq!(cmd, crate::os::login_shell());
+        assert_eq!(args, vec!["-l"]);
+        assert_eq!(sid, None);
+    }
+
+    #[test]
+    fn given_terminal_build_resume_with_project_launch_args_should_prefer_them() {
+        // given
+        let engine = Engine::new();
+        let mut agent_cfg = agent_cfg("terminal", Some(vec!["-i".into()]));
+        agent_cfg.command = "shell".into();
+        agent_cfg.machine_launch_args = Some(vec!["-l".into()]);
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("terminal", &agent_cfg, None)
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, crate::os::login_shell());
+        assert_eq!(args, vec!["-i"]);
+    }
+
+    #[test]
     fn given_codex_build_resume_without_launch_args_should_add_no_permission_flags() {
         // given
         let engine = Engine::new();

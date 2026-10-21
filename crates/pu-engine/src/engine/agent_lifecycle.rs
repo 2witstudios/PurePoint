@@ -607,7 +607,9 @@ impl Engine {
                 Ok((command, args, Some(sid.into())))
             }
             _ => {
-                // Terminal / unknown: fresh shell in same directory
+                // Terminal / unknown: fresh shell in same directory, launched
+                // with the same configured args as the initial spawn.
+                args.extend(launch_args);
                 Ok((command, args, None))
             }
         }
