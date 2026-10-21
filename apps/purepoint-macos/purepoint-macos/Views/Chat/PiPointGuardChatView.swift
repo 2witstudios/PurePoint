@@ -329,7 +329,8 @@ struct PiPointGuardChatView: View {
     private var court: some View {
         PointGuardCourtView(
             plays: playbook.plays, prompts: playbook.prompts ?? [], canRun: model.canSendPlay && !fetchingPlay,
-            connected: model.connected, compact: compact, composer: { composer }, onRun: runPlay,
+            connected: model.connected, compact: compact, composer: { composer },
+            onRun: { [session = model.snapshot?.sessionId] play in runPlay(play, in: session) },
             onAssign: { playbook.assign(slot: $0, prompt: $1) }, onReset: { playbook.reset(slot: $0) },
             onOpenSettings: { appState.showSettings = true }
         )
@@ -349,7 +350,9 @@ struct PiPointGuardChatView: View {
         if model.submissions.last?.id != previous { awaitingReply = revision }
     }
 
-    private func runPlay(_ play: PointGuardPlay) {
+    /// Runs a play in the session it was clicked in; a session switched in the meantime drops it.
+    private func runPlay(_ play: PointGuardPlay, in session: String?) {
+        guard session != nil, model.snapshot?.sessionId == session else { return }
         followOutput = true
         guard case .saved(let name) = play.source else { return sendFromCourt { model.submit(play: play.prompt) } }
         guard !fetchingPlay else { return }
@@ -362,6 +365,7 @@ struct PiPointGuardChatView: View {
                     model.error = "The saved prompt \u{201C}\(name)\u{201D} is empty, so there's nothing to send."
                     return
                 }
+                guard model.snapshot?.sessionId == session else { return }
                 guard model.canSendPlay else {
                     model.error = "Point Guard got busy. Run the play again once it's free."
                     return

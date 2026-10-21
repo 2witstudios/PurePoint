@@ -20,6 +20,7 @@ struct PointGuardCourtView<Composer: View>: View {
 
     @State private var hover: CGPoint?
     @State private var passing: Int?
+    @State private var passTask: Task<Void, Never>?
     @State private var composerBottom: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -35,6 +36,7 @@ struct PointGuardCourtView<Composer: View>: View {
                 court(proxy.size)
             }
         }
+        .onDisappear { passTask?.cancel() }
     }
 
     // MARK: - Court
@@ -253,10 +255,11 @@ struct PointGuardCourtView<Composer: View>: View {
         guard canRun, passing == nil else { return }
         guard !reduceMotion else { return onRun(play) }
         passing = play.slot
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
+        passTask = Task {
+            defer { passing = nil }
+            // A pass interrupted by the court going away (a new chat, a resumed one) never sends.
+            guard (try? await Task.sleep(for: .milliseconds(450))) != nil, !Task.isCancelled else { return }
             onRun(play)
-            passing = nil
         }
     }
 }
