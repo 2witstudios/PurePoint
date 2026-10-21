@@ -45,7 +45,7 @@ final class ChannelState {
     var unreadCount: Int { unreadAuthors.filter { $0.key > readSequence && $0.value != selfAuthorId && !seenSequences.contains($0.key) }.count }
     var topLevelMessages: [ChannelMessage] { messages.filter { $0.parentId == nil } }
 
-    init(projectRoot: String, defaultsScope: String? = nil, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonClient().send($0) }) {
+    init(projectRoot: String, defaultsScope: String? = nil, defaults: UserDefaults = .standard, sendRequest: @escaping (DaemonRequest) async throws -> DaemonResponse = { try await DaemonEndpoint.local.makeClient().send($0) }) {
         self.sendRequest = sendRequest
         self.projectRoot = projectRoot
         self.defaultsScope = defaultsScope ?? projectRoot
@@ -65,6 +65,11 @@ final class ChannelState {
         guard polling == nil else { return }
         polling = Task { [weak self] in
             while !Task.isCancelled {
+                #if os(iOS)
+                // Paused in the background; polls again as soon as the app returns.
+                await AppActivity.shared.untilForeground()
+                if Task.isCancelled { return }
+                #endif
                 await self?.refresh()
                 do { try await Task.sleep(for: .seconds(self?.viewers == 0 ? 15 : 3)) } catch { return }
             }

@@ -345,7 +345,8 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         | Response::FsWriteResult { .. }
         | Response::FsSubscribed
         | Response::FsEvent { .. }
-        | Response::GitExecResult { .. } => {
+        | Response::GitExecResult { .. }
+        | Response::AttachFileResult { .. } => {
             println!("{}", serde_json::to_string_pretty(response)?);
         }
     }

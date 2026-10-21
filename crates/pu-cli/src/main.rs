@@ -795,8 +795,17 @@ async fn async_main() {
         }
     };
 
+    // The proxy's stdout is a daemon byte stream and its stdin read never
+    // returns on its own; skip side work and exit as soon as it finishes.
+    let proxy = matches!(
+        cli.command,
+        Commands::Daemon {
+            action: commands::daemon::DaemonAction::Proxy
+        }
+    );
+
     // Background plugin freshness check (non-blocking)
-    if !custom_socket {
+    if !custom_socket && !proxy {
         std::thread::spawn(skill::ensure_plugin_current);
     }
 
@@ -1108,6 +1117,10 @@ async fn async_main() {
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);
+    }
+    if proxy {
+        // A pending blocking stdin read would hold up runtime shutdown.
+        std::process::exit(0);
     }
 }
 

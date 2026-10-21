@@ -101,7 +101,7 @@ struct PromptCreationSheet: View {
                 Task {
                     await hubState.saveTemplate(
                         projectRoot: saveRoot,
-                        projectRoots: appState.projects.map(\.projectRoot),
+                        projectRoots: appState.libraryProjectRoots,
                         name: name.trimmingCharacters(in: .whitespaces),
                         description: description,
                         agent: agentType,
@@ -113,6 +113,10 @@ struct PromptCreationSheet: View {
                 }
             }
             .keyboardShortcut(.defaultAction)
+            #if os(iOS)
+            // The Mac draws the default button prominent on its own.
+            .buttonStyle(.borderedProminent)
+            #endif
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 20)

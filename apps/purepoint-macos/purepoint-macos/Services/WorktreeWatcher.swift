@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Metadata notifications supplement DiffState's foreground recursive-file polling.
@@ -65,3 +66,4 @@ nonisolated final class WorktreeWatcher: @unchecked Sendable {
     }
     deinit { debounceWork?.cancel(); sources.forEach { $0.cancel() } }
 }
+#endif

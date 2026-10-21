@@ -1,15 +1,14 @@
 import Foundation
-import Network
 
 // MARK: - Line reader
 
 nonisolated final class DaemonLineReader: @unchecked Sendable {
-    private let connection: NWConnection
+    private let stream: any DaemonByteStream
     private var buffer = Data()
     private var scanOffset = 0
 
-    init(connection: NWConnection) {
-        self.connection = connection
+    init(stream: any DaemonByteStream) {
+        self.stream = stream
     }
 
     func readLine() async throws -> Data {
@@ -24,22 +23,8 @@ nonisolated final class DaemonLineReader: @unchecked Sendable {
                 }
                 return line
             }
-            let chunk = try await readChunk()
+            let chunk = try await stream.receive()
             buffer.append(chunk)
-        }
-    }
-
-    private func readChunk() async throws -> Data {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, error in
-                if let error {
-                    cont.resume(throwing: error)
-                } else if let data, !data.isEmpty {
-                    cont.resume(returning: data)
-                } else {
-                    cont.resume(throwing: DaemonClientError.eof)
-                }
-            }
         }
     }
 }

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Watches a manifest.json file for changes using GCD file system events.
@@ -112,3 +113,4 @@ final class ManifestWatcher: @unchecked Sendable {
         }
     }
 }
+#endif

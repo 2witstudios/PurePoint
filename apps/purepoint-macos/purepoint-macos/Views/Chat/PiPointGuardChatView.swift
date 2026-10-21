@@ -1,5 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#endif
 
 /// Native presentation of the same authoritative Pi session used by the phone.
 struct PiPointGuardChatView: View {
@@ -19,10 +22,19 @@ struct PiPointGuardChatView: View {
     @State private var transcriptWindow = PiTranscriptWindow()
     @State private var showFiles = false
     @State private var importingAttachment = false
+    #if os(iOS)
+    @State private var showPhotos = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    #endif
     @FocusState private var composerFocused: Bool
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        lifecycle(attachmentPickers(conversationLayout))
+            .sheet(item: dialogBinding) { dialog in dialogSheet(dialog) }
+    }
+
+    private var conversationLayout: some View {
         PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact, tabBar: tabBar) {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
@@ -50,37 +62,58 @@ struct PiPointGuardChatView: View {
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: Theme.chatBackground))
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
-            result in
-            importAttachment(result)
-        }
-        .task { if model.connected { await model.loadConversations() } }
-        .onChange(of: model.connected) { _, connected in
-            if connected { Task { await model.loadConversations() } }
-        }
-        .onChange(of: model.busy) { _, busy in
-            if !busy && model.connected { Task { await model.loadConversations() } }
-        }
-        .onChange(of: model.snapshot?.sessionId) { _, _ in
-            Task { await model.loadConversations() }
-        }
-        .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
-            Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
-        }
-        .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
-            Button("Stop and resume") {
-                if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
+    }
+
+    private func attachmentPickers(_ content: some View) -> some View {
+        content
+            // The iPad also attaches photos through PhotosPicker, with the same limits (IPAD-8.3).
+            .fileImporter(
+                isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]
+            ) { result in
+                importAttachment(result)
             }
-        }
-        .sheet(
-            item: Binding(
-                get: { model.snapshot?.dialogs.first },
-                set: { dialog in
-                    if dialog == nil, let current = model.snapshot?.dialogs.first {
-                        Task { await model.answer(current, cancelled: true) }
-                    }
-                })
-        ) { dialog in PiDialogView(model: model, dialog: dialog).id(dialog.id) }
+            #if os(iOS)
+            .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
+            .onChange(of: selectedPhoto) { _, item in
+                if let item { importPhoto(item) }
+            }
+            #endif
+    }
+
+    private func lifecycle(_ content: some View) -> some View {
+        content
+            .task { if model.connected { await model.loadConversations() } }
+            .onChange(of: model.connected) { _, connected in
+                if connected { Task { await model.loadConversations() } }
+            }
+            .onChange(of: model.busy) { _, busy in
+                if !busy && model.connected { Task { await model.loadConversations() } }
+            }
+            .onChange(of: model.snapshot?.sessionId) { _, _ in
+                Task { await model.loadConversations() }
+            }
+            .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
+                Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
+            }
+            .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
+                Button("Stop and resume") {
+                    if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
+                }
+            }
+    }
+
+    private var dialogBinding: Binding<PiExtensionDialog?> {
+        Binding(
+            get: { model.snapshot?.dialogs.first },
+            set: { dialog in
+                if dialog == nil, let current = model.snapshot?.dialogs.first {
+                    Task { await model.answer(current, cancelled: true) }
+                }
+            })
+    }
+
+    private func dialogSheet(_ dialog: PiExtensionDialog) -> some View {
+        PiDialogView(model: model, dialog: dialog).id(dialog.id).presentedControlDefaults()
     }
 
     private var sidebar: some View {
@@ -365,6 +398,7 @@ struct PiPointGuardChatView: View {
                         return .handled
                     }
                 HStack(spacing: compact ? 8 : 12) {
+                    #if os(macOS)
                     Button {
                         showFiles = true
                     } label: {
@@ -378,6 +412,24 @@ struct PiPointGuardChatView: View {
                     }
                     .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
                     .accessibilityLabel("Add attachment").help("Attach an image, text file, or PDF")
+                    #else
+                    // The same plus control; touch and pointer pick photos or files from its menu.
+                    Menu {
+                        Button("Photos", systemImage: "photo") { showPhotos = true }
+                        Button("Files", systemImage: "folder") { showFiles = true }
+                    } label: {
+                        Group {
+                            if importingAttachment {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "plus").font(.system(size: 18))
+                            }
+                        }.frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
+                    .accessibilityLabel("Add attachment").help("Attach a photo, image, text file, or PDF")
+                    #endif
                     Spacer(minLength: 0)
                     if model.busy {
                         Menu {
@@ -468,6 +520,32 @@ struct PiPointGuardChatView: View {
             }
         }
     }
+
+    #if os(iOS)
+    private func importPhoto(_ item: PhotosPickerItem) {
+        let draftKey = model.draftKey
+        Task {
+            importingAttachment = true
+            defer { importingAttachment = false; selectedPhoto = nil }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw PiComposerError("This photo could not be opened.")
+                }
+                let file = try await Task.detached(priority: .userInitiated) {
+                    try PiAttachmentImport.image(data, name: "Photo.jpg")
+                }.value
+                guard model.draftKey == draftKey else {
+                    model.error = "The conversation changed. Attach the photo again to your current draft."
+                    return
+                }
+                model.addAttachment(file)
+                composerFocused = true
+            } catch {
+                model.error = error.localizedDescription
+            }
+        }
+    }
+    #endif
 
     private func submitDraft(mode: String? = nil) {
         followOutput = true
@@ -611,8 +689,15 @@ private struct PiDialogView: View {
                     Button("No") { Task { await model.answer(dialog, confirmed: false) } }
                     Button("Confirm") { Task { await model.answer(dialog, confirmed: true) } }.keyboardShortcut(
                         .defaultAction)
+                        #if os(iOS)
+                        .buttonStyle(.borderedProminent)
+                        #endif
                 } else if dialog.method != "select" {
                     Button("Send") { Task { await model.answer(dialog, value: text) } }.keyboardShortcut(.defaultAction)
+                        #if os(iOS)
+                        // The Mac draws the default button prominent on its own.
+                        .buttonStyle(.borderedProminent)
+                        #endif
                 }
             }
         }.padding(24).frame(width: 420).onAppear { text = dialog.prefill ?? "" }

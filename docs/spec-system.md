@@ -73,6 +73,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Configuration | CFG | SEED |
 | Machines | MACH | SPECIFIED |
 | Linux Phone Host | LPH | SPECIFIED |
+| iPad App | IPAD | SPECIFIED |
 
 ### Reference (Inventory)
 Reference material for existing codebases and PurePoint CLI commands.

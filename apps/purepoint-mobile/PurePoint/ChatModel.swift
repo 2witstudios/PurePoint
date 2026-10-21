@@ -47,6 +47,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var machineSubmissions: [String: [Submission]] = [:]
     private var machineCanceledIds: [String: [String]] = [:]
     private var cachedSnapshots: [String: Snapshot] = [:]
+    // Chat access is per Mac; a machine last seen at Off never shows cached chat.
+    private var machineChatGrants: [String: ChatGrant] = [:]
     private var machineEditorOffers: [String: String] = [:]
     private var machinePrincipals: [String: String] = [:]
     private var repairedMachines: Set<String> = []
@@ -255,8 +257,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func saveActiveMachine() {
         saveDraft(); saveAttachmentDraft(); saveSubmissions(); saveCanceledIds()
         machineEditorIds[machineKey] = seenEditorIds
-        machineEditorOffers[machineKey] = editorOffer
-        if let state = snapshot {
+        machineEditorOffers[machineKey] = chatGrant.canRead ? editorOffer : nil
+        machineChatGrants[machineKey] = chatGrant
+        if !chatGrant.canRead { cachedSnapshots[machineKey] = nil } else if let state = snapshot {
             cachedSnapshots[machineKey] = Snapshot(version: state.version, epoch: state.epoch, revision: state.revision, busy: false, sessionId: state.sessionId, title: state.title, messages: state.messages, tools: state.tools, queue: [], dialogs: [], notices: [], capabilities: state.capabilities)
         }
     }
@@ -273,7 +276,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func activateMachine(_ machine: SavedMachine) {
         retryTask?.cancel(); detach(); selectionGeneration += 1; switchingMachine = true
         endpoint = machine.endpoint; demo = false; clientId = ""; wantsConnection = false
-        snapshot = cachedSnapshots[machineKey]; cursor.reset(); conversations = []; browsing = nil; editorOffer = machineEditorOffers[machineKey]
+        chatGrant = machineChatGrants[machineKey] ?? .send
+        snapshot = chatGrant.canRead ? cachedSnapshots[machineKey] : nil; cursor.reset(); conversations = []; browsing = nil; editorOffer = chatGrant.canRead ? machineEditorOffers[machineKey] : nil
         seenEditorIds = machineEditorIds[machineKey] ?? []; changingSession = false; error = nil; pairingError = nil
         canceledIdHistory = Self.recentCanceledIds(machineCanceledIds[machineKey] ?? [])
         seenCanceledIds = Set(canceledIdHistory)
@@ -496,8 +500,10 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func applyChatGrant(_ grant: ChatGrant, resync: Bool) {
         let previous = chatGrant
         chatGrant = grant
+        machineChatGrants[machineKey] = grant
         if !grant.canRead {
             saveDraft(); snapshot = nil; cursor.reset(); editorOffer = nil; browsing = nil; conversations = []
+            cachedSnapshots[machineKey] = nil; machineEditorOffers[machineKey] = nil
         } else if resync && !previous.canRead && connected {
             let current = generation
             Task { [weak self] in

@@ -39,16 +39,14 @@ fn find_daemon_binary_in(
     explicit: Option<&std::ffi::OsStr>,
 ) -> Result<PathBuf, String> {
     use std::os::unix::fs::MetadataExt;
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    let mut owners = vec![unsafe { libc::geteuid() }, 0];
     let exe_dir = exe.and_then(Path::parent);
-    let candidates = if let Some(contents) = exe_dir.and_then(bundle_contents) {
-        // An app installed by another account is owned by that account, and
-        // its engine is as trustworthy as the `pu` running now.
-        owners.extend(
-            exe.and_then(|exe| std::fs::metadata(exe).ok())
-                .map(|m| m.uid()),
-        );
+    let bundle = exe_dir.and_then(bundle_contents);
+    let exe_owner = exe
+        .and_then(|exe| std::fs::metadata(exe).ok())
+        .map(|m| m.uid());
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let owners = allowed_owners(unsafe { libc::geteuid() }, bundle.is_some(), exe_owner);
+    let candidates = if let Some(contents) = bundle {
         vec![contents.join("MacOS").join(DAEMON_BINARY)]
     } else if let Some(explicit) = explicit {
         match which::which(explicit) {
@@ -78,6 +76,16 @@ fn find_daemon_binary_in(
         reasons.push("no candidate locations".into());
     }
     Err(reasons.join("; "))
+}
+
+/// Users whose engine binaries may be started: this user and root, plus, in
+/// an app bundle, the owner of the running `pu`. An app installed by another
+/// account is owned by that account, and its engine is as trustworthy as the
+/// `pu` running now.
+fn allowed_owners(euid: u32, in_bundle: bool, exe_owner: Option<u32>) -> Vec<u32> {
+    let mut owners = vec![euid, 0];
+    owners.extend(exe_owner.filter(|_| in_bundle));
+    owners
 }
 
 /// An executable file owned by an allowed user that no other user can
@@ -457,8 +465,27 @@ mod tests {
             trusted_mode_and_owner(0o775, 501, &[501]),
             Err("writable by group or others")
         );
-        // The bundle case also allows the owner of the running `pu`.
-        assert_eq!(trusted_mode_and_owner(0o755, 502, &[501, 0, 502]), Ok(()));
+    }
+
+    #[test]
+    fn given_bundle_installed_by_another_user_should_trust_its_owner_only_in_bundle() {
+        // The running `pu` (uid 502) installed the app; we run as 501.
+        let in_bundle = allowed_owners(501, true, Some(502));
+        assert_eq!(trusted_mode_and_owner(0o755, 502, &in_bundle), Ok(()));
+        assert_eq!(
+            trusted_mode_and_owner(0o775, 502, &in_bundle),
+            Err("writable by group or others")
+        );
+        assert_eq!(
+            trusted_mode_and_owner(0o755, 503, &in_bundle),
+            Err("owned by another user")
+        );
+        // Outside a bundle the owner of `pu` earns no extra trust.
+        let outside = allowed_owners(501, false, Some(502));
+        assert_eq!(
+            trusted_mode_and_owner(0o755, 502, &outside),
+            Err("owned by another user")
+        );
     }
 
     #[test]

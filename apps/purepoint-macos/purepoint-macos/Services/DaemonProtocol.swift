@@ -359,12 +359,17 @@ nonisolated enum DaemonRequest: Encodable {
     case inventory(kind: String, projectRoot: String? = nil)
     // File and git access confined to registered projects (machines.md, protocol 9).
     case fsList(path: String, recursive: Bool = false, includeHidden: Bool = true, maxEntries: Int = 20_000)
+    /// `fs_list` with `directories_only`: the subdirectories of any directory on the machine,
+    /// for choosing a folder to open as a project. `~` is the daemon user's home.
+    case fsBrowse(path: String, includeHidden: Bool, maxEntries: Int = 20_000)
     case fsStat(path: String)
     case fsRead(path: String, maxBytes: Int = 1_048_576)
     case fsWrite(path: String, data: Data, expectedModifiedMs: Int64? = nil, createDirs: Bool = false)
     case fsDelete(path: String)
     case subscribeFs(root: String, recursive: Bool = true)
     case gitExec(cwd: String, program: String, args: [String], stdin: Data? = nil, timeoutMs: Int = 30_000)
+    /// One chunk of a file sent to the daemon's machine (protocol 12); see `AttachmentUpload`.
+    case attachFile(uploadId: String, name: String, offset: Int, data: Data, done: Bool)
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicCodingKey.self)
@@ -612,6 +617,12 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(recursive, forKey: .key("recursive"))
             try container.encode(includeHidden, forKey: .key("include_hidden"))
             try container.encode(maxEntries, forKey: .key("max_entries"))
+        case .fsBrowse(let path, let includeHidden, let maxEntries):
+            try container.encode("fs_list", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+            try container.encode(includeHidden, forKey: .key("include_hidden"))
+            try container.encode(maxEntries, forKey: .key("max_entries"))
+            try container.encode(true, forKey: .key("directories_only"))
         case .fsStat(let path):
             try container.encode("fs_stat", forKey: .key("type"))
             try container.encode(path, forKey: .key("path"))
@@ -639,6 +650,13 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(args, forKey: .key("args"))
             try container.encodeIfPresent(stdin?.base64EncodedString(), forKey: .key("stdin_base64"))
             try container.encode(timeoutMs, forKey: .key("timeout_ms"))
+        case .attachFile(let uploadId, let name, let offset, let data, let done):
+            try container.encode("attach_file", forKey: .key("type"))
+            try container.encode(uploadId, forKey: .key("upload_id"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(offset, forKey: .key("offset"))
+            try container.encode(data.base64EncodedString(), forKey: .key("data_base64"))
+            try container.encode(done, forKey: .key("done"))
         }
     }
 }
@@ -687,6 +705,7 @@ nonisolated enum DaemonResponse: Decodable {
     case fsSubscribed
     case fsEvent(root: String, paths: [String])
     case gitExecResult(exitCode: Int32, stdout: Data, stderr: Data, truncated: Bool)
+    case attachFileResult(received: UInt64, path: String?)
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -822,6 +841,9 @@ nonisolated enum DaemonResponse: Decodable {
             self = .gitExecResult(
                 exitCode: p.exitCode, stdout: Data(base64Encoded: p.stdoutBase64) ?? Data(),
                 stderr: Data(base64Encoded: p.stderrBase64) ?? Data(), truncated: p.truncated)
+        case "attach_file_result":
+            let p = try AttachFileResultPayload(from: decoder)
+            self = .attachFileResult(received: p.received, path: p.path)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -1193,7 +1215,7 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
 nonisolated enum DaemonProtocol {
     /// The protocol this app speaks. A daemon reporting another version is incompatible.
-    static let version = 11
+    static let version = 12
 }
 
 nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {
@@ -1287,6 +1309,11 @@ private nonisolated struct FsWriteResultPayload: Decodable {
         case path, size
         case modifiedMs = "modified_ms"
     }
+}
+
+private nonisolated struct AttachFileResultPayload: Decodable {
+    let received: UInt64
+    let path: String?
 }
 
 private nonisolated struct FsEventPayload: Decodable {

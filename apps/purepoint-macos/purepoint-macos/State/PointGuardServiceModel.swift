@@ -1,3 +1,4 @@
+#if os(macOS)
 import Combine
 import Foundation
 
@@ -66,6 +67,10 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             defer { self.startTask = nil }
             do {
                 guard let resources = Bundle.main.resourceURL else { throw PiChatError("PurePoint bundle resources are unavailable.") }
+                // The bridge runs JavaScript from the bundle, so refuse to start it unless the
+                // bundle still matches the signature the app was launched with.
+                try await Task.detached(priority: .userInitiated) { try BundleSeal.verifyMainBundle() }.value
+                guard !Task.isCancelled else { return }
                 let manifestURL = resources.appendingPathComponent("PointGuard/runtime-manifest.json")
                 let runtime = try await Task.detached(priority: .userInitiated) { try PointGuardRuntime.load(manifestURL: manifestURL) }.value
                 guard !Task.isCancelled else { return }
@@ -456,3 +461,4 @@ enum PointGuardPhoneAccess {
         }
     }
 }
+#endif

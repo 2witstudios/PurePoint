@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
 import SwiftTerm
@@ -32,13 +33,13 @@ class TerminalPaneNSView: NSView {
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; remote agents attach over their machine.
-    var client = DaemonClient() {
+    var client = DaemonEndpoint.local.makeClient() {
         didSet {
-            terminal?.acceptsFileDrops = isLocalClient
+            terminal?.attachmentClient = client
             terminal?.usesRemoteHost = !isLocalClient
         }
     }
-    /// Local file paths only mean something to this Mac's daemon.
+    /// Local file paths only mean something to this Mac's daemon; remote agents get uploads.
     private var isLocalClient: Bool { client.socketPath == DaemonEndpoint.localSocketPath }
     /// A resize sends SIGWINCH, and full-screen programs answer by redrawing everything.
     /// That redraw is not new activity, so output until this moment does not count.
@@ -71,7 +72,7 @@ class TerminalPaneNSView: NSView {
         tv.layer?.masksToBounds = true
         tv.pinToEdges(of: self)
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
-        tv.acceptsFileDrops = isLocalClient
+        tv.attachmentClient = client
         tv.usesRemoteHost = !isLocalClient
         terminal = tv
 
@@ -247,3 +248,4 @@ class TerminalPaneNSView: NSView {
         terminal?.tearDown()
     }
 }
+#endif

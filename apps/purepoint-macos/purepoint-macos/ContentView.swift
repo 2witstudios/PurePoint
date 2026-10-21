@@ -6,15 +6,44 @@ struct ContentView: View {
     @Environment(WorkspaceRegistry.self) private var registry
     @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
-    @State private var sidebarVisible = true
+    @AppStorage(SidebarVisibility.sidebarKey) private var sidebarVisible = true
+    #if os(macOS)
     @State private var sidebarOutlineView: NSOutlineView?
+    #else
+    @State private var sidebarOutlineView: UIView?
+    #endif
     /// A focus request that arrived while the sidebar was hidden, waiting for its outline view to join a window.
     @State private var sidebarFocusPending = false
 
     /// Clears the traffic-light buttons, which sit over the top of the sidebar.
     private let trafficLightInset: CGFloat = 28
-    /// Clears the traffic-light buttons when the sidebar is hidden and the detail starts at the left edge.
-    private let hiddenSidebarLeadingInset: CGFloat = 72
+    #if os(macOS)
+    /// Puts the sidebar toggle just past the traffic-light buttons.
+    private let sidebarToggleLeadingInset: CGFloat = 72
+    /// Clears the traffic lights and the sidebar toggle when the sidebar is hidden and the detail starts at the left edge.
+    private let hiddenSidebarLeadingInset: CGFloat = 100
+    /// The band the sidebar toggle sits in, as tall as the title bar.
+    private var sidebarToggleBand: CGFloat { trafficLightInset }
+    #else
+    /// The window's top safe area: the status bar, when the window reaches it.
+    @State private var topSafeArea: CGFloat = 0
+    /// Where the iPadOS window controls (the iPad's traffic lights) end: below them, and to
+    /// their right. Zero when the window shows none.
+    @State private var windowControls = WindowControlsInsets()
+
+    /// Puts the sidebar toggle just past the window controls, as the Mac's sits past its traffic lights.
+    private var sidebarToggleLeadingInset: CGFloat { windowControls.leading + 8 }
+    /// Clears the window controls and the sidebar toggle when the sidebar is hidden and the detail
+    /// starts at the left edge, as the Mac clears its traffic lights.
+    private var hiddenSidebarLeadingInset: CGFloat { sidebarToggleLeadingInset + trafficLightInset }
+
+    /// The sidebar's rows start where the Mac's do, below a band as tall as the title bar that
+    /// holds the sidebar toggle, or below the window controls when those reach lower.
+    private var sidebarTopInset: CGFloat {
+        max(trafficLightInset, windowControls.bottom - topSafeArea)
+    }
+    private var sidebarToggleBand: CGFloat { sidebarTopInset }
+    #endif
 
     var body: some View {
         @Bindable var appState = appState
@@ -35,24 +64,65 @@ struct ContentView: View {
                         }
                     }
                 )
+                #if os(macOS)
                 .padding(.top, trafficLightInset)
                 .frame(width: PurePointTheme.sidebarIdealWidth)
                 .frame(maxHeight: .infinity)
                 .background(Color(nsColor: Theme.sidebarBackground))
+                #else
+                .padding(.top, sidebarTopInset)
+                .frame(width: PurePointTheme.sidebarIdealWidth)
+                .frame(maxHeight: .infinity)
+                // The column's fill runs under the status bar and home indicator, as the Mac's
+                // runs under its title bar.
+                .background(Color(nsColor: Theme.sidebarBackground).ignoresSafeArea())
+                #endif
 
                 Rectangle()
                     .fill(Color.primary.opacity(0.06))
                     .frame(width: 1)
+                    #if os(iOS)
+                    .ignoresSafeArea()
+                    #endif
             }
 
             DetailView(selection: $selection)
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // One spot whether the sidebar is shown or not: in the sidebar's top band, or the detail's leading gutter.
+        .overlay(alignment: .topLeading) {
+            TabBarButton(icon: "sidebar.left", help: sidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
+                withAnimation { sidebarVisible.toggle() }
+            }
+            .frame(height: sidebarToggleBand)
+            .padding(.leading, sidebarToggleLeadingInset)
+        }
+        #if os(macOS)
         // The configurator makes the content view span the title bar; this drops the inset that leaves.
         .ignoresSafeArea(.container, edges: .top)
+        #else
+        // iPad content stays below the status bar or window controls, where the Mac's sits below
+        // its title bar; only the column fills reach the window edges. At the bottom it runs to
+        // the window edge as the Mac's does: the home indicator floats over it, as over any
+        // full-screen content, and the keyboard still insets it.
+        .ignoresSafeArea(.container, edges: .bottom)
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topSafeArea = $0 }
+        .background(WindowControlsProbe { windowControls = $0 }.ignoresSafeArea())
+        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+        #endif
         .background(WindowChromeConfigurator())
         .navigationTitle("")
+        #if os(iOS) && DEBUG
+        .task {
+            if let debugSelection = await DebugLaunchArguments.current.selectAgentWorkspace(registry: registry) {
+                selection = debugSelection
+            }
+        }
+        .task {
+            await DebugLaunchArguments.current.runOpen(appState: appState) { selection = $0 }
+        }
+        #endif
         .task {
             while !Task.isCancelled {
                 appState.updateAgentSignals()
@@ -76,7 +146,11 @@ struct ContentView: View {
                 SettingsView()
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+                    #if os(macOS)
                     .onExitCommand { appState.showSettings = false }
+                    #else
+                    .onKeyPress(.escape) { appState.showSettings = false; return .handled }
+                    #endif
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
@@ -85,6 +159,8 @@ struct ContentView: View {
             guard let action = notification.userInfo?["action"] as? HotkeyAction else { return }
             handleHotkeyAction(action)
         }
+        // The iPad never hosts Point Guard, so it has no hosted working directory (IPAD-011).
+        #if os(macOS)
         .onReceive(appState.pointGuardService.$activeCwd.removeDuplicates()) { cwd in
             let root = cwd.isEmpty ? nil : URL(fileURLWithPath: cwd).standardizedFileURL.path
             guard root != appState.pointGuardRoot else { return }
@@ -93,6 +169,7 @@ struct ContentView: View {
                 appState.activatePointGuardWorkspace()
             }
         }
+        #endif
         .onChange(of: appState.pendingSignalDestination) { _, _ in
             selectSignalDestination()
         }
@@ -193,15 +270,17 @@ struct ContentView: View {
 
         case .focusContent:
             // Find the terminal in the current view and focus it
+            #if os(macOS)
             DispatchQueue.main.async {
                 guard let window = NSApp.keyWindow else { return }
                 focusTerminalInWindow(window)
             }
-
-        case .toggleSidebar:
-            withAnimation {
-                sidebarVisible.toggle()
+            #else
+            DispatchQueue.main.async {
+                guard let window = NSApp.keyWindow else { return }
+                viewCache.terminalToFocus(in: registry.activeWorkspace, window: window)?.focusTerminal()
             }
+            #endif
 
         case .navDashboard:
             selection = .nav(.dashboard)
@@ -217,11 +296,12 @@ struct ContentView: View {
             // with its last pane.
             // (A workspace left with nothing open is removed; the selection then falls back
             // to the dashboard via the workspacesByProject observer.)
-            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface,
-                TabCloseConfirmation.confirm(
-                    closing: [surface], in: workspace.id, appState: appState, registry: registry)
-            else { break }
-            registry.closeTab(workspaceId: workspace.id, surfaceId: surface.id)
+            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface else { break }
+            let workspaceId = workspace.id
+            TabCloseConfirmation.close([surface], in: workspaceId, appState: appState, registry: registry) {
+                [registry] in
+                registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
+            }
 
         case .toggleChatSidebar:
             NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)
@@ -231,6 +311,7 @@ struct ContentView: View {
         }
     }
 
+    #if os(macOS)
     private func focusTerminalInWindow(_ window: NSWindow) {
         // Walk the view hierarchy to find a visible terminal pane.
         func findTerminalPane(in view: NSView) -> TerminalPaneNSView? {
@@ -250,4 +331,5 @@ struct ContentView: View {
         else { return }
         pane.focusTerminal()
     }
+    #endif
 }

@@ -40,7 +40,7 @@ struct AgentsHubView: View {
     @State private var promptCommand = ""
 
     private var projectRoots: [String] {
-        appState.projects.map(\.projectRoot)
+        appState.libraryProjectRoots
     }
 
     private var anyProjectRoot: String {
@@ -49,6 +49,10 @@ struct AgentsHubView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            #if os(iOS)
+            LibraryMachineBar()
+            Divider()
+            #endif
             header
             Divider()
             tabBar
@@ -66,20 +70,33 @@ struct AgentsHubView: View {
                 await triggersState.loadTriggers(projectRoots: projectRoots)
             }
         }
+        #if os(iOS)
+        // The library follows the selected machine (IPAD-012); reload when it or its projects change.
+        .onChange(of: appState.libraryProjectRoots) { _, _ in
+            Task {
+                await hubState.loadAll(projectRoots: projectRoots)
+                await triggersState.loadTriggers(projectRoots: projectRoots)
+            }
+        }
+        #endif
         .onChange(of: hubState.selectedPromptId) { _, _ in
             syncPromptEditor()
         }
         .sheet(isPresented: Bindable(hubState).showingCreatePrompt) {
             PromptCreationSheet(hubState: hubState)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(hubState).showingCreateAgent) {
             AgentCreationSheet(hubState: hubState)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(hubState).showingCreateSwarm) {
             SwarmCreationSheet(hubState: hubState)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(triggersState).showingCreationSheet) {
             TriggerCreationSheet(state: triggersState)
+                .presentedControlDefaults()
         }
     }
 

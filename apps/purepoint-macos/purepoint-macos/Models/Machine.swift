@@ -89,23 +89,39 @@ nonisolated enum MachineRegistryStore {
         return try decode(data)
     }
 
+    #if os(macOS)
+    /// How error messages name the registry.
+    static let displayPath = "~/.pu/machines.json"
+    #else
+    static let displayPath = "the machine registry"
+    #endif
+
     /// Load, change and save under the same exclusive `machines.json.lock` the CLI takes,
-    /// so concurrent edits from either never lose each other.
+    /// so concurrent edits from either never lose each other. On iOS the app is the only
+    /// writer of its container registry: there is no lock, only the atomic replacement
+    /// (MACH-011).
     @discardableResult
     static func update<T>(path: String = MachinePaths.registryPath, _ change: (inout [Machine]) throws -> T) throws -> T {
         let directory = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        #if os(macOS)
         let lockFd = open(path + ".lock", O_CREAT | O_WRONLY | O_CLOEXEC, 0o600)
         guard lockFd >= 0 else { throw CocoaError(.fileWriteNoPermission) }
         defer { close(lockFd) }
         guard flock(lockFd, LOCK_EX) == 0 else { throw CocoaError(.fileLocking) }
         defer { flock(lockFd, LOCK_UN) }
+        let attributes: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
+        #else
+        let attributes: [FileAttributeKey: Any] = [
+            .posixPermissions: 0o600, .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
+        ]
+        #endif
 
         var machines = try load(path: path)
         let result = try change(&machines)
         let data = try encode(machines)
         let temp = directory + "/.machines.json.tmp.\(UUID().uuidString.lowercased())"
-        guard FileManager.default.createFile(atPath: temp, contents: data, attributes: [.posixPermissions: 0o600]) else {
+        guard FileManager.default.createFile(atPath: temp, contents: data, attributes: attributes) else {
             throw CocoaError(.fileWriteUnknown)
         }
         guard rename(temp, path) == 0 else {
@@ -115,13 +131,15 @@ nonisolated enum MachineRegistryStore {
         return result
     }
 
-    static func add(name: String, sshHost: String, to machines: inout [Machine]) throws -> Machine {
+    /// `id` is given when something keyed by the machine (the iPad's host-key pin) has to
+    /// exist before the machine is saved.
+    static func add(name: String, sshHost: String, id: UUID = UUID(), to machines: inout [Machine]) throws -> Machine {
         try validate(name: name)
         try validate(sshHost: sshHost)
         if let existing = machines.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
             throw MachineRegistryError.duplicateName(existing.name)
         }
-        let machine = Machine(name: name, sshHost: sshHost)
+        let machine = Machine(id: id, name: name, sshHost: sshHost)
         machines.append(machine)
         return machine
     }
@@ -145,14 +163,95 @@ nonisolated enum MachineRegistryStore {
     }
 }
 
+/// A `user@host[:port]` destination, the only form an iPad machine has: iOS has no ssh config
+/// aliases (REQ-IPAD-029). It is stored in `ssh_host`, so the registry schema is unchanged and
+/// a Mac reads the same entry as an ordinary destination.
+nonisolated struct SSHDestination: Hashable, Sendable {
+    static let defaultPort = 22
+
+    var user: String
+    var host: String
+    var port: Int
+
+    init(user: String, host: String, port: Int = SSHDestination.defaultPort) {
+        self.user = user
+        self.host = host
+        self.port = port
+    }
+
+    /// Parse `user@host`, `user@host:port`, `user@[v6]` or `user@[v6]:port`. A bare IPv6
+    /// literal without brackets is a host with the default port.
+    init?(sshHost: String) {
+        guard let at = sshHost.lastIndex(of: "@") else { return nil }
+        let user = String(sshHost[..<at])
+        var rest = Substring(sshHost[sshHost.index(after: at)...])
+        var port = Self.defaultPort
+        let host: String
+        if rest.hasPrefix("[") {
+            guard let close = rest.firstIndex(of: "]") else { return nil }
+            host = String(rest[rest.index(after: rest.startIndex)..<close])
+            rest = rest[rest.index(after: close)...]
+            if !rest.isEmpty {
+                guard rest.hasPrefix(":"), let parsed = Self.port(rest.dropFirst()) else { return nil }
+                port = parsed
+            }
+        } else if rest.filter({ $0 == ":" }).count == 1, let colon = rest.firstIndex(of: ":") {
+            host = String(rest[..<colon])
+            guard let parsed = Self.port(rest[rest.index(after: colon)...]) else { return nil }
+            port = parsed
+        } else {
+            host = String(rest)
+        }
+        guard Self.isValid(user: user), Self.isValid(host: host) else { return nil }
+        self.init(user: user, host: host, port: port)
+    }
+
+    /// The `ssh_host` form: the port only when it is not 22, an IPv6 literal in brackets.
+    var sshHost: String {
+        let hostPart = host.contains(":") ? "[" + host + "]" : host
+        return user + "@" + hostPart + (port == Self.defaultPort ? "" : ":\(port)")
+    }
+
+    static func isValid(user: String) -> Bool {
+        !user.isEmpty && user.utf8.count <= 64 && !user.hasPrefix("-")
+            && !user.unicodeScalars.contains {
+                $0 == "@" || $0 == ":" || CharacterSet.whitespacesAndNewlines.contains($0)
+                    || CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    static func isValid(host: String) -> Bool {
+        !host.isEmpty && host.utf8.count <= 253 && !host.hasPrefix("-")
+            && !host.unicodeScalars.contains {
+                "@[]/".unicodeScalars.contains($0) || CharacterSet.whitespacesAndNewlines.contains($0)
+                    || CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    private static func port(_ text: Substring) -> Int? {
+        guard !text.isEmpty, text.count <= 5, text.allSatisfy({ ("0"..."9").contains($0) }), let value = Int(text),
+            (1...65_535).contains(value)
+        else { return nil }
+        return value
+    }
+}
+
+extension Machine {
+    /// The machine's destination when `ssh_host` is `user@host[:port]`; nil for an ssh
+    /// config alias, which only a Mac can resolve.
+    nonisolated var destination: SSHDestination? { SSHDestination(sshHost: sshHost) }
+}
+
 /// `Host` aliases from `~/.ssh/config`, offered when adding a machine.
 nonisolated enum SSHConfig {
+    #if os(macOS)
     static var defaultPath: String { FileManager.default.homeDirectoryForCurrentUser.path + "/.ssh/config" }
 
     static func hostAliases(path: String = defaultPath) -> [String] {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
         return hostAliases(from: text)
     }
+    #endif
 
     /// Every concrete alias on `Host` lines; patterns (`*`, `?`, negations) are skipped.
     static func hostAliases(from text: String) -> [String] {

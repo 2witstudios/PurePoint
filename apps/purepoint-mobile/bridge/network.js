@@ -321,17 +321,17 @@ export async function serve(
           activeTerminalRequestIds.add(id);
           terminalRequest = true;
         } else chatGate(chatLevel(current), r.op);
+        // Re-read live grants: queued chat actions run only if still permitted.
+        const permitted = () =>
+          chatAllowed(
+            chatLevel(principal(identities.get(ws)?.credential)),
+            chatOperations.get(r.op),
+          );
         const data = await (terminalOperation(r.op)
           ? terminal.request(r)
-          : controller.request(r));
-        // A downgrade during the request withholds chat content it no longer grants.
-        if (
-          !terminalOperation(r.op) &&
-          !chatAllowed(
-            chatLevel(principal(identities.get(ws)?.credential)),
-            "read",
-          )
-        )
+          : controller.request(r, { allowed: permitted }));
+        // A downgrade during the request withholds results it no longer grants.
+        if (!terminalOperation(r.op) && !permitted())
           throw new Error("Point Guard chat permission changed");
         send(ws, { type: "receipt", id, ok: true, data });
         if (r.op === "sync") send(ws, data);

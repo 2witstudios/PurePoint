@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct SettingsAboutView: View {
@@ -70,3 +71,4 @@ struct SettingsAboutView: View {
     private var versionString: String { Bundle.main.appVersion }
     private var buildString: String { Bundle.main.appBuild }
 }
+#endif

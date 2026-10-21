@@ -64,6 +64,14 @@ private struct EditableHotkeyRow: View {
         .onDisappear {
             if isRecording { stopRecording() }
         }
+        #if os(iOS)
+        .background {
+            if isRecording {
+                HotkeyRecorderView(keyBindingState: keyBindingState, onInput: handleRecorderInput)
+                    .frame(width: 0, height: 0)
+            }
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -152,6 +160,8 @@ private struct EditableHotkeyRow: View {
             pulsePhase.toggle()
         }
 
+        // iOS records through `HotkeyRecorderView`, shown while `isRecording`.
+        #if os(macOS)
         recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             if event.keyCode == SpecialKey.escape.keyCode
                 && event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty
@@ -173,7 +183,27 @@ private struct EditableHotkeyRow: View {
             }
             return nil
         }
+        #endif
     }
+
+    #if os(iOS)
+    private func handleRecorderInput(_ input: HotkeyRecorderInput) {
+        switch input {
+        case .cancel:
+            stopRecording()
+        case .ignored:
+            break  // Ignore bare keys without modifiers
+        case .binding(let binding):
+            if let conflict = keyBindingState.detectConflict(binding, excluding: action) {
+                pendingBinding = binding
+                conflictAction = conflict
+            } else {
+                keyBindingState.setBinding(binding, for: action)
+                stopRecording()
+            }
+        }
+    }
+    #endif
 
     private func stopRecording() {
         isRecording = false
@@ -181,9 +211,11 @@ private struct EditableHotkeyRow: View {
         pendingBinding = nil
         keyBindingState.recordingAction = nil
 
+        #if os(macOS)
         if let monitor = recordingMonitor {
             NSEvent.removeMonitor(monitor)
             recordingMonitor = nil
         }
+        #endif
     }
 }

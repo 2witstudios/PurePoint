@@ -10,7 +10,7 @@ On the server:
 curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | sh
 ```
 
-This puts static `pu` and `pu-engine` binaries (x86_64 or aarch64) in `~/.pu/bin`. Set `PU_VERSION=1.2.3` to pin a release. Add `~/.pu/bin` to your `PATH` in `~/.profile`, or call it by full path.
+This puts static `pu` and `pu-engine` binaries (x86_64 or aarch64) in `~/.pu/bin`. Set `PU_VERSION=1.2.3` to pin a release. Before installing, the script checks the release signature against the PurePoint key it embeds (using `minisign`, or OpenSSL 3, which most distributions ship), and, if the GitHub CLI is installed and signed in, the build provenance with `gh attestation verify`. If it can't verify the download it stops; set `PU_INSTALL_SKIP_VERIFY=1` to install anyway (it warns). A failed check always stops the install. Add `~/.pu/bin` to your `PATH` in `~/.profile`, or call it by full path.
 
 To pair a phone or iPad directly with this server, also install phone access:
 
@@ -21,7 +21,7 @@ pu phone install --now
 
 Phone access adds the Point Guard bridge, with its own copy of Node.js, in `~/.pu/pointguard/<version>/`. It needs glibc 2.28 or newer, so it doesn't run on Alpine or other musl systems. On those hosts the installer says so, and `pu` and `pu-engine` still install and work.
 
-The installer checks the payload's SHA-256. If the GitHub CLI (`gh`) is installed and signed in, it also verifies the release's build provenance; otherwise it says that check was skipped. An existing version directory is never modified. Set `PU_PHONE_ARCHIVE` to install a local payload tarball.
+The payload is verified like `pu` itself: its SHA-256, then the release signature (with `minisign` or OpenSSL 3) or its build provenance (with a signed-in `gh`). Installation stops if a check fails or none can run, unless you set `PU_INSTALL_SKIP_VERIFY=1`. An existing version directory is never modified. Set `PU_PHONE_ARCHIVE` to install a local payload tarball.
 
 Also install `git` and the agent CLIs you use (`claude`, `codex`, …) as that same user, and sign in to them.
 

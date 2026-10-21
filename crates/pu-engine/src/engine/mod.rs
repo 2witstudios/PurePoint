@@ -1,4 +1,5 @@
 mod agent_lifecycle;
+mod attach_file;
 mod build_cache;
 mod channel;
 mod definitions;
@@ -74,6 +75,8 @@ pub struct Engine {
     native_sources: Arc<crate::signals::NativeSources>,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
+    /// `$HOME` at startup. It, its ancestors and `/` are never projects.
+    home: Option<std::path::PathBuf>,
     start_time: Instant,
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
@@ -191,6 +194,7 @@ impl Engine {
             native_sources: Arc::default(),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
+            home: std::env::var_os("HOME").map(std::path::PathBuf::from),
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -418,10 +422,9 @@ impl Engine {
             },
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => {
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                 if fs_ops::is_too_broad_project_root(
                     std::path::Path::new(&project_root),
-                    home.as_deref(),
+                    self.home.as_deref(),
                 ) {
                     return inventory::project_root_not_allowed(&project_root);
                 }
@@ -800,6 +803,7 @@ impl Engine {
             | Request::FsDelete { .. }
             | Request::SubscribeFs { .. }
             | Request::GitExec { .. }) => self.handle_fs_request(request).await,
+            request @ Request::AttachFile { .. } => self.handle_attach_file(request).await,
         }
     }
 

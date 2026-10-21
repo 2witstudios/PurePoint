@@ -64,9 +64,30 @@ struct SidebarFooter: View {
             .frame(height: PurePointTheme.footerHeight)
         }
         .sheet(isPresented: $showAddMachine) {
+            #if os(iOS) && DEBUG
+            AddMachineSheet(flow: debugAddMachine.flow)
+            #else
             AddMachineSheet()
+            #endif
         }
+        #if os(iOS) && DEBUG
+        // `-PUDebugAddMachine` shows the sheet it is submitting (Debug launch arguments).
+        .onChange(of: debugAddMachine.flow == nil, initial: true) { _, isNil in
+            if !isNil { showAddMachine = true }
+        }
+        // `-PUDebugOpen add-machine` shows it empty, as this footer's button does.
+        .onChange(of: debugAddMachine.showEmpty, initial: true) { _, show in
+            if show {
+                debugAddMachine.showEmpty = false
+                showAddMachine = true
+            }
+        }
+        #endif
     }
+
+    #if os(iOS) && DEBUG
+    private var debugAddMachine: DebugAddMachinePresenter { .shared }
+    #endif
 
     private var activeProject: ProjectState? {
         switch selection {
@@ -82,6 +103,7 @@ struct SidebarFooter: View {
     }
 
     private func openProjectWithPicker() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -91,6 +113,10 @@ struct SidebarFooter: View {
         if panel.runModal() == .OK, let url = panel.url {
             appState.openProject(url.path)
         }
+        #else
+        // No local folders on iPad: the remote folder picker registers this hook (IPAD-7.1).
+        AppLifecycleHooks.openProject?()
+        #endif
     }
 
     private func showCommandPalette() {
@@ -103,7 +129,7 @@ struct SidebarFooter: View {
         let hub = appState.agentsHubState
         let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
-            await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            await hub.loadAll(projectRoots: appState.libraryProjectRoots)
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.variantsWithWorktree,
                 agents: hub.agents,

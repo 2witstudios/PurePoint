@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import os.log
 
@@ -211,3 +212,4 @@ enum CLIInstaller {
         return targetDate >= sourceDate
     }
 }
+#endif

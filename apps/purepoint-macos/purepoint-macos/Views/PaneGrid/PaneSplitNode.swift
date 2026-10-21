@@ -45,6 +45,15 @@ nonisolated indirect enum PaneSplitNode: Equatable, Sendable {
         }
     }
 
+    /// The pane in the grid's top-right corner, whose tab strip ends at the window's trailing edge.
+    var topTrailingLeafId: Int {
+        switch self {
+        case .leaf(let id): return id
+        case .split(.horizontal, _, let first, _): return first.topTrailingLeafId
+        case .split(.vertical, _, _, let second): return second.topTrailingLeafId
+        }
+    }
+
     // MARK: - Structural Analysis (2x3 constraint)
 
     /// Count the number of "rows" (horizontal splits at the top level).

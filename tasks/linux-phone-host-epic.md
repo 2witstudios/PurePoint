@@ -91,9 +91,9 @@ Publish `purepoint-pointguard-<version>-<arch>-linux-gnu.tar.gz` with checksum a
 - Given a musl or pre-2.28 glibc host, should refuse the payload with a clear message and leave `pu`/`pu-engine` installed.
 - Given a running bridge, should never modify files of the version it is executing.
 
-**Status**: Implemented on `pu/linux-phone-packaging`; first exercised by the next `v*` release. The Linux tarballs now include the musl `pu-point-guard-lock`. `release.yml` `linux-phone` builds, installs and proves each payload. `attest` holds only `id-token`/`attestations: write`, checks out no code and signs provenance for every Linux tarball. `publish` waits for both. `install.sh` `PU_WITH_PHONE=1` / `PU_PHONE_ARCHIVE` behaves as follows:
+**Status**: Implemented on `pu/linux-phone-packaging`; first exercised by the next `v*` release. The Linux tarballs now include the musl `pu-point-guard-lock`. `release.yml` `linux-phone` builds, installs and proves each payload. Merged onto #274's pipeline: `sign-linux` minisigns the payloads, `attest` records their provenance and attests the npm SBOM against them, and `publish` waits for `linux-phone`. `install.sh` `PU_WITH_PHONE=1` / `PU_PHONE_ARCHIVE` behaves as follows:
 - It refuses musl, or glibc < 2.28, and exits 3 with pu/pu-engine still installed.
-- It checks the SHA-256. When `gh` is installed and signed in, it also runs `gh attestation verify --repo 2witstudios/PurePoint --signer-workflow …/release.yml`; otherwise it says provenance was not checked.
+- It checks the SHA-256, then the release minisign signature or `gh attestation verify` exactly as for `pu` (#274): any check that runs must pass, and an unverifiable download installs only with `PU_INSTALL_SKIP_VERIFY=1`. `sign-linux` signs and `attest` attests the payloads alongside the `pu` tarballs.
 - It rejects absolute, `..`, out-of-payload or oddly named entries and any link or special file.
 - It stages in `~/.pu/pointguard/.install.*` and renames with `mv -T` onto `~/.pu/pointguard/<puVersion>/`. There is no `current` link: the unit names the versioned directory (LPH-002).
 - An existing complete version is left untouched, and an incomplete one is refused.

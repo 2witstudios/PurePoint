@@ -38,7 +38,7 @@ final class ScheduleState {
         let f = DateFormatter(); f.dateFormat = "EEEE, MMMM d"; return f
     }()
 
-    init(client: DaemonClient = DaemonClient()) {
+    init(client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.client = client
     }
 

@@ -118,6 +118,17 @@ final class DelayedTrustRead: @unchecked Sendable {
         precondition(delayedModel.networkAgentPendingForChecks > 0 && delayedModel.networkPendingForChecks == 0 && !exists("release-B-permissions"), "Pi chat readiness must not depend on terminal capabilities")
         precondition(delayedModel.networkStaleAgentPendingForChecks == 0, "Held A inventory must drain on switching to B without exposing stale fleet callbacks")
         try mark("release-A-agents"); try mark("release-B-permissions"); delayedModel.disconnect()
-        print("Network machine checks passed: two real pinned hosts; A/B/back; in-flight receipts/history/dialogs/editor; enrollment failure/cancel/pin; reconnect selection; explicit disconnect; zero Stop; one A send/no replay; held fleet inventory and capability discovery never gate Pi chat.")
+        // Chat access is per Mac: an Off Mac's cached transcript never resurfaces under another Mac's grant.
+        let grants = ChatModel(defaults: defaults, trustLoader: { vault.read($0) })
+        grants.selectMachine(a.hostId); try await wait { grants.connected && grants.snapshot?.title == "A" && grants.chatGrant == .send }
+        try mark("chat-off-A"); try await wait { grants.chatGrant == .off && grants.snapshot == nil }
+        grants.selectMachine(b.hostId); try await wait { grants.connected && grants.snapshot?.title == "B" && grants.chatGrant == .send }
+        grants.selectMachine(a.hostId)
+        precondition(grants.chatGrant == .off && grants.snapshot == nil && grants.editorOffer == nil, "Given A at Off, switching back should restore A's Off grant without its cached transcript")
+        try await wait { grants.connected }; try await Task.sleep(nanoseconds: 80_000_000)
+        precondition(grants.chatGrant == .off && grants.snapshot == nil, "Given A at Off after reconnect, chat should stay locked")
+        try mark("chat-send-A"); try await wait { grants.chatGrant == .send && grants.snapshot?.title == "A" }
+        grants.disconnect()
+        print("Network machine checks passed: two real pinned hosts; A/B/back; in-flight receipts/history/dialogs/editor; enrollment failure/cancel/pin; reconnect selection; explicit disconnect; zero Stop; one A send/no replay; held fleet inventory and capability discovery never gate Pi chat; per-Mac chat access.")
     }
 }

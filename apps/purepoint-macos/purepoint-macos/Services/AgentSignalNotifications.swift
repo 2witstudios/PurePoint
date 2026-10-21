@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import UserNotifications
 
 /// Local delivery only. It never sends input, resolves requests or owns agent sessions.
@@ -38,7 +40,11 @@ import UserNotifications
         if defaults.stringArray(forKey: "PP_signalDeliveredEvents") != policy.deliveredKeys {
             defaults.set(policy.deliveredKeys, forKey: "PP_signalDeliveredEvents")
         }
+        #if os(macOS)
         NSApp.dockTile.badgeLabel = result.badge == 0 ? nil : String(result.badge)
+        #else
+        setAppBadge(result.badge)
+        #endif
         let current = Set(agents.compactMap(\.eventKey))
         let obsolete = knownNotificationKeys.filter { !current.contains($0) }
         if !obsolete.isEmpty {
@@ -77,6 +83,44 @@ import UserNotifications
         }
     }
 
+    #if os(iOS)
+    /// The badge count last handed to iOS; nil until set, or after it could not be set.
+    private var appliedBadge: Int?
+
+    /// The app icon badge, in place of the Mac's dock tile. Unlike the dock tile it needs the
+    /// user's permission, asked for (with the same options as the Mac's notifications) the
+    /// first time there is something to count.
+    private func setAppBadge(_ count: Int) {
+        guard count != appliedBadge else { return }
+        appliedBadge = count
+        Task {
+            let settings = await center.notificationSettings()
+            switch AgentSignalBadge.action(count: count, authorization: settings.authorizationStatus,
+                badgeSetting: settings.badgeSetting) {
+            case .set:
+                break
+            case .requestAuthorization:
+                guard (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) == true else {
+                    return
+                }
+            case .skip:
+                // Applied again when the app returns to the foreground (`refreshBadge`), in case
+                // the user allowed badges in Settings meanwhile.
+                return
+            }
+            // A newer count superseded this one while permission was checked.
+            guard appliedBadge == count else { return }
+            do { try await center.setBadgeCount(count) } catch { if appliedBadge == count { appliedBadge = nil } }
+        }
+    }
+
+    /// Apply the badge again on the next update: permission may have changed while the app was
+    /// in the background.
+    func refreshBadge() {
+        appliedBadge = nil
+    }
+    #endif
+
     private func drainPendingTaps() {
         guard !drainingTaps, let open else { return }
         drainingTaps = true
@@ -104,3 +148,26 @@ import UserNotifications
         }
     }
 }
+
+#if os(iOS)
+/// What setting the app badge needs, given the notification permission.
+enum AgentSignalBadge: Equatable {
+    case set
+    case requestAuthorization
+    case skip
+
+    static func action(count: Int, authorization: UNAuthorizationStatus, badgeSetting: UNNotificationSetting)
+        -> AgentSignalBadge
+    {
+        switch authorization {
+        case .notDetermined:
+            // Asking only to clear a badge that was never shown would prompt for nothing.
+            count > 0 ? .requestAuthorization : .skip
+        case .denied:
+            .skip
+        default:
+            badgeSetting == .disabled ? .skip : .set
+        }
+    }
+}
+#endif

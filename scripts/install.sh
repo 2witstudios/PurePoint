@@ -4,13 +4,25 @@
 #   curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | sh
 #
 # Environment:
-#   PU_VERSION        release to install, e.g. 1.4.0 (default: latest)
-#   PU_INSTALL_DIR    install directory (default: ~/.pu/bin)
-#   PU_ARCHIVE        install from a local purepoint-*.tar.gz instead of downloading
-#   PU_WITH_PHONE=1   also install phone access (the Point Guard bridge payload)
-#                     into ~/.pu/pointguard/<version>/; needs glibc >= 2.28
-#   PU_PHONE_ARCHIVE  install phone access from a local
-#                     purepoint-pointguard-*-linux-gnu.tar.gz (implies PU_WITH_PHONE=1)
+#   PU_VERSION      release to install, e.g. 1.4.0 (default: latest)
+#   PU_INSTALL_DIR  install directory (default: ~/.pu/bin)
+#   PU_ARCHIVE      install from a local purepoint-*.tar.gz instead of downloading
+#                   (not verified: you vouch for the file)
+#   PU_INSTALL_SKIP_VERIFY=1
+#                   install a download even if its authenticity can't be
+#                   verified (prints a warning)
+#   PU_WITH_PHONE=1 also install phone access (the Point Guard bridge payload)
+#                   into ~/.pu/pointguard/<version>/; needs glibc >= 2.28
+#   PU_PHONE_ARCHIVE
+#                   install phone access from a local
+#                   purepoint-pointguard-*-linux-gnu.tar.gz (implies
+#                   PU_WITH_PHONE=1; not verified: you vouch for the file)
+#
+# Downloads are verified before anything is installed. The release key below
+# must have signed the archive (checked with minisign, or with OpenSSL 3 when
+# minisign isn't installed), and when the GitHub CLI is installed and signed
+# in, the archive's build provenance must verify with `gh attestation verify`.
+# At least one of the two must succeed, and any check that runs must pass.
 #
 # Linux builds of pu and pu-engine are static (musl) and run on any
 # distribution. Phone access bundles the official glibc Node.js build, so it
@@ -19,10 +31,13 @@
 set -eu
 
 REPO="2witstudios/PurePoint"
+# Minisign public key for release archives (.github/scripts/minisign.sh).
+RELEASE_PUBLIC_KEY="RWSEvitv5QIgchUQgebD93PuXamKznz5sMJMavmViuMEYSM8nVtcrRv6"
 INSTALL_DIR="${PU_INSTALL_DIR:-$HOME/.pu/bin}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'install.sh: warning: %s\n' "$*" >&2; }
 
 detect_arch() {
     arch=$(uname -m)
@@ -78,6 +93,122 @@ sha256_of() {
     fi
 }
 
+b64decode() {
+    openssl base64 -d -A
+}
+
+# bytes <file> <offset> <count>
+bytes() {
+    dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null
+}
+
+hex() {
+    od -An -v -tx1 | tr -d ' \n'
+}
+
+# Ed25519 verification with OpenSSL 3: ed25519_verify <raw-key> <message> <sig>
+ed25519_verify() {
+    # DER SubjectPublicKeyInfo prefix for an Ed25519 key.
+    { printf '\060\052\060\005\006\003\053\145\160\003\041\000'; cat "$1"; } > "$1.der"
+    openssl pkeyutl -verify -pubin -keyform DER -inkey "$1.der" -rawin \
+        -in "$2" -sigfile "$3" >/dev/null 2>&1
+}
+
+# Checks a minisign signature (prehashed "ED" format, the minisign default)
+# against RELEASE_PUBLIC_KEY with OpenSSL, including the trusted comment.
+openssl_minisign_verify() {
+    file=$1 sig=$2 work="$tmp/verify"
+    mkdir -p "$work"
+    printf '%s' "$RELEASE_PUBLIC_KEY" | b64decode > "$work/pub" 2>/dev/null || return 1
+    [ "$(wc -c < "$work/pub" | tr -d ' ')" = 42 ] || return 1
+    [ "$(bytes "$work/pub" 0 2)" = Ed ] || return 1
+    bytes "$work/pub" 10 32 > "$work/key"
+
+    [ "$(sed -n 1p "$sig" | cut -c 1-19)" = "untrusted comment: " ] || return 1
+    sed -n 2p "$sig" | b64decode > "$work/sig-line" 2>/dev/null || return 1
+    [ "$(wc -c < "$work/sig-line" | tr -d ' ')" = 74 ] || return 1
+    [ "$(bytes "$work/sig-line" 0 2)" = ED ] || return 1
+    [ "$(bytes "$work/sig-line" 2 8 | hex)" = "$(bytes "$work/pub" 2 8 | hex)" ] || return 1
+    bytes "$work/sig-line" 10 64 > "$work/sig"
+
+    trusted=$(sed -n 3p "$sig")
+    case "$trusted" in "trusted comment: "*) ;; *) return 1 ;; esac
+    sed -n 4p "$sig" | b64decode > "$work/global" 2>/dev/null || return 1
+    [ "$(wc -c < "$work/global" | tr -d ' ')" = 64 ] || return 1
+
+    openssl dgst -blake2b512 -binary "$file" > "$work/hash" || return 1
+    ed25519_verify "$work/key" "$work/hash" "$work/sig" || return 1
+    { cat "$work/sig"; printf '%s' "${trusted#trusted comment: }"; } > "$work/global-input"
+    ed25519_verify "$work/key" "$work/global-input" "$work/global"
+}
+
+openssl_can_verify() {
+    command -v openssl >/dev/null 2>&1 || return 1
+    case "$(openssl version 2>/dev/null)" in
+        "OpenSSL 0."* | "OpenSSL 1."* | LibreSSL*) return 1 ;;
+        OpenSSL*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints "verified", "unavailable" (nothing to check with) or "failed".
+verify_signature() {
+    file=$1 sig_url=$2
+    if ! fetch "$sig_url" "$tmp/archive.minisig" 2>/dev/null; then
+        warn "the release has no signature ($sig_url)"
+        echo unavailable
+        return
+    fi
+    if command -v minisign >/dev/null 2>&1; then
+        if minisign -Vm "$file" -x "$tmp/archive.minisig" -P "$RELEASE_PUBLIC_KEY" >/dev/null 2>&1; then
+            echo verified
+        else
+            echo failed
+        fi
+    elif openssl_can_verify; then
+        if openssl_minisign_verify "$file" "$tmp/archive.minisig"; then
+            echo verified
+        else
+            echo failed
+        fi
+    else
+        warn "install minisign or OpenSSL 3 to check the release signature"
+        echo unavailable
+    fi
+}
+
+# Prints "verified", "unavailable" or "failed".
+verify_attestation() {
+    file=$1
+    if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+        echo unavailable
+        return
+    fi
+    if gh attestation verify "$file" --repo "$REPO" >/dev/null 2>&1; then
+        echo verified
+    else
+        echo failed
+    fi
+}
+
+verify_download() {
+    file=$1 sig_url=$2
+    signature=$(verify_signature "$file" "$sig_url")
+    [ "$signature" != failed ] || die "signature check failed for $(basename "$file"); not installing"
+    attestation=$(verify_attestation "$file")
+    [ "$attestation" != failed ] || die "gh attestation verify failed for $(basename "$file"); not installing"
+    if [ "$signature" = verified ] || [ "$attestation" = verified ]; then
+        [ "$signature" = verified ] && say "verified release signature"
+        [ "$attestation" = verified ] && say "verified build provenance (gh attestation)"
+        return 0
+    fi
+    if [ "${PU_INSTALL_SKIP_VERIFY:-}" = 1 ]; then
+        warn "PU_INSTALL_SKIP_VERIFY=1: installing $(basename "$file") without verifying who built it"
+        return 0
+    fi
+    die "could not verify $(basename "$file"): install minisign or OpenSSL 3, or sign in with the GitHub CLI (gh auth login). To install anyway, set PU_INSTALL_SKIP_VERIFY=1."
+}
+
 tmp=$(mktemp -d)
 phone_stage=""
 cleanup() {
@@ -102,6 +233,7 @@ else
     expected=$(cut -d ' ' -f 1 "$tmp/sum")
     actual=$(sha256_of "$archive")
     [ "$expected" = "$actual" ] || die "checksum mismatch for $name.tar.gz"
+    verify_download "$archive" "$base/$name.tar.gz.minisig"
 fi
 
 mkdir -p "$tmp/x"
@@ -259,16 +391,20 @@ else
     expected=$(cut -d ' ' -f 1 "$tmp/phone.sum")
     printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$' || phone_die "malformed checksum file"
     [ "$expected" = "$(sha256_of "$phone_archive")" ] || phone_die "checksum mismatch for $phone_name.tar.gz"
-    say "verified SHA-256 of $phone_name.tar.gz"
-    # Build provenance: signed by this repository's release workflow on GitHub.
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-        gh attestation verify "$phone_archive" --repo "$REPO" \
-            --signer-workflow "$REPO/.github/workflows/release.yml" >/dev/null \
-            || phone_die "build provenance attestation did not verify for $phone_name.tar.gz"
-        say "verified build provenance of $phone_name.tar.gz (gh attestation verify)"
-    else
-        say "warning: provenance NOT verified: needs the GitHub CLI (gh), signed in. Only the SHA-256 was checked."
-        say "  to verify later: gh attestation verify $phone_name.tar.gz --repo $REPO"
+    # Same rule as pu itself: the release signature or build provenance must
+    # verify, and any check that runs must pass.
+    signature=$(verify_signature "$phone_archive" "$base/$phone_name.tar.gz.minisig")
+    [ "$signature" != failed ] || phone_die "signature check failed for $phone_name.tar.gz"
+    attestation=$(verify_attestation "$phone_archive")
+    [ "$attestation" != failed ] || phone_die "gh attestation verify failed for $phone_name.tar.gz"
+    [ "$signature" = verified ] && say "verified release signature of $phone_name.tar.gz"
+    [ "$attestation" = verified ] && say "verified build provenance of $phone_name.tar.gz (gh attestation)"
+    if [ "$signature" != verified ] && [ "$attestation" != verified ]; then
+        if [ "${PU_INSTALL_SKIP_VERIFY:-}" = 1 ]; then
+            warn "PU_INSTALL_SKIP_VERIFY=1: installing $phone_name.tar.gz without verifying who built it"
+        else
+            phone_die "could not verify $phone_name.tar.gz: install minisign or OpenSSL 3, or sign in with the GitHub CLI (gh auth login). To install anyway, set PU_INSTALL_SKIP_VERIFY=1."
+        fi
     fi
 fi
 

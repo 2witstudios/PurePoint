@@ -4,7 +4,7 @@ import SwiftUI
 struct DiffCardView: View {
     let fileDiff: FileDiff
     var onLoadPreview: (() -> Void)? = nil
-    var loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil
+    var loadPage: (@MainActor (FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil
     var revealToken: UUID? = nil
     @State private var expanded: Bool
     @State private var history = ReviewPageHistory()
@@ -16,7 +16,7 @@ struct DiffCardView: View {
     @State private var loadToken = UUID()
 
     init(fileDiff: FileDiff, onLoadPreview: (() -> Void)? = nil,
-         loadPage: ((FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil,
+         loadPage: (@MainActor (FileDiff, ReviewPageCursor?) async throws -> ReviewPage)? = nil,
          revealToken: UUID? = nil) {
         self.fileDiff = fileDiff; self.onLoadPreview = onLoadPreview
         self.loadPage = loadPage; self.revealToken = revealToken
@@ -68,7 +68,12 @@ struct DiffCardView: View {
                         Text("Page \(pageIndex + 1)").font(.system(size: 11)).foregroundStyle(.secondary)
                         if hasMore { Button("More lines") { pageIndex += 1 }.disabled(loading) }
                         Spacer()
+                        #if os(macOS)
                         if let page { Button("Open full patch") { NSWorkspace.shared.open(page.slice.snapshot.url) } }
+                        #else
+                        // No default app on iPad: the patch opens in Quick Look or a share sheet.
+                        if let page { Button("Open full patch") { LocalFilePresenter.present(page.slice.snapshot.url) } }
+                        #endif
                     }.buttonStyle(.borderless).padding(10)
                 }
             }
@@ -142,6 +147,11 @@ struct DiffCardView: View {
             .padding(.vertical, 2)
             .background(statusColor.opacity(0.6))
             .clipShape(RoundedRectangle(cornerRadius: 3))
+            #if os(iOS)
+            // iOS sets the label a little wider; in a narrow window the long filename beside it
+            // would wrap "Modified" onto two lines.
+            .fixedSize()
+            #endif
     }
 
     private var statsText: some View {

@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(source / "Views/Chat/PointGuardPaneControls.swift"),
         str(source / "Views/Chat/PointGuardConversationLayout.swift"),
         str(source / "Views/PaneGrid/DraggableSplit.swift"),
+        str(source / "Views/PresentedControlDefaults.swift"),
         str(app / "verification/PointGuardSidebarChecks.swift"),
         str(root_safety),
         "-o", str(executable),
