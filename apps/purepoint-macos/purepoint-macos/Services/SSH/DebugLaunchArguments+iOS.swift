@@ -29,8 +29,14 @@ struct DebugLaunchArguments {
 
     init(defaults: UserDefaults, arguments: [String] = ProcessInfo.processInfo.arguments) {
         if let value = defaults.string(forKey: "PUDebugAddMachine"), !value.isEmpty {
-            let parts = value.split(separator: ",", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            addMachine = (parts[0], parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil)
+            let parts = value.split(separator: ",", maxSplits: 1, omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            // A value with no destination (",", ",name") is ignored rather than crashing.
+            if let sshHost = parts.first, !sshHost.isEmpty {
+                addMachine = (sshHost, parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil)
+            } else {
+                print("[SSH] -PUDebugAddMachine: expected user@host[:port][,name], got \(value)")
+            }
         }
         trustHostKey = defaults.bool(forKey: "PUDebugTrustHostKey")
         if let value = defaults.string(forKey: "PUDebugSelectAgent"), !value.isEmpty {

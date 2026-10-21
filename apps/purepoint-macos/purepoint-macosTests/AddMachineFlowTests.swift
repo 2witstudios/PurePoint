@@ -204,6 +204,19 @@ struct AddMachineFlowTests {
         #expect(arguments.addMachine?.name == "lab")
         #expect(arguments.trustHostKey)
     }
+
+    @Test func debugAddMachineWithoutADestinationIsIgnored() throws {
+        for value in [",", " , ", ",lab", " "] {
+            let defaults = try #require(UserDefaults(suiteName: "pu-debug-args-\(UUID().uuidString)"))
+            defaults.set(value, forKey: "PUDebugAddMachine")
+            #expect(DebugLaunchArguments(defaults: defaults, arguments: []).addMachine == nil)
+        }
+        let defaults = try #require(UserDefaults(suiteName: "pu-debug-args-\(UUID().uuidString)"))
+        defaults.set("me@host,", forKey: "PUDebugAddMachine")
+        let arguments = DebugLaunchArguments(defaults: defaults, arguments: [])
+        #expect(arguments.addMachine?.sshHost == "me@host")
+        #expect(arguments.addMachine?.name == nil)
+    }
     #endif
 }
 #endif
