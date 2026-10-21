@@ -94,6 +94,7 @@ struct ScheduleListView: View {
         .onTapGesture {
             state.handleEventClick(event: occurrence.event)
         }
+        #if os(macOS)
         .onHover { hovering in
             if hovering {
                 NSCursor.pointingHand.push()
@@ -101,6 +102,9 @@ struct ScheduleListView: View {
                 NSCursor.pop()
             }
         }
+        #else
+        .hoverEffect(.highlight)
+        #endif
     }
 
     // MARK: - Grouped Data

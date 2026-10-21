@@ -29,7 +29,7 @@ struct ChannelHoverRow<Content: View>: View {
                 }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
                     .padding(.horizontal, 10).padding(.vertical, 7)
                     .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2) as Color))
                     .padding(.trailing, 16).padding(.top, 2)
                     .opacity(hovering || focus != nil ? 1 : 0)
             }

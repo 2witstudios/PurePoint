@@ -152,6 +152,8 @@ private struct EditableHotkeyRow: View {
             pulsePhase.toggle()
         }
 
+        // iOS records key presses through UIPress handling (IPAD-6.12).
+        #if os(macOS)
         recordingMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             if event.keyCode == SpecialKey.escape.keyCode
                 && event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty
@@ -173,6 +175,7 @@ private struct EditableHotkeyRow: View {
             }
             return nil
         }
+        #endif
     }
 
     private func stopRecording() {
@@ -181,9 +184,11 @@ private struct EditableHotkeyRow: View {
         pendingBinding = nil
         keyBindingState.recordingAction = nil
 
+        #if os(macOS)
         if let monitor = recordingMonitor {
             NSEvent.removeMonitor(monitor)
             recordingMonitor = nil
         }
+        #endif
     }
 }
