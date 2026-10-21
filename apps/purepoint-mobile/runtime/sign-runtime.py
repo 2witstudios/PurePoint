@@ -22,7 +22,7 @@ for file in resources.rglob('*'):
         continue
     with file.open('rb') as stream:
         magic = stream.read(4)
-    if magic in [b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe']:
+    if magic in [b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xfe\xed\xfa\xce', b'\xca\xfe\xba\xbe']:
         run(*sign, str(file))
         run('/usr/bin/codesign', '--verify', '--strict', str(file))
 for name in ['pu', 'point-guard-node', 'point-guard-lock']:

@@ -125,7 +125,7 @@ jobs:
           name: macos-app-unsigned
           path: build/PurePoint-unsigned.tar
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 14
 
   # Holds the Developer ID identity, the notarization credentials and the
   # Sparkle update key. Runs only Apple's tools, this repository's signing
@@ -149,8 +149,9 @@ jobs:
       # Must match the Sparkle version the app links (Package.resolved).
       SPARKLE_VERSION: 2.9.0
       SPARKLE_SHA256: 01e0f0ebf6614061ea816d414de50f937d64ffa6822ad572243031ca3676fe19
-      CREATE_DMG_VERSION: 1.3.0
-      CREATE_DMG_SHA256: c50d2bc97c3d6292642bac55f530d247eaf4bf65ee605f26b4caf339383e381c
+      # create-dmg v1.3.0, fetched by commit so the archive can't move with the tag.
+      CREATE_DMG_COMMIT: a2b71d0fda6d0df2a86dc7f67082d4d73e84c59f
+      CREATE_DMG_SHA256: 36577b966f16c12dd78d5bb5107c2ae3d069b044226b6ebbffa6a434ce142d0a
     steps:
       - name: Set signing paths
         run: |
@@ -190,7 +191,7 @@ jobs:
         run: |
           ARCHIVE="$RUNNER_TEMP/create-dmg.tar.gz"
           curl -fsSL --proto '=https' \
-            "https://github.com/create-dmg/create-dmg/archive/refs/tags/v${CREATE_DMG_VERSION}.tar.gz" \
+            "https://github.com/create-dmg/create-dmg/archive/${CREATE_DMG_COMMIT}.tar.gz" \
             -o "$ARCHIVE"
           echo "${CREATE_DMG_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
           tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
@@ -241,7 +242,7 @@ jobs:
 
       - name: Create DMG
         run: |
-          "$RUNNER_TEMP/create-dmg-${CREATE_DMG_VERSION}/create-dmg" \
+          "$RUNNER_TEMP/create-dmg-${CREATE_DMG_COMMIT}/create-dmg" \
             --volname "PurePoint" \
             --window-pos 200 120 \
             --window-size 600 400 \
@@ -300,7 +301,7 @@ jobs:
           name: macos-dmg
           path: ${{ env.DMG_PATH }}
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 14
 
       - name: Cleanup signing material
         if: always()
@@ -387,7 +388,6 @@ jobs:
     permissions:
       contents: write
     env:
-      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.version.outputs.raw }}
       BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
@@ -407,7 +407,12 @@ jobs:
           name: macos-dmg
           path: dist
 
+      # A re-run of every job re-signs and re-notarizes the DMG, which changes
+      # its bytes. The appcast must never carry a signature for a DMG other
+      # than the published one, so an existing release must match exactly.
       - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${VERSION}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
@@ -418,10 +423,11 @@ jobs:
             exit 0
           fi
           echo "::notice::$TAG already exists; its assets are left unchanged"
-          PUBLISHED=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          PUBLISHED=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets[] | "\(.digest) \(.name)"')
           for FILE in dist/*; do
-            if ! grep -qxF "$(basename "$FILE")" <<< "$PUBLISHED"; then
-              echo "::error::$TAG exists without $(basename "$FILE"); delete the release and re-run to publish it"
+            EXPECTED="sha256:$(sha256sum "$FILE" | cut -d' ' -f1) $(basename "$FILE")"
+            if ! grep -qxF "$EXPECTED" <<< "$PUBLISHED"; then
+              echo "::error::$TAG assets already published with different content ($(basename "$FILE")); delete the release, or use Re-run failed jobs instead of re-running all jobs"
               exit 1
             fi
           done
@@ -429,6 +435,8 @@ jobs:
       # The `appcast` release is the moving update feed, so its appcast.xml is
       # the one asset that is replaced on every release.
       - name: Generate and upload appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           DMG_URL="https://github.com/2witstudios/purepoint/releases/download/v${VERSION}/PurePoint-${VERSION}.dmg"
           PUB_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S %z')"

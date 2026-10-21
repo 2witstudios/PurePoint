@@ -62,6 +62,12 @@ class PinningTests(unittest.TestCase):
                             self.assertIs((step.get("with") or {}).get("persist-credentials"), False)
 
 
+    def test_every_workflow_defaults_to_a_read_only_token(self):
+        for path in WORKFLOWS:
+            with self.subTest(file=path.name):
+                self.assertIn(load(path).get("permissions"), ({}, {"contents": "read"}))
+
+
 class ReleaseWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -85,6 +91,34 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     writers.append(name)
         self.assertEqual(writers, ["publish"])
         self.assertEqual(self.jobs["publish"]["permissions"], {"contents": "write"})
+
+    def test_write_token_reaches_only_the_steps_that_publish(self):
+        publish = self.jobs["publish"]
+        self.assertNotIn("GH_TOKEN", publish.get("env", {}))
+        holders = [step["name"] for step in steps(publish) if "GH_TOKEN" in (step.get("env") or {})]
+        self.assertEqual(holders, ["Create GitHub Release", "Generate and upload appcast"])
+
+    def test_existing_release_must_match_the_new_assets_byte_for_byte(self):
+        # Re-signing changes the DMG, so a name-only check could publish an
+        # appcast signature for bytes that were never released.
+        create = next(step["run"] for step in steps(self.jobs["publish"]) if step["name"] == "Create GitHub Release")
+        self.assertIn(".digest", create)
+        self.assertIn("sha256sum", create)
+        self.assertIn("grep -qxF \"$EXPECTED\"", create)
+        self.assertNotIn("--clobber", create)
+
+    def test_artifacts_outlive_an_environment_approval_wait(self):
+        for name in ("build-macos", "sign-macos"):
+            for step in steps(self.jobs[name]):
+                if step.get("uses", "").startswith("actions/upload-artifact@"):
+                    with self.subTest(job=name):
+                        self.assertGreaterEqual(step["with"]["retention-days"], 14)
+
+    def test_create_dmg_is_fetched_by_commit(self):
+        env = self.jobs["sign-macos"]["env"]
+        self.assertRegex(env["CREATE_DMG_COMMIT"], r"^[0-9a-f]{40}$")
+        self.assertRegex(env["CREATE_DMG_SHA256"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("refs/tags", run_text(self.jobs["sign-macos"]))
 
     def test_publish_job_runs_no_repository_code(self):
         for step in steps(self.jobs["publish"]):
