@@ -21,15 +21,21 @@ struct ContentView: View {
     /// Clears the traffic-light buttons when the sidebar is hidden and the detail starts at the left edge.
     private let hiddenSidebarLeadingInset: CGFloat = 72
     #else
-    /// The window's top safe area: the status bar, or the iPadOS window controls.
+    /// The window's top safe area: the status bar, when the window reaches it.
     @State private var topSafeArea: CGFloat = 0
-    /// iPad window controls sit inside the top safe area, which the content keeps clear of, so
-    /// a hidden sidebar leaves nothing to clear at the left edge.
-    private let hiddenSidebarLeadingInset: CGFloat = 0
+    /// Where the iPadOS window controls (the iPad's traffic lights) end: below them, and to
+    /// their right. Zero when the window shows none.
+    @State private var windowControls = WindowControlsInsets()
+
+    /// Clears the window controls when the sidebar is hidden and the detail starts at the
+    /// left edge, as the Mac clears its traffic lights.
+    private var hiddenSidebarLeadingInset: CGFloat { windowControls.leading }
 
     /// The sidebar's rows start where the Mac's do, below a band as tall as the title bar, or
-    /// below the safe area when that is taller.
-    private var sidebarTopInset: CGFloat { max(0, trafficLightInset - topSafeArea) }
+    /// below the status bar or window controls when those reach lower.
+    private var sidebarTopInset: CGFloat {
+        max(0, trafficLightInset - topSafeArea, windowControls.bottom - topSafeArea)
+    }
     #endif
 
     var body: some View {
@@ -87,6 +93,7 @@ struct ContentView: View {
         // full-screen content, and the keyboard still insets it.
         .ignoresSafeArea(.container, edges: .bottom)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topSafeArea = $0 }
+        .background(WindowControlsProbe { windowControls = $0 }.ignoresSafeArea())
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         #endif
         .background(WindowChromeConfigurator())
