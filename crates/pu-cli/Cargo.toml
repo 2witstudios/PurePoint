@@ -10,7 +10,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }
 clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
 shell-words = "1"

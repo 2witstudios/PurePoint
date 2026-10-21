@@ -4,6 +4,7 @@ pub mod bench;
 pub mod channel;
 pub mod clean;
 pub mod daemon;
+pub mod daemon_proxy;
 pub mod diff;
 pub mod gate;
 pub mod grid;
