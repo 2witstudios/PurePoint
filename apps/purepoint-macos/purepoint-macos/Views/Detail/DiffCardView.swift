@@ -68,9 +68,11 @@ struct DiffCardView: View {
                         Text("Page \(pageIndex + 1)").font(.system(size: 11)).foregroundStyle(.secondary)
                         if hasMore { Button("More lines") { pageIndex += 1 }.disabled(loading) }
                         Spacer()
-                        // The iPad shares the fetched patch instead of opening it locally (IPAD-7.2).
                         #if os(macOS)
                         if let page { Button("Open full patch") { NSWorkspace.shared.open(page.slice.snapshot.url) } }
+                        #else
+                        // No default app on iPad: the patch opens in Quick Look or a share sheet.
+                        if let page { Button("Open full patch") { LocalFilePresenter.present(page.slice.snapshot.url) } }
                         #endif
                     }.buttonStyle(.borderless).padding(10)
                 }
