@@ -228,6 +228,8 @@ Debug builds (`#if DEBUG`) take launch arguments that let scripts connect a simu
 | (every launch) | Writes the device's OpenSSH public key line to `<data container>/Documents/purepoint-debug/id_ed25519.pub`. Read it with `xcrun simctl get_app_container <udid> com.2witstudios.PurePoint.ipad data`. |
 | `-PUDebugAddMachine user@host[:port][,name]` | Fills Add Machine with that destination and name (default: the host's first label, or `machine` for an IP address), shows the sheet and submits it, as if the user tapped Add. It does nothing when a machine with that destination is already registered. |
 | `-PUDebugTrustHostKey YES` | Confirms a first-use host key as if the user tapped Trust and Connect, both in Add Machine and for registered machines that ask. A changed host key is still refused (IPAD-009). |
+| `-PUDebugSelectAgent <agent id>` | Selects the workspace holding that agent once a machine's layout lists it, as if the user clicked its sidebar row, so its terminal opens. Gives up after a minute. |
+| `-PUDebugTerminalInput "<keys>"` | Types the keys into the first terminal that shows output, through the same input path as the keyboard, 1.5 s after that output. Text is typed as is; `<Enter>`, `<Esc>`, `<Tab>`, `<BS>`, `<Up>`, `<Down>`, `<Left>`, `<Right>`, `<C-x>` (Ctrl) and `<M-x>` (Alt) are keys. |
 
 `apps/purepoint-macos/scripts/ipad-test-sshd.sh start <worktree> [--port N] [--sim <udid>]` runs a throwaway sshd for these:
 - It is the system's `/usr/sbin/sshd` binary, run unprivileged on 127.0.0.1 only, with its own host key, `authorized_keys` and config in a temp dir. It never touches `~/.ssh` or the system sshd.

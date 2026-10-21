@@ -57,6 +57,13 @@ struct ContentView: View {
         .ignoresSafeArea(.container, edges: .top)
         .background(WindowChromeConfigurator())
         .navigationTitle("")
+        #if os(iOS) && DEBUG
+        .task {
+            if let debugSelection = await DebugLaunchArguments.current.selectAgentWorkspace(registry: registry) {
+                selection = debugSelection
+            }
+        }
+        #endif
         .task {
             while !Task.isCancelled {
                 appState.updateAgentSignals()

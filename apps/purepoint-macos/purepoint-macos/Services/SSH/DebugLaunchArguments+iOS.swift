@@ -11,9 +11,12 @@ import Observation
 ///   `<data container>/Documents/purepoint-debug/id_ed25519.pub`.
 /// - `-PUDebugAddMachine user@host[:port][,name]` submits Add Machine with those fields.
 /// - `-PUDebugTrustHostKey YES` confirms a first-use host key as if the user tapped Trust.
+/// - `-PUDebugSelectAgent <agent id>` selects the workspace holding that agent, as if the
+///   user clicked its sidebar row.
 struct DebugLaunchArguments {
     var addMachine: (sshHost: String, name: String?)?
     var trustHostKey = false
+    var selectAgent: String?
 
     static let current = DebugLaunchArguments(defaults: .standard)
 
@@ -23,6 +26,22 @@ struct DebugLaunchArguments {
             addMachine = (parts[0], parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil)
         }
         trustHostKey = defaults.bool(forKey: "PUDebugTrustHostKey")
+        if let value = defaults.string(forKey: "PUDebugSelectAgent"), !value.isEmpty {
+            selectAgent = value
+        }
+    }
+
+    /// The workspace holding the `-PUDebugSelectAgent` agent, once a machine's layout lists it.
+    /// Gives up after a minute.
+    @MainActor
+    func selectAgentWorkspace(registry: WorkspaceRegistry) async -> SidebarSelection? {
+        guard let selectAgent else { return nil }
+        for _ in 0..<120 {
+            if let id = registry.workspaceId(forAgent: selectAgent) { return .workspace(id) }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return nil }
+        }
+        print("[SSH] -PUDebugSelectAgent: no workspace holds \(selectAgent)")
+        return nil
     }
 
     static var publicKeyURL: URL {
