@@ -1,6 +1,6 @@
 # Linux phone host
 
-**Maturity: DECIDED** | ID Prefix: LPH | Dependencies: `product/point-guard-setup.md`, `product/machines.md`, `architecture/distribution.md`, `architecture/desktop-app-integration.md`, `product/cli.md`
+**Maturity: SPECIFIED** | ID Prefix: LPH | Dependencies: `product/point-guard-setup.md`, `product/machines.md`, `architecture/distribution.md`, `architecture/desktop-app-integration.md`, `product/cli.md`
 
 ## Purpose
 
@@ -292,6 +292,34 @@ Forked: packaging (`package-runtime.py` gains a dir/tarball layout; `sign-runtim
 
 Keeping the listener process minimal benefits both platforms. Rendering the QR in `pu`, and keeping provider SDK work out of the listener where practical, shrinks the code a network attacker can reach.
 
+## Requirements
+
+- Given a Linux host with phone access installed, `pu phone install --now` should write `pu-pointguard.service` (0644, no secrets) naming the exact versioned payload, enable and start it, and warn when lingering is off.
+- Given a payload whose manifest `puVersion` differs from `pu`'s release version, every `pu phone` command that runs or writes the unit should refuse and name the reinstall command.
+- Given `pu phone stop` or `restart` while Point Guard is busy, should refuse with the idle message unless `--force`; an idle stop should leave the unit inactive (exit 0, not restarted).
+- Given `pu phone restart` after an upgrade, should move the unit to the new payload, keep host identity and device trust, and prune only payload versions older than the one kept (never newer ones, the unit's payload or install staging directories).
+- Given `pu phone pair` on a terminal wide enough, should render a black-on-white QR with a quiet zone; otherwise (or with `--text`) should print a `purepoint-pair:` paste code. On SIGINT, SIGTERM, SIGHUP or any exit before use it should revoke the code, and on success print the enrolled device (identified by the durable device id) and its grants.
+- Given `pu phone grant`, should apply downgrades before upgrades, print the derived chat level, and warn when a change can enable full chat.
+- Given `pu phone devices --json`, should emit `deviceId`, `name`, `createdAt`, `revokedAt`, `terminals`, `workspaceManagement` and `chat`, and never credential or hash material.
+- Given `pu phone login`, should print auth URLs, device codes and links for use on another device, read secrets without echo or from `--api-key-stdin`, cancel the attempt on any exit except success, and say that a restart applies it.
+- Given a phone on a Linux host, the authenticated `/pair/verify` response should include `hostKind: "linux"` and a `hostLabel` of `[A-Za-z0-9-]{1,63}`, used by the phone for display only.
+- Given the iOS app, paste and scan should share one validation path, and a paste should be accepted only as `purepoint-pair:` followed by the QR JSON, at most 4 KB.
+
+## Interfaces
+
+| Interface | Shape |
+|---|---|
+| Release asset | `purepoint-pointguard-<version>-<x86_64\|aarch64>-linux-gnu.tar.gz` + `.sha256` + GitHub build-provenance attestation |
+| Install | `install.sh`: `PU_WITH_PHONE=1` (download) or `PU_PHONE_ARCHIVE=<tarball>` (local); exit 3 for an unsupported libc with `pu`/`pu-engine` still installed |
+| Payload | `~/.pu/pointguard/<version>/{bin/node, bin/point-guard-lock, bridge/, node_modules/, runtime-manifest.json}`; manifest `{"schemaVersion":1,"layout":"linux","puVersion":…}` |
+| Release version | `pu` compiled with `PU_RELEASE_VERSION=<tag>` in release builds (crate version otherwise); `pu phone` and the manifest must match exactly |
+| Unit | `~/.config/systemd/user/pu-pointguard.service`: `ExecStart=<payload>/bin/node <payload>/bridge/main.js --managed`, explicit `Environment=`, `UnsetEnvironment=`, `UMask=0077`, `NoNewPrivileges`, `LockPersonality`, `RestrictRealtime`, `RestrictSUIDSGID`, `SystemCallArchitectures=native`, `Restart=on-failure`, `KillMode=mixed` |
+| State | `${XDG_STATE_HOME:-~/.local/state}/purepoint/point-guard/` (0700): `admin-token`, `desktop-chat-token`, `admin.json` (`adminSocket`, never `adminURL`), `trust/`, `admin/admin.sock` (0600 in a 0700 dir) |
+| Owner admin | HTTP/1.1 `POST /admin/v1` over the Unix socket, `Authorization: Bearer <admin-token>`; operations as on the Mac plus `devices.rename {deviceId, name}`; `pairing.status` adds `deviceId` once a consumed enrollment's device is durable |
+| Phone verify | `GET /pair/verify` (authenticated) adds optional `hostKind`, `hostLabel` |
+| Status | `status` adds `hostKind`, `hostLabel` and `remote: {state: listening\|unavailable\|starting, mode, address?, code?, message?, recovery?, commands?}` |
+| Paste code | `purepoint-pair:` + the QR JSON |
+
 ## Security requirements (parity and Linux-specific)
 
 These apply to the Linux host, and those marked (shared) also apply to the Mac bridge.
@@ -323,13 +351,12 @@ These apply to the Linux host, and those marked (shared) also apply to the Mac b
 
 ## Implementation plan
 
-The dependency-ordered epic lives in [`tasks/linux-phone-host-epic.md`](../../tasks/linux-phone-host-epic.md). The spec is DECIDED; the next step is SPECIFIED (Given/should requirements and interfaces per task) before implementation. A prototype of the bridge seam, Node-native identity minting, tailnet discovery, the late-bind remote manager and the Unix-socket admin transport exists on the local branch `pu/linux-phone-impl-wip` (its new bridge tests pass; the Rust `pu phone` code there is not yet compiled). Implementation also depends on PR #264 (chat grants) and aligns with PR #265 (owner-only daemon socket, explicit `pu-engine` lookup: the payload runs the `pu` beside the installed `pu-engine`).
+The dependency-ordered epic lives in [`tasks/linux-phone-host-epic.md`](../../tasks/linux-phone-host-epic.md), with per-task status. It builds on PR #264 (chat grants) and PR #265 (owner-only daemon socket, explicit `pu-engine` lookup: the bridge runs the `pu` beside the installed `pu-engine`). The user guide is [`guide/linux-server.md`](../guide/linux-server.md#5-pair-a-phone-or-ipad-optional).
 
 ## Risks
 
-- **Grant semantics change on the Mac too** (LPH-013). Existing paired phones would move to the new chat default, which needs a migration and owner messaging.
 - **Size and supply chain**: a Linux bridge payload ships the bridge's ~175 lockfile production packages (some platform-optional) and a Node runtime to servers. Its integrity guarantees must not be weaker than the `pu` binaries'.
 - **glibc-only** support excludes Alpine hosts until Node.js publishes official musl builds (LPH-001).
 - **Userspace-networking Tailscale** relies on the user being a Tailscale operator, or running one printed `sudo` command, before `tailscale serve` can be applied (LPH-008).
-- **New identity helper on the Mac** (LPH-010) adds a signed helper to the bundle and needs owner Xcode/notarization acceptance.
+- **Identity minting changes on the Mac too** (LPH-010). New identities are ECDSA P-256 from Node's crypto; existing RSA identities load unchanged. The Mac app still needs an owner Xcode build to confirm.
 - **Headless OAuth** coverage depends on which Pi providers offer manual-code or device-code flows. API keys always work.

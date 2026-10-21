@@ -7,9 +7,10 @@
 // with an empty HOME and a PATH holding no tools, the way `pu phone` does.
 // Proves: manifest and payload-relative paths, private state/admin modes, the
 // Unix-socket owner admin, single-use enrollment over the pinned TLS listener,
-// owner token separation, revocation, the state lock refusing a second
+// per-message grants over the pinned WebSocket, owner token separation,
+// revocation with another device still connected, the state lock refusing a second
 // bridge, and identity/trust surviving a restart. With a Linux `pu`, it also
-// drives `pu phone status/devices/revoke` against the running bridge.
+// drives `pu phone status/devices/grant/revoke/pair` against the running bridge.
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, mkdir, rm, cp, stat, lstat, readdir } from "node:fs/promises";
 import { spawn, execFileSync } from "node:child_process";
@@ -20,6 +21,7 @@ import { randomUUID, createHash } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { createRequire } from "node:module";
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const args = process.argv.slice(2);
@@ -238,17 +240,122 @@ try {
   const collision = spawn(node, [entry, "--managed"], { env: environment(true), cwd: home, stdio: "ignore" });
   assert.equal((await once(collision, "exit"))[0], 1);
   assert.equal((await second.admin("status")).instanceId, second.ready.instanceId);
+  // A second device; grants are set by the owner and enforced per message.
+  const tablet = JSON.parse(
+    (await enroll(JSON.parse((await second.admin("pairing.create")).payload), "Linux proof tablet")).body,
+  );
+  const deviceId = (await second.admin("devices.list")).devices.find((d) => d.name === "Linux proof device").deviceId;
+  const setGrant = async (name, id, terminals, workspace) => {
+    if (pu) puCli("grant", name, "--terminals", terminals, "--workspace", workspace);
+    else {
+      await second.admin("devices.workspaceManagement", { deviceId: id, workspaceManagement: false });
+      await second.admin("devices.terminals", { deviceId: id, terminals });
+      await second.admin("devices.workspaceManagement", { deviceId: id, workspaceManagement: workspace === "on" });
+    }
+  };
+  await setGrant("Linux proof device", deviceId, "view", "off");
+  await setGrant("Linux proof tablet", tablet.deviceId, "control", "on");
+  // ws comes from the payload itself, as the bridge loads it.
+  const WebSocket = createRequire(entry)("ws");
+  const connect = (who) =>
+    new Promise((resolve, reject) => {
+      const ws = new WebSocket(qr.endpoint, {
+        rejectUnauthorized: false,
+        headers: { Authorization: `Bearer ${who.credential}`, "X-PointGuard-Client-ID": who.clientId },
+      });
+      const inbox = [];
+      let next = 0;
+      ws.on("message", (bytes) => inbox.push(JSON.parse(bytes.toString())));
+      ws.once("upgrade", (res) => {
+        const cert = res.socket.getPeerCertificate().raw;
+        assert.equal(createHash("sha256").update(cert).digest("hex"), qr.certificateSHA256);
+      });
+      ws.once("open", () => {
+        // Errors after open (e.g. a revoked socket closing) end in "close".
+        ws.on("error", () => {});
+        resolve({
+          ws,
+          inbox,
+          call: (op, fields = {}) =>
+            new Promise((done, fail) => {
+              const id = `${op}-${++next}`;
+              const timer = setTimeout(() => fail(new Error(`no receipt for ${op}`)), 10000);
+              const listener = (bytes) => {
+                const r = JSON.parse(bytes.toString());
+                if (r.type === "receipt" && r.id === id) {
+                  clearTimeout(timer);
+                  ws.off("message", listener);
+                  done(r);
+                }
+              };
+              ws.on("message", listener);
+              ws.send(JSON.stringify({ version: 1, id, op, clientId: who.clientId, ...fields }));
+            }),
+        });
+      });
+      ws.once("error", reject);
+    });
+  const viewer = await connect({ credential, clientId: deviceId });
+  const manager = await connect(tablet);
+  assert.equal((await viewer.call("permissions")).data.chat, "read");
+  assert.equal((await manager.call("permissions")).data.chat, "send");
+  assert.equal((await viewer.call("send", { text: "never dispatched" })).ok, false, "View cannot send chat");
+  // An unknown credential never upgrades.
+  await assert.rejects(connect({ credential: "x".repeat(43), clientId: deviceId }));
   if (pu) {
     const listed = JSON.parse(puCli("devices", "--json"));
     const text = JSON.stringify(listed);
     assert.ok(text.includes("Linux proof device"), text);
-    assert.ok(!text.includes(credential));
+    assert.ok(!text.includes(credential) && !text.includes(tablet.credential));
+    assert.equal(listed.find((d) => d.name === "Linux proof tablet").chat, "send");
     puCli("revoke", "Linux proof device");
   } else {
-    await second.admin("devices.revoke", { deviceId: devices[0].deviceId });
+    await second.admin("devices.revoke", { deviceId });
   }
   const revoked = (await second.admin("devices.list")).devices;
-  assert.ok(revoked.every((d) => d.revokedAt), "Revocation is durable before success");
+  assert.ok(revoked.find((d) => d.deviceId === deviceId).revokedAt, "Revocation is durable before success");
+  // The revoked device's socket closes now; the other device stays connected.
+  if (viewer.ws.readyState !== WebSocket.CLOSED) await once(viewer.ws, "close");
+  assert.equal(manager.ws.readyState, WebSocket.OPEN);
+  assert.equal((await manager.call("permissions")).data.chat, "send");
+  // A live downgrade applies to the very next message.
+  await setGrant("Linux proof tablet", tablet.deviceId, "off", "off");
+  assert.equal((await manager.call("permissions")).data.chat, "off");
+  assert.equal((await manager.call("sync")).ok, false, "Off refuses chat reads");
+  manager.ws.close();
+  if (pu) {
+    // `pu phone pair`: stdout is not a terminal, so it prints the paste code.
+    const pairing = () => {
+      const child = spawn(pu, ["phone", "pair", "--ttl", "60"], {
+        env: { HOME: home, PATH: "/usr/bin:/bin" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let out = "";
+      child.stdout.on("data", (b) => (out += b));
+      child.stderr.on("data", (b) => (out += b));
+      const code = (async () => {
+        for (let i = 0; i < 100 && !out.includes("purepoint-pair:{"); i++) await pause(100);
+        const line = out.split("\n").find((l) => l.startsWith("purepoint-pair:"));
+        assert.ok(line, out);
+        return JSON.parse(line.slice("purepoint-pair:".length));
+      })();
+      return { child, code, out: () => out };
+    };
+    const paired = pairing();
+    const pasted = await paired.code;
+    assert.equal(pasted.certificateSHA256, qr.certificateSHA256);
+    assert.equal((await enroll(pasted, "Linux proof paste")).status, 200);
+    const [exitCode] = await once(paired.child, "exit");
+    assert.equal(exitCode, 0, paired.out());
+    assert.match(paired.out(), /Paired "Linux proof paste": terminals off, workspace off, chat none/);
+    // An SSH drop (SIGHUP) before use revokes the code.
+    const dropped = pairing();
+    const abandoned = await dropped.code;
+    dropped.child.kill("SIGHUP");
+    await once(dropped.child, "exit");
+    assert.notEqual((await enroll(abandoned, "Too late")).status, 200, "A dropped pairing code is revoked");
+    puCli("revoke", "Linux proof paste");
+  }
   await stop(second);
 
   // 3. Restart: identity and trust survive; the revoked device stays revoked.
@@ -256,11 +363,13 @@ try {
   assert.equal(third.ready.hostId, first.ready.hostId);
   assert.equal(third.ready.certificateSHA256, first.ready.certificateSHA256);
   const after = (await third.admin("devices.list")).devices;
-  assert.equal(after.length, 1);
-  assert.ok(after[0].revokedAt);
+  assert.equal(after.length, pu ? 3 : 2);
+  assert.ok(after.find((d) => d.deviceId === deviceId).revokedAt);
+  const kept = after.find((d) => d.deviceId === tablet.deviceId);
+  assert.ok(!kept.revokedAt && kept.terminals === "off", "Grants persist across restart");
   await stop(third);
   console.log(
-    `PASS ${inPlace ? "installed" : "relocated"} ${manifest.target} payload for pu ${manifest.puVersion}: empty HOME/stripped PATH, private Unix admin, pinned single-use enrollment, owner token separation, revocation, lock collision, identity across restart${pu ? ", pu phone status/devices/revoke" : ""}.`,
+    `PASS ${inPlace ? "installed" : "relocated"} ${manifest.target} payload for pu ${manifest.puVersion}: empty HOME/stripped PATH, private Unix admin, pinned single-use enrollment, per-message grants over the pinned WebSocket, owner token separation, revocation with the other device still connected, lock collision, identity across restart${pu ? ", pu phone status/devices/grant/revoke/pair" : ""}.`,
   );
 } finally {
   // Only this proof's own child may be signaled.

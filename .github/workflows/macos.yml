@@ -453,6 +453,57 @@ jobs:
           BEFORE=$(stat -c '%i %Y' "$INSTALLED")
           run_install | grep -F "already installed"
           [ "$(stat -c '%i %Y' "$INSTALLED")" = "$BEFORE" ]
+      # The runner is an ephemeral VM with systemd as PID 1, so this step uses
+      # its real HOME and user manager to prove the unit pu phone writes.
+      - name: Run phone access as a systemd user service
+        run: |
+          env -i HOME="$HOME" PATH=/usr/bin:/bin PU_ARCHIVE="$PU_TARBALL" \
+            PU_PHONE_ARCHIVE="$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz" sh scripts/install.sh
+          sudo loginctl enable-linger "$USER"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 0.2; done
+          PU="$HOME/.pu/bin/pu"
+          UNIT_FILE="$HOME/.config/systemd/user/pu-pointguard.service"
+          ready() {
+            for _ in $(seq 60); do
+              if "$PU" phone status --json > "$RUNNER_TEMP/status.json" &&
+                [ "$(jq -r '.pointGuard.phase // empty' "$RUNNER_TEMP/status.json")" = ready ]; then
+                return 0
+              fi
+              sleep 1
+            done
+            cat "$RUNNER_TEMP/status.json"
+            return 1
+          }
+          "$PU" phone install --now
+          ready
+          grep -qxF 'NoNewPrivileges=yes' "$UNIT_FILE"
+          grep -qxF 'UMask=0077' "$UNIT_FILE"
+          [ "$(stat -c %a "$UNIT_FILE")" = 644 ]
+          # Owner admin is a private Unix socket, not a TCP port.
+          STATE="$HOME/.local/state/purepoint/point-guard"
+          [ "$(stat -c %a "$STATE/admin")" = 700 ]
+          [ "$(stat -c %a "$STATE/admin/admin.sock")" = 600 ]
+          "$PU" phone devices | grep -F "No paired devices"
+          HOST=$(jq -r .pointGuard.hostId "$RUNNER_TEMP/status.json")
+          # The bridge's environment excludes inherited loader and Node options.
+          PID=$(systemctl --user show -p MainPID --value pu-pointguard.service)
+          if tr '\0' '\n' < "/proc/$PID/environ" | grep -E '^(NODE_OPTIONS|LD_PRELOAD|PU_ENGINE_PATH)='; then exit 1; fi
+          "$PU" phone restart
+          ready
+          [ "$(jq -r .pointGuard.hostId "$RUNNER_TEMP/status.json")" = "$HOST" ]
+          # An idle stop exits 0, so Restart=on-failure never resurrects it.
+          "$PU" phone stop
+          sleep 8
+          [ "$(systemctl --user is-active pu-pointguard.service || true)" = inactive ]
+          "$PU" phone uninstall
+          [ ! -e "$UNIT_FILE" ]
+          # Device trust and host identity outlive the service.
+          [ -f "$STATE/trust/trust.json" ]
+      - name: Point Guard service journal
+        if: failure()
+        run: XDG_RUNTIME_DIR="/run/user/$(id -u)" journalctl --user -u pu-pointguard.service --no-pager | tail -200 || true
       - name: Refuse phone access on musl and keep pu installed
         run: |
           set +e
