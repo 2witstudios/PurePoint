@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 /// NSViewController hosting an NSOutlineView for compact sidebar rows.
@@ -1323,3 +1324,4 @@ final class SidebarKeyOutlineView: NSOutlineView {
         onWindowAttached?(self)
     }
 }
+#endif

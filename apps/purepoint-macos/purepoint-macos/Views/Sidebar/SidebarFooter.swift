@@ -82,6 +82,7 @@ struct SidebarFooter: View {
     }
 
     private func openProjectWithPicker() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -91,6 +92,10 @@ struct SidebarFooter: View {
         if panel.runModal() == .OK, let url = panel.url {
             appState.openProject(url.path)
         }
+        #else
+        // No local folders on iPad: the remote folder picker registers this hook (IPAD-7.1).
+        AppLifecycleHooks.openProject?()
+        #endif
     }
 
     private func showCommandPalette() {

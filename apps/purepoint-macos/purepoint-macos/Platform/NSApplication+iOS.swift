@@ -20,4 +20,19 @@ final class NSApplication {
     /// iOS apps cannot bring themselves to the foreground; a notification tap already did.
     func activate(ignoringOtherApps: Bool) {}
 }
+
+/// AppKit's shared-application global, so `NSApp.keyWindow` call sites compile unchanged.
+@MainActor var NSApp: NSApplication { .shared }
+
+/// A Mac window is a UIKit window on iOS: shared views only pass it through (to anchor the
+/// command palette) or hand it focus requests.
+typealias NSWindow = UIWindow
+
+extension UIWindow {
+    /// AppKit's focus call. UIKit moves focus by asking the responder itself.
+    @discardableResult
+    func makeFirstResponder(_ responder: UIResponder?) -> Bool {
+        responder?.becomeFirstResponder() ?? false
+    }
+}
 #endif

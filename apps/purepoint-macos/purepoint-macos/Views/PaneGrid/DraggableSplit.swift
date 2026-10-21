@@ -52,6 +52,7 @@ struct DraggableSplit<First: View, Second: View>: View {
                 height: isVertical ? nil : dividerThickness
             )
             .contentShape(Rectangle().inset(by: -4))
+            #if os(macOS)
             .onHover { hovering in
                 if hovering {
                     if isVertical {
@@ -63,6 +64,9 @@ struct DraggableSplit<First: View, Second: View>: View {
                     NSCursor.pop()
                 }
             }
+            #else
+            .hoverEffect(.highlight)
+            #endif
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in

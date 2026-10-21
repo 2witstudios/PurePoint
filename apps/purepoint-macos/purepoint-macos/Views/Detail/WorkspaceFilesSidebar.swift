@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import SwiftUI
 
 /// Attached to the workspace's content, rather than the elevated global navigation.
@@ -224,7 +226,12 @@ private struct InlineFilePreview: View {
             while !Task.isCancelled {
                 // A remote check is an SSH round trip: skip it while the app is in the
                 // background, like the other remote pollers (the first read always runs).
+                #if os(macOS)
                 let checkNow = hunks == nil || host.isLocal || NSApplication.shared.isActive
+                #else
+                // On iOS the scene-phase hook pauses background polling (IPAD-7.4).
+                let checkNow = true
+                #endif
                 let modified = checkNow ? await FileIOService.fileModificationDate(at: path, host: host) : lastModified
                 if checkNow, hunks == nil || modified != lastModified {
                     do {

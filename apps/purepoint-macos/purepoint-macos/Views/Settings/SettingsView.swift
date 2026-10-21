@@ -87,8 +87,10 @@ struct SettingsView: View {
                     SettingsHotkeysView()
                 case .display:
                     SettingsDisplayView()
+                #if os(macOS)
                 case .about:
                     SettingsAboutView()
+                #endif
                 }
             }
             .padding(24)

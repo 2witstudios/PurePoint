@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// Register a machine reachable over SSH. PurePoint stores only its name and SSH destination
@@ -64,7 +68,9 @@ struct AddMachineSheet: View {
         }
         .padding(20)
         .frame(width: 420)
+        #if os(macOS)
         .task { aliases = SSHConfig.hostAliases() }
+        #endif
     }
 
     static func suggestedName(_ alias: String) -> String {
@@ -84,6 +90,7 @@ struct AddMachineSheet: View {
         }
         isTesting = true
         testResult = nil
+        #if os(macOS)
         Task {
             do {
                 let home = try await MachineSSH.resolveHome(sshHost: host)
@@ -96,6 +103,14 @@ struct AddMachineSheet: View {
             isTesting = false
             if let testResult { Self.announce(testResult) }
         }
+        #else
+        // The iPad tests a machine over its own SSH connection (IPAD-5.4); there is no system ssh.
+        let message = "Testing a connection is not yet available on iPad."
+        testSucceeded = false
+        testResult = message
+        isTesting = false
+        Self.announce(message)
+        #endif
     }
 
     private func add() {
@@ -115,9 +130,13 @@ struct AddMachineSheet: View {
 
     /// Results appear in the sheet; VoiceOver users hear them too.
     private static func announce(_ message: String) {
+        #if os(macOS)
         guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
         NSAccessibility.post(
             element: window, notification: .announcementRequested,
             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+        #else
+        UIAccessibility.post(notification: .announcement, argument: message)
+        #endif
     }
 }

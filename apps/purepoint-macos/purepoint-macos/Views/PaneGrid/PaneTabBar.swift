@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// The strip at the top of every pane: its tabs, then the pane's actions.
@@ -305,6 +309,7 @@ enum TabCloseConfirmation {
             reasons.append("Unsaved changes to \(unsaved.joined(separator: ", ")) will be lost.")
         }
 
+        #if os(macOS)
         let alert = NSAlert()
         alert.messageText = tabs.count > 1 ? "Close this pane?" : "Close this tab?"
         alert.informativeText = reasons.joined(separator: " ")
@@ -312,6 +317,19 @@ enum TabCloseConfirmation {
         alert.addButton(withTitle: tabs.count > 1 ? "Close Pane" : "Close Tab")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+        #else
+        // UIKit has no modal run loop to answer synchronously, so the close is refused and the
+        // reasons are shown: nothing is lost without the user's say.
+        let alert = UIAlertController(
+            title: tabs.count > 1 ? "Can't close this pane" : "Can't close this tab",
+            message: reasons.joined(separator: " "), preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        if var presenter = NSApp.keyWindow?.rootViewController {
+            while let presented = presenter.presentedViewController { presenter = presented }
+            presenter.present(alert, animated: true)
+        }
+        return false
+        #endif
     }
 }
 
@@ -323,6 +341,7 @@ private struct MiddleClickModifier: ViewModifier {
     }
 }
 
+#if os(macOS)
 /// Catches only the middle mouse button; every other event passes through to SwiftUI.
 private struct MiddleClickCatcher: NSViewRepresentable {
     let action: () -> Void
@@ -349,6 +368,15 @@ private struct MiddleClickCatcher: NSViewRepresentable {
         }
     }
 }
+#else
+/// UIKit delivers no middle-button clicks to a view, so on iOS the catcher is a no-op and the
+/// tab keeps its close button.
+private struct MiddleClickCatcher: View {
+    let action: () -> Void
+
+    var body: some View { EmptyView() }
+}
+#endif
 
 extension View {
     fileprivate func onMiddleClick(perform action: @escaping () -> Void) -> some View {

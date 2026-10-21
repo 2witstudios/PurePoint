@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import ImageIO
 import PDFKit
@@ -70,3 +71,4 @@ nonisolated enum PiAttachmentImport {
         throw PiComposerError("This image could not be prepared. Choose a smaller image.")
     }
 }
+#endif

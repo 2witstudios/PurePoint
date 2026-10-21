@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct ToolCallCardView: View {
@@ -50,3 +51,4 @@ struct ToolCallCardView: View {
         }
     }
 }
+#endif
