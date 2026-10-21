@@ -25,9 +25,11 @@ struct ScheduleView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: Bindable(state).showingCreationSheet) {
             ScheduleEventSheet(state: state, editingEvent: nil)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(state).showingEditSheet) {
             ScheduleEventSheet(state: state, editingEvent: state.selectedEvent)
+                .presentedControlDefaults()
         }
         .task {
             await state.loadSchedules(projectRoots: projectRoots)

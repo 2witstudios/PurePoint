@@ -54,6 +54,8 @@ struct AddMachineSheet: View {
         }
         .padding(20)
         .frame(width: 420)
+        // Presented as a sheet, which does not inherit the root's Mac control defaults.
+        .presentedControlDefaults()
         .onChange(of: flow.error) { _, error in if let error { Self.announce(error) } }
         .onChange(of: flow.step) { _, step in
             switch step {
@@ -66,26 +68,43 @@ struct AddMachineSheet: View {
         .fileImporter(isPresented: $showKeyImporter, allowedContentTypes: [.data, .text, .plainText]) { result in
             importKeyFile(result)
         }
-        .sheet(isPresented: $showPasteKey) { pasteKeySheet }
+        .sheet(isPresented: $showPasteKey) { pasteKeySheet.presentedControlDefaults() }
     }
 
     // MARK: - Sections
 
+    /// The Mac sheet's `Form` in the macOS columns style: right-aligned labels with a colon,
+    /// rounded-border fields beside them. An iOS `Form` is an inset list that drops the labels.
     private var fields: some View {
-        Form {
-            TextField("Name", text: $flow.name, prompt: Text("studio"))
-            TextField("Host", text: $flow.host, prompt: Text("studio.local or 192.168.1.20"))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-            TextField("Port", text: $flow.port, prompt: Text("22"))
-                .keyboardType(.numberPad)
-            TextField("User", text: $flow.user, prompt: Text("jono"))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 8) {
+            row("Name") { TextField("Name", text: $flow.name, prompt: Text("studio")) }
+            row("Host") {
+                TextField("Host", text: $flow.host, prompt: Text("studio.local or 192.168.1.20"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+            }
+            row("Port") {
+                TextField("Port", text: $flow.port, prompt: Text("22"))
+                    .keyboardType(.numberPad)
+            }
+            row("User") {
+                TextField("User", text: $flow.user, prompt: Text("jono"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
         }
+        .textFieldStyle(.roundedBorder)
         .disabled(flow.isBusy || isConfirming)
-        .frame(minHeight: 200)
+    }
+
+    private func row<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
+        GridRow {
+            Text("\(label):")
+                .gridColumnAlignment(.trailing)
+                .accessibilityHidden(true)
+            field()
+        }
     }
 
     private var deviceKey: some View {
@@ -160,6 +179,7 @@ struct AddMachineSheet: View {
             if flow.step == .saved {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             } else {
                 Button("Cancel") {
                     Task { await flow.cancel() }
@@ -171,6 +191,7 @@ struct AddMachineSheet: View {
                     Task { await flow.submit(appState: appState) }
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
                 .disabled(flow.isBusy || isConfirming || !canSubmit)
             }
         }

@@ -97,6 +97,7 @@ struct PointGuardSetupView: View {
             PointGuardPairingScanner { code in
                 showScanner = false; chat.pair(code)
             }
+            .presentedControlDefaults()
         }
     }
 

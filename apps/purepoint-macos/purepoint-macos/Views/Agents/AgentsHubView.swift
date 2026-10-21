@@ -84,15 +84,19 @@ struct AgentsHubView: View {
         }
         .sheet(isPresented: Bindable(hubState).showingCreatePrompt) {
             PromptCreationSheet(hubState: hubState)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(hubState).showingCreateAgent) {
             AgentCreationSheet(hubState: hubState)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(hubState).showingCreateSwarm) {
             SwarmCreationSheet(hubState: hubState)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(triggersState).showingCreationSheet) {
             TriggerCreationSheet(state: triggersState)
+                .presentedControlDefaults()
         }
     }
 

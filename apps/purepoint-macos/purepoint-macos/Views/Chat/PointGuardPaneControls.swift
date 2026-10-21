@@ -63,6 +63,7 @@ struct PointGuardPaneControls: View {
                     #endif
                 }
             }.frame(width: 620, height: 650)
+            .presentedControlDefaults()
             #if os(iOS)
             // The strip forces a dark scheme; the sheet follows the window like a Mac sheet window.
             .environment(\.colorScheme, Self.windowColorScheme)

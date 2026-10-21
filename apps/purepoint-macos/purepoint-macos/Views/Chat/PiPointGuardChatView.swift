@@ -94,7 +94,7 @@ struct PiPointGuardChatView: View {
                         Task { await model.answer(current, cancelled: true) }
                     }
                 })
-        ) { dialog in PiDialogView(model: model, dialog: dialog).id(dialog.id) }
+        ) { dialog in PiDialogView(model: model, dialog: dialog).id(dialog.id).presentedControlDefaults() }
     }
 
     private var sidebar: some View {
@@ -670,8 +670,15 @@ private struct PiDialogView: View {
                     Button("No") { Task { await model.answer(dialog, confirmed: false) } }
                     Button("Confirm") { Task { await model.answer(dialog, confirmed: true) } }.keyboardShortcut(
                         .defaultAction)
+                        #if os(iOS)
+                        .buttonStyle(.borderedProminent)
+                        #endif
                 } else if dialog.method != "select" {
                     Button("Send") { Task { await model.answer(dialog, value: text) } }.keyboardShortcut(.defaultAction)
+                        #if os(iOS)
+                        // The Mac draws the default button prominent on its own.
+                        .buttonStyle(.borderedProminent)
+                        #endif
                 }
             }
         }.padding(24).frame(width: 420).onAppear { text = dialog.prefill ?? "" }

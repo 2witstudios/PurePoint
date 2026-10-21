@@ -484,6 +484,7 @@ struct RemoteProjectPickerPresenter: ViewModifier {
             }
             .sheet(isPresented: $isPresented) {
                 RemoteFolderPicker()
+                    .presentedControlDefaults()
             }
     }
 
