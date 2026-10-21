@@ -132,11 +132,12 @@ struct PointGuardSetupView: View {
                 Spacer()
                 Picker("Access", selection: Binding(
                     get: { level },
-                    set: { next in if let id { Task { await service.setAccess(id, from: level, to: next) } } }
+                    set: { next in if let id { Task { await service.setAccess(id, to: next) } } }
                 )) {
                     ForEach(PointGuardPhoneAccess.Level.allCases) { Text($0.title).tag($0) }
                 }
                 .labelsHidden().pickerStyle(.menu).fixedSize()
+                .disabled(id.map(service.accessUpdates.contains) ?? true)
                 Button("Revoke", role: .destructive) { if let id { Task { await service.revokeDevice(id) } } }
             }
             Text(PointGuardPhoneAccess.summary(terminals: level.terminals, workspaceManagement: level.workspaceManagement))

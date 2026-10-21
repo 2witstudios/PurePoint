@@ -267,6 +267,15 @@ import Foundation
         }
         precondition(PointGuardPhoneAccess.Level(terminals: "view", workspaceManagement: true) == .view)
         precondition(PointGuardPhoneAccess.Level(terminals: "admin", workspaceManagement: true) == .off)
+        // Access writes come from the stored grants, so a legacy management grant under View is cleared.
+        precondition(PointGuardPhoneAccess.steps(terminals: "view", workspaceManagement: true, to: .terminals)
+            == [.workspaceManagement(false), .terminals("control")])
+        precondition(PointGuardPhoneAccess.steps(terminals: "off", workspaceManagement: true, to: .off) == [.workspaceManagement(false)])
+        precondition(PointGuardPhoneAccess.steps(terminals: "view", workspaceManagement: false, to: .full)
+            == [.terminals("control"), .workspaceManagement(true)])
+        precondition(PointGuardPhoneAccess.steps(terminals: "control", workspaceManagement: true, to: .view)
+            == [.workspaceManagement(false), .terminals("view")])
+        precondition(PointGuardPhoneAccess.steps(terminals: "control", workspaceManagement: true, to: .full).isEmpty)
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }
