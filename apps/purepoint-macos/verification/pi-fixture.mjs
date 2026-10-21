@@ -26,6 +26,7 @@ const remote = await serve(controller, {host:'127.0.0.1',port:0,trust,tls:trust.
 const phoneEndpoint = `wss://127.0.0.1:${remote.address().port}/v1`;
 const enrollment = trust.createEnrollment({endpoint:phoneEndpoint});
 const device = await trust.enroll({enrollmentToken:JSON.parse(enrollment.payload).enrollmentToken,name:'Fixture phone'});
+await trust.setTerminals(device.deviceId,'control'); await trust.setWorkspaceManagement(device.deviceId,true);
 await writeFile(path.join(directory,'phone-trust.json'),JSON.stringify({...device,endpoint:phoneEndpoint,certificateSHA256:trust.certificateSHA256}),{mode:0o600});
 console.log(JSON.stringify({port:local.address().port,desktopClientId}));
 const close = async () => { controller.dispose(); await local.shutdown(); await remote.shutdown(); await rpc.close(); await trust.close(); process.exit(0); };

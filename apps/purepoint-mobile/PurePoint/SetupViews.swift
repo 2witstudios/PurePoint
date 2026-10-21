@@ -230,7 +230,7 @@ struct ConversationView: View {
                         .safeAreaInset(edge: .bottom) {
                             Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
                                 if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { finish() } } }
-                            }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession).padding().frame(maxWidth: .infinity).background(Color(uiColor: .systemBackground))
+                            }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend).padding().frame(maxWidth: .infinity).background(Color(uiColor: .systemBackground))
                         }
                 } else {
                     List {
@@ -246,7 +246,7 @@ struct ConversationView: View {
             .safeAreaInset(edge: .top) { if let error = model.error { NoticeBanner(text: error).padding(.horizontal, 12).padding(.vertical, 6).background(.bar) } }
             .navigationTitle(model.browsing?.title ?? "History").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .bottomBar) { Button("New conversation") { if model.busy { confirmNew = true } else { Task { await model.changeSession(selection: selection); finish() } } }.disabled(!model.connected || model.demo || model.changingSession) }
+                ToolbarItem(placement: .bottomBar) { Button("New conversation") { if model.busy { confirmNew = true } else { Task { await model.changeSession(selection: selection); finish() } } }.disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend) }
                 ToolbarItem(placement: .topBarLeading) { if model.browsing != nil { Button("Back") { model.browsing = nil } } }
                 ToolbarItem(placement: .topBarTrailing) { Button("Close") { model.browsing = nil; finish() }.keyboardShortcut(.cancelAction) }
             }

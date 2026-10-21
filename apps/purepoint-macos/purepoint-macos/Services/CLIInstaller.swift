@@ -12,12 +12,15 @@ enum CLIInstaller {
     private static let oldPluginDir = home.appendingPathComponent(".claude/plugins/purepoint")
     private static let oldSkillDir = home.appendingPathComponent(".claude/skills/pu")
 
-    /// Copy the bundled `pu` binary to ~/.pu/bin/pu, set up the local marketplace
+    /// Copy the bundled `pu` and `pu-engine` to ~/.pu/bin, set up the local marketplace
     /// at ~/.pu/marketplace/, and register it with Claude Code if needed.
     static func installIfNeeded() {
         guard let macosDir = Bundle.main.executableURL?.deletingLastPathComponent() else { return }
 
-        installBinary(from: macosDir)
+        // `pu` auto-starts only the engine beside it (or in ~/.pu/bin), so the
+        // two are installed together.
+        installBinary(named: "pu", from: macosDir)
+        installBinary(named: "pu-engine", from: macosDir)
         let pluginUpdated = installPlugin(from: macosDir)
         if pluginUpdated {
             DispatchQueue.global().async {
@@ -26,11 +29,11 @@ enum CLIInstaller {
         }
     }
 
-    private static func installBinary(from macosDir: URL) {
-        let bundled = macosDir.appendingPathComponent("pu")
+    private static func installBinary(named name: String, from macosDir: URL) {
+        let bundled = macosDir.appendingPathComponent(name)
         guard FileManager.default.isExecutableFile(atPath: bundled.path) else { return }
 
-        let target = installDir.appendingPathComponent("pu")
+        let target = installDir.appendingPathComponent(name)
 
         if FileManager.default.isExecutableFile(atPath: target.path),
             isUpToDate(source: bundled, target: target)
@@ -39,8 +42,29 @@ enum CLIInstaller {
         }
 
         try? FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: target)
-        try? FileManager.default.copyItem(at: bundled, to: target)
+        installAtomically(bundled, to: target)
+    }
+
+    /// Copy to a temporary file, then rename it over `target`. Writing the target in
+    /// place would modify the image of a daemon running from it, which macOS kills;
+    /// rename swaps the directory entry, so a running process keeps its old file.
+    private static func installAtomically(_ source: URL, to target: URL) {
+        let fileManager = FileManager.default
+        let temporary = target.deletingLastPathComponent().appendingPathComponent(
+            ".\(target.lastPathComponent).tmp.\(ProcessInfo.processInfo.processIdentifier)")
+        try? fileManager.removeItem(at: temporary)
+        do {
+            try fileManager.copyItem(at: source, to: temporary)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: temporary.path)
+            guard rename(temporary.path, target.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            logger.error(
+                "failed to install \(target.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     /// Copy bundled plugin into the local marketplace at ~/.pu/marketplace/plugins/pu/

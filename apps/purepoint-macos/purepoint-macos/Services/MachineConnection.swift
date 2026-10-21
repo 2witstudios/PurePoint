@@ -115,9 +115,9 @@ nonisolated enum MachineSSH {
         ]
     }
 
-    /// Non-interactive SSH has a minimal PATH; the prefix lets both `pu` and the `pu-engine`
-    /// it spawns resolve from the installed locations. Wrapped in `/bin/sh -c` so a fish or
-    /// csh login shell runs it too.
+    /// Non-interactive SSH has a minimal PATH; the prefix lets `pu` resolve from the installed
+    /// locations. `pu` then starts the `pu-engine` beside itself (or in `~/.pu/bin`), never one
+    /// found on PATH. Wrapped in `/bin/sh -c` so a fish or csh login shell runs it too.
     static let startDaemonCommand =
         "/bin/sh -c 'PATH=\"$HOME/.pu/bin:$HOME/.cargo/bin:$PATH\"; export PATH; exec pu health'"
 

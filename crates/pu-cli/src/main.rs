@@ -72,7 +72,7 @@ enum Commands {
         /// Variable substitution (KEY=VALUE), repeatable
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
-        /// Skip auto-mode flags (--dangerously-skip-permissions, --sandbox, etc.)
+        /// Launch the bare agent command, ignoring configured launch args (project and machine). --agent-args still apply
         #[arg(long)]
         no_auto: bool,
         /// Extra CLI flags passed directly to the agent (space-separated)

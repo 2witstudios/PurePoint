@@ -86,14 +86,13 @@ just export         # Export from archive
 
 ### Full release pipeline (CI)
 
-The release CI workflow (`.github/workflows/release.yml`) triggered by `v*` tags:
+The release CI workflow (`.github/workflows/release.yml`) runs on a `v*` tag push:
 
-1. Build universal Rust binaries (arm64 + x86_64)
-2. Archive Xcode project with Developer ID signing
-3. Export and notarize with Apple
-4. Create DMG and sign with Sparkle
-5. Create GitHub Release with DMG attached
-6. Generate Sparkle appcast XML
+1. `build-macos` archives the universal app ad-hoc signed, with no secrets and a read-only token. `linux` builds the static musl tarballs the same way.
+2. `sign-macos`, in the protected `release` environment, re-signs the app inside-out with Developer ID (`.github/scripts/sign-macos-app.sh`), notarizes and staples it, builds the DMG, signs, notarizes and staples the DMG, and signs it for Sparkle. Sparkle's `sign_update` and `create-dmg` are downloaded at pinned versions and checked against committed SHA-256 sums.
+3. `publish` creates the GitHub release with the DMG and Linux tarballs in one step, then updates the Sparkle appcast on the `appcast` release.
+
+A failed job can be re-run from the Actions page. The release is created only once every build is signed, so a re-run never replaces published assets. See DIST-005 in `docs/architecture/distribution.md` for the security model and the repository settings it relies on.
 
 ## Toolchain
 

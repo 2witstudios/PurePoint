@@ -359,7 +359,7 @@ impl Engine {
                 };
             }
         };
-        let agent_cfg = match config::resolve_agent(&cfg, &agent_entry.agent_type) {
+        let mut agent_cfg = match config::resolve_agent(&cfg, &agent_entry.agent_type) {
             Some(c) => c.clone(),
             None => {
                 return Response::Error {
@@ -421,6 +421,10 @@ impl Engine {
             .ok();
         }
         let effective_session_id = agent_entry.session_id.clone();
+        if agent_entry.bare_launch {
+            // Spawned with --no-auto: keep the bare command across resume.
+            agent_cfg.clear_launch_args();
+        }
 
         // 4. Construct resume command based on agent type
         let (command, mut args, session_id) = match self.build_resume_command(
@@ -563,7 +567,7 @@ impl Engine {
         // as on initial spawn. Resume flags belong to the wrapped agent.
         let (command, mut args) = Self::parse_agent_command(agent_cfg, agent_type)?;
         let launch_args =
-            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
+            pu_core::types::resolved_launch_args(agent_type, agent_cfg.configured_launch_args());
         let mut policy_args = args.clone();
         policy_args.extend(launch_args.clone());
         crate::read_source::prepare_session_args(agent_type, &mut policy_args, "validation")
@@ -607,7 +611,9 @@ impl Engine {
                 Ok((command, args, Some(sid.into())))
             }
             _ => {
-                // Terminal / unknown: fresh shell in same directory
+                // Terminal / unknown: fresh shell in same directory, launched
+                // with the same configured args as the initial spawn.
+                args.extend(launch_args);
                 Ok((command, args, None))
             }
         }
@@ -684,6 +690,8 @@ mod resume_command_tests {
                 prompt_flag: None,
                 interactive: true,
                 launch_args: Some(vec![]),
+                machine_launch_args: None,
+                policy_launch_args: None,
             };
             // when / then
             assert!(engine.build_resume_command(kind, &config, None).is_err());
@@ -732,6 +740,8 @@ mod resume_command_tests {
                 prompt_flag: None,
                 interactive: true,
                 launch_args: Some(vec!["--first".into(), "shared".into()]),
+                machine_launch_args: None,
+                policy_launch_args: None,
             };
 
             // when
@@ -767,5 +777,107 @@ mod resume_command_tests {
                 "{agent_type}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod bare_launch_resume_tests {
+    use pu_core::protocol::{Request, Response, SuspendTarget};
+    use pu_core::types::AgentLocation;
+
+    use super::*;
+
+    /// Spawn a root terminal agent whose config carries launch args, then
+    /// suspend and resume it. Returns the manifest entry's `bare_launch` flag
+    /// and the resumed process's argv as `ps` reports it.
+    async fn spawn_suspend_resume(no_auto: bool) -> (bool, String) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let pr = root.to_string_lossy().to_string();
+        let engine = Engine::new();
+        engine
+            .handle_request(Request::Init {
+                project_root: pr.clone(),
+            })
+            .await;
+        // `-i` stands in for any configured launch arg (project or machine).
+        std::fs::write(
+            pu_core::paths::config_path(&root),
+            "agents:\n  terminal:\n    name: terminal\n    command: shell\n    launchArgs: -i\n",
+        )
+        .unwrap();
+        let agent_id = match engine
+            .handle_request(Request::Spawn {
+                project_root: pr.clone(),
+                prompt: String::new(),
+                agent: "terminal".into(),
+                name: None,
+                base: None,
+                root: true,
+                worktree: None,
+                command: None,
+                no_auto,
+                extra_args: vec![],
+                plan_mode: false,
+                no_trigger: true,
+                trigger: None,
+            })
+            .await
+        {
+            Response::SpawnResult { agent_id, .. } => agent_id,
+            other => panic!("expected SpawnResult, got {other:?}"),
+        };
+        engine
+            .handle_request(Request::Suspend {
+                project_root: pr.clone(),
+                target: SuspendTarget::Agent(agent_id.clone()),
+            })
+            .await;
+        let resumed = engine
+            .handle_request(Request::Resume {
+                project_root: pr.clone(),
+                agent_id: agent_id.clone(),
+            })
+            .await;
+        assert!(
+            matches!(resumed, Response::ResumeResult { .. }),
+            "{resumed:?}"
+        );
+        let m = manifest::read_manifest(&root).unwrap();
+        let Some(AgentLocation::Root(agent)) = m.find_agent(&agent_id) else {
+            panic!("agent missing from manifest");
+        };
+        let pid = agent.pid.expect("resumed agent has a pid");
+        let ps = std::process::Command::new("ps")
+            .args(["-o", "args=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let argv = String::from_utf8_lossy(&ps.stdout).trim().to_string();
+        let bare = agent.bare_launch;
+        engine.kill_agents(&[agent_id]).await;
+        (bare, argv)
+    }
+
+    fn has_launch_arg(argv: &str) -> bool {
+        argv.split_whitespace().skip(1).any(|arg| arg == "-i")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_no_auto_spawn_should_resume_without_configured_launch_args() {
+        // given / when
+        let (bare, argv) = spawn_suspend_resume(true).await;
+        // then
+        assert!(bare, "--no-auto should persist on the manifest entry");
+        assert!(!has_launch_arg(&argv), "resumed with launch args: {argv}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn given_default_spawn_should_resume_with_configured_launch_args() {
+        // given / when
+        let (bare, argv) = spawn_suspend_resume(false).await;
+        // then — control: the check above would catch leaked args
+        assert!(!bare);
+        assert!(has_launch_arg(&argv), "resumed without launch args: {argv}");
     }
 }
