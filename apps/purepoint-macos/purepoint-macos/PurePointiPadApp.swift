@@ -10,6 +10,7 @@ struct PurePointiPadApp: App {
     @State private var viewCache = TerminalViewCache()
     @State private var registry = WorkspaceRegistry()
     @State private var keyBindingState = KeyBindingState()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -34,6 +35,17 @@ struct PurePointiPadApp: App {
                     }
                     appState.loadMachines()
                 }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            AppLifecycleHooks.scenePhaseChanged?(phase)
+        }
+        .commands {
+            AppCommands(
+                appState: appState,
+                settingsState: settingsState,
+                registry: registry,
+                keyBindingState: keyBindingState
+            )
         }
     }
 }
