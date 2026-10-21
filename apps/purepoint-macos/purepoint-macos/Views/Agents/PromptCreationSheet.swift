@@ -101,7 +101,7 @@ struct PromptCreationSheet: View {
                 Task {
                     await hubState.saveTemplate(
                         projectRoot: saveRoot,
-                        projectRoots: appState.projects.map(\.projectRoot),
+                        projectRoots: appState.libraryProjectRoots,
                         name: name.trimmingCharacters(in: .whitespaces),
                         description: description,
                         agent: agentType,

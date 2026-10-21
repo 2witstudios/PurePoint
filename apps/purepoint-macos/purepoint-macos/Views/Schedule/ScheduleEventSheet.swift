@@ -24,7 +24,7 @@ struct ScheduleEventSheet: View {
     private var isEditing: Bool { editingEvent != nil }
 
     private var projectRoots: [String] {
-        appState.projects.map(\.projectRoot)
+        appState.libraryProjectRoots
     }
 
     private static let previewFormatter: DateFormatter = {

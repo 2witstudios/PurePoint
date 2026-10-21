@@ -122,7 +122,7 @@ struct SidebarFooter: View {
         let hub = appState.agentsHubState
         let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
-            await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            await hub.loadAll(projectRoots: appState.libraryProjectRoots)
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.variantsWithWorktree,
                 agents: hub.agents,

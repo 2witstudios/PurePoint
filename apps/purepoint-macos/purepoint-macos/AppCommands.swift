@@ -281,7 +281,7 @@ struct AppCommands: Commands {
         #if os(macOS)
         let window = NSApp.keyWindow
         CommandPalettePanel.requestOpen {
-            await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            await hub.loadAll(projectRoots: appState.libraryProjectRoots)
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.variantsWithWorktree,
                 agents: hub.agents,
@@ -298,7 +298,7 @@ struct AppCommands: Commands {
         #else
         // No key window to anchor to: the palette presenter decides where the palette appears.
         AppLifecycleHooks.paletteOpenCoordinator.request {
-            await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+            await hub.loadAll(projectRoots: appState.libraryProjectRoots)
             let items = CommandPaletteItem.buildItems(
                 builtInVariants: AgentVariant.variantsWithWorktree,
                 agents: hub.agents,

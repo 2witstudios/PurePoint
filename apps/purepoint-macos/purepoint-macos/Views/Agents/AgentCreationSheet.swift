@@ -137,7 +137,7 @@ struct AgentCreationSheet: View {
                 Task {
                     await hubState.saveAgentDef(
                         projectRoot: saveRoot,
-                        projectRoots: appState.projects.map(\.projectRoot),
+                        projectRoots: appState.libraryProjectRoots,
                         def: def
                     )
                     dismiss()

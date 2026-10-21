@@ -42,11 +42,33 @@ final class AppState {
 
     /// The active project when it is local. Library screens (agent definitions, schedules,
     /// triggers, agent settings) talk to the local daemon only.
+    #if os(macOS)
     var activeLocalProjectRoot: String? {
         guard let activeProjectRoot, !ProjectKey(id: activeProjectRoot).isRemote else {
             return projects.first?.projectRoot
         }
         return activeProjectRoot
+    }
+    #else
+    /// On iPad the library screens talk to the library machine's daemon (IPAD-012), so this is
+    /// the active project's root on that machine, or that machine's first project.
+    var activeLocalProjectRoot: String? {
+        guard let machine = libraryMachine else { return nil }
+        if let activeProjectRoot {
+            let key = ProjectKey(id: activeProjectRoot)
+            if key.machineId == machine.machine.id { return key.root }
+        }
+        return machine.projects.first?.projectRoot
+    }
+    #endif
+
+    /// The project roots the library screens list and create in.
+    var libraryProjectRoots: [String] {
+        #if os(macOS)
+        projects.map(\.projectRoot)
+        #else
+        libraryMachine?.projects.map(\.projectRoot) ?? []
+        #endif
     }
     // ContentView starts on Dashboard before its first selection-change callback.
     var activeSidebarSelection: SidebarSelection? = .nav(.dashboard)
@@ -65,10 +87,19 @@ final class AppState {
     @ObservationIgnored lazy var pointGuardService = PointGuardServiceModel()
     #endif
 
+    #if os(macOS)
     var agentsHubState = AgentsHubState()
     var agentConfigState = AgentConfigState()
     var scheduleState = ScheduleState()
     var triggersState = TriggersState()
+    #else
+    /// The machine the library screens use when the selection names none (IPAD-012).
+    var pickedLibraryMachineId: UUID?
+    /// Each machine's library states, made when its library is first shown
+    /// (`AppState+LibraryScope+iOS.swift`).
+    @ObservationIgnored var libraryStatesByMachine: [UUID: LibraryStates] = [:]
+    @ObservationIgnored lazy var noMachineLibraryStates = LibraryStates(endpoint: nil)
+    #endif
 
     weak var registry: WorkspaceRegistry?
 

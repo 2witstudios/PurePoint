@@ -27,8 +27,8 @@ final class AgentConfigState {
         self.sendRequest = sendRequest ?? { try await client.send($0) }
     }
     #else
-    /// iOS has no local daemon to start. Until agent settings target the selected machine's
-    /// daemon (IPAD-012), requests report that no daemon is running, without a local client.
+    /// iOS has no local daemon to start. `AppState` builds one per machine on that machine's
+    /// client (IPAD-012); these defaults report that no daemon is running.
     init(
         ensureDaemon: @escaping () async throws -> Void = { throw DaemonClientError.notRunning },
         sendRequest: ((DaemonRequest) async throws -> DaemonResponse)? = nil

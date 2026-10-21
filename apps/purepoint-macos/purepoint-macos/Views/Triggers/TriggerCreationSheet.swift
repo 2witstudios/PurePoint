@@ -168,7 +168,7 @@ struct TriggerCreationSheet: View {
                 Task {
                     await state.saveTrigger(
                         projectRoot: saveRoot,
-                        projectRoots: appState.projects.map(\.projectRoot),
+                        projectRoots: appState.libraryProjectRoots,
                         name: name.isEmpty ? "Untitled Trigger" : name,
                         description: description.isEmpty ? nil : description,
                         on: event.rawValue,

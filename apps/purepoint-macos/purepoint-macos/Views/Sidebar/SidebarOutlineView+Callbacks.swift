@@ -18,7 +18,7 @@ extension SidebarOutlineView {
             let builtIns = includeWorktree ? AgentVariant.variantsWithWorktree : AgentVariant.allVariants
             let window = NSApp.keyWindow
             CommandPalettePanel.requestOpen {
-                await hub.loadAll(projectRoots: appState.projects.map(\.projectRoot))
+                await hub.loadAll(projectRoots: appState.libraryProjectRoots)
                 let items = CommandPaletteItem.buildItems(
                     builtInVariants: builtIns,
                     agents: hub.agents,
