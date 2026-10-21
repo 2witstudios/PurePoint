@@ -33,8 +33,10 @@ import TreeSitterXML
 final class SyntaxHighlightManager {
     #if os(macOS)
     private weak var textView: NSTextView?
-    private var highlighter: TextViewHighlighter?
+    #else
+    private weak var textView: UITextView?
     #endif
+    private var highlighter: TextViewHighlighter?
     private var currentLanguage: EditorLanguage = .plaintext
     private let fontSize: CGFloat
 
@@ -57,9 +59,11 @@ final class SyntaxHighlightManager {
         return NSFont(descriptor: descriptor, size: regularFont.pointSize)
     }()
 
-    /// The text view binding (Neon's `TextViewHighlighter` over `UITextView`) arrives with the
-    /// iOS editor (IPAD-6.5). Until then the manager tracks the language and highlights nothing.
-    init(fontSize: CGFloat = 13) {
+    /// Highlights a TextKit 2 `UITextView` through Neon's `TextViewHighlighter`, which styles
+    /// with the text layout manager's rendering attributes (the TextKit 2 counterpart of the
+    /// Mac's temporary attributes).
+    init(textView: UITextView, fontSize: CGFloat = 13) {
+        self.textView = textView
         self.fontSize = fontSize
     }
     #endif
@@ -134,7 +138,59 @@ final class SyntaxHighlightManager {
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: range)
     }
     #else
-    private func rebuildHighlighter() {}
+    private func rebuildHighlighter() {
+        highlighter = nil
+
+        guard let textView else { return }
+
+        if textView.text.utf8.count > Self.maxHighlightSize {
+            clearRenderingAttributes()
+            return
+        }
+
+        guard let langConfig = Self.languageConfiguration(for: currentLanguage) else {
+            clearRenderingAttributes()
+            return
+        }
+
+        do {
+            let config = TextViewHighlighter.Configuration(
+                languageConfiguration: langConfig,
+                attributeProvider: { [fontSize] token in
+                    var attributes = Self.attributeProvider(token)
+                    if let font = attributes[.font] as? NSFont {
+                        attributes[.font] = font.withSize(fontSize)
+                    }
+                    return attributes
+                },
+                languageProvider: { name in
+                    Self.languageConfigurationForInjection(name)
+                },
+                locationTransformer: { [weak textView] offset in
+                    guard let textView else { return nil }
+                    let string = textView.textStorage.string as NSString
+                    guard offset <= string.length else { return nil }
+                    let head = string.substring(to: offset)
+                    let lines = head.components(separatedBy: "\n")
+                    let row = lines.count - 1
+                    let col = (lines.last ?? "").utf16.count
+                    return Point(row: row, column: col)
+                }
+            )
+            highlighter = try TextViewHighlighter(textView: textView, configuration: config)
+        } catch {
+            clearRenderingAttributes()
+        }
+    }
+
+    private func clearRenderingAttributes() {
+        guard let textView, let layoutManager = textView.textLayoutManager,
+            !textView.textStorage.string.isEmpty
+        else { return }
+        let range = layoutManager.documentRange
+        layoutManager.removeRenderingAttribute(.foregroundColor, for: range)
+        layoutManager.removeRenderingAttribute(.font, for: range)
+    }
     #endif
 
     // MARK: - Language Configuration Registry
