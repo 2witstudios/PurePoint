@@ -299,6 +299,15 @@ struct WorkspaceFilesSplitTests {
         #expect(Split.clampedSidebarWidth(900, total: 1200) == 640)
     }
 
+    @Test func aNewIPadStartsNarrowerThanTheMacIdeal() {
+        #expect(Split.defaultSidebarWidth == 280)
+        #expect(Split.clampedSidebarWidth(Split.defaultSidebarWidth, total: 1194) == 280)
+    }
+
+    @Test func theDividerHitAreaIsWideEnoughForAFingerOrPointer() {
+        #expect(Split.dragInset * 2 >= 16)
+    }
+
     @Test func contentKeepsItsMinimumInANarrowWindow() {
         // 160pt content plus the 1pt divider.
         #expect(Split.clampedSidebarWidth(360, total: 500) == 339)
