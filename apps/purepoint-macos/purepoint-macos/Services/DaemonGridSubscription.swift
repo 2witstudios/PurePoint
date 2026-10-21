@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 /// Subscribes to grid command events from the daemon and dispatches them to WorkspaceRegistry.
 /// Modeled after DaemonAttachSession — actor isolation serializes writes.
@@ -9,7 +8,7 @@ actor DaemonGridSubscription {
     let projectId: String
     private let client: DaemonClient
     private weak var registry: WorkspaceRegistry?
-    private var connection: NWConnection?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
 
     init(projectRoot: String, projectId: String? = nil, registry: WorkspaceRegistry, client: DaemonClient = DaemonClient()) {
@@ -59,7 +58,7 @@ actor DaemonGridSubscription {
     /// Stop the subscription.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -69,7 +68,7 @@ actor DaemonGridSubscription {
         let reg = self.registry
 
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        self.connection?.close()
         self.connection = conn
 
         // Send subscribe request

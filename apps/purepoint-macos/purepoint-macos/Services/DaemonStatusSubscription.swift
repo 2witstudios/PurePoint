@@ -1,11 +1,10 @@
 import Foundation
-import Network
 
 /// Subscribes to status events from the daemon and delivers parsed models.
 /// Modeled after DaemonGridSubscription — actor isolation serializes writes.
 actor DaemonStatusSubscription {
     let projectRoot: String
-    private var connection: NWConnection?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
     /// Set once a subscription is established. Losing an established stream
     /// means the daemon went away; even if the socket answers again it may be a
@@ -67,7 +66,7 @@ actor DaemonStatusSubscription {
     /// Stop the subscription.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -77,7 +76,7 @@ actor DaemonStatusSubscription {
         onEvent: @escaping @MainActor ([WorktreeModel], [AgentModel]) -> Void
     ) async throws {
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        self.connection?.close()
         self.connection = conn
 
         try await DaemonClient.write(.subscribeStatus(projectRoot: projectRoot), to: conn)

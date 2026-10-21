@@ -1,177 +1,84 @@
-import Darwin
 import Foundation
-import Network
 
 // MARK: - DaemonClient
 
 nonisolated final class DaemonClient: @unchecked Sendable {
     static let connectionQueue = DispatchQueue(label: "purepoint.daemon.connection")
     static let connectTimeout: TimeInterval = 5
+    /// The daemon's socket. It also identifies the endpoint when another transport carries it.
     let socketPath: String
+    let transport: any DaemonTransport
 
-    init(socketPath: String? = nil) {
-        self.socketPath =
+    init(socketPath: String? = nil, transport: (any DaemonTransport)? = nil) {
+        let socketPath =
             socketPath
             ?? {
                 let home = FileManager.default.homeDirectoryForCurrentUser.path
                 return "\(home)/.pu/daemon.sock"
             }()
+        self.socketPath = socketPath
+        self.transport = transport ?? UnixSocketTransport(socketPath: socketPath)
     }
 
     /// Send a single request and return the response.
-    /// Cancellation-aware: NWConnection ignores task cancellation, so cancelling
-    /// the task cancels the connection, which completes any pending connect or
-    /// receive with an error instead of leaving the caller suspended.
+    /// Cancellation-aware: cancelling the task aborts a pending connect and closes the
+    /// stream, which completes any pending receive with an error instead of leaving the
+    /// caller suspended.
     func send(_ request: DaemonRequest) async throws -> DaemonResponse {
-        let connection = makeConnection()
-        defer { connection.cancel() }
+        let holder = StreamHolder()
+        defer { holder.close() }
 
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            let reader = try await Self.connect(connection)
-            try await Self.write(request, to: connection)
+            let stream = try await transport.openStream(cancellable: true)
+            holder.hold(stream)
+            let reader = DaemonLineReader(stream: stream)
+            try await Self.write(request, to: stream)
             return try await readOne(from: reader)
         } onCancel: {
-            connection.cancel()
+            holder.close()
         }
     }
 
     /// Blocking request/response for synchronous callers that already run off the main
-    /// thread — GitService's process pipeline and remote project hosts. It uses a plain
-    /// socket rather than NWConnection so it never waits on the cooperative thread pool.
+    /// thread — GitService's process pipeline and remote project hosts. On a Unix socket it
+    /// uses a plain socket rather than NWConnection so it never waits on the cooperative
+    /// thread pool.
     func sendBlocking(_ request: DaemonRequest, timeout: TimeInterval = 30) throws -> DaemonResponse {
         var payload = try JSONEncoder().encode(request)
         payload.append(0x0A)
 
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw DaemonClientError.notRunning }
-        defer { Darwin.close(fd) }
+        let stream = try transport.openBlockingStream(timeout: timeout)
+        defer { stream.close() }
 
-        var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-        let seconds = max(1, Int(timeout.rounded(.up)))
-        var interval = timeval(tv_sec: seconds, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &interval, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &interval, socklen_t(MemoryLayout<timeval>.size))
-
-        var address = sockaddr_un()
-        let pathBytes = Array(socketPath.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-            throw DaemonClientError.notRunning
-        }
-        address.sun_family = sa_family_t(AF_UNIX)
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        withUnsafeMutableBytes(of: &address.sun_path) { raw in
-            raw.copyBytes(from: pathBytes)
-        }
-        let connected = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        guard connected == 0 else { throw DaemonClientError.notRunning }
-
-        try payload.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            guard let base = raw.baseAddress else { return }
-            var offset = 0
-            while offset < raw.count {
-                let written = Darwin.write(fd, base + offset, raw.count - offset)
-                if written < 0 {
-                    if errno == EINTR { continue }
-                    throw errno == EAGAIN ? DaemonClientError.requestTimeout : DaemonClientError.eof
-                }
-                offset += written
-            }
-        }
+        try stream.write(payload)
 
         var line = Data()
-        var chunk = [UInt8](repeating: 0, count: 65_536)
         while true {
-            let count = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw errno == EAGAIN ? DaemonClientError.requestTimeout : DaemonClientError.eof
-            }
-            if count == 0 { throw DaemonClientError.eof }
-            if let newline = chunk[0..<count].firstIndex(of: 0x0A) {
-                line.append(contentsOf: chunk[0..<newline])
+            let chunk = try stream.read()
+            if let newline = chunk.firstIndex(of: 0x0A) {
+                line.append(chunk[chunk.startIndex..<newline])
                 break
             }
-            line.append(contentsOf: chunk[0..<count])
+            line.append(chunk)
         }
         return Self.parse(line)
     }
 
-    /// Connect to the daemon and return the connection + a line reader.
-    func connect() async throws -> (NWConnection, DaemonLineReader) {
-        let connection = makeConnection()
-        let reader = try await Self.connect(connection)
-        return (connection, reader)
+    /// Open a long-lived stream to the daemon and return it with a line reader. The connect
+    /// runs to completion or its timeout regardless of task cancellation.
+    func connect() async throws -> (any DaemonByteStream, DaemonLineReader) {
+        let stream = try await transport.openStream()
+        return (stream, DaemonLineReader(stream: stream))
     }
 
     // MARK: - Private
 
-    private func makeConnection() -> NWConnection {
-        let params = NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
-        let endpoint = NWEndpoint.unix(path: socketPath)
-        return NWConnection(to: endpoint, using: params)
-    }
-
-    private static func connect(_ connection: NWConnection) async throws -> DaemonLineReader {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            // nonisolated(unsafe) is safe because the handler runs on the serial connectionQueue
-            nonisolated(unsafe) var resumed = false
-            connection.stateUpdateHandler = { state in
-                guard !resumed else { return }
-                switch state {
-                case .ready:
-                    resumed = true
-                    cont.resume()
-                case .failed(let err):
-                    resumed = true
-                    cont.resume(throwing: err)
-                case .waiting(let err):
-                    // Stale socket: file exists but no listener — fail fast
-                    connection.cancel()
-                    resumed = true
-                    cont.resume(throwing: err)
-                case .cancelled:
-                    resumed = true
-                    cont.resume(throwing: DaemonClientError.cancelled)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: DaemonClient.connectionQueue)
-            // A daemon that has stopped accepting leaves the connection pending
-            // forever; give up so callers see an error instead of hanging.
-            DaemonClient.connectionQueue.asyncAfter(deadline: .now() + Self.connectTimeout) {
-                guard !resumed else { return }
-                resumed = true
-                connection.cancel()
-                cont.resume(throwing: DaemonClientError.connectTimeout)
-            }
-        }
-
-        return DaemonLineReader(connection: connection)
-    }
-
-    static func write(_ request: DaemonRequest, to connection: NWConnection) async throws {
+    static func write(_ request: DaemonRequest, to stream: any DaemonByteStream) async throws {
         let json = try JSONEncoder().encode(request)
         var message = json
         message.append(0x0A)  // newline
-
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(
-                content: message,
-                completion: .contentProcessed { error in
-                    if let error {
-                        cont.resume(throwing: error)
-                    } else {
-                        cont.resume()
-                    }
-                })
-        }
+        try await stream.send(message)
     }
 
     private func readOne(from reader: DaemonLineReader) async throws -> DaemonResponse {
@@ -187,5 +94,29 @@ nonisolated final class DaemonClient: @unchecked Sendable {
             print("[DaemonClient] parse error: \(error)\n  raw: \(preview)")
             return .unknown(type: "parse_error")
         }
+    }
+}
+
+/// The stream a `send` is using, so task cancellation can close it from another thread. A
+/// stream handed over after cancellation is closed at once.
+nonisolated private final class StreamHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stream: (any DaemonByteStream)?
+    private var closed = false
+
+    func hold(_ stream: any DaemonByteStream) {
+        let closeNow = lock.withLock {
+            if !closed { self.stream = stream }
+            return closed
+        }
+        if closeNow { stream.close() }
+    }
+
+    func close() {
+        let stream = lock.withLock {
+            closed = true
+            return self.stream
+        }
+        stream?.close()
     }
 }

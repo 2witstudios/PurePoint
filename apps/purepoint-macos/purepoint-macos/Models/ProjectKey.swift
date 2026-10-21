@@ -62,7 +62,25 @@ nonisolated struct DaemonEndpoint: Hashable, Sendable {
         DaemonEndpoint(machineId: id, socketPath: MachinePaths.socketPath(machineId: id))
     }
 
-    func makeClient() -> DaemonClient { DaemonClient(socketPath: socketPath) }
+    /// How this endpoint is reached. With no provider installed (macOS) it is the Unix socket
+    /// at `socketPath`; a platform that reaches machines another way (the iPad, over SSH)
+    /// installs `transportProvider` and every client made from an endpoint uses it.
+    var transport: any DaemonTransport {
+        Self.transportProvider?(self) ?? UnixSocketTransport(socketPath: socketPath)
+    }
+
+    func makeClient() -> DaemonClient { DaemonClient(socketPath: socketPath, transport: transport) }
+
+    typealias TransportProvider = @Sendable (DaemonEndpoint) -> any DaemonTransport
+
+    /// The platform's transport hook. Nil on macOS.
+    static var transportProvider: TransportProvider? {
+        get { providerLock.withLock { installedProvider } }
+        set { providerLock.withLock { installedProvider = newValue } }
+    }
+
+    private static let providerLock = NSLock()
+    nonisolated(unsafe) private static var installedProvider: TransportProvider?
 }
 
 /// Filesystem locations shared with the CLI (`crates/pu-core/src/paths.rs`).
