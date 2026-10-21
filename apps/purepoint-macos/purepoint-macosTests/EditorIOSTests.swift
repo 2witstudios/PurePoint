@@ -9,6 +9,111 @@ import UIKit
 /// gutter, Neon highlighting, and the Markdown preview's link handling.
 @MainActor
 @Suite struct EditorIOSTests {
+    private func makeEditor(_ content: String = "", language: EditorLanguage = .plaintext) -> EditorNSView {
+        let editor = EditorNSView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        editor.setContent(content)
+        editor.setLanguage(language)
+        editor.layoutIfNeeded()
+        return editor
+    }
+
+    // MARK: - Text view
+
+    @Test func usesTextKit2WithoutFallingBack() {
+        let textView = makeEditor("let a = 1\n").editorTextView
+        #expect(textView.textLayoutManager != nil)
+    }
+
+    @Test func isConfiguredAsACodeEditor() {
+        let textView = makeEditor().editorTextView
+        #expect(textView.font == UIFont.monospacedSystemFont(ofSize: 13, weight: .regular))
+        #expect(textView.autocorrectionType == .no)
+        #expect(textView.autocapitalizationType == .none)
+        #expect(textView.spellCheckingType == .no)
+        #expect(textView.smartQuotesType == .no)
+        #expect(textView.smartDashesType == .no)
+        #expect(textView.smartInsertDeleteType == .no)
+        #expect(textView.isFindInteractionEnabled)
+        #expect(!textView.allowsEditingTextAttributes)
+        #expect(textView.textContainerInset == UIEdgeInsets(top: 6, left: 4, bottom: 6, right: 4))
+    }
+
+    @Test func setContentDoesNotReportAnEdit() {
+        let editor = makeEditor()
+        var reported: [String] = []
+        editor.onContentChanged = { reported.append($0) }
+        editor.setContent("fresh")
+        #expect(editor.getContent() == "fresh")
+        #expect(reported.isEmpty)
+    }
+
+    @Test func typingReportsTheNewContent() {
+        let editor = makeEditor("a")
+        var reported: [String] = []
+        editor.onContentChanged = { reported.append($0) }
+        let textView = editor.editorTextView
+        textView.selectedRange = NSRange(location: 1, length: 0)
+        textView.insertText("b")
+        #expect(editor.getContent() == "ab")
+        #expect(reported.last == "ab")
+    }
+
+    @Test func tabInsertsFourSpaces() {
+        let editor = makeEditor("x")
+        let textView = editor.editorTextView
+        textView.selectedRange = NSRange(location: 0, length: 0)
+        textView.insertText("\t")
+        #expect(editor.getContent() == "    x")
+    }
+
+    @Test func commandSSaves() {
+        let editor = makeEditor()
+        var saves = 0
+        editor.onSave = { saves += 1 }
+        let textView = editor.editorTextView
+        let command = textView.keyCommands?.first { $0.input == "s" && $0.modifierFlags == .command }
+        #expect(command != nil)
+        #expect(command?.wantsPriorityOverSystemBehavior == true)
+        textView.saveDocument(nil)
+        #expect(saves == 1)
+    }
+
+    @Test func readOnlyFilesCannotBeEdited() {
+        let editor = makeEditor("locked")
+        editor.setEditable(false)
+        #expect(!editor.editorTextView.isEditable)
+        #expect(editor.editorTextView.isSelectable)
+        editor.setEditable(true)
+        #expect(editor.editorTextView.isEditable)
+    }
+
+    @Test func replacingTheTextClearsUndo() {
+        let editor = makeEditor("one")
+        let textView = editor.editorTextView
+        textView.undoManager?.registerUndo(withTarget: textView) { _ in }
+        editor.setContent("two")
+        #expect(textView.undoManager?.canUndo != true)
+    }
+
+    // MARK: - Highlighting
+
+    @Test func highlightsSwiftKeywordsThroughNeon() async throws {
+        let editor = makeEditor("let value = 1\n", language: .swift)
+        let textView = editor.editorTextView
+        let layoutManager = try #require(textView.textLayoutManager)
+        let start = layoutManager.documentRange.location
+
+        var keywordColor: UIColor?
+        for _ in 0..<100 where keywordColor == nil {
+            layoutManager.enumerateRenderingAttributes(from: start, reverse: false) { _, attrs, _ in
+                keywordColor = attrs[.foregroundColor] as? UIColor
+                return false
+            }
+            if keywordColor == nil { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        #expect(keywordColor == EditorTheme.keyword)
+    }
+
     // MARK: - Gutter
 
     @Test func lineStartsSkipTheTrailingNewline() {
@@ -27,6 +132,13 @@ import UIKit
         #expect(LineNumberRulerView.lineIndex(forCharacter: 4, in: starts) == 1)
         #expect(LineNumberRulerView.lineIndex(forCharacter: 5, in: starts) == 2)
         #expect(LineNumberRulerView.lineIndex(forCharacter: 99, in: starts) == 3)
+    }
+
+    @Test func gutterSitsBesideTheText() {
+        let editor = makeEditor("a\nb")
+        let gutter = editor.subviews.first { $0 is LineNumberRulerView }
+        #expect(gutter?.frame.width == 40)
+        #expect(editor.editorTextView.frame.minX == 40)
     }
 
 }
