@@ -1376,3 +1376,54 @@ test("queued chat actions re-check access when they leave the queue", async () =
   assert.equal(rpc.answerValue, undefined);
   c.dispose();
 });
+test("a queued Stop whose access is lost does not cancel late dialogs", async () => {
+  const rpc = new Runtime();
+  const c = new Controller(rpc, {});
+  await c.refresh();
+  rpc.emit("event", { type: "agent_start" });
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const original = rpc.call.bind(rpc);
+  rpc.call = async (op) => {
+    if (op === "prompt") {
+      await held;
+      return { disposition: "queued" };
+    }
+    return original(op);
+  };
+  const prompt = request(c, "send", {
+    epoch: c.epoch,
+    text: "Work",
+    mode: "steer",
+  });
+  let granted = true;
+  const stop = c.request(
+    {
+      version: 1,
+      clientId: "test-client",
+      id: crypto.randomUUID(),
+      epoch: c.epoch,
+      op: "stop",
+      runId: c.runId,
+    },
+    { allowed: () => granted },
+  );
+  stop.catch(() => {});
+  granted = false;
+  rpc.answerValue = undefined;
+  rpc.emit("event", {
+    type: "extension_ui_request",
+    id: "late",
+    method: "confirm",
+  });
+  assert.equal(rpc.answerValue, undefined);
+  assert.deepEqual(
+    c.snapshot().dialogs.map((d) => d.id),
+    ["late"],
+  );
+  release();
+  await prompt;
+  await assert.rejects(stop, /permission changed/);
+  assert.ok(!rpc.calls.includes("abort"));
+  c.dispose();
+});

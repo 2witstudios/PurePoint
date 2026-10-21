@@ -158,7 +158,12 @@ export class Controller extends EventEmitter {
     if (e.type === "extension_ui_request") {
       const method = e.method;
       if (["confirm", "select", "input", "editor"].includes(method)) {
-        if ([...this.stops.values()].includes(this.runId)) {
+        // A queued Stop cancels late dialogs only while its sender may still stop.
+        if (
+          [...this.stops.values()].some(
+            (stop) => stop.runId === this.runId && stop.allowed(),
+          )
+        ) {
           this.rpc.answer({ id: e.id, cancelled: true });
         } else if (this.dialogs.size >= 32) {
           this.rpc.answer({ id: e.id, cancelled: true });
@@ -406,7 +411,7 @@ export class Controller extends EventEmitter {
     this.pendingMutations++;
     try {
       if (r.op === "stop") {
-        this.stops.set(`${r.clientId}:${r.id}`, r.runId);
+        this.stops.set(`${r.clientId}:${r.id}`, { runId: r.runId, allowed });
         this.cancelDialogs();
       }
       const operation = this.serial.then(async () => {
