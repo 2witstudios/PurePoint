@@ -155,6 +155,34 @@ final class FakeConnector: SSHConnector, @unchecked Sendable {
     func setFailure(_ error: Error?) { lock.withLock { failure = error } }
 }
 
+/// A connector whose connects wait until the test releases them, in order.
+final class GatedConnector: SSHConnector, @unchecked Sendable {
+    private let lock = NSLock()
+    private var gates: [CheckedContinuation<Void, Never>?] = []
+    private var made: [FakeExecConnection] = []
+
+    func connect(onDisconnect: @escaping @Sendable () -> Void) async throws -> any SSHExecConnection {
+        await withCheckedContinuation { continuation in
+            lock.withLock { gates.append(continuation) }
+        }
+        let connection = FakeExecConnection(maxSessions: 10, respond: { _, _ in }, onDisconnect: onDisconnect)
+        lock.withLock { made.append(connection) }
+        return connection
+    }
+
+    /// Connects started so far, released or not.
+    var waiting: Int { lock.withLock { gates.count } }
+    var connections: [FakeExecConnection] { lock.withLock { made } }
+
+    func release(_ index: Int) {
+        let gate: CheckedContinuation<Void, Never>? = lock.withLock {
+            defer { gates[index] = nil }
+            return gates[index]
+        }
+        gate?.resume()
+    }
+}
+
 /// A clock tests move by hand.
 final class FakeClock: @unchecked Sendable {
     private let lock = NSLock()
@@ -333,6 +361,50 @@ struct SSHMachineSessionTests {
         _ = try await session.openChannel("relay")
         #expect(connector.attempts == 2)
         #expect(await session.backoffState.failures == 0)
+    }
+
+    @Test func aConnectSupersededByDisconnectDoesNotLeakTheNextOne() async throws {
+        let connector = GatedConnector()
+        let session = SSHMachineSession(connector: connector)
+        let first = Task { try await session.openChannel("relay") }
+        await eventually { connector.waiting == 1 }
+        await session.disconnect()
+        let second = Task { try await session.openChannel("relay") }
+        await eventually { connector.waiting == 2 }
+        // The superseded connect finishes: it must not forget the one still in flight.
+        connector.release(0)
+        await #expect(throws: (any Error).self) { try await first.value }
+        let third = Task { try await session.openChannel("relay") }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(connector.waiting == 2)
+        if connector.waiting > 2 { connector.release(2) }
+        connector.release(1)
+        _ = try await second.value
+        _ = try await third.value
+        #expect(connector.connections.count == 2)
+        #expect(connector.connections[0].isClosed)
+        #expect(!connector.connections[1].isClosed)
+        #expect(await session.channelCounts == [2])
+    }
+
+    @Test func streamsDoNotRedialWhileAHostKeyDecisionIsPending() async throws {
+        let key = SSHPublicKey(type: "ssh-ed25519", blob: SSHWire.string("ssh-ed25519") + SSHWire.string(Data(count: 32)))
+        let clock = FakeClock()
+        let connector = FakeConnector()
+        connector.setFailure(SSHTrustError.hostKeyUnconfirmed(key))
+        let session = SSHMachineSession(connector: connector, now: { clock.now })
+        await #expect(throws: SSHTrustError.hostKeyUnconfirmed(key)) { try await session.connect() }
+        // Long past the backoff, streams still fail with the refusal instead of dialing.
+        clock.advance(120)
+        for _ in 0..<3 {
+            await #expect(throws: SSHTrustError.hostKeyUnconfirmed(key)) { try await session.openChannel("relay") }
+        }
+        #expect(connector.attempts == 1)
+        // The user decided: the next connect dials again.
+        connector.setFailure(nil)
+        await session.resetBackoff()
+        _ = try await session.openChannel("relay")
+        #expect(connector.attempts == 2)
     }
 
     @Test func hostKeyRefusalPassesThroughUnchanged() async throws {

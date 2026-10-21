@@ -240,10 +240,16 @@ actor SSHMachineSession {
     private func primary(failFast: Bool) async throws -> Int {
         if let primaryId { return primaryId }
         if let pendingPrimary { return try await pendingPrimary.value }
-        if failFast, backoff.remainingDelay(at: now()) > 0, let lastError { throw lastError }
+        if failFast, let lastError {
+            // A host key waiting on the user's decision is never redialled by a stream; only
+            // `connect` after the decision (with `resetBackoff`) dials again.
+            if lastError is SSHTrustError { throw lastError }
+            if backoff.remainingDelay(at: now()) > 0 { throw lastError }
+        }
         let task = Task { try await self.addConnection(primary: true) }
         pendingPrimary = task
-        defer { pendingPrimary = nil }
+        // `disconnect` may have replaced this task with a newer one meanwhile; that one stays.
+        defer { if pendingPrimary == task { pendingPrimary = nil } }
         do {
             let id = try await task.value
             backoff.recordSuccess()
