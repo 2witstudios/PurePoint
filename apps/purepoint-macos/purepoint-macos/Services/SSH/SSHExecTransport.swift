@@ -117,6 +117,12 @@ nonisolated final class SSHRelayByteStream: DaemonByteStream {
         self.machineName = machineName
     }
 
+    /// A stream dropped without `close` still ends its channel and hands its slot back; both
+    /// are idempotent, so a closed stream is unaffected.
+    deinit {
+        close()
+    }
+
     func send(_ data: Data) async throws {
         do {
             try await opened.channel.write(data)

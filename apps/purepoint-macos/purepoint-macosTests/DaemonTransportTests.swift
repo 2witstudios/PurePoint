@@ -268,6 +268,78 @@ struct DaemonStreamTransportTests {
     }
 }
 
+/// A stream that records whether it was closed and otherwise never delivers anything.
+private final class SilentByteStream: DaemonByteStream, @unchecked Sendable {
+    private let lock = NSLock()
+    private var closed = false
+    private var waiter: CheckedContinuation<Data, Error>?
+
+    var isClosed: Bool { lock.withLock { closed } }
+
+    func send(_ data: Data) async throws {}
+
+    func receive() async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let done = lock.withLock {
+                if closed { return true }
+                waiter = continuation
+                return false
+            }
+            if done { continuation.resume(throwing: DaemonClientError.eof) }
+        }
+    }
+
+    func close() {
+        let waiting = lock.withLock {
+            closed = true
+            defer { waiter = nil }
+            return waiter
+        }
+        waiting?.resume(throwing: DaemonClientError.eof)
+    }
+}
+
+/// A transport whose single connect waits until the test releases it.
+private final class GatedTransport: DaemonTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var gate: CheckedContinuation<Void, Never>?
+    private var opened: [SilentByteStream] = []
+
+    var streams: [SilentByteStream] { lock.withLock { opened } }
+    var isWaiting: Bool { lock.withLock { gate != nil } }
+
+    func openStream(cancellable: Bool) async throws -> any DaemonByteStream {
+        await withCheckedContinuation { continuation in lock.withLock { gate = continuation } }
+        let stream = SilentByteStream()
+        lock.withLock { opened.append(stream) }
+        return stream
+    }
+
+    func release() {
+        let waiting = lock.withLock {
+            defer { gate = nil }
+            return gate
+        }
+        waiting?.resume()
+    }
+}
+
+struct DaemonAttachStopTests {
+    @MainActor @Test func stoppingWhileConnectingClosesTheNewStream() async throws {
+        let transport = GatedTransport()
+        let client = DaemonClient(transport: transport)
+        let terminal = PlatformTerminalView(frame: .init(x: 0, y: 0, width: 200, height: 100))
+        let session = DaemonAttachSession(agentId: "ag-1", terminalView: terminal, client: client)
+        let running = Task { await session.start() }
+        await waitUntil { transport.isWaiting }
+        await session.stop()
+        transport.release()
+        await running.value
+        let closed = transport.streams.map(\.isClosed)
+        #expect(closed == [true])
+    }
+}
+
 // MARK: - Endpoint resolution
 
 /// Providers are injected through the task-local override, so neither other suites nor the

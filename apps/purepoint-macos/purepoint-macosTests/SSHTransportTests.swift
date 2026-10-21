@@ -343,6 +343,20 @@ struct SSHMachineSessionTests {
         #expect(connector.attempts == 2)
     }
 
+    @Test func aRelayStreamDroppedWithoutCloseClosesItsChannel() async throws {
+        let connector = FakeConnector()
+        let session = SSHMachineSession(connector: connector)
+        var channel: FakeExecChannel?
+        do {
+            let opened = try await session.openChannel("relay")
+            channel = opened.channel as? FakeExecChannel
+            _ = SSHRelayByteStream(opened: opened, machineName: "studio")
+        }
+        #expect(channel?.isEnded == true)
+        await eventually { await session.channelCounts == [0] }
+        #expect(await session.channelCounts == [0])
+    }
+
     @Test func failedConnectsBackOffAndFailFast() async throws {
         let clock = FakeClock()
         let connector = FakeConnector()

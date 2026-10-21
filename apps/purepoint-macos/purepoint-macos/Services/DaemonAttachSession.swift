@@ -132,6 +132,11 @@ actor DaemonAttachSession {
         let tv = self.terminalView
 
         let (conn, reader) = try await client.connect()
+        // `stop()` may have run while connecting; it could not close this stream.
+        guard !stopped else {
+            conn.close()
+            throw CancellationError()
+        }
         self.connection?.close()
         self.connection = conn
 
