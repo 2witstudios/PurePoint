@@ -5,6 +5,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 ## [Unreleased]
 
 ### Changed
+- Release builds now compile in jobs that hold no secrets, and a separate job in a protected environment signs and notarizes the result. The Sparkle signing tool matches the Sparkle version the app ships (2.9.0) and is checked against a pinned SHA-256. Workflow actions are pinned to commit SHAs. The GitHub release is created once, with all of its assets.
 - **Breaking: agents now launch without permission-skipping flags by default.** Claude Code used to start with `--dangerously-skip-permissions` and Codex with `--sandbox workspace-write --ask-for-approval on-request` whenever a project didn't set `launchArgs`. Now every agent launches with its bare command (`claude`, `codex`, `opencode`) and follows the tool's own approval settings. Worktrees isolate git state, not your filesystem or network, so skipping approvals is now something you opt into. To keep auto mode for yourself in every project, add it once to `~/.pu/agent-settings.yaml` (or Settings → Agents → Launch args for all projects):
   ```yaml
   launchArgs:
