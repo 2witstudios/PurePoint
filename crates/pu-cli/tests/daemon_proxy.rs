@@ -176,7 +176,7 @@ async fn given_no_daemon_should_exit_nonzero_with_empty_stdout_and_not_start_one
 
     // then
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(69));
     assert_eq!(output.stdout, b"");
     assert!(stderr.contains(env.socket.to_str().unwrap()), "{stderr}");
     assert!(stderr.contains("pu daemon start"), "{stderr}");

@@ -9,8 +9,18 @@ use tokio::net::UnixStream;
 
 use crate::error::CliError;
 
+/// Exit status when no daemon answers (`EX_UNAVAILABLE`), so the iPad can
+/// tell "daemon stopped" apart from other failures (docs/product/ipad-app.md).
+pub const EXIT_NO_DAEMON: i32 = 69;
+
 pub async fn run(socket: &Path) -> Result<(), CliError> {
-    let stream = connect(socket).await?;
+    let stream = match connect(socket).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(EXIT_NO_DAEMON);
+        }
+    };
     relay(stream, tokio::io::stdin(), tokio::io::stdout()).await
 }
 
