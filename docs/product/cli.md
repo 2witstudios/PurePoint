@@ -93,6 +93,12 @@ Key behaviors:
 | `pu machine remove <name>` | `--json` | Forget a machine; its daemon and agents keep running |
 | `pu machine status [name]` | `--json` | Probe machine daemons over SSH: `running`, `busy`, `stopped`, `incompatible` or `unreachable`. Never starts a daemon |
 | `pu machine start <name>` | — | Start a machine's daemon by running `pu health` there over ssh |
+| `pu phone install` / `uninstall` | `--now`, `--port` | Linux only: write, enable (and start) or remove the `pu-pointguard.service` user unit for the payload matching this `pu` (LPH-003). Uninstall keeps device trust |
+| `pu phone start` / `stop` / `restart` / `status` | `--force` (stop, restart), `--json` (status) | Service lifecycle. `stop`/`restart` ask the bridge to stop only while idle; `restart` moves to this `pu`'s payload and prunes older ones |
+| `pu phone run` | `--port` | Run the bridge in the foreground with an empty, explicit environment (hosts without systemd) |
+| `pu phone pair` | `--ttl <1-300>`, `--text` | Terminal QR (or `purepoint-pair:` paste code) for one single-use enrollment; revoked on any exit except success (LPH-007) |
+| `pu phone devices` / `grant` / `rename` / `revoke` | `--json`; `--terminals off\|view\|control`, `--workspace on\|off` | Device administration by name or unique id prefix (≥ 4 characters). Grants apply downgrades first and print the derived chat level (LPH-013) |
+| `pu phone login` / `model` / `cwd` | `[provider]`, `--api-key-stdin`; `[<provider>/<model>]`; `<path>` | Headless provider sign-in over the owner admin socket, model choice and working folder (LPH-009) |
 | `pu --machine <name> <command>` | conflicts with `--socket` | Run a command against a machine's daemon (see below) |
 
 ## Research Notes

@@ -158,8 +158,8 @@ import UserNotifications
         if recoveries.count >= 50 {
             return "Saved prompt recovery is full. Copy or recover and dismiss a saved prompt before sending."
         }
-        if !connected { return "Connect to your Mac to control agents." }
-        if permission != .control { return "Terminal access is view only. Enable control on your Mac." }
+        if !connected { return "Connect to your computer to control agents." }
+        if permission != .control { return "Terminal access is view only. Enable control on the computer you paired with." }
         if streamId == nil { return "Open the terminal before sending." }
         guard let agent else { return "Agent status is unavailable. Refresh before sending a prompt." }
         if let reason = agent.promptBlockReason { return reason }

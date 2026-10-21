@@ -22,7 +22,7 @@ def components(paths, full=False):
         return {
             "macos": True, "mobile": True, "mobile_swift": True,
             "packaging": True, "release_archive": True, "universal": True,
-            "runtime_targets": RUNTIME_TARGETS,
+            "linux_phone": True, "runtime_targets": RUNTIME_TARGETS,
         }
     shared = any(
         path in {".github/workflows/macos.yml", ".github/workflows/release-proof.yml", ".github/workflows/release.yml"} or path.startswith((".github/scripts/", "apps/shared/ChatMarkdown/"))
@@ -52,6 +52,12 @@ def components(paths, full=False):
         or path.endswith(("/project.pbxproj", "/Package.resolved"))
         for path in paths
     )
+    # The Linux phone access payload: everything it stages, the installer
+    # that unpacks it, and the pu CLI (`pu phone`) that runs it.
+    linux_phone = packaging or any(
+        path == "scripts/install.sh" or path.startswith("crates/pu-cli/") or path in RUST_ROOT
+        for path in paths
+    )
     return {
         "macos": shared or any(
             path.startswith((
@@ -68,6 +74,7 @@ def components(paths, full=False):
         "release_archive": packaging or any(path.startswith("apps/purepoint-macos/") for path in paths),
         # The universal proof needs the Intel slice, which pull requests skip.
         "universal": False,
+        "linux_phone": linux_phone,
         "runtime_targets": RUNTIME_TARGETS[:1],
     }
 
@@ -96,6 +103,7 @@ CHECKS = (
     ("runtime-package", "packaging"),
     ("runtime-universal", "universal"),
     ("runtime-rust", "mobile"),
+    ("runtime-linux", "linux_phone"),
 )
 
 

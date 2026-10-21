@@ -329,7 +329,7 @@ export function terminalConnection({
                       screenMayBeInexact: true,
                       error: error.inventoryUnavailable
                         ? "Daemon inventory unavailable; refresh to retry"
-                        : "Machine unavailable; connect this Mac and its existing forward",
+                        : "Machine unavailable; keep the host and its existing forward connected",
                       complete: false,
                       agents: [],
                     };
