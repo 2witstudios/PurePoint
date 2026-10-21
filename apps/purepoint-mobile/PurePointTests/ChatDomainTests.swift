@@ -163,4 +163,13 @@ final class ChatDomainTests: XCTestCase {
         XCTAssertNil(ConnectionAddress.url("ws://0.0.0.0:8787/v1"))
         XCTAssertNil(ConnectionAddress.url("ws://example.com/v1"))
     }
+    func testGivenChatAccessShouldFailClosedOnUnknownValues() throws {
+        XCTAssertEqual(ChatGrant.from("read"), .read)
+        XCTAssertEqual(ChatGrant.from("admin"), .off)
+        XCTAssertEqual(ChatGrant.from(nil), .send, "Bridges without chat gating allowed full chat")
+        XCTAssertFalse(ChatGrant.read.canSend)
+        XCTAssertFalse(ChatGrant.off.canRead)
+        let envelope = try JSONDecoder().decode(WireEnvelope.self, from: Data(#"{"type":"permissions","chat":"off"}"#.utf8))
+        XCTAssertEqual(ChatGrant.from(envelope.chat), .off)
+    }
 }
