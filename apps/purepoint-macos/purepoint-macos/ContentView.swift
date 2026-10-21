@@ -82,7 +82,10 @@ struct ContentView: View {
         .ignoresSafeArea(.container, edges: .top)
         #else
         // iPad content stays below the status bar or window controls, where the Mac's sits below
-        // its title bar; only the column fills reach the window edges.
+        // its title bar; only the column fills reach the window edges. At the bottom it runs to
+        // the window edge as the Mac's does: the home indicator floats over it, as over any
+        // full-screen content, and the keyboard still insets it.
+        .ignoresSafeArea(.container, edges: .bottom)
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topSafeArea = $0 }
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         #endif
