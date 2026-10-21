@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftTerm
 import Testing
 
 @testable import PurePoint
@@ -47,5 +49,67 @@ struct AttachmentUploadTests {
         let objects = try AttachmentUpload.requests(for: Data(), name: "empty", uploadId: "u1").map(json)
         #expect(objects.count == 1)
         #expect(objects.first?["done"] as? Bool == true)
+    }
+
+    @Test func givenCommandVWithCapsLockShouldStillBeAPaste() {
+        #expect(AttachmentUpload.isCommandOnly(.command))
+        #expect(AttachmentUpload.isCommandOnly([.command, .capsLock]))
+        #expect(AttachmentUpload.isCommandOnly([.command, .function]))
+    }
+
+    @Test func givenCommandWithAnotherShortcutModifierShouldNotBeAPaste() {
+        #expect(!AttachmentUpload.isCommandOnly([.command, .shift]))
+        #expect(!AttachmentUpload.isCommandOnly([.command, .option]))
+        #expect(!AttachmentUpload.isCommandOnly([.command, .control]))
+        #expect(!AttachmentUpload.isCommandOnly([.capsLock]))
+    }
+
+    private func temporaryDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    @Test func givenDroppedRegularFileShouldReadItsBytes() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("a.txt")
+        try Data("hello".utf8).write(to: file)
+        #expect(try AttachmentUpload.readFile(at: file) == Data("hello".utf8))
+    }
+
+    @Test func givenDroppedFolderShouldRejectIt() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(throws: AttachmentUpload.UploadError.self) { try AttachmentUpload.readFile(at: dir) }
+    }
+
+    @Test func givenDroppedFileOverTheLimitShouldRejectItWithoutReading() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("big.bin")
+        #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
+        // Sparse: extends the size without writing the bytes.
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(AttachmentUpload.maxBytes + 1))
+        try handle.close()
+        let error = #expect(throws: AttachmentUpload.UploadError.self) { try AttachmentUpload.readFile(at: file) }
+        guard case .tooLarge = error else {
+            Issue.record("expected tooLarge, got \(String(describing: error))")
+            return
+        }
+    }
+
+    @Test func givenMissingFileShouldThrow() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(throws: (any Error).self) { try AttachmentUpload.readFile(at: dir.appendingPathComponent("gone")) }
+    }
+
+    @Test @MainActor func givenNoAttachConnectionShouldReportInputUndelivered() async {
+        let session = DaemonAttachSession(agentId: "ag-1", terminalView: TerminalView(frame: .zero))
+        #expect(await session.deliverInput(Data("x".utf8), timeout: .milliseconds(150)) == false)
+        await session.stop()
+        #expect(await session.deliverInput(Data("x".utf8)) == false)
     }
 }

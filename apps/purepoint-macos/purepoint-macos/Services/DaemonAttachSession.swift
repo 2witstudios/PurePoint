@@ -96,6 +96,32 @@ actor DaemonAttachSession {
         try? await DaemonClient.write(.input(agentId: agentId, data: data), to: conn)
     }
 
+    /// Sends input that must not be lost, such as an uploaded file's path, and
+    /// reports whether it was written. Unlike `sendInput`, it waits up to
+    /// `timeout` for a reconnect when the attach connection is down.
+    func deliverInput(_ data: Data, timeout: Duration = .seconds(5)) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        var failed: NWConnection?
+        while !stopped, !isAgentGone, !didStreamEnd {
+            // Retry only on a new connection: a failed one stays set until replaced.
+            if let conn = connection, conn !== failed {
+                do {
+                    try await DaemonClient.write(.input(agentId: agentId, data: data), to: conn)
+                    return true
+                } catch {
+                    failed = conn
+                }
+            }
+            guard ContinuousClock.now < deadline else { break }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                break
+            }
+        }
+        return false
+    }
+
     /// Send resize notification to the daemon. Awaiting ensures actor serializes writes.
     func sendResize(cols: Int, rows: Int) async {
         guard cols > 0, rows > 0 else { return }

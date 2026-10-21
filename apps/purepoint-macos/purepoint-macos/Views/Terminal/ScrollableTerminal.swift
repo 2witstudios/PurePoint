@@ -246,7 +246,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     /// Cmd-V with an image (and no text) on the clipboard uploads it as a PNG and
     /// types its path on the agent's machine.
     private func handlePasteImage(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+        guard AttachmentUpload.isCommandOnly(event.modifierFlags),
             event.charactersIgnoringModifiers == "v",
             let window, event.window === window, window.firstResponder === terminalView,
             let client = attachmentClient,
@@ -257,7 +257,8 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     }
 
     /// Uploads files in order, then types their remote paths as one shell-escaped
-    /// line without submitting, as a local drop does. Beeps if any upload fails.
+    /// line without submitting, as a local drop does. Beeps if any upload fails
+    /// or the line cannot be typed.
     private func typeUploadedPaths(of files: [(data: Data, name: String)], via client: DaemonClient) {
         let session = attachSession
         Task {
@@ -267,7 +268,13 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
                     paths.append(try await AttachmentUpload.upload(file.data, name: file.name, via: client))
                 }
                 let line = paths.map(shellEscape).joined(separator: " ")
-                await session?.sendInput(Data(line.utf8))
+                // The upload uses its own connections, so it can finish while the
+                // attach connection is reconnecting.
+                guard await session?.deliverInput(Data(line.utf8)) == true else {
+                    print("[Attachment] could not type the uploaded paths")
+                    await MainActor.run { NSSound.beep() }
+                    return
+                }
             } catch {
                 print("[Attachment] upload failed: \(error.localizedDescription)")
                 await MainActor.run { NSSound.beep() }
@@ -314,15 +321,21 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             return false
         }
         if usesRemoteHost, let client = attachmentClient {
-            let files = urls.compactMap { url -> (data: Data, name: String)? in
-                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
-                return (data, url.lastPathComponent)
+            // Reading a large file, or one on a slow volume, must not block the main thread.
+            Task {
+                let read = await Task.detached {
+                    Result {
+                        try urls.map { (data: try AttachmentUpload.readFile(at: $0), name: $0.lastPathComponent) }
+                    }
+                }.value
+                switch read {
+                case .success(let files):
+                    typeUploadedPaths(of: files, via: client)
+                case .failure(let error):
+                    print("[Attachment] cannot upload drop: \(error.localizedDescription)")
+                    NSSound.beep()  // a folder, unreadable or oversized file
+                }
             }
-            guard files.count == urls.count else {
-                NSSound.beep()  // a folder or unreadable file
-                return false
-            }
-            typeUploadedPaths(of: files, via: client)
             return true
         }
         let escaped = urls.map { shellEscape($0.path) }.joined(separator: " ")

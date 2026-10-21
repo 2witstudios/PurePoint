@@ -12,12 +12,14 @@ nonisolated enum AttachmentUpload {
 
     enum UploadError: LocalizedError {
         case tooLarge(name: String)
+        case notAFile(name: String)
         case daemon(code: String, message: String)
         case unexpectedResponse
 
         var errorDescription: String? {
             switch self {
             case .tooLarge(let name): "\(name) is larger than 64 MB"
+            case .notAFile(let name): "\(name) is not a regular file"
             case .daemon(_, let message): message
             case .unexpectedResponse: "The agent's daemon did not accept the file"
             }
@@ -55,6 +57,23 @@ nonisolated enum AttachmentUpload {
             }
         }
         throw UploadError.unexpectedResponse
+    }
+
+    /// Reads a dropped file for upload. Checks it is a regular file within
+    /// `maxBytes` before reading, so a folder or an oversized file is rejected
+    /// without loading it. Blocking: call it off the main thread.
+    static func readFile(at url: URL) throws -> Data {
+        let name = url.lastPathComponent
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true else { throw UploadError.notAFile(name: name) }
+        guard (values.fileSize ?? 0) <= maxBytes else { throw UploadError.tooLarge(name: name) }
+        return try Data(contentsOf: url, options: .mappedIfSafe)
+    }
+
+    /// Whether a key event's modifiers are Command alone. Caps Lock, Fn and
+    /// other non-shortcut flags are ignored.
+    static func isCommandOnly(_ flags: NSEvent.ModifierFlags) -> Bool {
+        flags.intersection([.command, .shift, .option, .control]) == .command
     }
 
     /// A pasted image as PNG, when the pasteboard holds an image and no text
