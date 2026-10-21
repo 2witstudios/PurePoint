@@ -147,6 +147,11 @@ struct DiffCardView: View {
             .padding(.vertical, 2)
             .background(statusColor.opacity(0.6))
             .clipShape(RoundedRectangle(cornerRadius: 3))
+            #if os(iOS)
+            // iOS sets the label a little wider; in a narrow window the long filename beside it
+            // would wrap "Modified" onto two lines.
+            .fixedSize()
+            #endif
     }
 
     private var statsText: some View {
