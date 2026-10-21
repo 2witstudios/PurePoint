@@ -97,7 +97,7 @@ struct SettingsAgentsContentView: View {
             } else {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Appended to the command for this project. Leave empty to use the launch args for all projects.")
+                        Text("Appended to the command for this project. Leave empty to use the launch args for all projects. To launch the bare command here regardless, set launchArgs: \"\" for the agent in .pu/config.yaml.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         ForEach(launchArgsAgents, id: \.self) { agent in
@@ -115,13 +115,19 @@ struct SettingsAgentsContentView: View {
                                             command: payload.command,
                                             stored: payload.projectLaunchArgs
                                                 ?? payload.launchArgs?.joined(separator: " ") ?? "",
-                                            placeholder: payload.machineLaunchArgs ?? launchArgsPlaceholder
+                                            placeholder: payload.projectLaunchArgs == ""
+                                                ? "" : payload.machineLaunchArgs ?? launchArgsPlaceholder
                                         ) { text in
                                             Task {
                                                 await state.updateLaunchArgs(
                                                     projectRoot: projectRoot, agentName: agent,
                                                     launchArgs: text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text)
                                             }
+                                        }
+                                        if payload.projectLaunchArgs == "" {
+                                            Text("Set to empty in .pu/config.yaml: launches the bare command, ignoring the launch args for all projects.")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.tertiary)
                                         }
                                         resolvedCommandView(payload)
                                     }

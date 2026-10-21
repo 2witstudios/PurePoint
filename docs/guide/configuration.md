@@ -81,7 +81,7 @@ with an error. PurePoint never falls back to permission-skipping flags.
 
 Precedence, highest first:
 
-1. `pu spawn --no-auto`: the bare command, ignoring all configured launch args
+1. `pu spawn --no-auto`: the bare command, ignoring all configured launch args (kept on resume)
 2. Project `launchArgs` in `.pu/config.yaml`, when set (even to `""`)
 3. Machine-level `launchArgs` in `~/.pu/agent-settings.yaml`
 4. Nothing: the bare command

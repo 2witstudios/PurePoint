@@ -138,8 +138,10 @@ Read agent configuration for a project.
 `launch_args` is the project value as a list (`null` when unset).
 `project_launch_args` and `machine_launch_args` are the project and
 machine-level values in their string form, omitted when unset.
-`resolved_launch_args` is what spawn and resume append (project, else machine,
-else none), and `resolved_command` previews the command line. The three string
+`policy_launch_args` is present when Codex YOLO for all projects rewrites the
+args, and then overrides both. `resolved_launch_args` is what spawn and resume
+append (policy, else project, else machine, else none), and `resolved_command`
+previews the command line. The three string
 fields were added additively; older clients ignore them.
 
 ### UpdateAgentConfig

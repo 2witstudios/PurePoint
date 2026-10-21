@@ -146,6 +146,7 @@ AgentConfig:
   interactive: bool (default: true)
   launch_args: Option<Vec<String>>        # YAML: shell-style string (or legacy list); None = unset
   machine_launch_args: Option<Vec<String>> # not serialized; filled from ~/.pu/agent-settings.yaml
+  policy_launch_args: Option<Vec<String>>  # not serialized; Codex YOLO rewrite, overrides both
 
 GlobalAgentSettings (~/.pu/agent-settings.yaml):
   codex_yolo: bool (default: false)
@@ -153,7 +154,7 @@ GlobalAgentSettings (~/.pu/agent-settings.yaml):
   launch_args: IndexMap<String, LaunchArgs> (default: empty; agent type -> string)
 ```
 
-Launch args resolve as `--no-auto` (bare) > project `launch_args` (when set, even empty) > machine `launch_args[agent]` > none. No agent type has built-in launch args.
+`AgentEntry.bare_launch` (manifest, default `false`) records a `--no-auto` spawn so resume also launches bare. Launch args resolve as `--no-auto` / `bare_launch` (bare) > Codex YOLO policy > project `launch_args` (when set, even empty) > machine `launch_args[agent]` > none. No agent type has built-in launch args.
 
 ## Open Questions
 

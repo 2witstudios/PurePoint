@@ -111,7 +111,7 @@ added.
 | `""` or `[]` | any | the bare command (project opts out) |
 | `"--flag ..."` | any | exactly the project args |
 
-`pu spawn --no-auto` ignores both and launches the bare command.
+`pu spawn --no-auto` ignores both and launches the bare command, including when the agent is later resumed.
 
 On spawn and resume, launch args are appended after arguments in `command`.
 Resume keeps the configured executable and wrapper prefix, then adds the agent's

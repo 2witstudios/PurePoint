@@ -168,7 +168,7 @@ fn apply_global_agent_settings(config: &mut Config, settings: &GlobalAgentSettin
             "--dangerously-bypass-approvals-and-sandbox".into(),
             "--no-daemon".into(),
         ]);
-        agent.launch_args = Some(args);
+        agent.policy_launch_args = Some(args);
     }
 }
 
@@ -253,6 +253,7 @@ pub fn update_agent_config(
                 interactive: true,
                 launch_args: None,
                 machine_launch_args: None,
+                policy_launch_args: None,
             })
         });
 
@@ -352,7 +353,7 @@ mod tests {
             "wrapper -a authentication codex --search"
         );
         assert_eq!(
-            cfg.agents["codex"].launch_args.as_ref().unwrap(),
+            cfg.agents["codex"].configured_launch_args().unwrap(),
             &[
                 "-m",
                 "custom-model",
@@ -371,8 +372,7 @@ mod tests {
         let other = TempDir::new().unwrap();
         assert!(
             load_config_strict(other.path()).unwrap().agents["codex"]
-                .launch_args
-                .as_ref()
+                .configured_launch_args()
                 .unwrap()
                 .contains(&"--no-daemon".into())
         );
@@ -476,8 +476,42 @@ mod tests {
         );
         assert_eq!(config.agents["codex"].command, command);
         assert_eq!(
-            config.agents["codex"].launch_args.as_ref().unwrap(),
+            config.agents["codex"].configured_launch_args().unwrap(),
             &["--dangerously-bypass-approvals-and-sandbox", "--no-daemon"]
+        );
+    }
+
+    #[test]
+    fn given_yolo_should_keep_project_launch_args_separate_from_policy_args() {
+        // given — the project sets its own Codex args
+        let mut config = Config::default();
+        config.agents.get_mut("codex").unwrap().launch_args = Some(vec![
+            "--sandbox".into(),
+            "read-only".into(),
+            "--search".into(),
+        ]);
+        // when
+        apply_global_agent_settings(
+            &mut config,
+            &GlobalAgentSettings {
+                codex_yolo: true,
+                ..GlobalAgentSettings::default()
+            },
+        );
+        // then — the project value is what the project file says; YOLO's
+        // rewrite lives in its own slot and takes precedence
+        let codex = &config.agents["codex"];
+        assert_eq!(
+            codex.launch_args.as_deref().unwrap(),
+            &["--sandbox", "read-only", "--search"]
+        );
+        assert_eq!(
+            codex.configured_launch_args().unwrap(),
+            &[
+                "--search",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--no-daemon"
+            ]
         );
     }
 

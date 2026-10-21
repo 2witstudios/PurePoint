@@ -524,6 +524,7 @@ impl Engine {
             trigger_total,
             gate_attempts: trigger_name.as_ref().map(|_| 0),
             no_trigger,
+            bare_launch: no_auto,
             trigger_name: trigger_name.clone(),
         };
 

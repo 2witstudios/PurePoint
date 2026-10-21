@@ -18,14 +18,27 @@ pub struct AgentConfig {
     /// the project leaves `launch_args` unset. Filled in at config resolution.
     #[serde(skip)]
     pub machine_launch_args: Option<Vec<String>>,
+    /// Launch args forced by a machine policy (Codex YOLO), overriding both
+    /// project and machine args. Filled in at config resolution.
+    #[serde(skip)]
+    pub policy_launch_args: Option<Vec<String>>,
 }
 
 impl AgentConfig {
-    /// The launch args in effect before resolution: project, else machine, else none.
+    /// The launch args in effect before resolution: policy, else project,
+    /// else machine, else none.
     pub fn configured_launch_args(&self) -> Option<&[String]> {
-        self.launch_args
+        self.policy_launch_args
             .as_deref()
+            .or(self.launch_args.as_deref())
             .or(self.machine_launch_args.as_deref())
+    }
+
+    /// Drop every configured launch arg so the agent launches its bare command.
+    pub fn clear_launch_args(&mut self) {
+        self.launch_args = Some(Vec::new());
+        self.machine_launch_args = None;
+        self.policy_launch_args = None;
     }
 }
 
@@ -129,6 +142,7 @@ pub fn default_agents() -> IndexMap<String, AgentConfig> {
                 interactive: true,
                 launch_args: None,
                 machine_launch_args: None,
+                policy_launch_args: None,
             },
         )
     })
@@ -276,6 +290,7 @@ launchArgs:
             interactive: true,
             launch_args: Some(vec!["--dangerously-skip-permissions".into()]),
             machine_launch_args: None,
+            policy_launch_args: None,
         };
         let yaml = serde_yaml_ng::to_string(&config).unwrap();
         let parsed: AgentConfig = serde_yaml_ng::from_str(&yaml).unwrap();

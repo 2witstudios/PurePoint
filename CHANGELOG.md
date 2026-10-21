@@ -12,7 +12,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
   ```
   Projects that already set `launchArgs` are unaffected.
 - `launchArgs` is now one free-form string, split like a shell command line (`launchArgs: "--model opus --append-system-prompt 'be terse'"`), so new or renamed CLI flags work without a PurePoint update. Existing list values (`launchArgs: [..]`, `launchArgs: []`) still load the same; PurePoint writes the string form when it saves. A project value, even `""`, takes precedence over the machine-level one.
-- `pu spawn --no-auto` now launches the bare command and ignores project and machine-level launch args. `--agent-args` still apply.
+- `pu spawn --no-auto` now launches the bare command and ignores project and machine-level launch args. `--agent-args` still apply. The choice is saved with the agent, so it still launches bare after `pu bench`/`pu play`, suspend/resume or a daemon restart.
 - The daemon protocol is now version 11 because the launch args request and response shapes changed. Restart the daemon after updating (`pu` and the macOS app reject a v10 daemon with update guidance instead of appearing to save launch args that an old daemon drops).
 - Settings → Agents replaces the per-flag pickers for Claude, Codex and OpenCode with one launch args field per agent next to its command, for this project and for all projects. Codex YOLO for all projects is unchanged.
 

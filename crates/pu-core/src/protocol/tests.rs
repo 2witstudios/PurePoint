@@ -2185,6 +2185,7 @@ fn given_config_report_response_should_round_trip() {
                 interactive: true,
                 project_launch_args: Some("--verbose".into()),
                 machine_launch_args: None,
+                policy_launch_args: None,
                 resolved_command: Some("claude --verbose".into()),
             },
             AgentConfigInfo {
@@ -2197,6 +2198,7 @@ fn given_config_report_response_should_round_trip() {
                 interactive: true,
                 project_launch_args: None,
                 machine_launch_args: Some("--sandbox workspace-write".into()),
+                policy_launch_args: None,
                 resolved_command: None,
             },
         ],
