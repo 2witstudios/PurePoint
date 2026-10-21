@@ -151,6 +151,9 @@ actor SSHMachineSession {
         ([primaryId].compactMap { $0 } + overflowOrder).compactMap { slots[$0]?.channels }
     }
 
+    /// How long until the backoff allows the next connect attempt (0 when it may run now).
+    var pendingRetryDelay: TimeInterval { backoff.remainingDelay(at: now()) }
+
     /// Bring the primary connection up, first waiting out any backoff. Throws the connect
     /// error (a host-key refusal is `SSHTrustError`).
     func connect() async throws {

@@ -155,6 +155,13 @@ actor MachineConnection {
 
     private func supervise(generation: Int) async {
         while isCurrent(generation) {
+            // As on the Mac, a machine whose last attempt failed reads Offline while it waits
+            // out the backoff, and Connecting only once the next attempt starts.
+            let retryDelay = await session.pendingRetryDelay
+            if retryDelay > 0, !(await session.isConnected) {
+                try? await Task.sleep(for: .seconds(retryDelay))
+                guard isCurrent(generation) else { return }
+            }
             if !(await session.isConnected) { report(.connecting) }
             do {
                 try await session.connect()
