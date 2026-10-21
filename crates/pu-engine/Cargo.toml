@@ -3,6 +3,7 @@ name = "pu-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 pu-core = { path = "../pu-core" }

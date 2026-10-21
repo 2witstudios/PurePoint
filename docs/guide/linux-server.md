@@ -10,7 +10,7 @@ On the server:
 curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | sh
 ```
 
-This puts static `pu` and `pu-engine` binaries (x86_64 or aarch64) in `~/.pu/bin`. Set `PU_VERSION=1.2.3` to pin a release. Add `~/.pu/bin` to your `PATH` in `~/.profile`, or call it by full path.
+This puts static `pu` and `pu-engine` binaries (x86_64 or aarch64) in `~/.pu/bin`. Set `PU_VERSION=1.2.3` to pin a release. Before installing, the script checks the release signature against the PurePoint key it embeds (using `minisign`, or OpenSSL 3, which most distributions ship), and, if the GitHub CLI is installed and signed in, the build provenance with `gh attestation verify`. If it can't verify the download it stops; set `PU_INSTALL_SKIP_VERIFY=1` to install anyway (it warns). A failed check always stops the install. Add `~/.pu/bin` to your `PATH` in `~/.profile`, or call it by full path.
 
 Also install `git` and the agent CLIs you use (`claude`, `codex`, …) as that same user, and sign in to them.
 
