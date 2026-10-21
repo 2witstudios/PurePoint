@@ -1,33 +1,37 @@
 name: Release
 
+# Build jobs hold no secrets and only read the repository. Signing and
+# notarization run in their own job, in the protected `release` environment,
+# on the unsigned app the build job produced. Only the final publish job can
+# write to the repository, and it runs no build code.
+
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag to release (e.g. v1.2.3)'
-        required: true
 
 concurrency:
   group: release
   cancel-in-progress: false
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  release:
-    runs-on: macos-26
-    timeout-minutes: 45
+  version:
+    name: Validate version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      raw: ${{ steps.version.outputs.raw }}
+      build_number: ${{ steps.version.outputs.build_number }}
     steps:
       - name: Extract version from tag
         id: version
         # The tag reaches the shell only through the environment, and must be a
-        # plain X.Y.Z: later steps interpolate the extracted version.
+        # plain X.Y.Z: later jobs interpolate the extracted version.
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           TAG="${RELEASE_TAG#v}"
           if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -40,43 +44,29 @@ jobs:
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "Version: ${TAG} (build_number=${BUILD_NUMBER})"
 
+  # Compiles every third-party dependency (crates, Swift packages, npm runtime),
+  # so it gets no secrets, no signing identity and no write token. Release
+  # builds start from a clean cache.
+  build-macos:
+    name: Build macOS app (unsigned)
+    needs: version
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.raw }}
+      BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
+    steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # A qualified tag ref makes checkout fail on a nonexistent tag instead
-          # of silently building the default branch.
-          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.94.0
+        uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Apple certificate
-        env:
-          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-
-          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
-
-      - name: Install tools
-        run: brew install xcbeautify create-dmg
 
       - name: Checkout pinned local tree-sitter packages
         run: bash .github/scripts/checkout-tree-sitter.sh
@@ -110,6 +100,8 @@ jobs:
           PKGEOF
           done
 
+      # Ad-hoc signed only; the sign-macos job re-signs every nested binary
+      # with the Developer ID identity.
       - name: Archive
         run: |
           xcodebuild archive \
@@ -117,20 +109,118 @@ jobs:
             -scheme purepoint-macos \
             -configuration Release \
             -archivePath build/PurePoint.xcarchive \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Developer ID Application" \
-            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
-            MARKETING_VERSION="${{ steps.version.outputs.raw }}" \
-            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build_number }}"
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
-      - name: Export archive
+      # tar keeps the bundle's symlinks and modes, which artifact upload drops.
+      - name: Package unsigned app
         run: |
-          set -o pipefail
-          xcodebuild -exportArchive \
-            -archivePath build/PurePoint.xcarchive \
-            -exportPath build/export \
-            -exportOptionsPlist apps/purepoint-macos/ExportOptions.plist \
-            2>&1 | xcbeautify
+          tar -C build/PurePoint.xcarchive/Products/Applications \
+            -cf build/PurePoint-unsigned.tar PurePoint.app
+
+      - name: Upload unsigned app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-unsigned
+          path: build/PurePoint-unsigned.tar
+          if-no-files-found: error
+          retention-days: 14
+
+  # Holds the Developer ID identity, the notarization credentials and the
+  # Sparkle update key. Runs only Apple's tools, this repository's signing
+  # scripts, and Sparkle and create-dmg releases verified by SHA-256.
+  sign-macos:
+    name: Sign and notarize macOS app
+    needs: [version, build-macos]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    outputs:
+      ed_signature: ${{ steps.sparkle_sign.outputs.ed_signature }}
+      length: ${{ steps.sparkle_sign.outputs.length }}
+    env:
+      VERSION: ${{ needs.version.outputs.raw }}
+      APP_PATH: build/export/PurePoint.app
+      DMG_PATH: build/PurePoint-${{ needs.version.outputs.raw }}.dmg
+      # Must match the Sparkle version the app links (Package.resolved).
+      SPARKLE_VERSION: 2.9.0
+      SPARKLE_SHA256: 01e0f0ebf6614061ea816d414de50f937d64ffa6822ad572243031ca3676fe19
+      # create-dmg v1.3.0, fetched by commit so the archive can't move with the tag.
+      CREATE_DMG_COMMIT: a2b71d0fda6d0df2a86dc7f67082d4d73e84c59f
+      CREATE_DMG_SHA256: 36577b966f16c12dd78d5bb5107c2ae3d069b044226b6ebbffa6a434ce142d0a
+    steps:
+      - name: Set signing paths
+        run: |
+          echo "KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db" >> "$GITHUB_ENV"
+          echo "CERT_PATH=$RUNNER_TEMP/certificate.p12" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned app
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-unsigned
+          path: build
+
+      - name: Unpack unsigned app
+        run: |
+          mkdir -p build/export
+          tar -xf build/PurePoint-unsigned.tar -C build/export
+          rm build/PurePoint-unsigned.tar
+          # Extended attributes picked up in transit fail strict verification.
+          xattr -cr "$APP_PATH"
+
+      - name: Install Sparkle tools
+        run: |
+          ARCHIVE="$RUNNER_TEMP/sparkle.tar.xz"
+          curl -fsSL --proto '=https' \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" \
+            -o "$ARCHIVE"
+          echo "${SPARKLE_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xf "$ARCHIVE" -C "$RUNNER_TEMP/sparkle"
+
+      - name: Install create-dmg
+        run: |
+          ARCHIVE="$RUNNER_TEMP/create-dmg.tar.gz"
+          curl -fsSL --proto '=https' \
+            "https://github.com/create-dmg/create-dmg/archive/${CREATE_DMG_COMMIT}.tar.gz" \
+            -o "$ARCHIVE"
+          echo "${CREATE_DMG_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
+
+      # The key is not extractable (-x) and only codesign may use it (-T). The
+      # keychain locks itself after 15 idle minutes; signing steps unlock it.
+      - name: Install Apple certificate
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          umask 077
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 900 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -x -T /usr/bin/codesign -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+      - name: Sign app
+        run: |
+          bash .github/scripts/sign-macos-app.sh "$APP_PATH" "Developer ID Application"
+          security lock-keychain "$KEYCHAIN_PATH"
 
       - name: Notarize app
         env:
@@ -138,7 +228,6 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          APP_PATH="build/export/PurePoint.app"
           ZIP_PATH="$RUNNER_TEMP/PurePoint-notarize.zip"
 
           ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
@@ -153,7 +242,7 @@ jobs:
 
       - name: Create DMG
         run: |
-          create-dmg \
+          "$RUNNER_TEMP/create-dmg-${CREATE_DMG_COMMIT}/create-dmg" \
             --volname "PurePoint" \
             --window-pos 200 120 \
             --window-size 600 400 \
@@ -161,23 +250,28 @@ jobs:
             --icon "PurePoint.app" 150 190 \
             --app-drop-link 450 190 \
             --hide-extension "PurePoint.app" \
-            "build/PurePoint-${{ steps.version.outputs.raw }}.dmg" \
-            "build/export/PurePoint.app" \
+            "$DMG_PATH" \
+            "$APP_PATH" \
             || true
 
-          ls -la "build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
+          ls -la "$DMG_PATH"
 
-      - name: Sign and notarize DMG
+      # Last use of the signing identity: the keychain is deleted right after.
+      - name: Sign DMG
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          codesign --force --sign "Developer ID Application" \
+            --options runtime "$DMG_PATH"
+          security delete-keychain "$KEYCHAIN_PATH"
+
+      - name: Notarize DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
-
-          codesign --force --sign "Developer ID Application" \
-            --options runtime "$DMG_PATH"
-
           xcrun notarytool submit "$DMG_PATH" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
@@ -186,53 +280,168 @@ jobs:
 
           xcrun stapler staple "$DMG_PATH"
 
-      - name: Install Sparkle tools
-        run: |
-          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.7.0/Sparkle-2.7.0.tar.xz -o /tmp/sparkle.tar.xz
-          mkdir -p /tmp/sparkle
-          tar xf /tmp/sparkle.tar.xz -C /tmp/sparkle
-          cp /tmp/sparkle/bin/sign_update /usr/local/bin/sign_update
-          chmod +x /usr/local/bin/sign_update
-
       - name: Sign DMG with Sparkle Ed25519
         id: sparkle_sign
         env:
           SPARKLE_ED25519_KEY: ${{ secrets.SPARKLE_ED25519_KEY }}
         run: |
-          DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
-          SIGN_OUTPUT=$(echo "$SPARKLE_ED25519_KEY" | sign_update "$DMG_PATH" --ed-key-file -)
-          echo "Sparkle signature output: $SIGN_OUTPUT"
+          SIGN_OUTPUT=$(printf '%s\n' "$SPARKLE_ED25519_KEY" | "$RUNNER_TEMP/sparkle/bin/sign_update" "$DMG_PATH" --ed-key-file -)
           ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*edSignature="\([^"]*\)".*/\1/p')
           LENGTH=$(echo "$SIGN_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+          if [ -z "$ED_SIGNATURE" ] || [ -z "$LENGTH" ]; then
+            echo "::error::sign_update did not report an edSignature and length"
+            exit 1
+          fi
           echo "ed_signature=${ED_SIGNATURE}" >> "$GITHUB_OUTPUT"
           echo "length=${LENGTH}" >> "$GITHUB_OUTPUT"
 
+      - name: Upload DMG
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-dmg
+          path: ${{ env.DMG_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Cleanup signing material
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          rm -f "$CERT_PATH"
+
+  # Static pu + pu-engine for Linux servers (installed by scripts/install.sh).
+  # Built natively per arch against musl, so no glibc version floor applies.
+  linux:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
+        with:
+          targets: ${{ matrix.target }}
+
+      # rust-toolchain.toml pins 1.89 for every in-repo cargo call, so the
+      # targets installed above land on 1.94.0 while the build runs on the
+      # pinned toolchain. Add the target there too, as the macOS build phase
+      # does for its Apple targets.
+      - name: Add target to the pinned toolchain
+        run: rustup target add "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p pu-cli -p pu-engine
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ needs.version.outputs.raw }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          NAME="purepoint-${VERSION}-${TARGET}"
+          mkdir -p "dist/${NAME}"
+          cp "target/${TARGET}/release/pu" "target/${TARGET}/release/pu-engine" "dist/${NAME}/"
+          cp LICENSE* README.md "dist/${NAME}/" 2>/dev/null || true
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}.tar.gz
+            dist/${{ steps.package.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+
+  # The only job with a write token. It runs no build code: it creates the
+  # release with every asset in one step, then points the update feed at it.
+  # Versioned assets are never replaced; a re-run against an existing release
+  # only checks that the release already has them.
+  publish:
+    name: Publish release
+    needs: [version, sign-macos, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.raw }}
+      BUILD_NUMBER: ${{ needs.version.outputs.build_number }}
+      ED_SIGNATURE: ${{ needs.sign-macos.outputs.ed_signature }}
+      LENGTH: ${{ needs.sign-macos.outputs.length }}
+    steps:
+      - name: Download Linux builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: purepoint-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download DMG
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-dmg
+          path: dist
+
+      # A re-run of every job re-signs and re-notarizes the DMG, which changes
+      # its bytes. The appcast must never carry a signature for a DMG other
+      # than the published one, so an existing release must match exactly.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          DMG_PATH="build/PurePoint-${{ steps.version.outputs.raw }}.dmg"
+          TAG="v${VERSION}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" dist/* \
+              --verify-tag \
+              --title "PurePoint $TAG" \
+              --generate-notes
+            exit 0
+          fi
+          echo "::notice::$TAG already exists; its assets are left unchanged"
+          PUBLISHED=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets[] | "\(.digest) \(.name)"')
+          for FILE in dist/*; do
+            EXPECTED="sha256:$(sha256sum "$FILE" | cut -d' ' -f1) $(basename "$FILE")"
+            if ! grep -qxF "$EXPECTED" <<< "$PUBLISHED"; then
+              echo "::error::$TAG assets already published with different content ($(basename "$FILE")); delete the release, or use Re-run failed jobs instead of re-running all jobs"
+              exit 1
+            fi
+          done
 
-          TAG="v${{ steps.version.outputs.raw }}"
-
-          # publish-linux may have created the release first; then just attach.
-          gh release create "$TAG" "$DMG_PATH" \
-            --verify-tag \
-            --title "PurePoint $TAG" \
-            --generate-notes \
-            || gh release upload "$TAG" "$DMG_PATH" --clobber
-
+      # The `appcast` release is the moving update feed, so its appcast.xml is
+      # the one asset that is replaced on every release.
       - name: Generate and upload appcast
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ steps.version.outputs.raw }}"
-          BUILD_NUMBER="${{ steps.version.outputs.build_number }}"
           DMG_URL="https://github.com/2witstudios/purepoint/releases/download/v${VERSION}/PurePoint-${VERSION}.dmg"
-          ED_SIGNATURE="${{ steps.sparkle_sign.outputs.ed_signature }}"
-          LENGTH="${{ steps.sparkle_sign.outputs.length }}"
           PUB_DATE="$(date -u '+%a, %d %b %Y %H:%M:%S %z')"
 
+          mkdir -p build
           cat > build/appcast.xml << APPCAST_EOF
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -250,106 +459,3 @@ jobs:
           APPCAST_EOF
 
           gh release upload appcast build/appcast.xml --clobber
-
-      - name: Cleanup keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
-
-  # Static pu + pu-engine for Linux servers (installed by scripts/install.sh).
-  # Built natively per arch against musl, so no glibc version floor applies.
-  linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
-          - target: aarch64-unknown-linux-musl
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          # A qualified tag ref makes checkout fail on a nonexistent tag instead
-          # of silently building the default branch.
-          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.94.0
-        with:
-          targets: ${{ matrix.target }}
-
-      # rust-toolchain.toml pins 1.89 for every in-repo cargo call, so the
-      # targets installed above land on 1.94.0 while the build runs on the
-      # pinned toolchain. Add the target there too, as the macOS build phase
-      # does for its Apple targets.
-      - name: Add target to the pinned toolchain
-        run: rustup target add "$TARGET"
-        env:
-          TARGET: ${{ matrix.target }}
-
-      - name: Install musl toolchain
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
-      - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p pu-cli -p pu-engine
-
-      - name: Package
-        id: package
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          VERSION="${RELEASE_TAG#v}"
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::release tag must be vX.Y.Z, got: $RELEASE_TAG"
-            exit 1
-          fi
-          NAME="purepoint-${VERSION}-${TARGET}"
-          mkdir -p "dist/${NAME}"
-          cp "target/${TARGET}/release/pu" "target/${TARGET}/release/pu-engine" "dist/${NAME}/"
-          cp LICENSE* README.md "dist/${NAME}/" 2>/dev/null || true
-          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
-          (cd dist && sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256")
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Upload build
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.package.outputs.name }}
-          path: |
-            dist/${{ steps.package.outputs.name }}.tar.gz
-            dist/${{ steps.package.outputs.name }}.tar.gz.sha256
-          if-no-files-found: error
-
-  # Independent of the macOS job: a signing or notarization failure must not
-  # leave the release without Linux builds. Whichever job runs first creates
-  # the release; the other attaches to it.
-  publish-linux:
-    needs: [linux]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download builds
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Upload to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          TAG="v${RELEASE_TAG#v}"
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --verify-tag --title "PurePoint $TAG" --generate-notes \
-            || gh release view "$TAG" >/dev/null  # lost a create race with the macOS job
-          gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber

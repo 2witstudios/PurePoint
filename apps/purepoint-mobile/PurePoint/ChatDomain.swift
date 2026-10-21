@@ -257,7 +257,23 @@ enum JSONValue: Codable, Sendable {
     var strings: [String] { if case .array(let x) = self { return x.compactMap(\.text) }; return [] }
     func decode<T: Decodable>(_ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(self)) }
 }
-struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String?; var workspaceManagement: Bool?; var workspace: JSONValue? }
+struct WireEnvelope: Decodable, Sendable { let type: String; var id: String?; var ok: Bool?; var data: JSONValue?; var error: String?; var text: String?; var streamId: String?; var cols: Int?; var rows: Int?; var reason: String?; var terminals: String?; var workspaceManagement: Bool?; var workspace: JSONValue?; var chat: String? }
+/// Point Guard chat access the Mac derives from this phone's grants: View or Control reads,
+/// Control with Workspace management sends. The bridge enforces it; the app mirrors it.
+enum ChatGrant: String, Sendable {
+    case off, read, send
+    /// Bridges that predate chat gating send no value and allowed full chat; unknown values fail closed.
+    static func from(_ raw: String?) -> ChatGrant { raw.map { ChatGrant(rawValue: $0) ?? .off } ?? .send }
+    var canRead: Bool { self != .off }
+    var canSend: Bool { self == .send }
+    var explanation: String? {
+        switch self {
+        case .send: return nil
+        case .read: return "Point Guard chat is read-only on this phone. Sending needs Agents and terminals: Control and Workspace management. Change this on your Mac."
+        case .off: return "Point Guard chat needs Agents and terminals: View or Control. Change this on your Mac."
+        }
+    }
+}
 
 // A serial utility queue keeps encoding/file IO away from keyboard and rendering.
 // Coalescing replaces older pending values; serial execution prevents stale writes.

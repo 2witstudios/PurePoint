@@ -59,7 +59,7 @@ pu spawn [prompt] [options]
 | `--file <path>` | Read prompt from a file (conflicts with `--template`) |
 | `--command <cmd>` | Command to run (for terminal agents) |
 | `--var KEY=VALUE` | Variable substitution (repeatable) |
-| `--no-auto` | Skip default auto-mode flags |
+| `--no-auto` | Launch the bare agent command, ignoring configured launch args (project and machine); `--agent-args` still apply |
 | `--agent-args <args>` | Extra flags passed to the agent CLI |
 | `--plan` | Launch in plan/architect mode (read-only) |
 | `--no-trigger` | Disable event triggers for this agent |

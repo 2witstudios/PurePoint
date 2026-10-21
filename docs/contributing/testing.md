@@ -30,6 +30,22 @@ just ci-rust           # fmt-check + lint + test + deny
 just ci                # ci-rust + build-app + test-app
 ```
 
+### CI routing
+
+The `Build & Test` workflow (`.github/workflows/macos.yml`) is the required check. On pull requests, `.github/scripts/ci.py` routes jobs by changed paths so macOS runners only build what a change can affect:
+
+| Job | Runs on a pull request when |
+|---|---|
+| macOS Build & Test | the macOS app, Rust crates, or the mobile `bridge/`, `runtime/`, `support/`, `docs/` or npm lockfiles change |
+| Mobile bridge, Runtime Rust | anything under `apps/purepoint-mobile/` or the Rust crates changes |
+| Mobile Swift & iOS tests | the iOS app, its tests or verification checks, the bridge, npm lockfiles, or the `pu-point-guard-lock` helper change |
+| Point Guard package (arm64) | packaging inputs change: `apps/purepoint-mobile/runtime/`, `support/`, `docs/`, non-test `bridge/` files, npm lockfiles, the `pu-point-guard-lock` helper, Xcode `project.pbxproj` or `Package.resolved`, or `release*.yml` |
+| Release archive | packaging inputs or anything under `apps/purepoint-macos/` change |
+
+Changes to `.github/scripts/`, `macos.yml`, `release*.yml` or `apps/shared/ChatMarkdown/` run every pull-request job. The Intel (`macos-26-intel`) package leg and the universal package proof never run on pull requests. Pushes to `main`, the nightly schedule and manual `workflow_dispatch` runs skip routing and run every job, including Intel. Jobs skipped by routing still pass the `Build & Test` gate; any failed or cancelled job fails it.
+
+Rust-only pull requests skip the Release archive and packaging jobs; the static Linux build, Rust tests and the macOS debug build cover compilation, and a break that only shows up in the Release universal (x86_64) build or packaged runtime is caught by the next `main` or nightly run. To run the full set, Intel included, on a pull-request branch before merging, dispatch it manually: `gh workflow run macos.yml --ref <branch>`.
+
 ### Filtering tests
 
 ```sh

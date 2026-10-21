@@ -26,7 +26,8 @@ const HOME_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_SOCKET_PATH_LEN: usize = 103;
 
 /// Remote `PATH` is minimal for non-interactive SSH, so put the install
-/// locations on it; that covers both `pu` and the `pu-engine` it spawns.
+/// locations on it to find `pu`. `pu` then starts the `pu-engine` beside
+/// itself (or in `~/.pu/bin`), never one found on `PATH`.
 /// Run through `/bin/sh` so it also works when the login shell is fish or csh.
 pub const START_COMMAND: &str =
     r#"/bin/sh -c 'PATH="$HOME/.pu/bin:$HOME/.cargo/bin:$PATH"; export PATH; exec pu health'"#;

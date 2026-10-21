@@ -85,6 +85,7 @@ test("remote credentials bind ownership, reject admin rights and close revoked s
       ).enrollmentToken,
       name: "Other",
     });
+    await trust.setTerminals(other.deviceId, "view");
     assert.equal(
       (await request(base, "/pair/verify", null, phone.credential)).body
         .clientId,
@@ -165,3 +166,188 @@ test("legacy token option and plaintext remote trust cannot silently restore sha
     }),
   );
 });
+
+const chatReads = ["sync", "sessions", "history"];
+const chatSends = ["send", "stop", "new", "resume", "answer"];
+const tiers = {
+  off: ["off", false],
+  view: ["view", false],
+  control: ["control", false],
+  manage: ["control", true],
+};
+async function chatHarness(fn) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "pg-chat-grant-"));
+  const trust = await openTrustStore({ directory });
+  const c = new EventEmitter();
+  const dispatched = [];
+  c.request = async (r) => {
+    dispatched.push(r.op);
+    return { op: r.op };
+  };
+  const server = await serve(c, {
+    host: "127.0.0.1",
+    port: 0,
+    trust,
+    tls: trust.tls,
+  });
+  const url = `wss://127.0.0.1:${server.address().port}/v1`;
+  const grant = async (device, tier) => {
+    const [terminals, management] = tiers[tier];
+    await trust.setTerminals(device.deviceId, terminals);
+    await trust.setWorkspaceManagement(device.deviceId, management);
+  };
+  const pair = async (tier = "off") => {
+    const device = await trust.enroll({
+      enrollmentToken: JSON.parse(
+        trust.createEnrollment({ endpoint: url }).payload,
+      ).enrollmentToken,
+      name: "Phone",
+    });
+    await grant(device, tier);
+    const ws = await connect(url, device.credential, device.clientId);
+    const inbox = [];
+    ws.on("message", (bytes) => inbox.push(JSON.parse(bytes.toString())));
+    let next = 0;
+    const call = async (op, fields = {}) => {
+      const id = `${op}-${++next}`;
+      const receipt = new Promise((resolve) => {
+        const listener = (bytes) => {
+          const r = JSON.parse(bytes.toString());
+          if (r.type === "receipt" && r.id === id) {
+            ws.off("message", listener);
+            resolve(r);
+          }
+        };
+        ws.on("message", listener);
+      });
+      ws.send(
+        JSON.stringify({
+          version: 1,
+          id,
+          op,
+          clientId: device.clientId,
+          ...fields,
+        }),
+      );
+      return receipt;
+    };
+    return { device, ws, inbox, call };
+  };
+  try {
+    await fn({ trust, c, dispatched, pair, grant });
+  } finally {
+    await server.shutdown();
+    await trust.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+test("chat follows the device grants: View reads, Control with Workspace management sends, everything else is rejected before the controller", async () =>
+  chatHarness(async ({ dispatched, pair }) => {
+    const expected = {
+      off: [],
+      view: chatReads,
+      control: chatReads,
+      manage: [...chatReads, ...chatSends],
+    };
+    const phones = [];
+    for (const [tier, allowed] of Object.entries(expected)) {
+      const phone = await pair(tier);
+      phones.push(phone);
+      assert.equal(
+        (await phone.call("permissions")).data.chat,
+        { off: "off", view: "read", control: "read", manage: "send" }[tier],
+      );
+      dispatched.length = 0;
+      for (const op of [...chatReads, ...chatSends, "steer", "bogus"]) {
+        const receipt = await phone.call(op);
+        assert.equal(receipt.ok, allowed.includes(op), `${tier} ${op}`);
+        if (!receipt.ok) assert.equal(receipt.data, undefined);
+        if (!receipt.ok && chatSends.includes(op))
+          assert.match(
+            receipt.error,
+            tier === "off" ? /View or Control/ : /Control and Workspace/,
+          );
+      }
+      assert.deepEqual(dispatched, allowed, tier);
+    }
+    for (const p of phones) p.ws.close();
+  }));
+
+test("chat snapshots and editor offers reach only devices with View or Control", async () =>
+  chatHarness(async ({ c, pair }) => {
+    const off = await pair("off");
+    const view = await pair("view");
+    const manage = await pair("manage");
+    c.emit("snapshot", { type: "snapshot", revision: 1 });
+    c.emit("editor", { type: "editor", text: "draft" });
+    await settle();
+    const chat = (p) =>
+      p.inbox.filter((r) => r.type === "snapshot" || r.type === "editor");
+    assert.equal(chat(off).length, 0);
+    assert.equal(chat(view).length, 2);
+    assert.equal(chat(manage).length, 2);
+    for (const p of [off, view, manage]) p.ws.close();
+  }));
+
+test("a live grant downgrade stops broadcasts, rejects further chat ops and notifies the device", async () =>
+  chatHarness(async ({ trust, c, dispatched, pair, grant }) => {
+    const phone = await pair("manage");
+    assert.equal((await phone.call("permissions")).data.chat, "send");
+    const downgrade = trust.setWorkspaceManagement(
+      phone.device.deviceId,
+      false,
+    );
+    assert.equal((await phone.call("send")).ok, false);
+    await downgrade;
+    await settle();
+    assert.ok(
+      phone.inbox.some((r) => r.type === "permissions" && r.chat === "read"),
+    );
+    assert.equal((await phone.call("sync")).ok, true);
+    const off = trust.setTerminals(phone.device.deviceId, "off");
+    c.emit("snapshot", { type: "snapshot", revision: 2 });
+    await off;
+    await settle();
+    assert.equal(
+      phone.inbox.filter((r) => r.type === "snapshot" && r.revision === 2)
+        .length,
+      0,
+    );
+    assert.ok(
+      phone.inbox.some((r) => r.type === "permissions" && r.chat === "off"),
+    );
+    assert.equal((await phone.call("sync")).ok, false);
+    assert.deepEqual(dispatched, ["sync"]);
+    await grant(phone.device, "view");
+    await settle();
+    assert.equal((await phone.call("sync")).ok, true);
+    phone.ws.close();
+  }));
+
+test("a device with agents and terminals Off cannot reach agents through Point Guard chat", async () =>
+  chatHarness(async ({ dispatched, pair }) => {
+    // Default pairing: terminals off, workspace management off.
+    const phone = await pair();
+    const granted = (await phone.call("permissions")).data;
+    assert.equal(granted.terminals, "off");
+    assert.equal(granted.workspaceManagement, false);
+    assert.equal(granted.chat, "off");
+    assert.equal((await phone.call("agents")).ok, false);
+    const attempts = [
+      ["send", { text: "list all agents and kill agent X", mode: "send" }],
+      ["send", { text: "pu send agent 'git push --force'", mode: "steer" }],
+      ["answer", { dialogId: "confirm", confirmed: true }],
+      ["resume", { sessionId: "other" }],
+      ["history", { sessionId: "other" }],
+      ["sessions", {}],
+      ["sync", {}],
+      ["new", {}],
+      ["stop", { runId: "run" }],
+    ];
+    for (const [op, fields] of attempts)
+      assert.equal((await phone.call(op, fields)).ok, false, op);
+    assert.deepEqual(dispatched, []);
+    phone.ws.close();
+  }));

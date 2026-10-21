@@ -75,7 +75,7 @@ Created automatically. Holds daemon runtime files and global-scope definitions.
 
 ### CLI binary
 
-The macOS app installs the `pu` binary to `~/.pu/bin/pu` on launch. Add it to your PATH:
+The macOS app installs `pu` and `pu-engine` to `~/.pu/bin` on launch (copied to a temporary file, then renamed into place, so a running daemon is never modified). Add it to your PATH:
 
 ```sh
 export PATH="$HOME/.pu/bin:$PATH"

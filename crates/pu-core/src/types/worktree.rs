@@ -81,6 +81,7 @@ mod tests {
                 no_trigger: false,
                 trigger_name: None,
                 signal: None,
+                bare_launch: false,
             },
         );
         let entry = WorktreeEntry {

@@ -4,13 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Pull requests skip packaging proofs their changes cannot affect and the
+  # Intel legs; main, the nightly run and manual runs prove everything.
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request runs are cancelled; main, nightly and manual
+  # runs each finish their full proof.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -23,8 +30,13 @@ jobs:
     outputs:
       macos: ${{ steps.paths.outputs.macos }}
       mobile: ${{ steps.paths.outputs.mobile }}
+      mobile_swift: ${{ steps.paths.outputs.mobile_swift }}
+      packaging: ${{ steps.paths.outputs.packaging }}
+      release_archive: ${{ steps.paths.outputs.release_archive }}
+      universal: ${{ steps.paths.outputs.universal }}
+      runtime_targets: ${{ steps.paths.outputs.runtime_targets }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -44,15 +56,15 @@ jobs:
       run:
         working-directory: apps/purepoint-mobile
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
       - name: Build isolated lock helper for bridge proofs
@@ -69,23 +81,23 @@ jobs:
   mobile-swift:
     name: Mobile Swift & iOS tests
     needs: changes
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.mobile_swift == 'true'
     runs-on: macos-26
     timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/purepoint-mobile
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
       - run: npm ci --ignore-scripts
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
       - name: Build isolated lock helper for actual trust fixtures
@@ -131,7 +143,7 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
       - name: Retain iOS signature and XCTest diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mobile-diagnostics
           path: ${{ runner.temp }}/mobile-diagnostics
@@ -149,19 +161,19 @@ jobs:
       PROJECT: apps/purepoint-macos/purepoint-macos.xcodeproj
       DESTINATION: "platform=macOS"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
 
       - name: Isolate macOS artifact Rust output
         run: printf 'CARGO_TARGET_DIR=%s/macos-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install xcbeautify
         run: brew install xcbeautify
@@ -204,7 +216,7 @@ jobs:
           PKGEOF
           done
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
       - name: Prepare actual shared bridge dependencies and isolated helper
@@ -251,7 +263,7 @@ jobs:
 
       - name: Retain macOS failure diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-diagnostics
           path: ${{ runner.temp }}/macos-diagnostics
@@ -261,25 +273,21 @@ jobs:
   runtime-package:
     name: Point Guard package (${{ matrix.architecture }})
     needs: changes
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.packaging == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-26
-            architecture: arm64
-          - runner: macos-26-intel
-            architecture: x64
+        include: ${{ fromJSON(needs.changes.outputs.runtime_targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
       - name: Set isolated build directory
@@ -304,7 +312,7 @@ jobs:
       - name: Relocated clean native startup and state-preserving replacement
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/PointGuardProof.app"
       - name: Retain nonpublishing proof artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: point-guard-runtime-${{ matrix.architecture }}
           path: ${{ runner.temp }}/PointGuardProof.app
@@ -313,7 +321,7 @@ jobs:
   runtime-universal:
     name: Point Guard universal package (${{ matrix.architecture }})
     needs: [changes, runtime-package]
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.universal == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -325,17 +333,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: point-guard-runtime-arm64
           path: ${{ runner.temp }}/arm64-input
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: point-guard-runtime-x64
           path: ${{ runner.temp }}/x64-input
@@ -350,7 +358,7 @@ jobs:
       - name: Launch relocated universal runtime on native architecture
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/UniversalProof.app"
       - name: Retain nonpublishing universal proof artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: point-guard-runtime-universal-${{ matrix.architecture }}
           path: ${{ runner.temp }}/UniversalProof.app
@@ -363,10 +371,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
           components: rustfmt, clippy
@@ -378,7 +386,7 @@ jobs:
 
   release-archive:
     needs: changes
-    if: needs.changes.outputs.macos == 'true'
+    if: needs.changes.outputs.release_archive == 'true'
     uses: ./.github/workflows/release-proof.yml
 
   build-and-test:
@@ -387,12 +395,10 @@ jobs:
     needs: [changes, macos, release-archive, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Require every applicable check to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python3 .github/scripts/ci.py gate
-          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert all(r[j]["result"]==expected for j in ["runtime-package","runtime-universal","runtime-rust"]), {j:r[j] for j in ["runtime-package","runtime-universal","runtime-rust"]}'
+        run: python3 .github/scripts/ci.py gate
