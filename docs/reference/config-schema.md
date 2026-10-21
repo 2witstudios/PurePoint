@@ -13,9 +13,29 @@ agents:
   claude:
     name: claude
     command: claude
-    launchArgs:
-      - "--dangerously-skip-permissions"
+    launchArgs: "--model opus"
 ```
+
+## Machine settings (`~/.pu/agent-settings.yaml`)
+
+```yaml
+codexYolo: false
+agentStatusTracking: true
+launchArgs:
+  claude: "--dangerously-skip-permissions"
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `codexYolo` | bool | `false` | Codex YOLO for all projects; see below |
+| `agentStatusTracking` | bool | `true` | Report working/idle/question status through native adapters |
+| `launchArgs` | map of agent type → string (or string[]) | `{}` | Launch args for every project that leaves `launchArgs` unset |
+
+The file is read on every config resolution, so spawn and resume pick up changes
+without a daemon restart. It is written under a lock with atomic replacement.
+Malformed content, including an unbalanced quote in a `launchArgs` string, is a
+config error; it never falls back to permission flags. The keys under
+`launchArgs` are agent types (`claude`, `codex`, `opencode`, `terminal`).
 
 ## Machine-wide Codex permissions
 
@@ -28,7 +48,8 @@ codexYolo: true
 
 The default is `false`. When enabled, the daemon resolves Codex configuration
 with `--dangerously-bypass-approvals-and-sandbox --no-daemon`, replacing sandbox
-and approval options in `command` and `launchArgs`. Wrapper prefixes and other
+and approval options in `command` and the effective launch args (project, else
+machine-level). Wrapper prefixes and other
 arguments, including model and search, are preserved.
 For an encapsulated wrapper with no explicit `codex` executable token, the full
 command is preserved and only `launchArgs` are normalized. Claude and OpenCode are
@@ -55,28 +76,42 @@ Each entry in `agents` configures a specific agent type.
 | `command` | string | (required) | Binary to execute |
 | `promptFlag` | string | `null` | CLI flag for prompt injection (e.g., `"--prompt"`) |
 | `interactive` | bool | `true` | Whether the agent runs in an interactive PTY |
-| `launchArgs` | string[] or null | `null` | CLI arguments; see resolution logic below |
+| `launchArgs` | string, string[] or null | `null` | Extra CLI arguments; see resolution logic below |
 
 ### Built-in agent defaults
 
-These defaults apply when an agent type is not defined in `config.yaml`:
+These defaults apply when an agent type is not defined in `config.yaml`. No
+agent gets launch args by default:
 
 | Agent | Command | Default `launchArgs` |
 |---|---|---|
-| `claude` | `claude` | `["--dangerously-skip-permissions"]` |
-| `codex` | `codex` | `["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]` |
-| `opencode` | `opencode` | `[]` |
-| `terminal` | `shell` (resolved to `$SHELL`) | `[]` |
+| `claude` | `claude` | none |
+| `codex` | `codex` | none |
+| `opencode` | `opencode` | none |
+| `terminal` | `shell` (resolved to `$SHELL`) | none |
+
+### Launch args format
+
+`launchArgs` is a free-form string split shell-style: whitespace separates
+arguments, and single quotes, double quotes and backslashes group them, e.g.
+`--append-system-prompt "be terse"` is two arguments. Nothing is expanded
+(no variables, globs or command substitution). An unbalanced quote is a config
+error. The legacy list form (`["--model", "opus"]`) is still accepted;
+PurePoint writes the string form when it saves the config. For Codex, a legacy
+`--full-auto` or `--approval-mode=full-auto` that you wrote is rewritten to
+`--sandbox workspace-write --ask-for-approval on-request`; no other flags are
+added.
 
 ### Launch args resolution
 
-The `launchArgs` field has three-state semantics:
+| Project `launchArgs` | Machine `launchArgs.<agent>` | Launched with |
+|---|---|---|
+| `null` (omitted) | unset | the bare command |
+| `null` (omitted) | `"--flag ..."` | the machine args |
+| `""` or `[]` | any | the bare command (project opts out) |
+| `"--flag ..."` | any | exactly the project args |
 
-| Value | Behavior |
-|---|---|
-| `null` (omitted) | Use built-in defaults for this agent type |
-| `[]` (empty array) | No launch args; explicitly disables auto-mode |
-| `["--flag", ...]` | Use exactly these args, replacing defaults |
+`pu spawn --no-auto` ignores both and launches the bare command.
 
 On spawn and resume, launch args are appended after arguments in `command`.
 Resume keeps the configured executable and wrapper prefix, then adds the agent's
@@ -94,35 +129,41 @@ agents:
   claude:
     name: claude
     command: claude
-    launchArgs:
-      - "--dangerously-skip-permissions"
-      - "--model"
-      - "opus"
+    launchArgs: "--model opus --append-system-prompt 'Keep answers short.'"
 ```
 
-### Example: disable auto-mode for Claude
+### Example: opt into auto mode for all your projects
+
+```yaml
+# ~/.pu/agent-settings.yaml
+launchArgs:
+  claude: "--dangerously-skip-permissions"
+```
+
+### Example: ignore the machine default in one project
 
 ```yaml
 agents:
   claude:
     name: claude
     command: claude
-    launchArgs: []    # No --dangerously-skip-permissions
+    launchArgs: ""    # bare `claude`
 ```
 
 ## Config merging
 
 Configuration is resolved in this order (later overrides earlier):
 
-1. **Built-in defaults** (compiled into `pu`)
-2. **Project config** (`.pu/config.yaml`)
-3. **CLI flags** (`--agent`, `--no-auto`, `--agent-args`)
+1. **Built-in defaults** (compiled into `pu`; no launch args)
+2. **Machine settings** (`~/.pu/agent-settings.yaml` `launchArgs`)
+3. **Project config** (`.pu/config.yaml`)
+4. **CLI flags** (`--agent`, `--no-auto`, `--agent-args`)
 
 Agent types not defined in the config file are filled in from built-in defaults. If your config only defines `codex`, the `claude`, `opencode`, and `terminal` types still work with their default settings.
 
 ## Available agent flags
 
-The default config written by `pu init` includes commented-out examples of useful flags per agent type:
+These are the tools' own flags, listed for convenience; PurePoint passes whatever you write and does not validate them. Check each tool's `--help` for its current options. The default config written by `pu init` includes commented-out examples:
 
 ### Claude
 

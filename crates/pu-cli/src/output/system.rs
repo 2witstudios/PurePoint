@@ -29,12 +29,16 @@ pub(crate) fn print_config_report(default_agent: &str, agents: &[AgentConfigInfo
     println!("  Default agent: {}", default_agent.green());
     for a in agents {
         println!("\n  {} ({})", a.name.bold(), a.command.dimmed());
-        if let Some(ref args) = a.launch_args {
-            println!("    Launch args: {args:?}");
-        } else {
-            println!("    Launch args: {} (using defaults)", "none".dimmed());
+        match (&a.project_launch_args, &a.machine_launch_args) {
+            (Some(args), _) => println!("    Launch args: {args} (project)"),
+            (None, Some(args)) => println!("    Launch args: {args} (all projects)"),
+            (None, None) => println!("    Launch args: {}", "none".dimmed()),
         }
-        println!("    Resolved:    {:?}", a.resolved_launch_args);
+        if let Some(ref command) = a.resolved_command {
+            println!("    Resolved:    {command}");
+        } else {
+            println!("    Resolved:    {:?}", a.resolved_launch_args);
+        }
     }
 }
 

@@ -15,6 +15,7 @@ uuid = { workspace = true }
 indexmap = { workspace = true }
 fs4 = "1.1"
 sha2 = "0.10"
+shell-words = "1"
 
 [dev-dependencies]
 tempfile = "3"

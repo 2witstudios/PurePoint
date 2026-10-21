@@ -20,7 +20,7 @@ struct GlobalAgentSettingsTests {
                 case .getGlobalAgentSettings:
                     calls.append("load")
                     return .globalAgentSettingsReport(codexYolo: false, agentStatusTracking: true)
-                case .updateGlobalAgentSettings(let yolo, let tracking):
+                case .updateGlobalAgentSettings(let yolo, let tracking, _):
                     calls.append("save")
                     return .globalAgentSettingsReport(codexYolo: yolo ?? false, agentStatusTracking: tracking ?? true)
                 default:
@@ -59,14 +59,44 @@ struct GlobalAgentSettingsTests {
         #expect(requests == 1)
     }
 
-    @Test func yoloSurvivesEditingModelAndSearch() {
-        var config = parseCodexLaunchArgs(["--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "-m", "custom", "--search"])
-        #expect(config.yolo)
-        config.model = "updated"
-        #expect(composeCodexLaunchArgs(config) == ["--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "-m", "updated", "--search"])
-        config.yolo = false
-        #expect(!composeCodexLaunchArgs(config).contains("--dangerously-bypass-approvals-and-sandbox"))
-        #expect(composeCodexLaunchArgs(config).contains("workspace-write"))
+    @Test func projectLaunchArgsAreSentAsOneString() throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateAgentConfig(
+            projectRoot: "/p", agentName: "claude", launchArgs: "--model opus --append-system-prompt 'be terse'"))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["launch_args"] as? String == "--model opus --append-system-prompt 'be terse'")
+        let cleared = try JSONEncoder().encode(DaemonRequest.updateAgentConfig(projectRoot: "/p", agentName: "claude", launchArgs: nil))
+        let clearedJson = try #require(JSONSerialization.jsonObject(with: cleared) as? [String: Any])
+        #expect(clearedJson["launch_args"] is NSNull, "null clears the project value")
+    }
+
+    @Test func machineLaunchArgsSaveSendsOnlyThatAgent() async throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(launchArgs: ["claude": "--dangerously-skip-permissions"]))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["launch_args"] as? [String: String] == ["claude": "--dangerously-skip-permissions"])
+        #expect(json["codex_yolo"] == nil)
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { request in
+                guard case .updateGlobalAgentSettings(_, _, let launchArgs) = request else {
+                    return .error(code: "TEST", message: "Unexpected request")
+                }
+                return .globalAgentSettingsReport(codexYolo: false, agentStatusTracking: true, launchArgs: launchArgs ?? [:])
+            }
+        )
+        await state.updateMachineLaunchArgs(agentName: "claude", launchArgs: "--model opus", projectRoot: nil)
+        #expect(state.machineLaunchArgs == ["claude": "--model opus"])
+    }
+
+    @Test func configReportDecodesLaunchArgStrings() throws {
+        let json = #"{"type":"config_report","default_agent":"claude","agents":[{"name":"claude","command":"claude","launch_args":null,"resolved_launch_args":["--model","opus"],"interactive":true,"machine_launch_args":"--model opus","resolved_command":"claude --model opus"}]}"#
+        let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(json.utf8))
+        guard case .configReport(_, let agents) = response, let claude = agents.first else {
+            Issue.record("Expected config report")
+            return
+        }
+        #expect(claude.projectLaunchArgs == nil)
+        #expect(claude.machineLaunchArgs == "--model opus")
+        #expect(claude.resolvedCommand == "claude --model opus")
     }
 
     @Test func globalSettingsProtocolRoundTrip() throws {
@@ -77,12 +107,13 @@ struct GlobalAgentSettingsTests {
         #expect(json["project_root"] == nil)
         #expect(json["agent_status_tracking"] == nil)
         let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(#"{"type":"global_agent_settings_report","codex_yolo":true}"#.utf8))
-        guard case .globalAgentSettingsReport(let enabled, let tracking) = response else {
+        guard case .globalAgentSettingsReport(let enabled, let tracking, let launchArgs) = response else {
             Issue.record("Expected global settings response")
             return
         }
         #expect(enabled)
         #expect(tracking, "Older daemons always track status")
+        #expect(launchArgs.isEmpty, "Older daemons have no machine launch args")
     }
 
     @Test func statusTrackingUpdateSendsOnlyItsOwnField() async throws {

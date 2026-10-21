@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{AgentStatus, WorktreeEntry};
+use indexmap::IndexMap;
 
 pub const PROTOCOL_VERSION: u32 = 10;
 
@@ -107,7 +108,7 @@ pub enum Request {
         worktree: Option<String>,
         #[serde(default)]
         command: Option<String>,
-        /// Skip auto-mode launch args (--dangerously-skip-permissions, --sandbox, etc.)
+        /// Launch the bare agent command, ignoring configured launch args (project and machine).
         #[serde(default)]
         no_auto: bool,
         /// Additional CLI args appended after launch args (from --agent-args)
@@ -340,6 +341,10 @@ pub enum Request {
         codex_yolo: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_status_tracking: Option<bool>,
+        /// Machine-level launch args string per agent type; a blank string
+        /// removes that agent's entry. Agents left out keep their stored value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        launch_args: Option<IndexMap<String, String>>,
     },
     GetConfig {
         project_root: String,
@@ -347,6 +352,11 @@ pub enum Request {
     UpdateAgentConfig {
         project_root: String,
         agent_name: String,
+        /// A shell-style string or a list of args; `null` clears the project value.
+        #[serde(
+            default,
+            deserialize_with = "crate::types::launch_args_serde::deserialize"
+        )]
         launch_args: Option<Vec<String>>,
     },
     // Trigger CRUD
@@ -629,6 +639,9 @@ pub enum Response {
         codex_yolo: bool,
         #[serde(default = "crate::serde_defaults::default_true")]
         agent_status_tracking: bool,
+        /// Machine-level launch args string per agent type.
+        #[serde(default)]
+        launch_args: IndexMap<String, String>,
     },
     ConfigReport {
         #[serde(default, skip_serializing_if = "Option::is_none")]

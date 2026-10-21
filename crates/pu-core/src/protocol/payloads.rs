@@ -224,6 +224,15 @@ pub struct AgentConfigInfo {
     pub launch_args: Option<Vec<String>>,
     pub resolved_launch_args: Vec<String>,
     pub interactive: bool,
+    /// Project `launchArgs` as a shell-style string; `None` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_launch_args: Option<String>,
+    /// Machine-level launch args string from `~/.pu/agent-settings.yaml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_launch_args: Option<String>,
+    /// Preview of `command` plus the resolved launch args.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

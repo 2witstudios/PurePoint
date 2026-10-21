@@ -10,6 +10,8 @@ final class AgentConfigState {
     var error: String?
     var codexYolo = false
     var agentStatusTracking = true
+    /// Machine-level ("all projects") launch args string per agent type.
+    var machineLaunchArgs: [String: String] = [:]
     var globalSettingsLoaded = false
     var isSavingGlobalSettings = false
     var globalError: String?
@@ -38,6 +40,15 @@ final class AgentConfigState {
         isSavingGlobalSettings = false
     }
 
+    /// Save the machine-level launch args for one agent type; a blank string removes them.
+    func updateMachineLaunchArgs(agentName: String, launchArgs: String, projectRoot: String?) async {
+        guard !isSavingGlobalSettings else { return }
+        isSavingGlobalSettings = true
+        await sendGlobalSettings(.updateGlobalAgentSettings(launchArgs: [agentName: launchArgs]))
+        if let projectRoot { await load(projectRoot: projectRoot) }
+        isSavingGlobalSettings = false
+    }
+
     func updateAgentStatusTracking(_ enabled: Bool) async {
         guard !isSavingGlobalSettings else { return }
         isSavingGlobalSettings = true
@@ -50,9 +61,10 @@ final class AgentConfigState {
         do {
             try await ensureDaemon()
             switch try await sendRequest(request) {
-            case .globalAgentSettingsReport(let yolo, let tracking):
+            case .globalAgentSettingsReport(let yolo, let tracking, let launchArgs):
                 codexYolo = yolo
                 agentStatusTracking = tracking
+                machineLaunchArgs = launchArgs
                 globalSettingsLoaded = true
             case .error(_, let message):
                 globalError = message
@@ -84,7 +96,8 @@ final class AgentConfigState {
         isLoading = false
     }
 
-    func updateLaunchArgs(projectRoot: String, agentName: String, launchArgs: [String]?) async {
+    /// Save the project's launch args string; `nil` clears it so the machine default applies.
+    func updateLaunchArgs(projectRoot: String, agentName: String, launchArgs: String?) async {
         error = nil
         do {
             let response = try await sendRequest(

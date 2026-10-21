@@ -563,7 +563,7 @@ impl Engine {
         // as on initial spawn. Resume flags belong to the wrapped agent.
         let (command, mut args) = Self::parse_agent_command(agent_cfg, agent_type)?;
         let launch_args =
-            pu_core::types::resolved_launch_args(agent_type, agent_cfg.launch_args.as_deref());
+            pu_core::types::resolved_launch_args(agent_type, agent_cfg.configured_launch_args());
         let mut policy_args = args.clone();
         policy_args.extend(launch_args.clone());
         crate::read_source::prepare_session_args(agent_type, &mut policy_args, "validation")
@@ -684,6 +684,7 @@ mod resume_command_tests {
                 prompt_flag: None,
                 interactive: true,
                 launch_args: Some(vec![]),
+                machine_launch_args: None,
             };
             // when / then
             assert!(engine.build_resume_command(kind, &config, None).is_err());
@@ -732,6 +733,7 @@ mod resume_command_tests {
                 prompt_flag: None,
                 interactive: true,
                 launch_args: Some(vec!["--first".into(), "shared".into()]),
+                machine_launch_args: None,
             };
 
             // when

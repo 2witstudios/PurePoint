@@ -118,17 +118,56 @@ Read agent configuration for a project.
 {
   "type": "config_report",
   "default_agent": "claude",
-  "agents": {"claude": {"name": "claude", "command": "claude", ...}}
+  "terminal_available": true,
+  "agents": [
+    {
+      "id": "claude",
+      "name": "claude",
+      "command": "claude",
+      "launch_args": null,
+      "resolved_launch_args": ["--model", "opus"],
+      "interactive": true,
+      "project_launch_args": null,
+      "machine_launch_args": "--model opus",
+      "resolved_command": "claude --model opus"
+    }
+  ]
 }
 ```
 
+`launch_args` is the project value as a list (`null` when unset).
+`project_launch_args` and `machine_launch_args` are the project and
+machine-level values in their string form, omitted when unset.
+`resolved_launch_args` is what spawn and resume append (project, else machine,
+else none), and `resolved_command` previews the command line. The three string
+fields were added additively; older clients ignore them.
+
 ### UpdateAgentConfig
 
-Update launch args for an agent type.
+Set or clear the project launch args for an agent type.
 
-**Request**: `{"type": "update_agent_config", "project_root": "/path", "agent_name": "claude", "launch_args": ["--verbose"]}`
+**Request**: `{"type": "update_agent_config", "project_root": "/path", "agent_name": "claude", "launch_args": "--model opus --append-system-prompt 'be terse'"}`
 
-**Response**: `{"type": "ok"}`
+`launch_args` is a shell-style string or a list of strings; `null` clears the
+project value so the machine-level args (or none) apply. An unbalanced quote is
+rejected. The project config is written with the string form.
+
+**Response**: `config_report` for the updated config.
+
+### GetGlobalAgentSettings / UpdateGlobalAgentSettings
+
+Read or update the machine settings in `~/.pu/agent-settings.yaml`.
+
+**Request**: `{"type": "update_global_agent_settings", "launch_args": {"claude": "--dangerously-skip-permissions"}}`
+
+All fields are optional and omitted ones keep their stored value: `codex_yolo`
+(bool), `agent_status_tracking` (bool), and `launch_args` (agent type →
+launch args string; a blank string removes that agent's entry, unknown agent
+types and unbalanced quotes are rejected without saving).
+
+**Response**: `{"type": "global_agent_settings_report", "codex_yolo": false, "agent_status_tracking": true, "launch_args": {"claude": "--dangerously-skip-permissions"}}`
+
+`launch_args` was added additively and defaults to `{}`.
 
 ## Agent lifecycle
 
@@ -156,7 +195,7 @@ Spawn a new agent, optionally in a new worktree.
 }
 ```
 
-The `trigger` field optionally binds a trigger by name to the spawned agent.
+`no_auto: true` launches the agent's bare command, ignoring project and machine-level launch args; `extra_args` still apply. The `trigger` field optionally binds a trigger by name to the spawned agent.
 
 **Response**:
 ```json
