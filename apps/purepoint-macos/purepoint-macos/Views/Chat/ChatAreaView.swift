@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct ChatAreaView: View {
@@ -91,3 +92,4 @@ struct ChatAreaView: View {
         }
     }
 }
+#endif

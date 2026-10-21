@@ -5,7 +5,9 @@ struct PointGuardPaneControls: View {
     @ObservedObject var model: PiChatModel
     @Environment(AppState.self) private var appState
     @State private var showSetup = false
+    #if os(macOS)
     @State private var showPhone = false
+    #endif
 
     var body: some View {
         HStack(spacing: 6) {
@@ -20,10 +22,13 @@ struct PointGuardPaneControls: View {
             .help(model.connectionStatus)
             .accessibilityLabel(model.busy ? "Point Guard is working" : model.connectionStatus)
             Menu {
+                // Pairing phones belongs to the Mac that hosts Point Guard (REQ-IPAD-038).
+                #if os(macOS)
                 Button("Connect phone") {
                     showPhone = true
                     Task { await appState.pointGuardService.connectPhone() }
                 }
+                #endif
                 Button("Setup") { showSetup = true }
                 Divider()
                 Button(model.connected ? "Disconnect" : "Connect") {
@@ -45,12 +50,18 @@ struct PointGuardPaneControls: View {
                 }.padding()
                 Divider()
                 ScrollView {
+                    #if os(macOS)
                     PointGuardSetupView(service: appState.pointGuardService, chat: model).padding(24)
+                    #else
+                    PointGuardSetupView(chat: model).padding(24)
+                    #endif
                 }
             }.frame(width: 620, height: 650)
         }
+        #if os(macOS)
         .sheet(isPresented: $showPhone) {
             PointGuardPhoneView(service: appState.pointGuardService, isPresented: $showPhone)
         }
+        #endif
     }
 }

@@ -50,10 +50,13 @@ struct PiPointGuardChatView: View {
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: Theme.chatBackground))
+        // The iPad attaches through PhotosPicker and fileImporter with these limits (IPAD-8.3).
+        #if os(macOS)
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
             result in
             importAttachment(result)
         }
+        #endif
         .task { if model.connected { await model.loadConversations() } }
         .onChange(of: model.connected) { _, connected in
             if connected { Task { await model.loadConversations() } }
@@ -365,6 +368,7 @@ struct PiPointGuardChatView: View {
                         return .handled
                     }
                 HStack(spacing: compact ? 8 : 12) {
+                    #if os(macOS)
                     Button {
                         showFiles = true
                     } label: {
@@ -378,6 +382,7 @@ struct PiPointGuardChatView: View {
                     }
                     .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
                     .accessibilityLabel("Add attachment").help("Attach an image, text file, or PDF")
+                    #endif
                     Spacer(minLength: 0)
                     if model.busy {
                         Menu {
@@ -446,6 +451,7 @@ struct PiPointGuardChatView: View {
         }
     }
 
+    #if os(macOS)
     private func importAttachment(_ result: Result<URL, Error>) {
         let draftKey = model.draftKey
         Task {
@@ -468,6 +474,7 @@ struct PiPointGuardChatView: View {
             }
         }
     }
+    #endif
 
     private func submitDraft(mode: String? = nil) {
         followOutput = true

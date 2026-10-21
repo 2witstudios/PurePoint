@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import CoreImage.CIFilterBuiltins
 import SwiftUI
@@ -234,3 +235,4 @@ struct PointGuardPhoneView: View {
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 }
+#endif
