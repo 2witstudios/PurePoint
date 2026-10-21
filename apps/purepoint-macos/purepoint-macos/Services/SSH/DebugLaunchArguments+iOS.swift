@@ -119,7 +119,9 @@ struct DebugLaunchArguments {
 /// | `dashboard`, `agents`, `schedule` | the sidebar nav row |
 /// | `settings[/<section>]` | Settings, at `general`, `pointGuard`, `agents`, `hotkeys` or `display` |
 /// | `project/<name>` | the project's detail (first project with that name) |
-/// | `root/<name>` | the project root checkout's first workspace, as clicking its row |
+///
+/// No route selects a workspace: that attaches its terminals, which claims their size for
+/// whoever else is watching. `-PUDebugSelectAgent` names the agent explicitly instead.
 /// | `worktree/<project>/<branch>` | the worktree's detail |
 /// | `channel/<name>` | the project's channel |
 /// | `add-machine` | the Add Machine sheet |
@@ -128,7 +130,6 @@ enum DebugOpenRoute: Equatable, CustomStringConvertible {
     case nav(SidebarNavItem)
     case settings(SettingsSection?)
     case project(String)
-    case root(String)
     case worktree(project: String, branch: String)
     case channel(String)
     case addMachine
@@ -150,7 +151,6 @@ enum DebugOpenRoute: Equatable, CustomStringConvertible {
             guard let section = SettingsSection(rawValue: parts[1]) else { return nil }
             self = .settings(section)
         case ("project", 2): self = .project(parts[1])
-        case ("root", 2): self = .root(parts[1])
         case ("worktree", 3): self = .worktree(project: parts[1], branch: parts[2])
         case ("channel", 2): self = .channel(parts[1])
         case ("add-machine", 1): self = .addMachine
@@ -180,11 +180,6 @@ enum DebugOpenRoute: Equatable, CustomStringConvertible {
             return .run { appState.showSettings = true }
         case .project(let name):
             return project(name).map { .select(.project($0.projectId)) }
-        case .root(let name):
-            guard let project = project(name),
-                let workspace = appState.registry?.workspacesByProject[project.projectId]?.first(where: { !$0.isPointGuard })
-            else { return nil }
-            return .select(.workspace(workspace.id))
         case .worktree(let name, let branch):
             guard let worktree = project(name)?.worktrees.first(where: { $0.branch == branch || $0.name == branch })
             else { return nil }
