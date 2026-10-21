@@ -338,8 +338,6 @@ pub enum Request {
     /// Fields left out keep their stored value.
     UpdateGlobalAgentSettings {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        codex_yolo: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_status_tracking: Option<bool>,
         /// Machine-level launch args string per agent type; a blank string
         /// removes that agent's entry. Agents left out keep their stored value.
@@ -653,7 +651,6 @@ pub enum Response {
         created_at: DateTime<Utc>,
     },
     GlobalAgentSettingsReport {
-        codex_yolo: bool,
         #[serde(default = "crate::serde_defaults::default_true")]
         agent_status_tracking: bool,
         /// Machine-level launch args string per agent type.
