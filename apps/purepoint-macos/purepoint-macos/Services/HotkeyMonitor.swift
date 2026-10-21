@@ -33,6 +33,10 @@ final class HotkeyMonitor {
         // are handled by SwiftUI .commands so they show in menus
         guard action.isMonitorHandled else { return event }
 
+        // The sidebars' shown state is shared by every window, so it is toggled here once
+        // rather than by each window's handler.
+        if SidebarVisibility.toggle(for: action) { return nil }
+
         NotificationCenter.default.post(
             name: .hotkeyAction,
             object: nil,

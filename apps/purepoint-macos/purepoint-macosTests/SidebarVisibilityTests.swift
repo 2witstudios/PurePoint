@@ -47,6 +47,27 @@ struct SidebarVisibilityTests {
         #expect(SidebarVisibility.isShown(SidebarVisibility.sidebarKey, in: defaults))
     }
 
+    @Test func givenASidebarToggleActionShouldFlipItsSidebarOnce() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+
+        #expect(SidebarVisibility.toggle(for: .toggleWorkspaceSidebar, in: defaults))
+        #expect(!SidebarVisibility.isShown(SidebarVisibility.workspaceSidebarKey, in: defaults))
+        #expect(SidebarVisibility.isShown(SidebarVisibility.sidebarKey, in: defaults))
+
+        #expect(SidebarVisibility.toggle(for: .toggleSidebar, in: defaults))
+        #expect(!SidebarVisibility.isShown(SidebarVisibility.sidebarKey, in: defaults))
+    }
+
+    @Test func givenAnotherActionShouldLeaveBothSidebarsAlone() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+
+        #expect(!SidebarVisibility.toggle(for: .focusSidebar, in: defaults))
+        #expect(SidebarVisibility.isShown(SidebarVisibility.sidebarKey, in: defaults))
+        #expect(SidebarVisibility.isShown(SidebarVisibility.workspaceSidebarKey, in: defaults))
+    }
+
     @Test func givenTheWorkspaceSidebarHotkeyShouldBeListedUnderNavigation() {
         #expect(HotkeyAction.actions(for: .navigation).contains(.toggleWorkspaceSidebar))
         #expect(HotkeyAction.toggleWorkspaceSidebar.displayName == "Toggle Workspace Sidebar")

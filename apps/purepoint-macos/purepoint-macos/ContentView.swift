@@ -7,7 +7,6 @@ struct ContentView: View {
     @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
     @AppStorage(SidebarVisibility.sidebarKey) private var sidebarVisible = true
-    @AppStorage(SidebarVisibility.workspaceSidebarKey) private var workspaceSidebarVisible = true
     @State private var sidebarOutlineView: NSOutlineView?
     /// A focus request that arrived while the sidebar was hidden, waiting for its outline view to join a window.
     @State private var sidebarFocusPending = false
@@ -207,16 +206,6 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 guard let window = NSApp.keyWindow else { return }
                 focusTerminalInWindow(window)
-            }
-
-        case .toggleSidebar:
-            withAnimation {
-                sidebarVisible.toggle()
-            }
-
-        case .toggleWorkspaceSidebar:
-            withAnimation {
-                workspaceSidebarVisible.toggle()
             }
 
         case .navDashboard:

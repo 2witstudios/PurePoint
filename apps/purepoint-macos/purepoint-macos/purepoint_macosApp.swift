@@ -81,7 +81,7 @@ struct purepoint_macosApp: App {
             // Both sidebars, in the View menu. Each also has a toggle button in the window's top strip.
             CommandGroup(after: .sidebar) {
                 Button("Toggle Sidebar") {
-                    postHotkeyAction(.toggleSidebar)
+                    SidebarVisibility.toggle(for: .toggleSidebar)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .toggleSidebar),
@@ -89,7 +89,7 @@ struct purepoint_macosApp: App {
                 )
 
                 Button("Toggle Workspace Sidebar") {
-                    postHotkeyAction(.toggleWorkspaceSidebar)
+                    SidebarVisibility.toggle(for: .toggleWorkspaceSidebar)
                 }
                 .keyboardShortcut(
                     keyBindingState.keyEquivalent(for: .toggleWorkspaceSidebar),
