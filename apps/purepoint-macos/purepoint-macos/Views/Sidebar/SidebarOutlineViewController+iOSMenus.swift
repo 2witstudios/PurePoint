@@ -178,6 +178,9 @@ extension SidebarOutlineViewController {
         guard let cell = outlineView.cellForItem(at: indexPath) as? SidebarRowCell else { return nil }
         let parameters = UIPreviewParameters()
         parameters.visiblePath = UIBezierPath(roundedRect: cell.rowView.bounds, cornerRadius: 5)
+        // The row draws its own fill; the preview's default white would cover the sidebar
+        // background behind its text.
+        parameters.backgroundColor = .clear
         return UITargetedPreview(view: cell.rowView, parameters: parameters)
     }
 

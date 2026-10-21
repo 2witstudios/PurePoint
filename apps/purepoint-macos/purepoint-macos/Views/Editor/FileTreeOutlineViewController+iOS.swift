@@ -399,6 +399,8 @@ extension FileTreeOutlineViewController: UICollectionViewDelegate {
         guard let cell = outlineView.cellForItem(at: indexPath) as? FileTreeRowCell else { return nil }
         let parameters = UIPreviewParameters()
         parameters.visiblePath = UIBezierPath(roundedRect: cell.rowView.bounds, cornerRadius: 5)
+        // The row draws its own fill; the preview's default white would cover the pane behind it.
+        parameters.backgroundColor = .clear
         return UITargetedPreview(view: cell.rowView, parameters: parameters)
     }
 }
