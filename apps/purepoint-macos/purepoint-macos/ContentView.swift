@@ -17,8 +17,20 @@ struct ContentView: View {
 
     /// Clears the traffic-light buttons, which sit over the top of the sidebar.
     private let trafficLightInset: CGFloat = 28
+    #if os(macOS)
     /// Clears the traffic-light buttons when the sidebar is hidden and the detail starts at the left edge.
     private let hiddenSidebarLeadingInset: CGFloat = 72
+    #else
+    /// The window's top safe area: the status bar, or the iPadOS window controls.
+    @State private var topSafeArea: CGFloat = 0
+    /// iPad window controls sit inside the top safe area, which the content keeps clear of, so
+    /// a hidden sidebar leaves nothing to clear at the left edge.
+    private let hiddenSidebarLeadingInset: CGFloat = 0
+
+    /// The sidebar's rows start where the Mac's do, below a band as tall as the title bar, or
+    /// below the safe area when that is taller.
+    private var sidebarTopInset: CGFloat { max(0, trafficLightInset - topSafeArea) }
+    #endif
 
     var body: some View {
         @Bindable var appState = appState
@@ -39,22 +51,41 @@ struct ContentView: View {
                         }
                     }
                 )
+                #if os(macOS)
                 .padding(.top, trafficLightInset)
                 .frame(width: PurePointTheme.sidebarIdealWidth)
                 .frame(maxHeight: .infinity)
                 .background(Color(nsColor: Theme.sidebarBackground))
+                #else
+                .padding(.top, sidebarTopInset)
+                .frame(width: PurePointTheme.sidebarIdealWidth)
+                .frame(maxHeight: .infinity)
+                // The column's fill runs under the status bar and home indicator, as the Mac's
+                // runs under its title bar.
+                .background(Color(nsColor: Theme.sidebarBackground).ignoresSafeArea())
+                #endif
 
                 Rectangle()
                     .fill(Color.primary.opacity(0.06))
                     .frame(width: 1)
+                    #if os(iOS)
+                    .ignoresSafeArea()
+                    #endif
             }
 
             DetailView(selection: $selection)
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        #if os(macOS)
         // The configurator makes the content view span the title bar; this drops the inset that leaves.
         .ignoresSafeArea(.container, edges: .top)
+        #else
+        // iPad content stays below the status bar or window controls, where the Mac's sits below
+        // its title bar; only the column fills reach the window edges.
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { topSafeArea = $0 }
+        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+        #endif
         .background(WindowChromeConfigurator())
         .navigationTitle("")
         #if os(iOS) && DEBUG
