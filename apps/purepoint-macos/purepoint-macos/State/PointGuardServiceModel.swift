@@ -1,3 +1,4 @@
+#if os(macOS)
 import Combine
 import Foundation
 
@@ -439,3 +440,4 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
 private extension PiJSONValue {
     var values: [PiJSONValue] { if case .array(let values) = self { return values }; return [] }
 }
+#endif

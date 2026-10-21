@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import UserNotifications
 
 /// Local delivery only. It never sends input, resolves requests or owns agent sessions.
@@ -38,7 +40,9 @@ import UserNotifications
         if defaults.stringArray(forKey: "PP_signalDeliveredEvents") != policy.deliveredKeys {
             defaults.set(policy.deliveredKeys, forKey: "PP_signalDeliveredEvents")
         }
+        #if os(macOS)
         NSApp.dockTile.badgeLabel = result.badge == 0 ? nil : String(result.badge)
+        #endif
         let current = Set(agents.compactMap(\.eventKey))
         let obsolete = knownNotificationKeys.filter { !current.contains($0) }
         if !obsolete.isEmpty {

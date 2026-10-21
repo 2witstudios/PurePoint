@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 
 @MainActor
@@ -41,3 +42,4 @@ final class HotkeyMonitor {
         return nil  // consume event
     }
 }
+#endif

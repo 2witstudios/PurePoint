@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 nonisolated enum DaemonLifecycle {
@@ -281,3 +282,4 @@ enum DaemonLifecycleError: Error, LocalizedError {
         }
     }
 }
+#endif

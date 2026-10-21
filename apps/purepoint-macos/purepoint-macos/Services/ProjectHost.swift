@@ -134,7 +134,9 @@ nonisolated protocol HostDirectoryWatcher: AnyObject, Sendable {
     func stopAll()
 }
 
+#if os(macOS)
 nonisolated extension FileTreeWatcher: HostDirectoryWatcher {}
+#endif
 
 // MARK: - Local
 
@@ -205,7 +207,12 @@ nonisolated struct LocalProjectHost: ProjectHost {
     }
 
     func makeWatcher(onChange: @escaping @Sendable () -> Void) -> any HostDirectoryWatcher {
+        #if os(macOS)
         FileTreeWatcher(onChange: onChange)
+        #else
+        // No local projects on iOS; the iPad's projects are all machine-backed.
+        InertDirectoryWatcher()
+        #endif
     }
 
     static func milliseconds(_ date: Date?) -> Int64 {
@@ -227,6 +234,7 @@ nonisolated struct LocalProjectHost: ProjectHost {
             modifiedMs: milliseconds(attributes[.modificationDate] as? Date), ignored: nil)
     }
 
+    #if os(macOS)
     /// Run git or gh on this Mac. Moved unchanged from GitService.
     func run(_ command: HostCommand) -> CommandResult {
         let process = Process()
@@ -330,6 +338,12 @@ nonisolated struct LocalProjectHost: ProjectHost {
             stdout: stdout, stderr: stderr, exitCode: process.terminationStatus,
             outputExceededLimit: outputExceededLimit)
     }
+    #else
+    /// iOS cannot spawn processes; git and gh run on a machine through `DaemonProjectHost`.
+    func run(_ command: HostCommand) -> CommandResult {
+        CommandResult(stdout: "", stderr: "Local commands are not available on iPad.", exitCode: -1)
+    }
+    #endif
 }
 
 // MARK: - Remote (daemon over SSH)
