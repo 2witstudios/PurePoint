@@ -23,7 +23,7 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 
 ### Fixed
 - `$HOME`, `/` and ancestors of `$HOME` are never registered as projects, even when an older version left `~/.pu/manifest.json` behind. Such entries are removed from the project registry when the daemon starts. Requests that would create or change something under such a root (`init`, `spawn`, worktrees, templates, schedules and the rest) now fail with `project_root_not_allowed`. If an older version recorded agents under `$HOME`, you can still see, read and kill them there (`status`, `read`, `kill`). Move ongoing work to a real project directory.
-- Request lines that arrive in several pieces while an attach or grid stream is sending output are no longer cut short.
+- Request lines that arrive in several pieces are no longer cut short, whether an attach or grid stream is sending output meanwhile or the stream ends (for example when the agent exits) before the line is complete. A last request sent without a trailing newline before the client closes its side is still answered.
 
 ## [0.5.2] — 2026-10-15
 
