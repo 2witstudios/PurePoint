@@ -156,7 +156,7 @@ impl Engine {
         }
 
         // When plan_mode is active, prefix the prompt with instructions to enter plan mode.
-        // This keeps bypass permissions as the base while guiding the agent into plan mode
+        // This keeps the configured launch args as the base while guiding the agent into plan mode
         // via its own tool (EnterPlanMode) rather than conflicting CLI flags.
         let prompt = if plan_mode {
             format!(
@@ -205,17 +205,9 @@ impl Engine {
             };
             let mut args = cmd_args;
 
-            // Add agent-type-specific launch args from config (or defaults).
-            // --no-auto skips only the built-in defaults; explicit user-configured
-            // launchArgs are always applied.
-            let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
-                Vec::new()
-            } else {
-                pu_core::types::resolved_launch_args(&agent_type, agent_cfg.launch_args.as_deref())
-            };
-            if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
-                tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
-            }
+            // Configured launch args: project, else machine-level, else none.
+            // --no-auto launches the bare command, ignoring all of them.
+            let launch_args = Self::spawn_launch_args(&agent_type, &agent_cfg, no_auto);
             Self::append_launch_args(&mut args, launch_args);
 
             // Append extra args from --agent-args (always applied, even with --no-auto)
@@ -532,6 +524,7 @@ impl Engine {
             trigger_total,
             gate_attempts: trigger_name.as_ref().map(|_| 0),
             no_trigger,
+            bare_launch: no_auto,
             trigger_name: trigger_name.clone(),
         };
 
@@ -625,6 +618,17 @@ impl Engine {
             agent_id,
             status: AgentStatus::Running,
         }
+    }
+
+    pub(super) fn spawn_launch_args(
+        agent_type: &str,
+        agent_cfg: &pu_core::types::AgentConfig,
+        no_auto: bool,
+    ) -> Vec<String> {
+        if no_auto {
+            return Vec::new();
+        }
+        pu_core::types::resolved_launch_args(agent_type, agent_cfg.configured_launch_args())
     }
 
     fn append_launch_args(args: &mut Vec<String>, launch_args: Vec<String>) {

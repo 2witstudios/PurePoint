@@ -491,7 +491,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 10);
+    assert_eq!(PROTOCOL_VERSION, 11);
 }
 
 // --- GridCommand round-trips ---
@@ -2069,6 +2069,62 @@ fn given_update_agent_config_request_with_args_should_round_trip() {
     }
 }
 
+#[test]
+fn given_update_agent_config_request_with_string_args_should_split_them() {
+    // given — the Settings text field sends the free-form string
+    let json = r#"{"type":"update_agent_config","project_root":"/test","agent_name":"claude","launch_args":"--model opus --append-system-prompt 'be terse'"}"#;
+    // when
+    let parsed: Request = serde_json::from_str(json).unwrap();
+    // then
+    match parsed {
+        Request::UpdateAgentConfig { launch_args, .. } => assert_eq!(
+            launch_args.unwrap(),
+            vec!["--model", "opus", "--append-system-prompt", "be terse"]
+        ),
+        _ => panic!("expected UpdateAgentConfig"),
+    }
+}
+
+#[test]
+fn given_update_agent_config_request_with_unbalanced_quote_should_be_rejected() {
+    let json = r#"{"type":"update_agent_config","project_root":"/test","agent_name":"claude","launch_args":"--x 'oops"}"#;
+    assert!(serde_json::from_str::<Request>(json).is_err());
+}
+
+#[test]
+fn given_update_global_agent_settings_with_launch_args_should_round_trip() {
+    let req = Request::UpdateGlobalAgentSettings {
+        codex_yolo: None,
+        agent_status_tracking: None,
+        launch_args: Some(
+            [(
+                "claude".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(!json.contains("codex_yolo"));
+    match serde_json::from_str::<Request>(&json).unwrap() {
+        Request::UpdateGlobalAgentSettings { launch_args, .. } => assert_eq!(
+            launch_args.unwrap()["claude"],
+            "--dangerously-skip-permissions"
+        ),
+        _ => panic!("expected UpdateGlobalAgentSettings"),
+    }
+}
+
+#[test]
+fn given_legacy_global_agent_settings_report_should_default_launch_args() {
+    let json = r#"{"type":"global_agent_settings_report","codex_yolo":false}"#;
+    match serde_json::from_str::<Response>(json).unwrap() {
+        Response::GlobalAgentSettingsReport { launch_args, .. } => assert!(launch_args.is_empty()),
+        _ => panic!("expected GlobalAgentSettingsReport"),
+    }
+}
+
 // --- Input submit field ---
 
 #[test]
@@ -2127,6 +2183,10 @@ fn given_config_report_response_should_round_trip() {
                 launch_args: Some(vec!["--verbose".into()]),
                 resolved_launch_args: vec!["--verbose".into()],
                 interactive: true,
+                project_launch_args: Some("--verbose".into()),
+                machine_launch_args: None,
+                policy_launch_args: None,
+                resolved_command: Some("claude --verbose".into()),
             },
             AgentConfigInfo {
                 id: None,
@@ -2136,6 +2196,10 @@ fn given_config_report_response_should_round_trip() {
                 launch_args: None,
                 resolved_launch_args: vec!["--sandbox".into(), "workspace-write".into()],
                 interactive: true,
+                project_launch_args: None,
+                machine_launch_args: Some("--sandbox workspace-write".into()),
+                policy_launch_args: None,
+                resolved_command: None,
             },
         ],
     };
