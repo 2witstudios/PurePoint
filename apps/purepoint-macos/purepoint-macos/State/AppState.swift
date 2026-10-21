@@ -568,8 +568,11 @@ final class AppState {
 
     #if os(iOS)
     /// The iPad's replacement for the Mac's `NSApplication` activity and termination hooks:
-    /// the scene phase the iPad App forwards. Installed when the App creates its state.
+    /// the scene phase the iPad App forwards. Installed when the App creates its state, which
+    /// is also before launch-time notification responses arrive, as the Mac's application
+    /// delegate installs the notification delegate.
     private func installLifecycleHooks() {
+        _ = AgentSignalNotifications.shared
         AppLifecycleHooks.scenePhaseChanged = { [weak self] phase in
             self?.scenePhaseChanged(phase)
         }
@@ -595,6 +598,7 @@ final class AppState {
         for project in managedProjects {
             project.resumeStreams()
         }
+        signalNotifications.refreshBadge()
         updateAgentSignals()
     }
     #endif
