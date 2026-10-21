@@ -423,12 +423,7 @@ impl Engine {
                     std::path::Path::new(&project_root),
                     home.as_deref(),
                 ) {
-                    return Response::Error {
-                        code: "project_root_not_allowed".into(),
-                        message: format!(
-                            "{project_root} is /, $HOME or an ancestor of $HOME; register a project directory instead"
-                        ),
-                    };
+                    return inventory::project_root_not_allowed(&project_root);
                 }
                 let response = self.handle_init(&project_root).await;
                 if matches!(response, Response::InitResult { .. })

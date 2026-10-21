@@ -6,10 +6,12 @@ The PurePoint daemon communicates with clients (CLI, macOS app) via NDJSON over 
 
 | Property | Value |
 |---|---|
-| Socket path | `~/.pu/daemon.sock` |
+| Socket path | `~/.pu/daemon.sock` (mode 0600; the daemon keeps `~/.pu` at 0700) |
+| Access | Only processes running as the daemon's user: every accepted connection's peer uid must equal the daemon's effective uid, or it is closed |
 | Protocol version | 11 |
 | Framing | Newline-delimited JSON (one JSON object per line) |
-| Max message size | 1 MB (1,048,576 bytes) |
+| Max message size | 1 MB (1,048,576 bytes); a longer line gets one `FRAME_TOO_LARGE` error and the connection is closed |
+| First request | Must arrive within 30 seconds of connecting, or the connection is closed |
 | Max connections | 1024 (semaphore-limited; further connections get one `BUSY` error line and are closed) |
 | Client timeout | 30 seconds |
 | Binary data | Hex-encoded within JSON |
@@ -35,7 +37,8 @@ Responses use the same `"type"` field convention. Error responses have `"type": 
 
 | Code | When |
 |---|---|
-| `PARSE_ERROR` | Malformed JSON request |
+| `PARSE_ERROR` | Malformed JSON request (the connection stays open) |
+| `FRAME_TOO_LARGE` | Request line over 1 MB; the connection is closed right after |
 | `AGENT_NOT_FOUND` | Agent ID does not exist |
 | `WORKTREE_NOT_FOUND` | Worktree ID does not exist |
 | `NOT_FOUND` | Template, agent def, swarm def, schedule, or trigger not found |
@@ -71,7 +74,7 @@ Inventory returns `type: inventory`, observation time, optional project scope (n
 
 ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree_id. Legacy Status (with agent_id), Kill (single agent), Suspend (single agent), Resume, Rename and AssignTrigger accept an empty project_root for daemon ownership resolution. Explicit roots constrain ownership. Bulk requests require a root. Duplicate durable IDs return AMBIGUOUS_AGENT; a live session owned by another project returns AGENT_OWNERSHIP_CONFLICT; an incomplete durable inventory returns INVENTORY_INCOMPLETE when a known live owner cannot resolve the ID. Standalone shells support status/logs/input/attach/kill and reject resumable project operations with UNSUPPORTED_AGENT_OPERATION.
 
-Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
+Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
 
 ### Health
 
