@@ -298,6 +298,39 @@ struct ProbeTimeoutPolicyTests {
     }
 }
 
+struct SSHRelayWriteFailureTests {
+    private func stream(endedWith end: SSHExecEnd?) -> (SSHRelayByteStream, FakeExecChannel) {
+        let channel = FakeExecChannel(command: "relay") { _, _ in }
+        if let end { channel.end(end) }
+        let opened = SSHOpenedChannel(channel: channel, release: {}, onPrimary: true)
+        return (SSHRelayByteStream(opened: opened, machineName: "studio"), channel)
+    }
+
+    @Test func aRelayThatExitedForNoDaemonReportsDaemonStopped() async {
+        let (stream, _) = stream(endedWith: .exited(SSHRelayErrors.noDaemonStatus, stderr: "error: no daemon"))
+        await #expect(throws: DaemonClientError.notRunning) { try await stream.send(Data("{}\n".utf8)) }
+    }
+
+    @Test func aRelayThatFoundNoPuReportsTheInstallError() async {
+        let (stream, _) = stream(endedWith: .exited(SSHRelayErrors.commandNotFoundStatus, stderr: "pu: not found"))
+        await #expect(throws: SSHTransportError.puNotInstalled(machine: "studio")) {
+            try await stream.send(Data("{}\n".utf8))
+        }
+    }
+
+    @Test func aDroppedSessionStillReadsAsEOF() async {
+        let (stream, _) = stream(endedWith: .disconnected)
+        await #expect(throws: DaemonClientError.eof) { try await stream.send(Data("{}\n".utf8)) }
+    }
+
+    @Test func aWriteFailureWithNoEndYetClosesTheChannelAfterTheGrace() async {
+        let channel = FakeExecChannel(command: "relay") { _, _ in }
+        let end = await SSHRelayByteStream.end(of: channel, within: .milliseconds(50))
+        #expect(end == nil)
+        #expect(channel.isEnded)
+    }
+}
+
 @Suite(.serialized) struct SSHSessionAbandonTests {
     @Test func abandoningClosesTheConnectionAndBacksOff() async throws {
         let clock = FakeClock()

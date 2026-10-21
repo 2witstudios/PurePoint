@@ -123,12 +123,40 @@ nonisolated final class SSHRelayByteStream: DaemonByteStream {
         close()
     }
 
+    /// How long a failed write waits for the relay's exit status before reporting a plain EOF.
+    static let endGrace: Duration = .seconds(1)
+
     func send(_ data: Data) async throws {
         do {
             try await opened.channel.write(data)
         } catch {
+            // The relay may have exited before reading (no daemon, no `pu`): its status says why.
+            if case .exited(let status, let stderr) = await Self.end(of: opened.channel, within: Self.endGrace) {
+                opened.release()
+                throw SSHRelayErrors.error(for: .exited(status, stderr: stderr), machine: machineName)
+            }
             // A write into a dropped session fails like one into a closed socket.
             throw DaemonClientError.eof
+        }
+    }
+
+    /// How `channel` ended, waiting at most `limit`. A channel that has not ended by then is
+    /// closed, which also ends the wait: a stream whose write failed carries nothing more.
+    static func end(of channel: any SSHExecChannel, within limit: Duration) async -> SSHExecEnd? {
+        await withTaskGroup(of: SSHExecEnd?.self) { group in
+            group.addTask {
+                while true {
+                    if case .end(let end) = await channel.read() { return end }
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            if first == nil { channel.close() }
+            group.cancelAll()
+            return first
         }
     }
 
