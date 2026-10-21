@@ -87,6 +87,15 @@ struct ContentView: View {
             }
 
             DetailView(selection: $selection)
+                #if os(iOS)
+                // The pane grid clips each pane, so the tab strip's fill can't reach under the
+                // status bar as the sidebar columns' fills do; this band stands in for it.
+                .background(alignment: .top) {
+                    Color(nsColor: Theme.statusBarBand)
+                        .frame(height: topSafeArea)
+                        .offset(y: -topSafeArea)
+                }
+                #endif
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
