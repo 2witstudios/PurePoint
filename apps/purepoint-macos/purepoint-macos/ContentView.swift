@@ -286,11 +286,12 @@ struct ContentView: View {
             // with its last pane.
             // (A workspace left with nothing open is removed; the selection then falls back
             // to the dashboard via the workspacesByProject observer.)
-            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface,
-                TabCloseConfirmation.confirm(
-                    closing: [surface], in: workspace.id, appState: appState, registry: registry)
-            else { break }
-            registry.closeTab(workspaceId: workspace.id, surfaceId: surface.id)
+            guard let workspace = registry.activeWorkspace, let surface = workspace.focusedSurface else { break }
+            let workspaceId = workspace.id
+            TabCloseConfirmation.close([surface], in: workspaceId, appState: appState, registry: registry) {
+                [registry] in
+                registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
+            }
 
         case .toggleChatSidebar:
             NotificationCenter.default.post(name: .toggleChatSidebar, object: nil)

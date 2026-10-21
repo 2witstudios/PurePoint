@@ -97,10 +97,11 @@ struct PaneTabBar: View {
     }
 
     private func closePane() {
-        guard let pane,
-            TabCloseConfirmation.confirm(closing: pane.tabs, in: workspaceId, appState: appState, registry: registry)
-        else { return }
-        registry.closePane(workspaceId: workspaceId, leafId: leafId)
+        guard let pane else { return }
+        TabCloseConfirmation.close(pane.tabs, in: workspaceId, appState: appState, registry: registry) {
+            [registry, workspaceId, leafId] in
+            registry.closePane(workspaceId: workspaceId, leafId: leafId)
+        }
     }
 }
 
@@ -257,9 +258,10 @@ private struct PaneTab: View {
     }
 
     private func close() {
-        guard TabCloseConfirmation.confirm(closing: [surface], in: workspaceId, appState: appState, registry: registry)
-        else { return }
-        registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
+        TabCloseConfirmation.close([surface], in: workspaceId, appState: appState, registry: registry) {
+            [registry, workspaceId, surface] in
+            registry.closeTab(workspaceId: workspaceId, surfaceId: surface.id)
+        }
     }
 }
 
@@ -299,9 +301,33 @@ enum TabDragPayload {
 /// a whole pane goes — more than one running agent (one is what closing a tab does anyway).
 @MainActor
 enum TabCloseConfirmation {
-    static func confirm(
+    /// Run `close` once the user agreed, or at once when closing loses nothing. The Mac asks
+    /// with a modal alert; the iPad, which has no modal run loop, closes from the alert's
+    /// button instead.
+    static func close(
+        _ tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry,
+        perform close: @escaping @MainActor () -> Void
+    ) {
+        #if os(macOS)
+        guard confirm(closing: tabs, in: workspaceId, appState: appState, registry: registry) else { return }
+        close()
+        #else
+        let reasons = reasons(closing: tabs, in: workspaceId, appState: appState, registry: registry)
+        guard !reasons.isEmpty else {
+            close()
+            return
+        }
+        if var presenter = NSApp.keyWindow?.rootViewController {
+            while let presented = presenter.presentedViewController { presenter = presented }
+            presenter.present(alert(closing: tabs.count, reasons: reasons, close: close), animated: true)
+        }
+        #endif
+    }
+
+    /// What closing `tabs` would lose, or nothing when it needs no confirmation.
+    static func reasons(
         closing tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry
-    ) -> Bool {
+    ) -> [String] {
         let running = tabs.compactMap(\.content.agentId).filter {
             appState.agent(byId: $0)?.status.isAlive ?? false
         }
@@ -312,15 +338,23 @@ enum TabCloseConfirmation {
             else { return nil }
             return session.editor.currentFile?.name ?? "a file"
         }
-        guard running.count > 1 || !unsaved.isEmpty else { return true }
+        guard running.count > 1 || !unsaved.isEmpty else { return [] }
 
         var reasons: [String] = []
         if running.count > 1 { reasons.append("\(running.count) running agents will be stopped.") }
         if !unsaved.isEmpty {
             reasons.append("Unsaved changes to \(unsaved.joined(separator: ", ")) will be lost.")
         }
+        return reasons
+    }
 
-        #if os(macOS)
+    #if os(macOS)
+    static func confirm(
+        closing tabs: [Surface], in workspaceId: String, appState: AppState, registry: WorkspaceRegistry
+    ) -> Bool {
+        let reasons = reasons(closing: tabs, in: workspaceId, appState: appState, registry: registry)
+        guard !reasons.isEmpty else { return true }
+
         let alert = NSAlert()
         alert.messageText = tabs.count > 1 ? "Close this pane?" : "Close this tab?"
         alert.informativeText = reasons.joined(separator: " ")
@@ -328,20 +362,20 @@ enum TabCloseConfirmation {
         alert.addButton(withTitle: tabs.count > 1 ? "Close Pane" : "Close Tab")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
-        #else
-        // UIKit has no modal run loop to answer synchronously, so the close is refused and the
-        // reasons are shown: nothing is lost without the user's say.
-        let alert = UIAlertController(
-            title: tabs.count > 1 ? "Can't close this pane" : "Can't close this tab",
-            message: reasons.joined(separator: " "), preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
-        if var presenter = NSApp.keyWindow?.rootViewController {
-            while let presented = presenter.presentedViewController { presenter = presented }
-            presenter.present(alert, animated: true)
-        }
-        return false
-        #endif
     }
+    #else
+    /// The Mac's confirmation as a UIKit alert: the close button runs `close`.
+    static func alert(
+        closing count: Int, reasons: [String], close: @escaping @MainActor () -> Void
+    ) -> UIAlertController {
+        let alert = UIAlertController(
+            title: count > 1 ? "Close this pane?" : "Close this tab?",
+            message: reasons.joined(separator: " "), preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: count > 1 ? "Close Pane" : "Close Tab", style: .destructive) { _ in close() })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        return alert
+    }
+    #endif
 }
 
 private struct MiddleClickModifier: ViewModifier {

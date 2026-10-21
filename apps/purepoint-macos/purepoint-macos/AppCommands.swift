@@ -330,10 +330,13 @@ struct AppCommands: Commands {
     }
 
     private func closeFocusedPane() {
-        guard let workspace = registry.activeWorkspace, let pane = workspace.focusedPane,
-            TabCloseConfirmation.confirm(closing: pane.tabs, in: workspace.id, appState: appState, registry: registry)
-        else { return }
-        registry.closePane(workspaceId: workspace.id, leafId: workspace.focusedLeafId)
+        guard let workspace = registry.activeWorkspace, let pane = workspace.focusedPane else { return }
+        let workspaceId = workspace.id
+        let leafId = workspace.focusedLeafId
+        TabCloseConfirmation.close(pane.tabs, in: workspaceId, appState: appState, registry: registry) {
+            [registry] in
+            registry.closePane(workspaceId: workspaceId, leafId: leafId)
+        }
     }
 
     // MARK: - Tab Helpers
