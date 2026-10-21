@@ -24,37 +24,28 @@ impl Engine {
                 "project registry roots must be absolute",
             ));
         }
+        let mut engine = Self::new();
         // `/`, `$HOME` and its ancestors are never projects, whatever an older
         // daemon recorded; drop them from the registry on disk too.
-        let home = std::env::var_os("HOME").map(PathBuf::from);
         let count = projects.len();
         let projects: Vec<String> = projects
             .into_iter()
-            .filter(|root| !is_too_broad_project_root(Path::new(root), home.as_deref()))
+            .filter(|root| !is_too_broad_project_root(Path::new(root), engine.home.as_deref()))
             .collect();
         if projects.len() != count
             && let Err(e) = write_registry(&path, &projects)
         {
             tracing::warn!("failed to rewrite project registry: {e}");
         }
-        let mut engine = Self::new();
         engine.project_registry_path = Some(path);
         *engine.registered_projects.lock().unwrap() = projects.into_iter().collect();
         Ok(engine)
     }
 
-    pub(super) async fn register_project(&self, root: &str) -> Result<(), Response> {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        self.register_project_with_home(root, home).await
-    }
-
     /// Registers an initialized project, except one too broad to be a project
-    /// (`/`, `home` or an ancestor of it), which is skipped without error.
-    async fn register_project_with_home(
-        &self,
-        root: &str,
-        home: Option<PathBuf>,
-    ) -> Result<(), Response> {
+    /// (`/`, `$HOME` or an ancestor of it), which is skipped without error.
+    pub(super) async fn register_project(&self, root: &str) -> Result<(), Response> {
+        let home = self.home.clone();
         // Serialize durable updates without holding the inventory mutex over
         // filesystem I/O; health and queries can keep reading the old snapshot.
         let update = self.project_registry_updates.clone().lock_owned().await;
@@ -147,8 +138,7 @@ impl Engine {
             {
                 *root = canonical.to_string_lossy().into_owned();
             }
-            let home = std::env::var_os("HOME").map(PathBuf::from);
-            check_project_root_scope(root, legacy_root_use, home.as_deref())?;
+            check_project_root_scope(root, legacy_root_use, self.home.as_deref())?;
             if let Some(id) = targeted.as_deref() {
                 self.validate_live_owner(id, root).await?;
             }
@@ -709,13 +699,63 @@ mod tests {
         // `~/.pu` doubles as the global dir, so `$HOME` can look initialized.
         manifest::write_manifest(&home, &Manifest::new(home.to_string_lossy().into_owned()))
             .unwrap();
-        let engine = Engine::with_project_registry(path.clone()).unwrap();
+        let mut engine = Engine::with_project_registry(path.clone()).unwrap();
+        engine.home = Some(home.clone());
         for root in [home.clone(), home.parent().unwrap().to_path_buf()] {
             engine
-                .register_project_with_home(&root.to_string_lossy(), Some(home.clone()))
+                .register_project(&root.to_string_lossy())
                 .await
                 .unwrap();
         }
+        assert!(engine.registered_projects().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn given_legacy_home_project_requests_should_refuse_changes_but_serve_cleanup() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("registry.json");
+        std::fs::create_dir_all(tmp.path().join("home/.pu")).unwrap();
+        let home = tmp.path().join("home").canonicalize().unwrap();
+        let root = home.to_string_lossy().into_owned();
+        // An older version recorded `$HOME` as a project in the global dir.
+        manifest::write_manifest(&home, &Manifest::new(root.clone())).unwrap();
+        let before = std::fs::read(pu_core::paths::manifest_path(&home)).unwrap();
+        let mut engine = Engine::with_project_registry(path.clone()).unwrap();
+        engine.home = Some(home.clone());
+
+        let spawn: Request = serde_json::from_value(serde_json::json!({
+            "type": "spawn", "project_root": root, "prompt": "", "agent": "terminal",
+        }))
+        .unwrap();
+        let worktree = Request::CreateWorktree {
+            project_root: root.clone(),
+            name: Some("wt".into()),
+            base: None,
+        };
+        for refused in [spawn, worktree] {
+            let response = engine.handle_request(refused).await;
+            assert!(
+                matches!(&response, Response::Error { code, .. } if code == "project_root_not_allowed"),
+                "{response:?}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(pu_core::paths::manifest_path(&home)).unwrap(),
+            before,
+            "a refused request must not touch the legacy manifest"
+        );
+
+        let status = engine
+            .handle_request(Request::Status {
+                project_root: root.clone(),
+                agent_id: None,
+            })
+            .await;
+        assert!(
+            matches!(status, Response::StatusReport { .. }),
+            "{status:?}"
+        );
         assert!(engine.registered_projects().is_empty());
         assert!(!path.exists());
     }

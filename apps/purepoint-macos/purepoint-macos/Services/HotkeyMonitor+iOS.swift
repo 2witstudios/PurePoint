@@ -127,6 +127,9 @@ extension UIWindow {
     /// unhandled actions up to its window, so the commands work from any first responder.
     @objc func performHotkeyKeyCommand(_ sender: UIKeyCommand) {
         guard let action = HotkeyMonitor.action(for: sender) else { return }
+        // The sidebars' shown state is shared by every window, so it is toggled here once, as
+        // the Mac monitor does, rather than by each window's handler.
+        if SidebarVisibility.toggle(for: action) { return }
         HotkeyMonitor.post(action)
     }
 }

@@ -638,6 +638,7 @@ async fn attachment_pair(
     let task = tokio::spawn(async move {
         streams::handle_attach_stream(
             &mut BufReader::new(read),
+            &mut Vec::new(),
             &mut write,
             &engine,
             &agent_id,
@@ -813,6 +814,7 @@ async fn given_cancellable_submit_disconnect_should_stop_future_chunks_and_enter
         IpcServer::dispatch_request(
             &request,
             &mut BufReader::new(read),
+            &mut Vec::new(),
             &mut write,
             &engine,
             &Notify::new(),
@@ -891,8 +893,15 @@ async fn given_cancellable_request_and_eof_already_buffered_should_never_start_t
     let mut reader = BufReader::new(read);
     let before = buffer.current_offset();
     assert!(
-        !IpcServer::dispatch_request(&request, &mut reader, &mut write, &engine, &Notify::new())
-            .await
+        !IpcServer::dispatch_request(
+            &request,
+            &mut reader,
+            &mut Vec::new(),
+            &mut write,
+            &engine,
+            &Notify::new(),
+        )
+        .await
     );
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let (data, _, _) = buffer.read_from(before);
@@ -1256,12 +1265,17 @@ fn given_permissive_umask_socket_should_still_be_owner_only() {
         assert_eq!(mode, 0o600);
         return;
     }
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--test-threads=1"])
         .env(CHILD, "1")
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success(), "child test failed: {status}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // A renamed test would match nothing and "pass" with 0 tests run.
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "child test must run and pass exactly this test: {stdout}"
+    );
 }
 
 #[test]
@@ -1270,4 +1284,144 @@ fn given_peer_of_another_user_should_be_refused() {
     assert!(!peer_allowed(Some(502), 501));
     assert!(!peer_allowed(Some(0), 501));
     assert!(!peer_allowed(None, 501));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_line_still_arriving_when_attach_ends_should_finish_in_request_mode() {
+    let (engine, agent_id, tmp) =
+        crate::test_helpers::init_and_spawn_command(Some("/bin/cat")).await;
+    let project_root = tmp.path().join("project").to_string_lossy().into_owned();
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let engine = server.engine().clone();
+    let handle = tokio::spawn(async move { server.run().await });
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    write_line(
+        &mut writer,
+        &Request::Attach {
+            agent_id: agent_id.clone(),
+            replay: None,
+            client_id: None,
+        },
+    )
+    .await;
+    assert!(matches!(
+        read_response(&mut reader).await,
+        Response::AttachReady { .. }
+    ));
+
+    // Half an Input line is in flight when the agent exits and the attach
+    // stream hands the connection back to request mode.
+    let input = serde_json::to_string(&Request::Input {
+        agent_id: agent_id.clone(),
+        data: b"late\n".to_vec(),
+        submit: false,
+        cancel_on_disconnect: false,
+    })
+    .unwrap()
+        + "\n";
+    let (head, tail) = input.as_bytes().split_at(input.len() / 2);
+    writer.write_all(head).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    engine
+        .handle_request(Request::Kill {
+            project_root,
+            target: KillTarget::Agent(agent_id),
+            exclude: vec![],
+        })
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    writer.write_all(tail).await.unwrap();
+    write_line(&mut writer, &Request::Health).await;
+
+    let responses = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut responses = Vec::new();
+        loop {
+            let response = read_response(&mut reader).await;
+            let done = matches!(response, Response::HealthReport { .. });
+            responses.push(response);
+            if done {
+                return responses;
+            }
+        }
+    })
+    .await
+    .expect("health must be answered after the stream ends");
+    assert!(
+        !responses
+            .iter()
+            .any(|r| matches!(r, Response::Error { code, .. } if code == "PARSE_ERROR")),
+        "the split line must be reassembled, not parsed in pieces: {responses:?}"
+    );
+    let health = responses
+        .iter()
+        .filter(|r| matches!(r, Response::HealthReport { .. }))
+        .count();
+    assert_eq!(health, 1, "{responses:?}");
+    handle.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_request_without_trailing_newline_at_eof_should_still_be_answered() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let request = serde_json::to_string(&Request::Health).unwrap();
+    writer.write_all(request.as_bytes()).await.unwrap();
+    writer.shutdown().await.unwrap();
+    let responses = responses_until_close(&mut reader).await;
+    assert!(
+        matches!(responses.as_slice(), [Response::HealthReport { .. }]),
+        "{responses:?}"
+    );
+    handle.abort();
+}
+
+/// Enters a stream, sends a short line that is not UTF-8 and then a valid
+/// request: the stream must close the connection without running it.
+async fn assert_invalid_bytes_close_stream(sock_path: &std::path::Path, subscribe: Subscribe) {
+    let stream = UnixStream::connect(sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let (request, subscribed) = subscribe;
+    write_line(&mut writer, &request).await;
+    let first = read_response(&mut reader).await;
+    assert!(subscribed(&first), "{first:?}");
+    writer.write_all(b"\xff{}\n").await.unwrap();
+    write_line(&mut writer, &Request::Health).await;
+    let responses = responses_until_close(&mut reader).await;
+    assert!(
+        !responses
+            .iter()
+            .any(|r| matches!(r, Response::HealthReport { .. })),
+        "nothing after unreadable input may run: {responses:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_invalid_utf8_in_grid_stream_should_close_the_connection() {
+    let tmp = TempDir::new().unwrap();
+    let (sock_path, project_root, handle) = initialized_server(&tmp).await;
+    let subscribed: fn(&Response) -> bool = |r| matches!(r, Response::GridSubscribed);
+    let subscribe = (Request::SubscribeGrid { project_root }, subscribed);
+    assert_invalid_bytes_close_stream(&sock_path, subscribe).await;
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_invalid_utf8_in_status_stream_should_close_the_connection() {
+    let tmp = TempDir::new().unwrap();
+    let (sock_path, project_root, handle) = initialized_server(&tmp).await;
+    let subscribed: fn(&Response) -> bool = |r| matches!(r, Response::StatusSubscribed);
+    let subscribe = (Request::SubscribeStatus { project_root }, subscribed);
+    assert_invalid_bytes_close_stream(&sock_path, subscribe).await;
+    handle.abort();
 }

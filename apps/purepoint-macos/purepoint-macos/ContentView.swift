@@ -6,7 +6,7 @@ struct ContentView: View {
     @Environment(WorkspaceRegistry.self) private var registry
     @Environment(TerminalViewCache.self) private var viewCache
     @State private var selection: SidebarSelection? = .nav(.dashboard)
-    @State private var sidebarVisible = true
+    @AppStorage(SidebarVisibility.sidebarKey) private var sidebarVisible = true
     #if os(macOS)
     @State private var sidebarOutlineView: NSOutlineView?
     #else
@@ -18,8 +18,12 @@ struct ContentView: View {
     /// Clears the traffic-light buttons, which sit over the top of the sidebar.
     private let trafficLightInset: CGFloat = 28
     #if os(macOS)
-    /// Clears the traffic-light buttons when the sidebar is hidden and the detail starts at the left edge.
-    private let hiddenSidebarLeadingInset: CGFloat = 72
+    /// Puts the sidebar toggle just past the traffic-light buttons.
+    private let sidebarToggleLeadingInset: CGFloat = 72
+    /// Clears the traffic lights and the sidebar toggle when the sidebar is hidden and the detail starts at the left edge.
+    private let hiddenSidebarLeadingInset: CGFloat = 100
+    /// The band the sidebar toggle sits in, as tall as the title bar.
+    private var sidebarToggleBand: CGFloat { trafficLightInset }
     #else
     /// The window's top safe area: the status bar, when the window reaches it.
     @State private var topSafeArea: CGFloat = 0
@@ -27,15 +31,18 @@ struct ContentView: View {
     /// their right. Zero when the window shows none.
     @State private var windowControls = WindowControlsInsets()
 
-    /// Clears the window controls when the sidebar is hidden and the detail starts at the
-    /// left edge, as the Mac clears its traffic lights.
-    private var hiddenSidebarLeadingInset: CGFloat { windowControls.leading }
+    /// Puts the sidebar toggle just past the window controls, as the Mac's sits past its traffic lights.
+    private var sidebarToggleLeadingInset: CGFloat { windowControls.leading + 8 }
+    /// Clears the window controls and the sidebar toggle when the sidebar is hidden and the detail
+    /// starts at the left edge, as the Mac clears its traffic lights.
+    private var hiddenSidebarLeadingInset: CGFloat { sidebarToggleLeadingInset + trafficLightInset }
 
-    /// The sidebar's rows start where the Mac's do, below a band as tall as the title bar, or
-    /// below the status bar or window controls when those reach lower.
+    /// The sidebar's rows start where the Mac's do, below a band as tall as the title bar that
+    /// holds the sidebar toggle, or below the window controls when those reach lower.
     private var sidebarTopInset: CGFloat {
-        max(0, trafficLightInset - topSafeArea, windowControls.bottom - topSafeArea)
+        max(trafficLightInset, windowControls.bottom - topSafeArea)
     }
+    private var sidebarToggleBand: CGFloat { sidebarTopInset }
     #endif
 
     var body: some View {
@@ -82,6 +89,14 @@ struct ContentView: View {
             DetailView(selection: $selection)
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        // One spot whether the sidebar is shown or not: in the sidebar's top band, or the detail's leading gutter.
+        .overlay(alignment: .topLeading) {
+            TabBarButton(icon: "sidebar.left", help: sidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
+                withAnimation { sidebarVisible.toggle() }
+            }
+            .frame(height: sidebarToggleBand)
+            .padding(.leading, sidebarToggleLeadingInset)
         }
         #if os(macOS)
         // The configurator makes the content view span the title bar; this drops the inset that leaves.
@@ -266,11 +281,6 @@ struct ContentView: View {
                 viewCache.terminalToFocus(in: registry.activeWorkspace, window: window)?.focusTerminal()
             }
             #endif
-
-        case .toggleSidebar:
-            withAnimation {
-                sidebarVisible.toggle()
-            }
 
         case .navDashboard:
             selection = .nav(.dashboard)

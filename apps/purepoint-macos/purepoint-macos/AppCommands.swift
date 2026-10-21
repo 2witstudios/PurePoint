@@ -40,13 +40,23 @@ struct AppCommands: Commands {
             )
         }
 
-        // The workspace files sidebar's toolbar toggle is hidden with the title bar, so this is its control.
+        // Both sidebars, in the View menu. Each also has a toggle button in the window's top strip.
         CommandGroup(after: .sidebar) {
-            Button("Toggle Workspace Sidebar") {
-                let defaults = UserDefaults.standard
-                let isShown = defaults.object(forKey: "showWorkspaceFilesSidebar") as? Bool ?? true
-                defaults.set(!isShown, forKey: "showWorkspaceFilesSidebar")
+            Button("Toggle Sidebar") {
+                SidebarVisibility.toggle(for: .toggleSidebar)
             }
+            .keyboardShortcut(
+                keyBindingState.keyEquivalent(for: .toggleSidebar),
+                modifiers: keyBindingState.eventModifiers(for: .toggleSidebar)
+            )
+
+            Button("Toggle Workspace Sidebar") {
+                SidebarVisibility.toggle(for: .toggleWorkspaceSidebar)
+            }
+            .keyboardShortcut(
+                keyBindingState.keyEquivalent(for: .toggleWorkspaceSidebar),
+                modifiers: keyBindingState.eventModifiers(for: .toggleWorkspaceSidebar)
+            )
         }
 
         CommandGroup(replacing: .appSettings) {
@@ -83,14 +93,6 @@ struct AppCommands: Commands {
             .keyboardShortcut(
                 keyBindingState.keyEquivalent(for: .focusContent),
                 modifiers: keyBindingState.eventModifiers(for: .focusContent)
-            )
-
-            Button("Toggle Sidebar") {
-                postHotkeyAction(.toggleSidebar)
-            }
-            .keyboardShortcut(
-                keyBindingState.keyEquivalent(for: .toggleSidebar),
-                modifiers: keyBindingState.eventModifiers(for: .toggleSidebar)
             )
 
             Divider()

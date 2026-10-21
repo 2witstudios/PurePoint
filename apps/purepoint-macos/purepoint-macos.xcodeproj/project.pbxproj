@@ -7,9 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001; };
-		BB1122334455667788990002 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990002; };
-		BB1122334455667788990000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000; };
+		BB1122334455667788990000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000 /* ChatMarkdown.swift */; };
+		BB1122334455667788990001 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001 /* ChatMarkdownView.swift */; };
+		BB1122334455667788990002 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990002 /* ChatBubble.swift */; };
 		FB0A00012F60000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00022F60000000000001 /* SwiftTerm */; };
 		FB0A00062F60000000000002 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FB0A00072F60000000000002 /* Sparkle */; };
 		FB57075A2F6834CC0077135F /* TreeSitterPHP in Frameworks */ = {isa = PBXBuildFile; productRef = FB5707592F6834CC0077135F /* TreeSitterPHP */; };
@@ -34,9 +34,10 @@
 		FB57E1352F67BD090077135F /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1342F67BD090077135F /* TreeSitterJSON */; };
 		FB57E1382F67BD5B0077135F /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E1372F67BD5B0077135F /* TreeSitterBash */; };
 		FB57E13B2F67BD900077135F /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = FB57E13A2F67BD900077135F /* TreeSitterTypeScript */; };
-		FBAD00182F80000000000000 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001; };
-		FBAD00192F80000000000000 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990002; };
-		FBAD001A2F80000000000000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000; };
+		FBAD00152F80000000000000 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD00142F80000000000000 /* Citadel */; };
+		FBAD00182F80000000000000 /* ChatMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990001 /* ChatMarkdownView.swift */; };
+		FBAD00192F80000000000000 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990002 /* ChatBubble.swift */; };
+		FBAD001A2F80000000000000 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1122334455667788990000 /* ChatMarkdown.swift */; };
 		FBAD001B2F80000000000000 /* PairingSecret.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAD001C2F80000000000000 /* PairingSecret.swift */; };
 		FBAD02002F80000000000000 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01002F80000000000000 /* SwiftTerm */; };
 		FBAD02012F80000000000000 /* TreeSitterPHP in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01012F80000000000000 /* TreeSitterPHP */; };
@@ -61,10 +62,16 @@
 		FBAD02142F80000000000000 /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01142F80000000000000 /* TreeSitterJSON */; };
 		FBAD02152F80000000000000 /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01152F80000000000000 /* TreeSitterBash */; };
 		FBAD02162F80000000000000 /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD01162F80000000000000 /* TreeSitterTypeScript */; };
-		FBAD00152F80000000000000 /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = FBAD00142F80000000000000 /* Citadel */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		FBAD00112F80000000000000 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FBC7CFB22F53F1FD00F8E0A1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FBAD00012F80000000000000;
+			remoteInfo = "purepoint-ipad";
+		};
 		FBC7CFC82F53F1FE00F8E0A1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = FBC7CFB22F53F1FD00F8E0A1 /* Project object */;
@@ -79,35 +86,21 @@
 			remoteGlobalIDString = FBC7CFB92F53F1FD00F8E0A1;
 			remoteInfo = "purepoint-macos";
 		};
-		FBAD00112F80000000000000 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = FBC7CFB22F53F1FD00F8E0A1 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = FBAD00012F80000000000000;
-			remoteInfo = "purepoint-ipad";
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
 		AA1122334455667788990001 /* ChatMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdownView.swift; path = ../shared/ChatMarkdown/ChatMarkdownView.swift; sourceTree = SOURCE_ROOT; };
 		AA1122334455667788990002 /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatBubble.swift; path = ../shared/ChatMarkdown/ChatBubble.swift; sourceTree = SOURCE_ROOT; };
-		AA1122334455667788990000 /* ChatMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatMarkdown.swift; path = ../shared/ChatMarkdown/ChatMarkdown.swift; sourceTree = SOURCE_ROOT; };
-		FBAD001C2F80000000000000 /* PairingSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PairingSecret.swift; path = ../purepoint-mobile/PurePoint/PairingSecret.swift; sourceTree = SOURCE_ROOT; };
+		FBAD00032F80000000000000 /* purepoint-ipad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "purepoint-ipad.app"; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBAD00042F80000000000000 /* purepoint-ipadTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-ipadTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBAD001C2F80000000000000 /* PairingSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PairingSecret.swift; path = "../purepoint-mobile/PurePoint/PairingSecret.swift"; sourceTree = SOURCE_ROOT; };
 		FBC7CFBA2F53F1FD00F8E0A1 /* purepoint-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "purepoint-macos.app"; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFC72F53F1FE00F8E0A1 /* purepoint-macosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FBC7CFD12F53F1FE00F8E0A1 /* purepoint-macosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-macosUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		FBAD00032F80000000000000 /* purepoint-ipad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "purepoint-ipad.app"; path = PurePoint.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FBAD00042F80000000000000 /* purepoint-ipadTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "purepoint-ipadTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		FBAD00162F80000000000000 /* Exceptions for "purepoint-macos" folder in "purepoint-ipad" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				PurePoint.entitlements,
-			);
-			target = FBAD00012F80000000000000 /* purepoint-ipad */;
-		};
 		FBAD00172F80000000000000 /* Exceptions for "purepoint-macosTests" folder in "purepoint-ipadTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -136,9 +129,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FBC7CFBC2F53F1FD00F8E0A1 /* purepoint-macos */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				FBAD00162F80000000000000 /* Exceptions for "purepoint-macos" folder in "purepoint-ipad" target */,
-			);
 			path = "purepoint-macos";
 			sourceTree = "<group>";
 		};
@@ -158,6 +148,44 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		FBAD00062F80000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FBAD02002F80000000000000 /* SwiftTerm in Frameworks */,
+				FBAD02012F80000000000000 /* TreeSitterPHP in Frameworks */,
+				FBAD02022F80000000000000 /* TreeSitterMarkdown in Frameworks */,
+				FBAD02032F80000000000000 /* TreeSitterHTML in Frameworks */,
+				FBAD02042F80000000000000 /* TreeSitterGo in Frameworks */,
+				FBAD02052F80000000000000 /* TreeSitterRuby in Frameworks */,
+				FBAD02062F80000000000000 /* TreeSitterScala in Frameworks */,
+				FBAD02072F80000000000000 /* TreeSitterHaskell in Frameworks */,
+				FBAD02082F80000000000000 /* TreeSitterTOML in Frameworks */,
+				FBAD02092F80000000000000 /* TreeSitterXML in Frameworks */,
+				FBAD020A2F80000000000000 /* TreeSitterCSharp in Frameworks */,
+				FBAD020B2F80000000000000 /* TreeSitterCPP in Frameworks */,
+				FBAD020C2F80000000000000 /* TreeSitterYAML in Frameworks */,
+				FBAD020D2F80000000000000 /* TreeSitterLua in Frameworks */,
+				FBAD020E2F80000000000000 /* TreeSitterCSS in Frameworks */,
+				FBAD020F2F80000000000000 /* TreeSitterPython in Frameworks */,
+				FBAD02102F80000000000000 /* TreeSitterJavaScript in Frameworks */,
+				FBAD02112F80000000000000 /* TreeSitterSwift in Frameworks */,
+				FBAD02122F80000000000000 /* Neon in Frameworks */,
+				FBAD02132F80000000000000 /* TreeSitterRust in Frameworks */,
+				FBAD02142F80000000000000 /* TreeSitterJSON in Frameworks */,
+				FBAD02152F80000000000000 /* TreeSitterBash in Frameworks */,
+				FBAD02162F80000000000000 /* TreeSitterTypeScript in Frameworks */,
+				FBAD00152F80000000000000 /* Citadel in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FBAD00092F80000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FBC7CFB72F53F1FD00F8E0A1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -203,44 +231,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		FBAD00062F80000000000000 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				FBAD02002F80000000000000 /* SwiftTerm in Frameworks */,
-				FBAD02012F80000000000000 /* TreeSitterPHP in Frameworks */,
-				FBAD02022F80000000000000 /* TreeSitterMarkdown in Frameworks */,
-				FBAD02032F80000000000000 /* TreeSitterHTML in Frameworks */,
-				FBAD02042F80000000000000 /* TreeSitterGo in Frameworks */,
-				FBAD02052F80000000000000 /* TreeSitterRuby in Frameworks */,
-				FBAD02062F80000000000000 /* TreeSitterScala in Frameworks */,
-				FBAD02072F80000000000000 /* TreeSitterHaskell in Frameworks */,
-				FBAD02082F80000000000000 /* TreeSitterTOML in Frameworks */,
-				FBAD02092F80000000000000 /* TreeSitterXML in Frameworks */,
-				FBAD020A2F80000000000000 /* TreeSitterCSharp in Frameworks */,
-				FBAD020B2F80000000000000 /* TreeSitterCPP in Frameworks */,
-				FBAD020C2F80000000000000 /* TreeSitterYAML in Frameworks */,
-				FBAD020D2F80000000000000 /* TreeSitterLua in Frameworks */,
-				FBAD020E2F80000000000000 /* TreeSitterCSS in Frameworks */,
-				FBAD020F2F80000000000000 /* TreeSitterPython in Frameworks */,
-				FBAD02102F80000000000000 /* TreeSitterJavaScript in Frameworks */,
-				FBAD02112F80000000000000 /* TreeSitterSwift in Frameworks */,
-				FBAD02122F80000000000000 /* Neon in Frameworks */,
-				FBAD02132F80000000000000 /* TreeSitterRust in Frameworks */,
-				FBAD02142F80000000000000 /* TreeSitterJSON in Frameworks */,
-				FBAD02152F80000000000000 /* TreeSitterBash in Frameworks */,
-				FBAD02162F80000000000000 /* TreeSitterTypeScript in Frameworks */,
-				FBAD00152F80000000000000 /* Citadel in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		FBAD00092F80000000000000 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -273,6 +263,75 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		FBAD00012F80000000000000 /* purepoint-ipad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FBAD000B2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipad" */;
+			buildPhases = (
+				FBAD00052F80000000000000 /* Sources */,
+				FBAD00062F80000000000000 /* Frameworks */,
+				FBAD00072F80000000000000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				FBC7CFBC2F53F1FD00F8E0A1 /* purepoint-macos */,
+			);
+			name = "purepoint-ipad";
+			packageProductDependencies = (
+				FBAD01002F80000000000000 /* SwiftTerm */,
+				FBAD01012F80000000000000 /* TreeSitterPHP */,
+				FBAD01022F80000000000000 /* TreeSitterMarkdown */,
+				FBAD01032F80000000000000 /* TreeSitterHTML */,
+				FBAD01042F80000000000000 /* TreeSitterGo */,
+				FBAD01052F80000000000000 /* TreeSitterRuby */,
+				FBAD01062F80000000000000 /* TreeSitterScala */,
+				FBAD01072F80000000000000 /* TreeSitterHaskell */,
+				FBAD01082F80000000000000 /* TreeSitterTOML */,
+				FBAD01092F80000000000000 /* TreeSitterXML */,
+				FBAD010A2F80000000000000 /* TreeSitterCSharp */,
+				FBAD010B2F80000000000000 /* TreeSitterCPP */,
+				FBAD010C2F80000000000000 /* TreeSitterYAML */,
+				FBAD010D2F80000000000000 /* TreeSitterLua */,
+				FBAD010E2F80000000000000 /* TreeSitterCSS */,
+				FBAD010F2F80000000000000 /* TreeSitterPython */,
+				FBAD01102F80000000000000 /* TreeSitterJavaScript */,
+				FBAD01112F80000000000000 /* TreeSitterSwift */,
+				FBAD01122F80000000000000 /* Neon */,
+				FBAD01132F80000000000000 /* TreeSitterRust */,
+				FBAD01142F80000000000000 /* TreeSitterJSON */,
+				FBAD01152F80000000000000 /* TreeSitterBash */,
+				FBAD01162F80000000000000 /* TreeSitterTypeScript */,
+				FBAD00142F80000000000000 /* Citadel */,
+			);
+			productName = "purepoint-ipad";
+			productReference = FBAD00032F80000000000000 /* purepoint-ipad.app */;
+			productType = "com.apple.product-type.application";
+		};
+		FBAD00022F80000000000000 /* purepoint-ipadTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FBAD000C2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipadTests" */;
+			buildPhases = (
+				FBAD00082F80000000000000 /* Sources */,
+				FBAD00092F80000000000000 /* Frameworks */,
+				FBAD000A2F80000000000000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FBAD00122F80000000000000 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				FBC7CFCA2F53F1FE00F8E0A1 /* purepoint-macosTests */,
+			);
+			name = "purepoint-ipadTests";
+			packageProductDependencies = (
+			);
+			productName = "purepoint-ipadTests";
+			productReference = FBAD00042F80000000000000 /* purepoint-ipadTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		FBC7CFB92F53F1FD00F8E0A1 /* purepoint-macos */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = FBC7CFDB2F53F1FE00F8E0A1 /* Build configuration list for PBXNativeTarget "purepoint-macos" */;
@@ -366,75 +425,6 @@
 			productReference = FBC7CFD12F53F1FE00F8E0A1 /* purepoint-macosUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
-		FBAD00012F80000000000000 /* purepoint-ipad */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = FBAD000B2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipad" */;
-			buildPhases = (
-				FBAD00052F80000000000000 /* Sources */,
-				FBAD00062F80000000000000 /* Frameworks */,
-				FBAD00072F80000000000000 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				FBC7CFBC2F53F1FD00F8E0A1 /* purepoint-macos */,
-			);
-			name = "purepoint-ipad";
-			packageProductDependencies = (
-				FBAD01002F80000000000000 /* SwiftTerm */,
-				FBAD01012F80000000000000 /* TreeSitterPHP */,
-				FBAD01022F80000000000000 /* TreeSitterMarkdown */,
-				FBAD01032F80000000000000 /* TreeSitterHTML */,
-				FBAD01042F80000000000000 /* TreeSitterGo */,
-				FBAD01052F80000000000000 /* TreeSitterRuby */,
-				FBAD01062F80000000000000 /* TreeSitterScala */,
-				FBAD01072F80000000000000 /* TreeSitterHaskell */,
-				FBAD01082F80000000000000 /* TreeSitterTOML */,
-				FBAD01092F80000000000000 /* TreeSitterXML */,
-				FBAD010A2F80000000000000 /* TreeSitterCSharp */,
-				FBAD010B2F80000000000000 /* TreeSitterCPP */,
-				FBAD010C2F80000000000000 /* TreeSitterYAML */,
-				FBAD010D2F80000000000000 /* TreeSitterLua */,
-				FBAD010E2F80000000000000 /* TreeSitterCSS */,
-				FBAD010F2F80000000000000 /* TreeSitterPython */,
-				FBAD01102F80000000000000 /* TreeSitterJavaScript */,
-				FBAD01112F80000000000000 /* TreeSitterSwift */,
-				FBAD01122F80000000000000 /* Neon */,
-				FBAD01132F80000000000000 /* TreeSitterRust */,
-				FBAD01142F80000000000000 /* TreeSitterJSON */,
-				FBAD01152F80000000000000 /* TreeSitterBash */,
-				FBAD01162F80000000000000 /* TreeSitterTypeScript */,
-				FBAD00142F80000000000000 /* Citadel */,
-			);
-			productName = "purepoint-ipad";
-			productReference = FBAD00032F80000000000000 /* purepoint-ipad.app */;
-			productType = "com.apple.product-type.application";
-		};
-		FBAD00022F80000000000000 /* purepoint-ipadTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = FBAD000C2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipadTests" */;
-			buildPhases = (
-				FBAD00082F80000000000000 /* Sources */,
-				FBAD00092F80000000000000 /* Frameworks */,
-				FBAD000A2F80000000000000 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				FBAD00122F80000000000000 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				FBC7CFCA2F53F1FE00F8E0A1 /* purepoint-macosTests */,
-			);
-			name = "purepoint-ipadTests";
-			packageProductDependencies = (
-			);
-			productName = "purepoint-ipadTests";
-			productReference = FBAD00042F80000000000000 /* purepoint-ipadTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -445,6 +435,13 @@
 				LastSwiftUpdateCheck = 2610;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					FBAD00012F80000000000000 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					FBAD00022F80000000000000 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = FBAD00012F80000000000000;
+					};
 					FBC7CFB92F53F1FD00F8E0A1 = {
 						CreatedOnToolsVersion = 26.1.1;
 					};
@@ -455,13 +452,6 @@
 					FBC7CFD02F53F1FE00F8E0A1 = {
 						CreatedOnToolsVersion = 26.1.1;
 						TestTargetID = FBC7CFB92F53F1FD00F8E0A1;
-					};
-					FBAD00012F80000000000000 = {
-						CreatedOnToolsVersion = 26.3;
-					};
-					FBAD00022F80000000000000 = {
-						CreatedOnToolsVersion = 26.3;
-						TestTargetID = FBAD00012F80000000000000;
 					};
 				};
 			};
@@ -516,6 +506,20 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		FBAD00072F80000000000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FBAD000A2F80000000000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FBC7CFB82F53F1FD00F8E0A1 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -531,20 +535,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		FBC7CFCF2F53F1FE00F8E0A1 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		FBAD00072F80000000000000 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		FBAD000A2F80000000000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -586,6 +576,24 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		FBAD00052F80000000000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FBAD00182F80000000000000 /* ChatMarkdownView.swift in Sources */,
+				FBAD00192F80000000000000 /* ChatBubble.swift in Sources */,
+				FBAD001A2F80000000000000 /* ChatMarkdown.swift in Sources */,
+				FBAD001B2F80000000000000 /* PairingSecret.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FBAD00082F80000000000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FBC7CFB62F53F1FD00F8E0A1 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -610,27 +618,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		FBAD00052F80000000000000 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				FBAD00182F80000000000000 /* ChatMarkdownView.swift in Sources */,
-				FBAD00192F80000000000000 /* ChatBubble.swift in Sources */,
-				FBAD001A2F80000000000000 /* ChatMarkdown.swift in Sources */,
-				FBAD001B2F80000000000000 /* PairingSecret.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		FBAD00082F80000000000000 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		FBAD00122F80000000000000 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FBAD00012F80000000000000 /* purepoint-ipad */;
+			targetProxy = FBAD00112F80000000000000 /* PBXContainerItemProxy */;
+		};
 		FBC7CFC92F53F1FE00F8E0A1 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = FBC7CFB92F53F1FD00F8E0A1 /* purepoint-macos */;
@@ -641,14 +636,129 @@
 			target = FBC7CFB92F53F1FD00F8E0A1 /* purepoint-macos */;
 			targetProxy = FBC7CFD22F53F1FE00F8E0A1 /* PBXContainerItemProxy */;
 		};
-		FBAD00122F80000000000000 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = FBAD00012F80000000000000 /* purepoint-ipad */;
-			targetProxy = FBAD00112F80000000000000 /* PBXContainerItemProxy */;
-		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		FBAD000D2F80000000000000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 200;
+				DEVELOPMENT_TEAM = M96WTV3CKX;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Info-iPad.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad;
+				PRODUCT_NAME = PurePoint;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "PUREPOINT_IPAD $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		FBAD000E2F80000000000000 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 200;
+				DEVELOPMENT_TEAM = M96WTV3CKX;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Info-iPad.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad;
+				PRODUCT_NAME = PurePoint;
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "PUREPOINT_IPAD $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		FBAD000F2F80000000000000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 200;
+				DEVELOPMENT_TEAM = M96WTV3CKX;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PurePoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PurePoint";
+			};
+			name = Debug;
+		};
+		FBAD00102F80000000000000 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 200;
+				DEVELOPMENT_TEAM = M96WTV3CKX;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PurePoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PurePoint";
+			};
+			name = Release;
+		};
 		FBC7CFD92F53F1FE00F8E0A1 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -929,129 +1039,27 @@
 			};
 			name = Release;
 		};
-		FBAD000D2F80000000000000 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 200;
-				DEVELOPMENT_TEAM = M96WTV3CKX;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Info-iPad.plist";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 0.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad;
-				PRODUCT_NAME = PurePoint;
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "PUREPOINT_IPAD $(inherited)";
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 2;
-			};
-			name = Debug;
-		};
-		FBAD000E2F80000000000000 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 200;
-				DEVELOPMENT_TEAM = M96WTV3CKX;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "Info-iPad.plist";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 0.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad;
-				PRODUCT_NAME = PurePoint;
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "PUREPOINT_IPAD $(inherited)";
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 2;
-			};
-			name = Release;
-		};
-		FBAD000F2F80000000000000 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 200;
-				DEVELOPMENT_TEAM = M96WTV3CKX;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad.Tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 2;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PurePoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PurePoint";
-			};
-			name = Debug;
-		};
-		FBAD00102F80000000000000 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 200;
-				DEVELOPMENT_TEAM = M96WTV3CKX;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.2.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.2witstudios.PurePoint.ipad.Tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 2;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PurePoint.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PurePoint";
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		FBAD000B2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FBAD000D2F80000000000000 /* Debug */,
+				FBAD000E2F80000000000000 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FBAD000C2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipadTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FBAD000F2F80000000000000 /* Debug */,
+				FBAD00102F80000000000000 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		FBC7CFB52F53F1FD00F8E0A1 /* Build configuration list for PBXProject "purepoint-macos" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1084,24 +1092,6 @@
 			buildConfigurations = (
 				FBC7CFE22F53F1FE00F8E0A1 /* Debug */,
 				FBC7CFE32F53F1FE00F8E0A1 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		FBAD000B2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipad" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				FBAD000D2F80000000000000 /* Debug */,
-				FBAD000E2F80000000000000 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		FBAD000C2F80000000000000 /* Build configuration list for PBXNativeTarget "purepoint-ipadTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				FBAD000F2F80000000000000 /* Debug */,
-				FBAD00102F80000000000000 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1410,6 +1400,11 @@
 			package = FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */;
 			productName = TreeSitterTypeScript;
 		};
+		FBAD00142F80000000000000 /* Citadel */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FBAD00132F80000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
+			productName = Citadel;
+		};
 		FBAD01002F80000000000000 /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = FB0A00032F60000000000001 /* XCRemoteSwiftPackageReference "SwiftTerm" */;
@@ -1519,11 +1514,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = FB57E12C2F67BB8F0077135F /* XCRemoteSwiftPackageReference "tree-sitter-typescript" */;
 			productName = TreeSitterTypeScript;
-		};
-		FBAD00142F80000000000000 /* Citadel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FBAD00132F80000000000000 /* XCRemoteSwiftPackageReference "Citadel" */;
-			productName = Citadel;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

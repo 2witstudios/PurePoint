@@ -8,9 +8,12 @@ use super::{
 
 /// Streaming attach sub-loop: sends all buffered output, then streams new output
 /// while accepting Input/Resize commands from the client. Like every stream
-/// handler, returns whether the connection may go back to request mode.
+/// handler, returns whether the connection may go back to request mode, and
+/// reads through the connection's `partial` line buffer so a line that is
+/// still arriving when the stream ends is finished in request mode.
 pub(super) async fn handle_attach_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     agent_id: &str,
@@ -38,6 +41,7 @@ pub(super) async fn handle_attach_stream(
     // Always unregister, including failures writing initial replay.
     let keep_open = run_attachment(
         reader,
+        partial,
         writer,
         engine,
         agent_id,
@@ -57,6 +61,7 @@ pub(super) async fn handle_attach_stream(
 #[allow(clippy::too_many_arguments)]
 async fn run_attachment(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     agent_id: &str,
@@ -99,7 +104,6 @@ async fn run_attachment(
         return true;
     }
 
-    let mut partial = Vec::new();
     loop {
         tokio::select! {
             biased;
@@ -117,7 +121,7 @@ async fn run_attachment(
                 let _ = write_attachment_update(writer, agent_id, update).await;
                 break;
             }
-            frame = read_frame(reader, &mut partial) => {
+            frame = read_frame(reader, partial) => {
                 let line = match frame {
                     Ok(Frame::Line(line)) => line,
                     Ok(Frame::Eof) => break,
@@ -180,6 +184,7 @@ async fn write_size(
 /// accepts incoming GridCommand requests from the subscriber connection.
 pub(super) async fn handle_grid_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     project_root: &str,
@@ -189,7 +194,6 @@ pub(super) async fn handle_grid_stream(
 
     tracing::debug!(project_root, "grid stream started");
 
-    let mut partial = Vec::new();
     loop {
         tokio::select! {
             result = rx.recv() => {
@@ -209,7 +213,7 @@ pub(super) async fn handle_grid_stream(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            frame = read_frame(reader, &mut partial) => {
+            frame = read_frame(reader, partial) => {
                 let line = match frame {
                     Ok(Frame::Line(line)) => line,
                     Ok(Frame::Eof) => break,
@@ -250,6 +254,7 @@ async fn send_status(writer: &mut IpcWriter, engine: &Engine, project_root: &str
 /// Client receives real-time updates without polling.
 pub(super) async fn handle_status_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     project_root: &str,
@@ -264,7 +269,6 @@ pub(super) async fn handle_status_stream(
         return true;
     }
 
-    let mut partial = Vec::new();
     loop {
         tokio::select! {
             result = rx.recv() => {
@@ -285,7 +289,7 @@ pub(super) async fn handle_status_stream(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            frame = read_frame(reader, &mut partial) => {
+            frame = read_frame(reader, partial) => {
                 match frame {
                     // Any request ends the status stream.
                     Ok(Frame::Line(_)) | Ok(Frame::Eof) => break,
@@ -386,6 +390,7 @@ where
 /// under `root` until the client disconnects (or sends anything).
 pub(super) async fn handle_fs_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     root: &str,
@@ -460,7 +465,6 @@ pub(super) async fn handle_fs_stream(
 
     let mut pending: BTreeSet<String> = BTreeSet::new();
     let mut flush_at: Option<tokio::time::Instant> = None;
-    let mut partial = Vec::new();
     loop {
         let flush = async {
             match flush_at {
@@ -496,7 +500,7 @@ pub(super) async fn handle_fs_stream(
                     break;
                 }
             }
-            frame = read_frame(reader, &mut partial) => {
+            frame = read_frame(reader, partial) => {
                 // The connection closes after a watch stream either way.
                 if matches!(frame, Ok(Frame::TooLarge)) {
                     reject_frame_too_large(writer).await;
