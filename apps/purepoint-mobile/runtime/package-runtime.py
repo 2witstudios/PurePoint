@@ -237,9 +237,14 @@ def workspace_version(cargo_toml):
 
 def check_versions(pu_version, release_version, cargo_toml):
     """The payload must name exactly the `pu` it ships with (lockstep, LPH-002)."""
-    for value in (pu_version, release_version):
+    for value in (pu_version, release_version or pu_version):
         if not VERSION_PATTERN.fullmatch(value or ''):
             raise ValueError(f'Version must be plain X.Y.Z, got {value!r}')
+    if release_version:
+        # Release builds compile the release version into pu (PU_RELEASE_VERSION).
+        if pu_version != release_version:
+            raise ValueError(f'--pu-version {pu_version} differs from --release-version {release_version}')
+        return
     crate = workspace_version(cargo_toml)
     if pu_version != crate:
         raise ValueError(f'--pu-version {pu_version} differs from the workspace pu crate version {crate}')
@@ -369,8 +374,8 @@ def stage_linux(out, target, cache, lock_helper, pu_version, release_version=Non
     """Build `<out>/<name>/` plus `<out>/<name>.tar.gz` and `.sha256` for one Linux arch."""
     if target not in LINUX_TARGETS:
         raise ValueError(f'Unknown Linux target {target!r}')
-    release_version = release_version or pu_version
     check_versions(pu_version, release_version, (SOURCE.parents[1] / 'Cargo.toml').read_text())
+    release_version = release_version or pu_version
     arch = LINUX_TARGETS[target][0]
     out, cache, lock_helper = Path(out).resolve(), Path(cache).resolve(), Path(lock_helper).resolve()
     if not lock_helper.is_file():

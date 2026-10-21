@@ -1,7 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, lstat, mkdir, symlink, writeFile } from "node:fs/promises";
-import { X509Certificate, createPrivateKey, createPublicKey } from "node:crypto";
+import {
+  mkdtemp,
+  rm,
+  lstat,
+  mkdir,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import {
+  X509Certificate,
+  createPrivateKey,
+  createPublicKey,
+} from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import os from "node:os";
@@ -25,9 +36,15 @@ test("minted identity is a valid self-signed P-256 certificate matching its key"
   assert.ok(x509.verify(x509.publicKey));
   assert.ok(x509.checkIssued(x509));
   assert.equal(x509.publicKey.asymmetricKeyDetails.namedCurve, "prime256v1");
-  const derived = createPublicKey(createPrivateKey(key)).export({ type: "spki", format: "der" });
-  assert.ok(derived.equals(x509.publicKey.export({ type: "spki", format: "der" })));
-  const days = (Date.parse(x509.validTo) - Date.parse(x509.validFrom)) / 86400000;
+  const derived = createPublicKey(createPrivateKey(key)).export({
+    type: "spki",
+    format: "der",
+  });
+  assert.ok(
+    derived.equals(x509.publicKey.export({ type: "spki", format: "der" })),
+  );
+  const days =
+    (Date.parse(x509.validTo) - Date.parse(x509.validFrom)) / 86400000;
   assert.ok(days > 3649 && days < 3651);
   assert.ok(Date.parse(x509.validFrom) <= Date.now());
 });
@@ -41,25 +58,50 @@ test("minted identities never repeat keys or serials", () => {
 
 test("given validity past 2049, should encode GeneralizedTime that parses", () => {
   const { cert } = mintHostIdentity({ now: new Date("2045-01-01T00:00:00Z") });
-  assert.equal(new Date(new X509Certificate(cert).validTo).getUTCFullYear(), 2054);
+  assert.equal(
+    new Date(new X509Certificate(cert).validTo).getUTCFullYear(),
+    2054,
+  );
 });
 
 test("platform defaults: XDG state on Linux, Application Support on the Mac", () => {
-  const linux = platformDefaults({ platform: "linux", env: {}, home: "/home/u" });
-  assert.equal(linux.stateDirectory, "/home/u/.local/state/purepoint/point-guard");
+  const linux = platformDefaults({
+    platform: "linux",
+    env: {},
+    home: "/home/u",
+  });
+  assert.equal(
+    linux.stateDirectory,
+    "/home/u/.local/state/purepoint/point-guard",
+  );
   assert.equal(linux.adminTransport, "unix");
   assert.equal(linux.hostKind, "linux");
   assert.equal(
-    platformDefaults({ platform: "linux", env: { XDG_STATE_HOME: "/s" }, home: "/home/u" }).stateDirectory,
+    platformDefaults({
+      platform: "linux",
+      env: { XDG_STATE_HOME: "/s" },
+      home: "/home/u",
+    }).stateDirectory,
     "/s/purepoint/point-guard",
   );
   // A relative XDG value is ignored, never resolved against cwd.
   assert.equal(
-    platformDefaults({ platform: "linux", env: { XDG_STATE_HOME: "s" }, home: "/home/u" }).stateDirectory,
+    platformDefaults({
+      platform: "linux",
+      env: { XDG_STATE_HOME: "s" },
+      home: "/home/u",
+    }).stateDirectory,
     "/home/u/.local/state/purepoint/point-guard",
   );
-  const mac = platformDefaults({ platform: "darwin", env: {}, home: "/Users/u" });
-  assert.equal(mac.stateDirectory, "/Users/u/Library/Application Support/PurePoint/PointGuard");
+  const mac = platformDefaults({
+    platform: "darwin",
+    env: {},
+    home: "/Users/u",
+  });
+  assert.equal(
+    mac.stateDirectory,
+    "/Users/u/Library/Application Support/PurePoint/PointGuard",
+  );
   assert.equal(mac.adminTransport, "tcp");
   assert.equal(mac.discoverTailnet, false);
 });
@@ -74,7 +116,10 @@ test("interface candidates include only live tailnet IPv4 addresses", () => {
   const found = interfaceCandidates({
     lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
     eth0: [iface("10.0.0.2"), iface("100.63.0.1")],
-    tailscale0: [iface("100.101.1.2"), { address: "fd7a:115c:a1e0::1", family: "IPv6", internal: false }],
+    tailscale0: [
+      iface("100.101.1.2"),
+      { address: "fd7a:115c:a1e0::1", family: "IPv6", internal: false },
+    ],
   });
   assert.deepEqual([...found], ["100.101.1.2"]);
 });
@@ -83,15 +128,32 @@ test("discovery binds only when Tailscale and the interfaces agree", async () =>
   const paths = [process.execPath];
   const run = (output) => async () => output;
   assert.deepEqual(
-    await discoverTailnet({ paths: ["/nonexistent/tailscale"], interfaces: {}, run: run("") }),
+    await discoverTailnet({
+      paths: ["/nonexistent/tailscale"],
+      interfaces: {},
+      run: run(""),
+    }),
     { mode: "unavailable", reason: "tailscale_missing" },
   );
-  assert.equal((await discoverTailnet({ paths, interfaces: {}, run: run(null) })).reason, "tailscale_down");
   assert.equal(
-    (await discoverTailnet({ paths, interfaces: {}, run: run("100.64.0.1\n100.64.0.2\n") })).reason,
+    (await discoverTailnet({ paths, interfaces: {}, run: run(null) })).reason,
     "tailscale_down",
   );
-  assert.equal((await discoverTailnet({ paths, interfaces: {}, run: run("8.8.8.8\n") })).reason, "tailscale_down");
+  assert.equal(
+    (
+      await discoverTailnet({
+        paths,
+        interfaces: {},
+        run: run("100.64.0.1\n100.64.0.2\n"),
+      })
+    ).reason,
+    "tailscale_down",
+  );
+  assert.equal(
+    (await discoverTailnet({ paths, interfaces: {}, run: run("8.8.8.8\n") }))
+      .reason,
+    "tailscale_down",
+  );
   const agree = await discoverTailnet({
     paths,
     interfaces: { tailscale0: [iface("100.101.1.2")] },
@@ -100,25 +162,65 @@ test("discovery binds only when Tailscale and the interfaces agree", async () =>
   assert.equal(agree.mode, "interface");
   assert.equal(agree.address, "100.101.1.2");
   assert.equal(
-    (await discoverTailnet({ paths, interfaces: { tailscale0: [iface("100.101.1.3")] }, run: run("100.101.1.2\n") })).reason,
+    (
+      await discoverTailnet({
+        paths,
+        interfaces: { tailscale0: [iface("100.101.1.3")] },
+        run: run("100.101.1.2\n"),
+      })
+    ).reason,
     "tailnet_mismatch",
   );
-  const userspace = await discoverTailnet({ paths, interfaces: { eth0: [iface("10.0.0.2")] }, run: run("100.101.1.2\n") });
+  const userspace = await discoverTailnet({
+    paths,
+    interfaces: { eth0: [iface("10.0.0.2")] },
+    run: run("100.101.1.2\n"),
+  });
   assert.equal(userspace.mode, "serve");
 });
 
 test("serve passthrough requires TCP forwarding to exactly the loopback port without TLS termination", () => {
-  const ok = JSON.stringify({ TCP: { 8787: { TCPForward: "127.0.0.1:8787" } } });
+  const ok = JSON.stringify({
+    TCP: { 8787: { TCPForward: "127.0.0.1:8787" } },
+  });
   assert.equal(servePassthrough(ok, 8787), true);
-  assert.equal(servePassthrough(JSON.stringify({ TCP: { 8787: { TCPForward: "localhost:8787" } } }), 8787), true);
-  assert.equal(servePassthrough(ok, 9000), false);
-  assert.equal(servePassthrough(JSON.stringify({ TCP: { 8787: { TCPForward: "127.0.0.1:22" } } }), 8787), false);
-  assert.equal(servePassthrough(JSON.stringify({ TCP: { 8787: { TCPForward: "10.0.0.5:8787" } } }), 8787), false);
   assert.equal(
-    servePassthrough(JSON.stringify({ TCP: { 8787: { TCPForward: "127.0.0.1:8787", TerminateTLS: "host.ts.net" } } }), 8787),
+    servePassthrough(
+      JSON.stringify({ TCP: { 8787: { TCPForward: "localhost:8787" } } }),
+      8787,
+    ),
+    true,
+  );
+  assert.equal(servePassthrough(ok, 9000), false);
+  assert.equal(
+    servePassthrough(
+      JSON.stringify({ TCP: { 8787: { TCPForward: "127.0.0.1:22" } } }),
+      8787,
+    ),
     false,
   );
-  assert.equal(servePassthrough(JSON.stringify({ TCP: { 8787: { HTTPS: true } } }), 8787), false);
+  assert.equal(
+    servePassthrough(
+      JSON.stringify({ TCP: { 8787: { TCPForward: "10.0.0.5:8787" } } }),
+      8787,
+    ),
+    false,
+  );
+  assert.equal(
+    servePassthrough(
+      JSON.stringify({
+        TCP: {
+          8787: { TCPForward: "127.0.0.1:8787", TerminateTLS: "host.ts.net" },
+        },
+      }),
+      8787,
+    ),
+    false,
+  );
+  assert.equal(
+    servePassthrough(JSON.stringify({ TCP: { 8787: { HTTPS: true } } }), 8787),
+    false,
+  );
   assert.equal(servePassthrough("not json", 8787), false);
 });
 
@@ -184,7 +286,11 @@ test("remote manager in userspace mode advertises only after serve passthrough i
   const remote = await startRemote({
     port: 8787,
     peerAllowed: (mode) => mode,
-    discover: async () => ({ mode: "serve", address: "100.64.0.9", binary: "/t" }),
+    discover: async () => ({
+      mode: "serve",
+      address: "100.64.0.9",
+      binary: "/t",
+    }),
     serveCheck: async () => configured,
     listen: async (host, peer) => {
       binds.push([host, peer]);
@@ -195,7 +301,13 @@ test("remote manager in userspace mode advertises only after serve passthrough i
   assert.deepEqual(binds, [["127.0.0.1", "serve"]]);
   assert.equal(remote.chatURL(), null);
   assert.equal(remote.status().code, "serve_required");
-  assert.ok(remote.status().commands[0].startsWith("tailscale serve --bg --tcp 8787 tcp://127.0.0.1:8787"));
+  assert.ok(
+    remote
+      .status()
+      .commands[0].startsWith(
+        "tailscale serve --bg --tcp 8787 tcp://127.0.0.1:8787",
+      ),
+  );
   configured = true;
   await timers.next().fn();
   assert.equal(remote.chatURL(), "wss://100.64.0.9:8787/v1");
@@ -210,7 +322,8 @@ test("remote manager closes the listener when Tailscale disappears and backs off
   const remote = await startRemote({
     port: 8787,
     peerAllowed: () => () => true,
-    discover: async () => answers.shift() ?? { mode: "unavailable", reason: "tailscale_down" },
+    discover: async () =>
+      answers.shift() ?? { mode: "unavailable", reason: "tailscale_down" },
     listen: async () => ({ shutdown: async () => closed++ }),
     ...timers,
   });
@@ -242,7 +355,10 @@ test("remote manager reports bind failure without throwing", async () => {
   await remote.shutdown();
 });
 
-function request(socketPath, { token, body = { operation: "status" }, headers = {} }) {
+function request(
+  socketPath,
+  { token, body = { operation: "status" }, headers = {} },
+) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = http.request(
@@ -260,7 +376,9 @@ function request(socketPath, { token, body = { operation: "status" }, headers = 
       (res) => {
         let text = "";
         res.on("data", (c) => (text += c));
-        res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+        res.on("end", () =>
+          resolve({ status: res.statusCode, body: JSON.parse(text) }),
+        );
       },
     );
     req.on("error", reject);
@@ -278,7 +396,11 @@ test("owner admin over a Unix socket: private dir, 0600 socket under a permissiv
     await mkdir(path.join(root, "admin"), { mode: 0o777 });
     await writeFile(path.join(root, "admin", "planted"), "x");
     const token = "t".repeat(43);
-    admin = await serveAdmin({ token, dispatch: async () => ({ ok: 1 }), socketPath });
+    admin = await serveAdmin({
+      token,
+      dispatch: async () => ({ ok: 1 }),
+      socketPath,
+    });
     process.umask(previous);
     assert.equal((await lstat(path.join(root, "admin"))).mode & 0o777, 0o700);
     assert.equal((await lstat(socketPath)).mode & 0o777, 0o600);
@@ -286,8 +408,15 @@ test("owner admin over a Unix socket: private dir, 0600 socket under a permissiv
     assert.equal(admin.socket, socketPath);
     assert.equal(admin.url, undefined);
     assert.equal((await request(socketPath, {})).status, 401);
-    assert.equal((await request(socketPath, { token: "x".repeat(43) })).status, 401);
-    assert.equal((await request(socketPath, { token, headers: { origin: "http://e" } })).status, 403);
+    assert.equal(
+      (await request(socketPath, { token: "x".repeat(43) })).status,
+      401,
+    );
+    assert.equal(
+      (await request(socketPath, { token, headers: { origin: "http://e" } }))
+        .status,
+      403,
+    );
     const ok = await request(socketPath, { token });
     assert.equal(ok.status, 200);
     assert.deepEqual(ok.body.result, { ok: 1 });
@@ -324,11 +453,19 @@ test("owner admin refuses a symlinked admin directory target", async () => {
 
 test("owner admin socket path must be absolute and fit sun_path", async () => {
   await assert.rejects(
-    serveAdmin({ token: "t".repeat(43), dispatch: async () => ({}), socketPath: "relative/admin.sock" }),
+    serveAdmin({
+      token: "t".repeat(43),
+      dispatch: async () => ({}),
+      socketPath: "relative/admin.sock",
+    }),
     /absolute and short/,
   );
   await assert.rejects(
-    serveAdmin({ token: "t".repeat(43), dispatch: async () => ({}), socketPath: "/" + "a".repeat(120) + "/admin.sock" }),
+    serveAdmin({
+      token: "t".repeat(43),
+      dispatch: async () => ({}),
+      socketPath: "/" + "a".repeat(120) + "/admin.sock",
+    }),
     /absolute and short/,
   );
 });

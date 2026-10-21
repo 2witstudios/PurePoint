@@ -69,10 +69,7 @@ export function mintHostIdentity({ days = 3650, now = new Date() } = {}) {
         octetString(sequence(tag(0x01, Buffer.from([0xff])))),
       ),
       sequence(oid("2.5.29.14"), octetString(octetString(keyId))),
-      sequence(
-        oid("2.5.29.35"),
-        octetString(sequence(tag(0x80, keyId))),
-      ),
+      sequence(oid("2.5.29.35"), octetString(sequence(tag(0x80, keyId)))),
     ),
   );
   const tbs = sequence(
@@ -85,7 +82,11 @@ export function mintHostIdentity({ days = 3650, now = new Date() } = {}) {
     spki,
     extensions,
   );
-  const der = sequence(tbs, ecdsaWithSHA256, bitString(sign("sha256", tbs, privateKey)));
+  const der = sequence(
+    tbs,
+    ecdsaWithSHA256,
+    bitString(sign("sha256", tbs, privateKey)),
+  );
   const certificate = new X509Certificate(der);
   if (!certificate.verify(publicKey) || !certificate.checkIssued(certificate))
     throw new Error("Minted identity failed self-verification.");

@@ -25,7 +25,7 @@ export function interfaceCandidates(interfaces = os.networkInterfaces()) {
     for (const entry of entries ?? [])
       if (
         !entry.internal &&
-        (entry.family === "IPv4" || entry.family === 4) &&
+        String(entry.family).replace("IPv", "") === "4" &&
         tailnetIPv4(entry.address)
       )
         found.add(entry.address);
@@ -81,7 +81,8 @@ export async function discoverTailnet({
   const candidates = interfaceCandidates(interfaces);
   if (candidates.has(reported))
     return { mode: "interface", address: reported, binary };
-  if (candidates.size === 0) return { mode: "serve", address: reported, binary };
+  if (candidates.size === 0)
+    return { mode: "serve", address: reported, binary };
   return { mode: "unavailable", reason: "tailnet_mismatch" };
 }
 

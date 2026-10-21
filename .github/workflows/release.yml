@@ -349,10 +349,13 @@ jobs:
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      # pu records the release version, which `pu phone` requires the phone
+      # access payload to match exactly.
       - name: Build
         run: cargo build --release --locked --target "$TARGET" -p pu-cli -p pu-engine
         env:
           TARGET: ${{ matrix.target }}
+          PU_RELEASE_VERSION: ${{ needs.version.outputs.raw }}
 
       - name: Package
         id: package
@@ -435,14 +438,11 @@ jobs:
           tar -xzf "$RUNNER_TEMP/pu-build/${NAME}.tar.gz" -C "$RUNNER_TEMP/pu-unpacked"
           echo "PU_DIR=$RUNNER_TEMP/pu-unpacked/${NAME}" >> "$GITHUB_ENV"
 
-      # The payload records the pu crate version, which `pu phone` compares
-      # with its own; the asset name uses the release version.
+      # The payload records the release version that the linux job compiled
+      # into pu (PU_RELEASE_VERSION); `pu phone` requires an exact match.
       - name: Package phone access payload
         run: |
-          PU_CRATE_VERSION=$(python3 apps/purepoint-mobile/runtime/package-runtime.py --print-pu-version)
-          if [ "$PU_CRATE_VERSION" != "$VERSION" ]; then
-            echo "::warning::release v${VERSION} builds pu ${PU_CRATE_VERSION}; the payload installs to ~/.pu/pointguard/${PU_CRATE_VERSION}"
-          fi
+          PU_CRATE_VERSION="$VERSION"
           python3 apps/purepoint-mobile/runtime/package-runtime.py --layout dir \
             --target "$NODE_TARGET" \
             --out "$RUNNER_TEMP/phone" \

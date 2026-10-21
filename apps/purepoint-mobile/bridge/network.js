@@ -183,7 +183,8 @@ export async function serve(
   server.requestTimeout = 10000;
   server.keepAliveTimeout = 5000;
   if (allowPeer)
-    server.on("connection", (socket) => {
+    // Raw TCP accept, before any TLS handshake or request parsing.
+    server.on("connection", (/** @type {import("node:net").Socket} */ socket) => {
       if (!allowPeer(socket.remoteAddress ?? "")) socket.destroy();
     });
   const wss = new WebSocketServer({

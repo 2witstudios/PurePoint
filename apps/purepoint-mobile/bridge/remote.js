@@ -77,7 +77,11 @@ export async function startRemote({
     if (found.mode === "interface") {
       if (!(await bind("interface", found.address))) return false;
       advertised = `wss://${found.address}:${port}/v1`;
-      status = { state: "listening", mode: "interface", address: found.address };
+      status = {
+        state: "listening",
+        mode: "interface",
+        address: found.address,
+      };
       return true;
     }
     // Userspace networking: loopback listener, reachable only through serve.

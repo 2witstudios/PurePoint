@@ -92,9 +92,10 @@ for broken in ('[package]\nversion = "1.2.3"\n', '[workspace.package]\nedition =
     except ValueError: pass
     else: raise AssertionError('Missing workspace version accepted')
 cargo = '[workspace.package]\nversion = "0.4.0"\n'
-module.check_versions('0.4.0', '0.4.0', cargo)
-module.check_versions('0.4.0', '1.0.0', cargo)
-for pu_version, release in (('0.4.1', '0.4.1'), ('0.4.0', 'v1.0.0'), ('0.4.0/..', '0.4.0'), ('0.4', '0.4'), ('', '0.4.0')):
+module.check_versions('0.4.0', None, cargo)
+# Release builds compile the release version into pu, so the two must match.
+module.check_versions('1.0.0', '1.0.0', cargo)
+for pu_version, release in (('0.4.1', None), ('0.4.0', '1.0.0'), ('0.4.0', 'v1.0.0'), ('0.4.0/..', '0.4.0'), ('0.4', '0.4'), ('', '0.4.0')):
     try: module.check_versions(pu_version, release, cargo)
     except ValueError: pass
     else: raise AssertionError(f'Version {pu_version!r}/{release!r} accepted')

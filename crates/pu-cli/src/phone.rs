@@ -17,6 +17,13 @@ use serde_json::{Value, json};
 use crate::error::CliError;
 
 pub const UNIT: &str = "pu-pointguard.service";
+/// The version this `pu` was released as. Release builds set
+/// `PU_RELEASE_VERSION` to the tag; the phone payload records the same value,
+/// so a payload runs only with the exact `pu` it shipped with.
+pub const PU_VERSION: &str = match option_env!("PU_RELEASE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 pub const DEFAULT_PORT: u16 = 8787;
 const ADMIN_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE: usize = 1024 * 1024;
@@ -201,9 +208,7 @@ impl Admin {
         stream.write_all(head.as_bytes())?;
         stream.write_all(&body)?;
         let mut raw = Vec::new();
-        stream
-            .take(MAX_RESPONSE as u64 + 1)
-            .read_to_end(&mut raw)?;
+        stream.take(MAX_RESPONSE as u64 + 1).read_to_end(&mut raw)?;
         if raw.len() > MAX_RESPONSE {
             return Err(CliError::Other("admin response too large".into()));
         }
@@ -225,12 +230,12 @@ pub fn read_manifest(payload: &Path) -> Result<Value, CliError> {
     let text = std::fs::read_to_string(&file).map_err(|_| {
         CliError::Other(format!(
             "phone access is not installed for pu {} ({} missing). Install it with:\n  curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | PU_WITH_PHONE=1 sh",
-            env!("CARGO_PKG_VERSION"),
+            PU_VERSION,
             file.display()
         ))
     })?;
     let manifest: Value = serde_json::from_str(&text)?;
-    check_manifest(&manifest, env!("CARGO_PKG_VERSION"))?;
+    check_manifest(&manifest, PU_VERSION)?;
     Ok(manifest)
 }
 
@@ -297,7 +302,10 @@ pub fn bridge_environment(p: &UnitPaths) -> Vec<(String, String)> {
             "PATH".into(),
             format!("{}:/usr/bin:/bin", pu_home.join("bin").display()),
         ),
-        ("POINT_GUARD_STATE_DIR".into(), p.state.display().to_string()),
+        (
+            "POINT_GUARD_STATE_DIR".into(),
+            p.state.display().to_string(),
+        ),
         ("POINT_GUARD_PU_PATH".into(), p.pu.display().to_string()),
         ("POINT_GUARD_PU_HOME".into(), pu_home.display().to_string()),
         (
@@ -368,6 +376,29 @@ pub fn unit_payload(unit: &str) -> Option<PathBuf> {
     let rest = line.strip_prefix("ExecStart=\"")?;
     let node = rest.split('"').next()?;
     Some(Path::new(node).parent()?.parent()?.to_path_buf())
+}
+
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = text.split('.');
+    let mut next = || {
+        parts
+            .next()
+            .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))?
+            .parse()
+            .ok()
+    };
+    let version = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(version)
+}
+
+/// A payload directory name is prunable only when it is a plain version
+/// strictly older than the payload being kept.
+pub fn prunable(name: &str, keep: &Path) -> bool {
+    let kept = keep
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(parse_version);
+    matches!((parse_version(name), kept), (Some(v), Some(k)) if v < k)
 }
 
 /// Render a QR as terminal text: explicit black-on-white so dark themes don't
@@ -494,7 +525,13 @@ mod tests {
         assert!(check_manifest(&ok, "1.2.3").is_ok());
         let err = check_manifest(&ok, "1.2.4").unwrap_err().to_string();
         assert!(err.contains("1.2.3") && err.contains("1.2.4"), "{err}");
-        assert!(check_manifest(&json!({"schemaVersion": 1, "layout": "mac", "puVersion": "1.2.3"}), "1.2.3").is_err());
+        assert!(
+            check_manifest(
+                &json!({"schemaVersion": 1, "layout": "mac", "puVersion": "1.2.3"}),
+                "1.2.3"
+            )
+            .is_err()
+        );
         assert!(check_manifest(&json!({}), "1.2.3").is_err());
     }
 
@@ -539,6 +576,20 @@ mod tests {
     }
 
     #[test]
+    fn given_payload_dirs_should_prune_only_older_plain_versions() {
+        let keep = Path::new("/h/.pu/pointguard/0.7.10");
+        assert!(prunable("0.7.9", keep));
+        assert!(prunable("0.6.12", keep));
+        assert!(!prunable("0.7.10", keep), "kept");
+        assert!(!prunable("0.8.0", keep), "newer, e.g. just installed");
+        assert!(!prunable(".install.Ab12Cd", keep), "install staging");
+        assert!(!prunable("0.7", keep));
+        assert!(!prunable("0.7.9.1", keep));
+        assert!(!prunable("0.7.+9", keep));
+        assert!(!prunable("0.7.9", Path::new("/h/.pu/pointguard/dev")));
+    }
+
+    #[test]
     fn given_specials_should_escape_systemd_words() {
         assert_eq!(systemd_quote(r#"a"b\c%d"#), r#""a\"b\\c%%d""#);
     }
@@ -550,9 +601,17 @@ mod tests {
         assert!(size <= 80, "fits an 80-column terminal: {size}");
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), size.div_ceil(2));
-        assert!(lines.iter().all(|l| l.starts_with("\x1b[30;107m") && l.ends_with("\x1b[0m")));
+        assert!(
+            lines
+                .iter()
+                .all(|l| l.starts_with("\x1b[30;107m") && l.ends_with("\x1b[0m"))
+        );
         // Quiet zone: the first character row is blank.
-        assert!(lines[0].trim_start_matches("\x1b[30;107m").starts_with("    "));
+        assert!(
+            lines[0]
+                .trim_start_matches("\x1b[30;107m")
+                .starts_with("    ")
+        );
     }
 
     #[test]
@@ -575,8 +634,14 @@ mod tests {
         assert_eq!(chat_level(&json!({})), "none");
         assert_eq!(chat_level(&json!({"terminals": "view"})), "read");
         assert_eq!(chat_level(&json!({"terminals": "control"})), "read");
-        assert_eq!(chat_level(&json!({"terminals": "control", "workspaceManagement": true})), "send");
-        assert_eq!(chat_level(&json!({"terminals": "off", "workspaceManagement": true})), "none");
+        assert_eq!(
+            chat_level(&json!({"terminals": "control", "workspaceManagement": true})),
+            "send"
+        );
+        assert_eq!(
+            chat_level(&json!({"terminals": "off", "workspaceManagement": true})),
+            "none"
+        );
     }
 
     #[test]

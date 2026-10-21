@@ -153,7 +153,8 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
             let (provider, id) = model
                 .split_once('/')
                 .ok_or_else(|| CliError::Other("use <provider>/<model>".into()))?;
-            admin()?.call(json!({"operation": "model.select", "provider": provider, "model": id}))?;
+            admin()?
+                .call(json!({"operation": "model.select", "provider": provider, "model": id}))?;
             println!("Point Guard now uses {model}");
             Ok(())
         }
@@ -232,12 +233,15 @@ fn unit_state() -> String {
 
 /// The payload this `pu` was released with, verified, and the `pu` beside it.
 fn current_payload() -> Result<(PathBuf, PathBuf), CliError> {
-    let payload = phone::payload_dir(env!("CARGO_PKG_VERSION"))?;
+    let payload = phone::payload_dir(phone::PU_VERSION)?;
     phone::read_manifest(&payload)?;
     for file in ["bin/node", "bin/point-guard-lock", "bridge/main.js"] {
         let path = payload.join(file);
         let meta = std::fs::symlink_metadata(&path).map_err(|_| {
-            CliError::Other(format!("phone access payload is incomplete: {} missing", path.display()))
+            CliError::Other(format!(
+                "phone access payload is incomplete: {} missing",
+                path.display()
+            ))
         })?;
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         // SAFETY: geteuid has no preconditions.
@@ -326,7 +330,12 @@ fn linger_enabled() -> bool {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     Command::new("loginctl")
-        .args(["show-user", &uid.to_string(), "--property=Linger", "--value"])
+        .args([
+            "show-user",
+            &uid.to_string(),
+            "--property=Linger",
+            "--value",
+        ])
         .stdin(std::process::Stdio::null())
         .output()
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "yes")
@@ -362,7 +371,9 @@ fn stop_idle() -> Result<bool, CliError> {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    Err(CliError::Other("Point Guard did not stop within 30s".into()))
+    Err(CliError::Other(
+        "Point Guard did not stop within 30s".into(),
+    ))
 }
 
 fn stop(force: bool) -> Result<(), CliError> {
@@ -391,18 +402,27 @@ fn restart(force: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Remove payload versions nothing runs any more (the unit runs `keep`).
+/// Remove payload versions nothing runs any more: only plain `X.Y.Z`
+/// directories older than `keep`, never the unit's payload, never newer
+/// versions or `install.sh` staging directories.
 fn prune_payloads(keep: &Path) {
     let Ok(root) = phone::payload_root() else {
         return;
     };
+    let running = phone::unit_file()
+        .ok()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|unit| phone::unit_payload(&unit));
     let Ok(entries) = std::fs::read_dir(&root) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
-        if is_dir && path != keep {
+        if is_dir
+            && Some(&path) != running.as_ref()
+            && phone::prunable(&entry.file_name().to_string_lossy(), keep)
+        {
             let _ = std::fs::remove_dir_all(&path);
         }
     }
@@ -542,7 +562,10 @@ fn devices(as_json: bool) -> Result<(), CliError> {
         println!("{}", serde_json::to_string_pretty(&list)?);
         return Ok(());
     }
-    let active: Vec<&Value> = devices.iter().filter(|d| d["revokedAt"].is_null()).collect();
+    let active: Vec<&Value> = devices
+        .iter()
+        .filter(|d| d["revokedAt"].is_null())
+        .collect();
     if active.is_empty() {
         println!("No paired devices. Pair one with `pu phone pair`.");
         return Ok(());
@@ -559,7 +582,11 @@ fn devices(as_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn grant(device: &str, terminals: Option<String>, workspace: Option<String>) -> Result<(), CliError> {
+fn grant(
+    device: &str,
+    terminals: Option<String>,
+    workspace: Option<String>,
+) -> Result<(), CliError> {
     if terminals.is_none() && workspace.is_none() {
         return Err(CliError::Other(
             "pass --terminals off|view|control and/or --workspace on|off".into(),
@@ -573,7 +600,10 @@ fn grant(device: &str, terminals: Option<String>, workspace: Option<String>) -> 
         ops.push((w == "off", json!({"operation": "devices.workspaceManagement", "deviceId": id, "workspaceManagement": w == "on"})));
     }
     if let Some(t) = &terminals {
-        ops.push((t != "control", json!({"operation": "devices.terminals", "deviceId": id, "terminals": t})));
+        ops.push((
+            t != "control",
+            json!({"operation": "devices.terminals", "deviceId": id, "terminals": t}),
+        ));
     }
     ops.sort_by_key(|(downgrade, _)| !*downgrade);
     if terminals.as_deref() == Some("control") || workspace.as_deref() == Some("on") {
@@ -585,7 +615,10 @@ fn grant(device: &str, terminals: Option<String>, workspace: Option<String>) -> 
         admin.call(op)?;
     }
     let devices = devices_list(&admin)?;
-    if let Some(d) = devices.iter().find(|d| d["deviceId"].as_str() == Some(id.as_str())) {
+    if let Some(d) = devices
+        .iter()
+        .find(|d| d["deviceId"].as_str() == Some(id.as_str()))
+    {
         println!("{}: {}", d["name"].as_str().unwrap_or("?"), describe(d));
     }
     Ok(())
@@ -600,7 +633,10 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
     // process between creation and the revoke guard.
     let signals = Signals::new()?;
     let created = admin.call(json!({"operation": "pairing.create", "ttlSeconds": ttl}))?;
-    let enrollment = created["enrollmentId"].as_str().unwrap_or_default().to_string();
+    let enrollment = created["enrollmentId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let payload = created["payload"].as_str().unwrap_or_default().to_string();
     let expires = created["expiresAt"].as_i64().unwrap_or_default();
     // Revoke whatever happens next unless the enrollment was consumed.
@@ -614,7 +650,9 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
     let (qr, size) = phone::render_qr(&payload)?;
     if text || !std::io::stdout().is_terminal() || columns.is_some_and(|c| c < size) {
         if !text && columns.is_some_and(|c| c < size) {
-            println!("Terminal is narrower than the QR ({size} columns); showing the paste code instead.");
+            println!(
+                "Terminal is narrower than the QR ({size} columns); showing the paste code instead."
+            );
         }
         println!("In the PurePoint app: Connections → Pair a computer → Paste code, then paste:\n");
         println!("purepoint-pair:{payload}\n");
@@ -632,7 +670,10 @@ async fn pair(ttl: u32, text: bool) -> Result<(), CliError> {
         Enrolled::Device(id) => {
             guard.armed = false;
             let devices = devices_list(&admin)?;
-            match devices.iter().find(|d| d["deviceId"].as_str() == Some(id.as_str())) {
+            match devices
+                .iter()
+                .find(|d| d["deviceId"].as_str() == Some(id.as_str()))
+            {
                 Some(d) => println!(
                     "Paired {:?}: {}. Change it with `pu phone grant`.",
                     d["name"].as_str().unwrap_or("device"),
@@ -690,14 +731,18 @@ async fn wait_for_enrollment(
             reason = signals.any() => return Err(CliError::Other(reason.into())),
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
         }
-        let status = admin.call(json!({"operation": "pairing.status", "enrollmentId": enrollment}))?;
+        let status =
+            admin.call(json!({"operation": "pairing.status", "enrollmentId": enrollment}))?;
         match (status["status"].as_str(), status["deviceId"].as_str()) {
             (Some("pending"), _) => {}
             // Consumed but not yet durable: wait briefly for the device id. A
             // failed write never retries, so the phone must pair again.
             (Some("consumed"), None) => {
-                if consumed_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(15) {
-                    return Ok(Enrolled::Ended("was used but the device was not saved".into()));
+                if consumed_at.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(15)
+                {
+                    return Ok(Enrolled::Ended(
+                        "was used but the device was not saved".into(),
+                    ));
                 }
             }
             (Some("consumed"), Some(id)) => return Ok(Enrolled::Device(id.to_string())),
@@ -798,7 +843,11 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
                 p["id"].as_str().unwrap_or("?"),
                 p["name"].as_str().unwrap_or(""),
                 methods.join(", "),
-                if p["configured"].as_bool() == Some(true) { "  (configured)" } else { "" }
+                if p["configured"].as_bool() == Some(true) {
+                    "  (configured)"
+                } else {
+                    ""
+                }
             );
         }
         println!("\nSign in with `pu phone login <provider>` (add --api-key-stdin to pipe a key).");
@@ -807,7 +856,11 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
     let entry = providers
         .iter()
         .find(|p| p["id"].as_str() == Some(provider.as_str()))
-        .ok_or_else(|| CliError::Other(format!("unknown provider {provider:?}; list them with `pu phone login`")))?;
+        .ok_or_else(|| {
+            CliError::Other(format!(
+                "unknown provider {provider:?}; list them with `pu phone login`"
+            ))
+        })?;
     let kind = if api_key_stdin || entry["oauth"].as_bool() != Some(true) {
         "api_key"
     } else {
@@ -824,8 +877,12 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
         piped_key = Some(key);
     }
     let mut signals = Signals::new()?;
-    let started = admin.call(json!({"operation": "auth.start", "provider": provider, "type": kind}))?;
-    let attempt = started["attemptId"].as_str().unwrap_or_default().to_string();
+    let started =
+        admin.call(json!({"operation": "auth.start", "provider": provider, "type": kind}))?;
+    let attempt = started["attemptId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     // Cancel the attempt on any exit except success.
     let mut guard = CancelLogin {
         admin: &admin,
@@ -865,7 +922,10 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
             Some("pending") => {}
             Some(other) => {
                 return Err(CliError::Other(
-                    s["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("sign-in {other}")),
+                    s["error"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("sign-in {other}")),
                 ));
             }
             None => return Err(CliError::Other("unexpected sign-in status".into())),
@@ -883,12 +943,22 @@ async fn login(provider: Option<String>, api_key_stdin: bool) -> Result<(), CliE
                 Some("select") => {
                     let options = prompt["options"].as_array().cloned().unwrap_or_default();
                     for (i, o) in options.iter().enumerate() {
-                        eprintln!("  {}) {}", i + 1, o["label"].as_str().or(o["id"].as_str()).unwrap_or("?"));
+                        eprintln!(
+                            "  {}) {}",
+                            i + 1,
+                            o["label"].as_str().or(o["id"].as_str()).unwrap_or("?")
+                        );
                     }
                     let choice = read_line(&format!("{message} [1-{}]: ", options.len()))?;
-                    let index = choice.parse::<usize>().ok().filter(|i| (1..=options.len()).contains(i))
+                    let index = choice
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|i| (1..=options.len()).contains(i))
                         .ok_or_else(|| CliError::Other("invalid choice".into()))?;
-                    options[index - 1]["id"].as_str().unwrap_or_default().to_string()
+                    options[index - 1]["id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
                 }
                 _ => read_line(&format!("{message}: "))?,
             };
