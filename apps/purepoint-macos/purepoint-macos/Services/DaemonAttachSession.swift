@@ -36,7 +36,7 @@ actor DaemonAttachSession {
         localCols: Int = 120, localRows: Int = 40,
         onFirstOutput: (() -> Void)? = nil,
         onOutput: (@MainActor @Sendable () -> Void)? = nil,
-        client: DaemonClient = DaemonClient()
+        client: DaemonClient = DaemonEndpoint.local.makeClient()
     ) {
         self.desiredSize = (localCols, localRows)
         self.client = client

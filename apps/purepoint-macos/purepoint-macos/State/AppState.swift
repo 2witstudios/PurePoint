@@ -300,7 +300,7 @@ final class AppState {
         do {
             registered = try MachineRegistryStore.load()
         } catch {
-            daemonError = "Could not read machines from ~/.pu/machines.json: \(error.localizedDescription)"
+            daemonError = "Could not read machines from \(MachineRegistryStore.displayPath): \(error.localizedDescription)"
             return
         }
         for machine in registered {
@@ -336,10 +336,10 @@ final class AppState {
     /// The registry update takes a file lock shared with `pu machine`, so it runs off the
     /// main thread.
     @discardableResult
-    func addMachine(name: String, sshHost: String) async throws -> MachineState {
+    func addMachine(name: String, sshHost: String, id: UUID = UUID()) async throws -> MachineState {
         let machine = try await Task.detached {
             try MachineRegistryStore.update { machines in
-                try MachineRegistryStore.add(name: name, sshHost: sshHost, to: &machines)
+                try MachineRegistryStore.add(name: name, sshHost: sshHost, id: id, to: &machines)
             }
         }.value
         // The watcher may have reloaded between the registry write and this resume, adding
@@ -362,13 +362,17 @@ final class AppState {
         machines.removeAll { $0 === state }
         let id = state.machine.id
         let name = state.machine.name
+        #if os(iOS)
+        // A removed machine's host key is trusted no longer (REQ-IPAD-026).
+        try? HostKeyPinStore.shared.reset(machineId: id)
+        #endif
         Task {
             do {
                 try await Task.detached {
                     try MachineRegistryStore.update { machines in machines.removeAll { $0.id == id } }
                 }.value
             } catch {
-                daemonError = "Could not remove \(name) from ~/.pu/machines.json: \(error.localizedDescription)"
+                daemonError = "Could not remove \(name) from \(MachineRegistryStore.displayPath): \(error.localizedDescription)"
             }
         }
         if let active = activeProjectRoot, ProjectKey(id: active).machineId == id {
@@ -546,7 +550,7 @@ final class AppState {
         let projectRoots = localManagedProjects.map(\.projectRoot)
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            let client = DaemonClient()
+            let client = DaemonEndpoint.local.makeClient()
             // Only an instance that owns the daemon stops anything. A second app
             // instance attached to a shared daemon must leave the owner's agents
             // running: suspending them would strand them, since that daemon stays

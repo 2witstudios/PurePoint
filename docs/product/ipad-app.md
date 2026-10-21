@@ -219,6 +219,30 @@ The schema is the same as `~/.pu/machines.json` (`machines.md`):
 
 It lives at `<container>/Library/Application Support/PurePoint/machines.json`, with file protection `completeUntilFirstUserAuthentication`. It is not synced with any Mac.
 
+### Debug launch arguments
+
+Debug builds (`#if DEBUG`) take launch arguments that let scripts connect a simulator to a test machine without touching the UI. Each one runs the same code the UI runs. Release builds ignore them.
+
+| Argument | Effect |
+|---|---|
+| (every launch) | Writes the device's OpenSSH public key line to `<data container>/Documents/purepoint-debug/id_ed25519.pub`. Read it with `xcrun simctl get_app_container <udid> com.2witstudios.PurePoint.ipad data`. |
+| `-PUDebugAddMachine user@host[:port][,name]` | Fills Add Machine with that destination and name (default: the host's first label, or `machine` for an IP address), shows the sheet and submits it, as if the user tapped Add. It does nothing when a machine with that destination is already registered. |
+| `-PUDebugTrustHostKey YES` | Confirms a first-use host key as if the user tapped Trust and Connect, both in Add Machine and for registered machines that ask. A changed host key is still refused (IPAD-009). |
+
+`apps/purepoint-macos/scripts/ipad-test-sshd.sh start <worktree> [--port N] [--sim <udid>]` runs a throwaway sshd for these:
+- It is the system's `/usr/sbin/sshd` binary, run unprivileged on 127.0.0.1 only, with its own host key, `authorized_keys` and config in a temp dir. It never touches `~/.ssh` or the system sshd.
+- `pu` resolves to `<worktree>/target/debug/pu`.
+- It authorizes the simulator's key from the container file above.
+- It prints the port and user.
+
+`install-key` re-reads the key after the app's first launch. `stop` ends the sshd and removes its temp dir.
+
+Typical run:
+1. `cargo build -p pu-cli`.
+2. Install and launch the app once.
+3. `ipad-test-sshd.sh start "$PWD" --sim <udid>`.
+4. Relaunch: `xcrun simctl launch --terminate-running-process <udid> com.2witstudios.PurePoint.ipad -PUDebugAddMachine <user>@127.0.0.1:<port> -PUDebugTrustHostKey YES`.
+
 ### Exclusion list
 
 These Mac features are excluded on iPad:
