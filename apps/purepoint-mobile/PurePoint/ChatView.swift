@@ -57,8 +57,8 @@ struct ChatView: View {
                         .accessibilityHint("Open connection settings")
                     }
                     ToolbarItemGroup(placement: .topBarTrailing) {
-                        Button { overlays.openHistory(); composerFocused = false; let token = model.selectionToken; Task { await model.loadConversations(selection: token) } } label: { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Point Guard history")
-                        Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession).accessibilityLabel("New conversation")
+                        Button { overlays.openHistory(); composerFocused = false; let token = model.selectionToken; Task { await model.loadConversations(selection: token) } } label: { Image(systemName: "clock.arrow.circlepath") }.disabled(!model.chatGrant.canRead).accessibilityLabel("Point Guard history")
+                        Button(action: newConversation) { Image(systemName: "square.and.pencil") }.disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend).accessibilityLabel("New conversation")
                     }
                 }
             }
@@ -80,6 +80,11 @@ struct ChatView: View {
                     overlays.dialogArrived(selection: token)
                     Task { await Task.yield(); if model.isSelected(token) && overlays.shouldPresentDialog(selection: token) { presentPendingDialog() } }
                 } else { presentPendingDialog() }
+            }
+            .onChange(of: model.chatGrant) { _, grant in
+                composerFocused = false
+                if !grant.canRead { showHistory = false }
+                presentPendingDialog()
             }
             .onChange(of: model.selectionToken) { _, _ in
                 presentedDialog = nil; confirmNew = false; showHistory = false; destination = "pointGuard"
@@ -177,9 +182,11 @@ struct ChatView: View {
                     .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .padding(.horizontal, 12).padding(.top, 6)
                 }
-                transcript
+                if model.chatGrant.canRead { transcript } else { chatLocked }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if model.chatGrant.canSend { composer } else if model.chatGrant.canRead { readOnlyNotice }
+            }
             .opacity(destination == "pointGuard" ? 1 : 0).disabled(destination != "pointGuard").allowsHitTesting(destination == "pointGuard").accessibilityHidden(destination != "pointGuard")
             }
             .background(Color(uiColor: .systemBackground))
@@ -212,6 +219,8 @@ struct ChatView: View {
     private func closeSidebar() { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showSidebar = false } }
     private func newConversation() { let token = model.selectionToken; closeSidebar(); if model.busy { confirmNew = true } else { Task { if model.isSelected(token) { await model.changeSession(selection: token) } } } }
     private func presentPendingDialog() {
+        // Read-only phones cannot answer extension requests; the Mac or a Send phone does.
+        guard model.chatGrant.canSend else { presentedDialog = nil; return }
         guard !showConnection, !showHistory, !showPhotos, !showFiles, !showSidebar else { return }
         dialogSelection = model.selectionToken; presentedDialog = model.snapshot?.dialogs.first
     }
@@ -282,6 +291,25 @@ struct ChatView: View {
                 }
             }
         }
+    }
+    private var chatLocked: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "lock").font(.largeTitle).foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("Point Guard chat is locked").font(.headline)
+            Text(model.chatGrant.explanation ?? "").font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+    private var readOnlyNotice: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "eye").foregroundStyle(.secondary).accessibilityHidden(true)
+            Text(model.chatGrant.explanation ?? "").font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
+        .accessibilityElement(children: .combine)
     }
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {

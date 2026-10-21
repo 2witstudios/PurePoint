@@ -90,6 +90,10 @@ pub struct AgentEntry {
     pub gate_attempts: Option<u32>,
     #[serde(default, skip_serializing_if = "crate::serde_defaults::is_false")]
     pub no_trigger: bool,
+    /// Spawned with `--no-auto`: resume also launches the bare command,
+    /// ignoring configured launch args.
+    #[serde(default, skip_serializing_if = "crate::serde_defaults::is_false")]
+    pub bare_launch: bool,
     /// Name of the trigger definition this agent is bound to.
     /// Set at spawn time so the sequence is stable across ticks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,6 +137,8 @@ impl<'de> Deserialize<'de> for AgentEntry {
             #[serde(default)]
             no_trigger: bool,
             #[serde(default)]
+            bare_launch: bool,
+            #[serde(default)]
             trigger_name: Option<String>,
             #[serde(default)]
             signal: Option<crate::signals::SignalSnapshot>,
@@ -162,6 +168,7 @@ impl<'de> Deserialize<'de> for AgentEntry {
             trigger_total: raw.trigger_total,
             gate_attempts: raw.gate_attempts,
             no_trigger: raw.no_trigger,
+            bare_launch: raw.bare_launch,
             trigger_name: raw.trigger_name,
             signal: raw.signal,
         })
@@ -265,6 +272,7 @@ mod tests {
             no_trigger: false,
             trigger_name: None,
             signal: None,
+            bare_launch: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -340,6 +348,7 @@ mod tests {
             no_trigger: false,
             trigger_name: None,
             signal: None,
+            bare_launch: false,
         };
 
         // when

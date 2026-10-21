@@ -256,6 +256,12 @@ import Foundation
         precondition(fixture.canceled.contains("live-stop-id"), "Rejected Stop must preserve explicit cancellation")
         try! await service.stopOwnedForQuit()
         precondition(!child.isRunning && !service.ready, "Deliberate quit must await its exact child exit")
+        // Device labels say what each tier allows, including Point Guard chat.
+        precondition(PointGuardPhoneAccess.summary(terminals: "control", workspaceManagement: true).contains("run commands"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "control", workspaceManagement: false).contains("reads Point Guard chat"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "view", workspaceManagement: true).contains("reads Point Guard chat"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "off", workspaceManagement: true).contains("No access"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "admin", workspaceManagement: true).contains("No access"))
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }

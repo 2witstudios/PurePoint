@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
-import { serve, allowedHost } from "./network.js";
+import { serve, allowedHost, chatLevel } from "./network.js";
 const token = "test-only-token-not-a-real-credential-0000";
 function connect(url, auth = token, clientId = "desktop") {
   return new Promise((resolve, reject) => {
@@ -195,4 +195,24 @@ test("long-lived terminal discovery keeps polling beyond dedup window without re
     ws.terminate();
     await server.shutdown();
   }
+});
+
+test("chat level derives from the existing grants and fails closed on anything else", () => {
+  const level = (terminals, workspaceManagement) =>
+    chatLevel({ clientId: "phone", terminals, workspaceManagement });
+  assert.equal(chatLevel(null), "off");
+  assert.equal(level("off", false), "off");
+  assert.equal(level("off", true), "off");
+  assert.equal(level("view", false), "read");
+  assert.equal(level("view", true), "read");
+  assert.equal(level("control", false), "read");
+  assert.equal(level("control", true), "send");
+  assert.equal(level("control", "true"), "read");
+  assert.equal(level("admin", true), "off");
+  assert.equal(level(undefined, true), "off");
+  assert.equal(chatLevel({ clientId: "desktop", owner: true }), "send");
+  assert.equal(
+    chatLevel({ clientId: "phone", owner: "true", terminals: "off" }),
+    "off",
+  );
 });

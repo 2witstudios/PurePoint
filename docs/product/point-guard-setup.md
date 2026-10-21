@@ -45,6 +45,21 @@ Pinned remote HTTPS/WSS reuses [Node HTTPS](https://nodejs.org/api/https.html) a
 - Given legacy shared-token remote pairing, should preserve local recovery/native data and require QR v1 without authorization downgrade.
 - Given composed candidate, should pass independent complete exact-head review and applicable CI, both advertised package architectures, nested ad-hoc signing/entitlements/launch and state-preserving replacement fixture; human Developer ID/notarization/device acceptance stays pending.
 
+### Point Guard chat access from device grants
+
+Terminal and workspace grants bound a phone's direct controls, but Point Guard itself has a shell and the bundled `pu` CLI. Chat is therefore gated by the same grants, enforced by the bridge before any chat op reaches Pi and before any snapshot or editor offer is broadcast.
+
+! [PGSET-012] Point Guard chat follows the existing device grants: read needs Agents and terminals View or Control; send needs Control and Workspace management; Off has no chat — chat send is effectively full control of the Mac, so a separate toggle would suggest a restriction that does not exist. No new trust field or migration: existing devices get exactly the access their grants imply. Tagging Point Guard's own `pu` calls with the requesting device is a separate defense-in-depth item.
+
+- REQ-PGSET-001: Given a remote chat op, should derive the device's chat access from its current grants and check it before dispatch: `sync`, `sessions` and `history` need View or Control; `send` (every mode), `stop`, `new`, `resume` and `answer` need Control and Workspace management; any other non-terminal op is rejected without dispatch.
+- REQ-PGSET-002: Given a chat snapshot or editor offer, should deliver it only to connected devices with View or Control.
+- REQ-PGSET-003: Given the owner lowers a device's grants, should stop its chat broadcasts and reject its in-flight and further chat ops before the trust write completes, and push the derived chat access to its connections; an upgrade applies after the durable write.
+- REQ-PGSET-004: Given malformed grant values, should treat chat as Off (fail closed); loopback desktop chat is the owner and always sends.
+- REQ-PGSET-005: Given Connect phone settings, should label View as including reading Point Guard chat and Control plus Workspace management as including chatting with Point Guard, which can run commands and manage agents on this Mac, with a per-device summary of what the grants allow.
+- REQ-PGSET-006: Given a phone with read-only chat, should show the conversation and history with sending, new/resume and extension answers disabled and explained; given Off, should lock chat with an explanation while the connection stays up; a live change should apply without reconnecting.
+
+Phone: `permissions` results and events include the derived `chat: off|read|send`.
+
 ### Existing native Pi directory permissions
 
 Given an existing user-owned native Pi agent directory with group/other read or traverse permissions but no group/other write permissions, should reuse it without changing its mode or canonical auth/settings/session data. New native directories are created owner-only (0700). Existing native directories must be real directories, not symlinks, and owned by the current user; reject group/other-writable directories with sanitized actionable recovery. Native auth files remain strictly owner-only regular files with valid JSON; unsafe/corrupt files are never silently repaired. Managed Point Guard and trust directories remain strictly owner-only.
