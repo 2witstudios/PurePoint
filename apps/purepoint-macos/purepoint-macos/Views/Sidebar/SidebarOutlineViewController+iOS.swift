@@ -258,7 +258,6 @@ class SidebarOutlineViewController: UIViewController {
 
     /// A user selection (tap or arrow key): what the Mac's `outlineViewSelectionDidChange` does.
     private func userSelected(_ indexPath: IndexPath?) {
-        NSLog("PUDBG userSelected %@ suppress=%d", "\(String(describing: indexPath))", suppressSelectionCallback ? 1 : 0)
         guard !suppressSelectionCallback else { return }
         guard let indexPath, let node = node(at: indexPath) else {
             onSelectionChanged?(nil)
@@ -301,8 +300,16 @@ class SidebarOutlineViewController: UIViewController {
         section.isExpanded(key)
     }
 
+    /// Whether the row reads as open: the Mac outline never opens a row with no children, so
+    /// an empty project or worktree shows a right-pointing chevron even though the snapshot
+    /// keeps it expanded for when its first child arrives.
+    private func showsExpanded(_ key: String) -> Bool {
+        let section = self.section
+        return section.contains(key) && section.isExpanded(key) && nodesByKey[key]?.children.isEmpty == false
+    }
+
     private func toggleExpansion(_ key: String) {
-        setExpanded(key, !section.isExpanded(key))
+        setExpanded(key, !showsExpanded(key))
     }
 
     // MARK: - Keyboard
@@ -317,7 +324,7 @@ class SidebarOutlineViewController: UIViewController {
             return SidebarKeyNavigation.Row(
                 parent: section.parent(of: key).flatMap { index[$0] },
                 isExpandable: node?.isExpandable ?? false,
-                isExpanded: section.isExpanded(key),
+                isExpanded: showsExpanded(key),
                 isSelectable: node.map(SidebarTree.isSelectable) ?? false)
         }
         return (keys, rows)
@@ -366,7 +373,6 @@ class SidebarOutlineViewController: UIViewController {
     }
 
     @objc private func backgroundTapped(_ recognizer: UITapGestureRecognizer) {
-        NSLog("PUDBG backgroundTapped")
         outlineView.becomeFirstResponder()
         guard selectedIndexPath != nil else { return }
         deselectAll()
@@ -383,7 +389,7 @@ class SidebarOutlineViewController: UIViewController {
         cell.fillContent = { [weak self] cell in self?.fillContent(cell, node: node) }
         cell.configure(
             level: section.contains(key) ? section.level(of: key) : 0, isExpandable: node.isExpandable,
-            isExpanded: section.contains(key) && section.isExpanded(key))
+            isExpanded: showsExpanded(key))
     }
 
     private func fillContent(_ cell: SidebarRowCell, node: SidebarNode) {
@@ -540,7 +546,6 @@ enum InlineRenameFocus {
 
 extension SidebarOutlineViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        NSLog("PUDBG shouldSelect %@ %@", "\(indexPath)", node(at: indexPath)?.rowKey ?? "nil")
         guard let node = node(at: indexPath), SidebarTree.isSelectable(node) else { return false }
         // Clicking the selected row again changes nothing, as in the Mac outline.
         if collectionView.indexPathsForSelectedItems?.contains(indexPath) == true {
@@ -556,7 +561,6 @@ extension SidebarOutlineViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        NSLog("PUDBG didSelect %@", "\(indexPath)")
         if editingTextField == nil {
             outlineView.becomeFirstResponder()
         }
