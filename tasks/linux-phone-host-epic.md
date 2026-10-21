@@ -70,6 +70,8 @@ Teach `package-runtime.py` a directory/tarball layout for `linux-x64` and `linux
 - Given the staged payload, should launch `--managed` under an empty HOME and stripped PATH after being moved out of the checkout, in a glibc container per arch in CI.
 - Given the runtime manifest, should record the exact `pu` version and payload-relative paths, with no `../../Helpers` references.
 
+**Status**: Implemented on `pu/linux-phone-packaging`. `package-runtime.py --layout dir --target linux-x64|linux-arm64 --pu-version <crate version> [--release-version <tag version>]` stages `<out>/purepoint-pointguard-<version>-<x86_64|aarch64>-linux-gnu/` and a reproducible `.tar.gz` + `.sha256`. Node 22.23.3 `linux-x64`/`linux-arm64` `.tar.gz` pins come from that release's `SHASUMS256.txt` (fetched over HTTPS; the darwin pins in the same file match). Foreign platform packages are removed and the target's restored from lockfile integrity, so the payload can be built on any host. Pure-function tests are in `test-package-runtime.py`; `prove-linux-runtime.mjs` is the clean-launch proof, run in CI on x64 (`macos.yml` `runtime-linux`) and per arch in `release.yml` `linux-phone`. Verified locally: a linux-arm64 payload built on a Mac passed the full proof in a `debian:bookworm-slim` container. Not done: the GPG signature on `SHASUMS256.txt` was not checked, because the host's `gpg` hung.
+
 ---
 
 ## Release assets and installer path
@@ -80,6 +82,17 @@ Publish `purepoint-pointguard-<version>-<arch>-linux-gnu.tar.gz` with checksum a
 - Given an opt-in install, should verify the checksum (and the signature when the verifier is present) before unpacking into a new versioned directory and atomically switching `current`.
 - Given a musl or pre-2.28 glibc host, should refuse the payload with a clear message and leave `pu`/`pu-engine` installed.
 - Given a running bridge, should never modify files of the version it is executing.
+
+**Status**: Implemented on `pu/linux-phone-packaging`; first exercised by the next `v*` release. The Linux tarballs now include the musl `pu-point-guard-lock`. `release.yml` `linux-phone` builds, installs and proves each payload. `attest` holds only `id-token`/`attestations: write`, checks out no code and signs provenance for every Linux tarball. `publish` waits for both. `install.sh` `PU_WITH_PHONE=1` / `PU_PHONE_ARCHIVE` behaves as follows:
+- It refuses musl, or glibc < 2.28, and exits 3 with pu/pu-engine still installed.
+- It checks the SHA-256. When `gh` is installed and signed in, it also runs `gh attestation verify --repo 2witstudios/PurePoint --signer-workflow …/release.yml`; otherwise it says provenance was not checked.
+- It rejects absolute, `..`, out-of-payload or oddly named entries and any link or special file.
+- It stages in `~/.pu/pointguard/.install.*` and renames with `mv -T` onto `~/.pu/pointguard/<puVersion>/`. There is no `current` link: the unit names the versioned directory (LPH-002).
+- An existing complete version is left untouched, and an incomplete one is refused.
+
+Open:
+- The release tag (0.7.x) and the workspace crate version (0.1.0) differ today. The payload records the crate version, because `pu phone` compares against `CARGO_PKG_VERSION`, and the release job warns about the mismatch.
+- `pu` has no `--version`, so install.sh trusts the payload manifest's `puVersion`. `pu phone` re-checks it.
 
 ---
 
@@ -157,5 +170,21 @@ Add a CI job that runs the packaged Linux bridge in a container, enrolls with th
 **Requirements**:
 - Given the packaged payload in a clean container, should complete enrollment, verify the pin, enforce chat/terminal/workspace grants and revoke while other devices stay connected.
 - Given a restart through `pu phone restart`, should preserve host identity and device trust and invalidate outstanding enrollments.
+
+**Status**: Seed done on `pu/linux-phone-packaging`. `macos.yml` `runtime-linux` packages the x64 payload and runs `prove-linux-runtime.mjs` twice: relocated, and installed by `install.sh` into a throwaway HOME. Both runs use an empty HOME and a toolless PATH. The proof covers:
+- private state and Unix-socket admin modes
+- `pu phone status` against the running bridge
+- single-use enrollment over the pinned-TLS listener, with the certificate SHA-256 checked against the QR
+- device credentials and the chat token rejected as owner authority
+- the state-lock collision
+- `pu phone devices`/`revoke`
+- host identity and the revoked device persisting across a restart
+
+It also checks the musl refusal in Alpine.
+
+TODO:
+- Exercise chat/terminal/workspace grants over the authenticated WebSocket, with a second device staying connected while one is revoked. The proof stops at enrollment.
+- Use a real tailnet address rather than the explicit loopback `PI_MOBILE_HOST`.
+- Restart through `pu phone restart` under systemd. The proof restarts with `runtime.stop` and a relaunch; systemd user units are not available on hosted runners.
 
 ---

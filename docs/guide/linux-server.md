@@ -12,6 +12,17 @@ curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/
 
 This puts static `pu` and `pu-engine` binaries (x86_64 or aarch64) in `~/.pu/bin`. Set `PU_VERSION=1.2.3` to pin a release. Add `~/.pu/bin` to your `PATH` in `~/.profile`, or call it by full path.
 
+To pair a phone or iPad directly with this server, also install phone access:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/2witstudios/PurePoint/main/scripts/install.sh | PU_WITH_PHONE=1 sh
+pu phone install --now
+```
+
+Phone access adds the Point Guard bridge, with its own copy of Node.js, in `~/.pu/pointguard/<version>/`. It needs glibc 2.28 or newer, so it doesn't run on Alpine or other musl systems. On those hosts the installer says so, and `pu` and `pu-engine` still install and work.
+
+The installer checks the payload's SHA-256. If the GitHub CLI (`gh`) is installed and signed in, it also verifies the release's build provenance; otherwise it says that check was skipped. An existing version directory is never modified. Set `PU_PHONE_ARCHIVE` to install a local payload tarball.
+
 Also install `git` and the agent CLIs you use (`claude`, `codex`, …) as that same user, and sign in to them.
 
 To build from source instead, run `cargo install --path crates/pu-cli` and `cargo install --path crates/pu-engine`.
