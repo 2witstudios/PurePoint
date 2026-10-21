@@ -42,7 +42,11 @@ try {
   assert.equal(manifest.contractVersion, 1);
   assert.equal(manifest.layout, "linux");
   assert.match(manifest.puVersion, /^\d+\.\d+\.\d+$/);
-  assert.equal(manifest.piVersion, "1.1.0");
+  // The manifest names the Pi actually bundled.
+  const bundledPi = JSON.parse(
+    await readFile(path.join(base, "node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8"),
+  ).version;
+  assert.equal(manifest.piVersion, bundledPi);
   assert.equal(manifest.libc, "glibc");
   assert.equal(manifest.architecture, { x64: "x64", arm64: "arm64" }[process.arch]);
   assert.equal(manifest.paths.node, "bin/node");

@@ -264,10 +264,17 @@ def require_elf(path, target, what):
     if machine != LINUX_TARGETS[target][2]:
         raise ValueError(f'{what} is not a {target} ELF executable: {path}')
 
+def pi_version():
+    """The exact Pi the bridge depends on, so the manifest can't drift from it."""
+    version = json.loads((SOURCE / 'package.json').read_text())['dependencies']['@earendil-works/pi-coding-agent']
+    if not VERSION_PATTERN.fullmatch(version):
+        raise ValueError(f'Pi dependency must be an exact X.Y.Z version, got {version!r}')
+    return version
+
 def linux_manifest(pu_version, target, node_version, source_sha):
     """Payload-relative paths only; `pu` is the installed one beside pu-engine."""
     return dict(schemaVersion=1, contractVersion=1, layout='linux', puVersion=pu_version,
-                piVersion='1.1.0', nodeVersion=node_version, target=target,
+                piVersion=pi_version(), nodeVersion=node_version, target=target,
                 architecture=LINUX_TARGETS[target][0], libc='glibc', minGlibc=MIN_GLIBC,
                 sourceSHA=source_sha,
                 paths=dict(node='bin/node', lockHelper='bin/point-guard-lock',
