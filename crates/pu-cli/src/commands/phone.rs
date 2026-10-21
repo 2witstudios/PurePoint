@@ -116,9 +116,7 @@ pub async fn run(action: PhoneAction) -> Result<(), CliError> {
     match action {
         PhoneAction::Install { now, port } => install(now, port),
         PhoneAction::Uninstall => uninstall(),
-        PhoneAction::Start => systemctl(&["start", phone::UNIT]).map(|()| {
-            println!("started {}; check `pu phone status`", phone::UNIT);
-        }),
+        PhoneAction::Start => start(),
         PhoneAction::Stop { force } => stop(force),
         PhoneAction::Restart { force } => restart(force),
         PhoneAction::Status { json } => status(json),
@@ -377,6 +375,15 @@ fn stop_idle() -> Result<bool, CliError> {
     Err(CliError::Other(
         "Point Guard did not stop within 30s".into(),
     ))
+}
+
+fn start() -> Result<(), CliError> {
+    let (unit, payload) = render_unit(installed_port())?;
+    let installed = std::fs::read_to_string(phone::unit_file()?).ok();
+    phone::check_startable(installed.as_deref(), &unit, &payload)?;
+    systemctl(&["start", phone::UNIT])?;
+    println!("started {}; check `pu phone status`", phone::UNIT);
+    Ok(())
 }
 
 fn stop(force: bool) -> Result<(), CliError> {

@@ -112,6 +112,7 @@ Add `pu phone install|uninstall|start|stop|restart|status|run`, writing a `pu-po
 - Given a permissive umask or a group/other-writable unit directory, should still leave the unit file 0644 in a directory no other user can write.
 - Given `stop` or `restart` without `--force` while the service is running but its admin channel is unreachable, should refuse and suggest `--force` instead of stopping it.
 - Given a payload whose manifest version differs from `pu`, should refuse to start it and tell the user how to reinstall.
+- Given `start` with an installed unit that is missing or differs from the one this `pu` would write (for example an older payload after upgrading `pu`), should refuse and say to run `pu phone restart` or `pu phone install`.
 
 
 **Status**: Done (`crates/pu-cli/src/phone.rs`, `commands/phone.rs`). The unit adds `LockPersonality`, `RestrictRealtime`, `RestrictSUIDSGID` and `SystemCallArchitectures=native`. `pu` records the release version (`PU_RELEASE_VERSION`) so the payload lockstep is exact. Pruning keeps newer versions, the unit's payload and install staging. CI (`runtime-linux`) runs install, readiness, restart (identity kept), idle stop (not resurrected) and uninstall (trust kept) under a real systemd user manager.

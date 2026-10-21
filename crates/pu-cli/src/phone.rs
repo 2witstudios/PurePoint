@@ -452,6 +452,33 @@ pub fn unit_payload(unit: &str) -> Option<PathBuf> {
     Some(Path::new(node).parent()?.parent()?.to_path_buf())
 }
 
+/// `start` runs only the unit this `pu` would write: an older payload left
+/// in place after upgrading `pu` would break the version lockstep.
+pub fn check_startable(
+    installed: Option<&str>,
+    expected: &str,
+    payload: &Path,
+) -> Result<(), CliError> {
+    let Some(installed) = installed else {
+        return Err(CliError::Other(format!(
+            "{UNIT} is not installed; install it with `pu phone install --now`"
+        )));
+    };
+    if installed == expected {
+        return Ok(());
+    }
+    Err(CliError::Other(match unit_payload(installed) {
+        Some(running) if running != payload => format!(
+            "{UNIT} runs {}, but this pu uses {}; move it with `pu phone restart` (or `pu phone install --now`)",
+            running.display(),
+            payload.display()
+        ),
+        _ => format!(
+            "{UNIT} differs from the unit this pu writes; rewrite it with `pu phone restart` (or `pu phone install --now`)"
+        ),
+    }))
+}
+
 fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     let mut parts = text.split('.');
     let mut next = || {
@@ -722,6 +749,30 @@ mod tests {
         write_unit_file(&fresh, "x").unwrap();
         assert_eq!(mode(&fresh), 0o644);
         assert_eq!(mode(fresh.parent().unwrap()) & 0o022, 0);
+    }
+
+    #[test]
+    fn given_installed_unit_should_start_only_the_one_this_pu_writes() {
+        let expected = sample_unit();
+        let payload = Path::new("/home/a b/.pu/pointguard/1.2.3");
+        assert!(check_startable(Some(&expected), &expected, payload).is_ok());
+        let missing = check_startable(None, &expected, payload)
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("pu phone install"), "{missing}");
+        let older = expected.replace("/pointguard/1.2.3/", "/pointguard/1.2.2/");
+        let err = check_startable(Some(&older), &expected, payload)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("1.2.2") && err.contains("1.2.3") && err.contains("pu phone restart"),
+            "{err}"
+        );
+        let edited = expected.replace("RestartSec=5", "RestartSec=1");
+        let err = check_startable(Some(&edited), &expected, payload)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pu phone restart"), "{err}");
     }
 
     #[test]
