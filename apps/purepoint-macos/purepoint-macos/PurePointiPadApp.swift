@@ -14,6 +14,7 @@ struct PurePointiPadApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
+        // Each window (scene) gets its own shell over the shared state, as each Mac window does.
         WindowGroup {
             ContentView()
                 .environment(appState)
