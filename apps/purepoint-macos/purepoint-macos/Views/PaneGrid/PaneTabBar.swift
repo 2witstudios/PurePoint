@@ -157,6 +157,7 @@ private struct PaneTab: View {
         .onTapGesture { registry.selectTab(workspaceId: workspaceId, surfaceId: surface.id) }
         .onMiddleClick { close() }
         .help(helpText)
+        #if os(macOS)
         .draggable(TabDragPayload.string(for: surface.id)) {
             Text(title).font(.system(size: 12)).padding(6)
         }
@@ -169,6 +170,16 @@ private struct PaneTab: View {
         } isTargeted: {
             isDropTargeted = $0
         }
+        #else
+        // UIKit drag and drop (and the tab's taps and hover) on iPad; dropping inserts before it.
+        .overlay {
+            TabDragDropInteraction(
+                surfaceId: surface.id, title: title, closeVisible: isActive || isHovered,
+                isHovered: $isHovered, isDropTargeted: $isDropTargeted,
+                onSelect: { registry.selectTab(workspaceId: workspaceId, surfaceId: surface.id) },
+                onDrop: { moved in registry.moveTab(workspaceId: workspaceId, surfaceId: moved, before: surface.id) })
+        }
+        #endif
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel(helpText)

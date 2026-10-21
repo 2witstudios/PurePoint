@@ -35,7 +35,7 @@ class DiffContentNSView: NSView {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.textContainer?.widthTracksTextView = false
-        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.textContainerInset = DiffTextRendering.diffInset
         textView.autoresizingMask = [.width]
         textView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(textView)
@@ -80,88 +80,7 @@ class DiffContentNSView: NSView {
     }
 
     private func buildDiffAttributedString() -> NSAttributedString {
-        let result = NSMutableAttributedString()
-        let monoFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        let lineNoFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-
-        let tabStops = [
-            NSTextTab(textAlignment: .right, location: 36),
-            NSTextTab(textAlignment: .right, location: 72),
-            NSTextTab(textAlignment: .left, location: 82),
-        ]
-
-        for (hunkIdx, hunk) in hunks.enumerated() {
-            // Hunk separator between hunks
-            if hunkIdx > 0 {
-                let sepPara = NSMutableParagraphStyle()
-                sepPara.alignment = .center
-                sepPara.paragraphSpacingBefore = 4
-                sepPara.paragraphSpacing = 4
-                result.append(
-                    NSAttributedString(
-                        string: "···\n",
-                        attributes: [
-                            .font: NSFont.systemFont(ofSize: 11),
-                            .foregroundColor: NSColor.tertiaryLabelColor,
-                            .paragraphStyle: sepPara,
-                            .backgroundColor: Theme.hunkSeparator,
-                        ]))
-            }
-
-            for line in hunk.lines {
-                let para = NSMutableParagraphStyle()
-                para.tabStops = tabStops
-
-                let bgColor: NSColor
-                let fgColor: NSColor
-                switch line.type {
-                case .addition:
-                    bgColor = Theme.additionBackground
-                    fgColor = Theme.additionText
-                case .deletion:
-                    bgColor = Theme.deletionBackground
-                    fgColor = Theme.deletionText
-                case .context:
-                    bgColor = Theme.cardBackground
-                    fgColor = Theme.primaryText
-                }
-
-                // Old line number
-                let oldNo = line.oldLineNo.map { String($0) } ?? ""
-                result.append(
-                    NSAttributedString(
-                        string: "\t\(oldNo)",
-                        attributes: [
-                            .font: lineNoFont,
-                            .foregroundColor: NSColor.tertiaryLabelColor,
-                            .backgroundColor: bgColor,
-                            .paragraphStyle: para,
-                        ]))
-
-                // New line number
-                let newNo = line.newLineNo.map { String($0) } ?? ""
-                result.append(
-                    NSAttributedString(
-                        string: "\t\(newNo)",
-                        attributes: [
-                            .font: lineNoFont,
-                            .foregroundColor: NSColor.tertiaryLabelColor,
-                            .backgroundColor: bgColor,
-                        ]))
-
-                // Code content
-                result.append(
-                    NSAttributedString(
-                        string: "\t\(line.content)\n",
-                        attributes: [
-                            .font: monoFont,
-                            .foregroundColor: fgColor,
-                            .backgroundColor: bgColor,
-                        ]))
-            }
-        }
-
-        return result
+        DiffTextRendering.diffAttributedString(hunks: hunks)
     }
 }
 
