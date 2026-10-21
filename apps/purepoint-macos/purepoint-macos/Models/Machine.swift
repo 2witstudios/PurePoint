@@ -147,12 +147,14 @@ nonisolated enum MachineRegistryStore {
 
 /// `Host` aliases from `~/.ssh/config`, offered when adding a machine.
 nonisolated enum SSHConfig {
+    #if os(macOS)
     static var defaultPath: String { FileManager.default.homeDirectoryForCurrentUser.path + "/.ssh/config" }
 
     static func hostAliases(path: String = defaultPath) -> [String] {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
         return hostAliases(from: text)
     }
+    #endif
 
     /// Every concrete alias on `Host` lines; patterns (`*`, `?`, negations) are skipped.
     static func hostAliases(from text: String) -> [String] {

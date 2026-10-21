@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import SwiftUI
 
 // MARK: - HotkeyCategory
@@ -210,6 +212,7 @@ enum KeyModifier: String, Codable, Hashable, Comparable {
         }
     }
 
+    #if os(macOS)
     var nsEventFlag: NSEvent.ModifierFlags {
         switch self {
         case .control: .control
@@ -218,6 +221,7 @@ enum KeyModifier: String, Codable, Hashable, Comparable {
         case .command: .command
         }
     }
+    #endif
 
     /// Sort order for display: ⌃ ⌥ ⇧ ⌘
     private var sortOrder: Int {
@@ -372,6 +376,7 @@ struct KeyBinding: Codable, Equatable, Hashable {
         return result
     }
 
+    #if os(macOS)
     /// Check if this binding matches an NSEvent
     func matches(_ event: NSEvent) -> Bool {
         // Check modifiers (mask off irrelevant bits)
@@ -428,6 +433,7 @@ struct KeyBinding: Codable, Equatable, Hashable {
         }
         return nil
     }
+    #endif
 }
 
 // MARK: - Notification

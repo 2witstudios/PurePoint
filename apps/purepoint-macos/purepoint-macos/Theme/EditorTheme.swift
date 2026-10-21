@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 /// Syntax highlight colors derived from TerminalTheme ANSI palette for visual consistency.
 nonisolated enum EditorTheme {
@@ -24,6 +28,7 @@ nonisolated enum EditorTheme {
     private static func adaptive(
         dark: (CGFloat, CGFloat, CGFloat), light: (CGFloat, CGFloat, CGFloat)
     ) -> NSColor {
+        #if os(macOS)
         NSColor(name: nil) { appearance in
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
                 return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: 1.0)
@@ -31,5 +36,14 @@ nonisolated enum EditorTheme {
                 return NSColor(srgbRed: light.0, green: light.1, blue: light.2, alpha: 1.0)
             }
         }
+        #else
+        NSColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return NSColor(srgbRed: dark.0, green: dark.1, blue: dark.2, alpha: 1.0)
+            } else {
+                return NSColor(srgbRed: light.0, green: light.1, blue: light.2, alpha: 1.0)
+            }
+        }
+        #endif
     }
 }
