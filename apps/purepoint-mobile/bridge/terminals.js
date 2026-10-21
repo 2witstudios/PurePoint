@@ -39,6 +39,7 @@ export function terminalConnection({
   identity,
   permission,
   management = () => false,
+  chat = () => "off",
   ledger = new Map(),
   send,
   daemons = createDaemons(),
@@ -58,6 +59,7 @@ export function terminalConnection({
   const permissions = () => ({
     terminals: permission(),
     workspaceManagement: management(),
+    chat: chat(),
     workspace: workspaceFeatures,
   });
   const workspace = workspaceConnection({

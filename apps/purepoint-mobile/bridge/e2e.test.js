@@ -10,7 +10,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-async function trustedTransport(controller) {
+async function trustedTransport(
+  controller,
+  { terminals = "control", workspaceManagement = true } = {},
+) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pg-e2e-"));
   const trust = await openTrustStore({ directory });
   const remote = await serve(controller, {
@@ -26,6 +29,8 @@ async function trustedTransport(controller) {
     ).enrollmentToken,
     name: "Fixture phone",
   });
+  await trust.setTerminals(device.deviceId, terminals);
+  await trust.setWorkspaceManagement(device.deviceId, workspaceManagement);
   const desktop = {
     credential: randomBytes(32).toString("base64url"),
     clientId: "desktop",
@@ -38,6 +43,7 @@ async function trustedTransport(controller) {
   const nativeURL = `ws://127.0.0.1:${local.address().port}/v1`;
   return {
     phoneId: device.clientId,
+    setTerminals: (value) => trust.setTerminals(device.deviceId, value),
     connect: (kind = "phone") =>
       phone(
         kind === "desktop" ? nativeURL : url,
@@ -381,6 +387,71 @@ test("phone and desktop share streaming, queue ownership, dialogs, session races
   } finally {
     for (const client of [p, d])
       if (client?.ws.readyState === WebSocket.OPEN) await client.close();
+    await server.shutdown();
+    c.dispose();
+    await rpc.close();
+  }
+});
+
+test("View phones read chat and Off phones get none, end to end against the real controller", async () => {
+  const rpc = new Rpc(
+    process.execPath,
+    [fileURLToPath(new URL("./fixture.js", import.meta.url))],
+    process.cwd(),
+    process.env,
+  );
+  const c = new Controller(rpc, { list: async () => [] });
+  await c.refresh();
+  const server = await trustedTransport(c, {
+    terminals: "view",
+    workspaceManagement: false,
+  });
+  let p;
+  let desktop;
+  try {
+    p = await server.connect();
+    desktop = await server.connect("desktop");
+    const state = await p.call("sync");
+    await assert.rejects(
+      p.call("send", { text: "hello", mode: "send", epoch: state.epoch }),
+      /read-only/,
+    );
+    await assert.rejects(p.call("new", { epoch: state.epoch }), /read-only/);
+    const before = (await desktop.call("sync")).messages.length;
+    assert.equal(before, state.messages.length, "rejected send never ran");
+    await desktop.call("send", {
+      text: "from the Mac",
+      mode: "send",
+      epoch: state.epoch,
+    });
+    for (
+      let i = 0;
+      i < 100 && !p.snapshot?.messages?.some((m) => m.text === "from the Mac");
+      i++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(
+      p.snapshot.messages.some((m) => m.text === "from the Mac"),
+      "read-only phone still receives broadcasts",
+    );
+    await server.setTerminals("off");
+    const seen = p.snapshot.revision;
+    const latest = await desktop.call("sync");
+    await desktop.call("send", {
+      text: "after downgrade",
+      mode: latest.busy ? "after" : "send",
+      epoch: latest.epoch,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(p.snapshot.revision, seen, "off phone receives no snapshots");
+    await assert.rejects(p.call("sync"), /View or Control/);
+    await assert.rejects(
+      p.call("history", { sessionId: "x" }),
+      /View or Control/,
+    );
+  } finally {
+    if (p?.ws.readyState === WebSocket.OPEN) await p.close();
+    if (desktop?.ws.readyState === WebSocket.OPEN) await desktop.close();
     await server.shutdown();
     c.dispose();
     await rpc.close();
