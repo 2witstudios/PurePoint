@@ -4,12 +4,13 @@
 
 An agent-first coding workspace. IDEs were built for humans writing code — PurePoint is built for a world where agents write code and humans direct the work. You describe what needs to happen; PurePoint sets up isolated workstations (git worktrees with live agents) and orchestrates parallel execution.
 
-See `vision.md` for the full product vision. See `CONTEXT.md` for identity and naming.
+See `docs/vision.md` for the full product vision.
 
 ## Key Conventions
 
+- **Name**: PurePoint ([purepoint.dev](https://purepoint.dev))
 - **CLI**: `pu` command
-- **Config dir**: `.pu/`
+- **Config dir**: `.pu/` (replaces the old ppg / pure-point-guard / `.ppg/`)
 - **Branch naming**: `pu/{name}`
 
 ## Reading Protocol
@@ -33,7 +34,7 @@ NOTE: This manual protocol is temporary. PurePoint's daemon will handle context 
 
 ## macOS App Build Safety
 
-**Do NOT run `xcodebuild` from Codex.** The `purepoint-macos` build phase runs `cargo build` and copies the `pu-engine` binary to `~/.cargo/bin/` and `pu` to `~/.pu/bin/` (see the build script in the Xcode project). If the `pu-engine` daemon managing this agent session is running, overwriting its binary invalidates the code signature on the mapped executable, causing macOS to SIGKILL the process (exit 137) — killing your own session.
+**Do NOT run `xcodebuild` from an agent session.** The `purepoint-macos` build phase runs `cargo build` and copies the `pu-engine` binary to `~/.cargo/bin/` and `pu` to `~/.pu/bin/` (see the build script in the Xcode project). If the `pu-engine` daemon managing this agent session is running, overwriting its binary invalidates the code signature on the mapped executable, causing macOS to SIGKILL the process (exit 137) — killing your own session.
 
 **Rules:**
 - Never run `xcodebuild build`, `xcodebuild test`, or `swift build` for the macOS app from an agent session
