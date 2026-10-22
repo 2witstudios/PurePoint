@@ -76,6 +76,18 @@ ResolveAgent returns `type: agent_resolved`, agent_id, project_root and worktree
 
 Production registry: `<socket>.projects.json`, loaded on startup and atomically updated after successful initialization or validated use. `/`, `$HOME` and ancestors of `$HOME` are never registered, even when `~/.pu/manifest.json` makes `$HOME` look initialized; such entries left by older daemons are removed when the registry loads. Requests naming such a root fail with `project_root_not_allowed`, except `status`, `subscribe_status`, `read`, `channel_read` and `kill`, which stay available so agents an older version recorded there can be seen and stopped. Roots are canonical, registration survives restart, and startup does not resume agents. Health returns registered roots and counts only session handles without observed exits.
 
+The registry is ordered, and that order is the one every client shows for the machine. New projects are appended; `inventory` (projects) and Health list roots in registry order. Registries written by older daemons, which kept roots sorted by path, load in that order.
+
+### Reorder projects
+
+Set the order of the registered projects (protocol 13).
+
+**Request**: `{"type": "reorder_projects", "project_roots": ["/b", "/a"]}`
+
+**Response**: `{"type": "project_order", "project_roots": ["/b", "/a", "/c"]}`
+
+The listed roots move to the front in the given order. Registered roots not listed follow in their current order, and unknown roots are ignored, so a client with a stale list can reorder projects but never drop one. Roots are canonicalized like registration. The new order is written atomically to the registry before the reply.
+
 ### Health
 
 Check daemon liveness and protocol version.
@@ -88,7 +100,7 @@ Check daemon liveness and protocol version.
   "type": "health_report",
   "pid": 12345,
   "uptime_seconds": 3600,
-  "protocol_version": 11,
+  "protocol_version": 13,
   "projects": ["/path/to/project"],
   "agent_count": 3
 }

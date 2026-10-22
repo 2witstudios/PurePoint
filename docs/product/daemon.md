@@ -25,6 +25,8 @@ Daemon (pu-engine binary)
 
 **Global inventory (implemented 2026-10-10):** Production startup loads canonical project roots from `<socket>.projects.json`; successful Init and validated project use register roots atomically. Alternate sockets have independent registries. Invalid registrations do not enter the set, unavailable registered projects remain visible with errors, and restart does not spawn agents. A derived Inventory query combines manifests with live ownership metadata; no duplicate global agent database is stored. Global summary and flat agent/worktree records share count semantics, and Health now returns known projects and the count of live session handles rather than all retained handles. In-memory Engine::new remains available for isolated embedding/tests.
 
+**Project order (implemented 2026-10-21):** The registry is an ordered list and the single source of truth for a machine's project order. New projects are appended. `Request::ReorderProjects { project_roots }` (protocol 13) moves the listed roots to the front and keeps the rest in their current order. Inventory and Health report roots in registry order. The Mac sidebar (local and machine sections), the iPad and, through the bridge's `workspace.reorderProjects`, the phone all show this order and save reorders through it.
+
 **Daemon binary:** `pu-engine` (separate from `pu-cli`). Both modes take an exclusive lock on `daemon.sock.lock` (one daemon per socket) and write the PID file; managed mode (`--managed`) additionally exits when its parent app dies. Socket path configurable via `--socket <path>`, defaults to `~/.pu/daemon.sock`.
 
 ## Open Questions

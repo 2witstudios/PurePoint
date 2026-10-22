@@ -151,6 +151,32 @@ enum SidebarTree {
         return nodes
     }
 
+    /// Where a dragged project lands when dropped at `childIndex` under `parent` (nil for the
+    /// top level): the project and its index among its siblings once it's moved, or nil when
+    /// the drop is outside its own section or would leave it where it is. A project only
+    /// moves among its own section: the local projects, or one machine's.
+    static func projectDrop(
+        projectId: String, parent: SidebarNode?, childIndex: Int, roots: [SidebarNode]
+    ) -> (project: ProjectState, index: Int)? {
+        let siblings: [SidebarNode]
+        if let parent {
+            guard case .machine = parent.kind else { return nil }
+            siblings = parent.children
+        } else {
+            // Local projects lead the top level, ahead of the MACHINES section.
+            siblings = Array(roots.prefix { if case .project = $0.kind { true } else { false } })
+        }
+        let projects = siblings.compactMap { node -> ProjectState? in
+            if case .project(let project) = node.kind { project } else { nil }
+        }
+        guard childIndex >= 0, childIndex <= projects.count,
+            let from = projects.firstIndex(where: { $0.projectId == projectId })
+        else { return nil }
+        // `childIndex` counts the dragged row, which leaves its old place first.
+        let to = childIndex > from ? childIndex - 1 : childIndex
+        return to == from ? nil : (projects[from], to)
+    }
+
     /// Whether every row in the tree holds all the rows it will ever hold. `false` while a
     /// project has yet to read its snapshot and a machine has yet to answer its inventory,
     /// which is how the sidebar looks for the first moments after a relaunch or a machine

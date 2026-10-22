@@ -508,6 +508,46 @@ struct LaunchStatusSheet: View {
     }
 }
 
+// MARK: - Project order
+
+/// Reorders one machine's projects. The order is saved on that machine, so every device shows it.
+struct ProjectOrderSheet: View {
+    @ObservedObject var model: AgentControlModel
+    @ObservedObject var actions: WorkspaceActions
+    let machine: AgentMachine
+    @Environment(\.dismiss) private var dismiss
+    @State private var projects: [WorkspaceProject] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(projects) { project in
+                    Label(project.name, systemImage: "folder")
+                }.onMove { projects.move(fromOffsets: $0, toOffset: $1) }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("Projects on \(machine.name)").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        let ids = projects.map(\.id)
+                        dismiss()
+                        guard ids != machine.registeredProjects?.map(\.id) else { return }
+                        Task {
+                            do { try await model.reorderProjects(machine: machine.id, projectIds: ids) } catch {
+                                actions.failure = error.localizedDescription
+                                await model.refresh()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { projects = machine.registeredProjects ?? [] }
+    }
+}
+
 // MARK: - Home (the desktop sidebar)
 
 struct HomeView: View {
@@ -523,6 +563,7 @@ struct HomeView: View {
     @State private var creatingWorktree: WorkspaceTarget?
     @State private var renaming: AgentShortcut?
     @State private var stopping: AgentShortcut?
+    @State private var reordering: AgentMachine?
 
     var body: some View {
         ScrollView {
@@ -551,7 +592,8 @@ struct HomeView: View {
                          newWorktree: target.worktree == nil ? { creatingWorktree = target } : nil)
         }
         .modifier(AgentManagement(model: model, actions: actions, renaming: $renaming, stopping: $stopping, creatingWorktree: $creatingWorktree, open: openAgent))
-        .onChange(of: model.bridgeIdentity) { _, _ in collapsed = []; launchTarget = nil; renaming = nil; stopping = nil }
+        .sheet(item: $reordering) { machine in ProjectOrderSheet(model: model, actions: actions, machine: machine) }
+        .onChange(of: model.bridgeIdentity) { _, _ in collapsed = []; launchTarget = nil; renaming = nil; stopping = nil; reordering = nil }
     }
 
     // MARK: Rows
@@ -614,6 +656,10 @@ struct HomeView: View {
             Spacer()
             Text(!model.connected ? "Unavailable" : machine.online ? "Online" : "Offline").font(.caption).foregroundStyle(Theme.muted)
         }.padding(.trailing, 12).frame(minHeight: 40).contentShape(Rectangle()).onTapGesture { toggle(machineKey) }
+        .contextMenu {
+            Button("Reorder Projects…", systemImage: "arrow.up.arrow.down") { reordering = machine }
+                .disabled(!online || !model.canReorderProjects || (machine.registeredProjects?.count ?? 0) < 2)
+        }
         .opacity(model.connected ? 1 : 0.5).accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
         if !collapsed.contains(machineKey) {
             if !machine.online, let error = machine.error {

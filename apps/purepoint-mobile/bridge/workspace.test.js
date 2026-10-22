@@ -141,6 +141,8 @@ async function fixture(t) {
           send({ type: "kill_result", killed: [r.target.agent] });
         else if (r.type === "create_worktree")
           send({ type: "create_worktree_result", worktree_id: "wt-created" });
+        else if (r.type === "reorder_projects")
+          send({ type: "project_order", project_roots: r.project_roots });
       }
     });
   });
@@ -529,6 +531,43 @@ test("expanded presets bounded, validated rename and exact single-agent stop", a
   assert.deepEqual(f.requests.find((x) => x.type === "kill").target, {
     agent: f.agents[0].id,
   });
+});
+
+test("project reorder forwards registered roots and rejects unknown or repeated ones", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  const reorder = (operationId, projectIds) =>
+    c.request({
+      op: "workspace.reorderProjects",
+      operationId,
+      machine: "local",
+      projectIds,
+    });
+  let r = await reorder("order-0001", ["/registered", "/registered"]);
+  assert.equal(r.state, "failed");
+  r = await reorder("order-0002", ["/registered", "/elsewhere"]);
+  assert.equal(r.state, "failed");
+  r = await reorder("order-0003", []);
+  assert.equal(r.state, "failed");
+  assert.equal(
+    f.requests.filter((q) => q.type === "reorder_projects").length,
+    0,
+  );
+  r = await reorder("order-0004", ["/registered"]);
+  assert.equal(r.state, "succeeded");
+  assert.deepEqual(r.detail.projectIds, ["/registered"]);
+  assert.deepEqual(f.requests.at(-1), {
+    type: "reorder_projects",
+    project_roots: ["/registered"],
+  });
+  // A replay with the same operation never dispatches twice.
+  r = await reorder("order-0004", ["/registered"]);
+  assert.equal(r.state, "succeeded");
+  assert.equal(
+    f.requests.filter((q) => q.type === "reorder_projects").length,
+    1,
+  );
 });
 
 test("spawn instructions are optional; blank launches bare and plan mode needs instructions or a preset", async (t) => {

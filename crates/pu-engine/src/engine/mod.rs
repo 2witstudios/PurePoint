@@ -90,7 +90,8 @@ pub struct Engine {
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
     /// Projects that have been initialized or used — scheduler scans these.
-    registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Registered roots in the order clients show them.
+    registered_projects: Arc<std::sync::Mutex<Vec<String>>>,
     /// Agents with a resume in progress, so two resumes of one agent can never
     /// both spawn `claude --resume` on the same transcript.
     resuming: Arc<std::sync::Mutex<HashSet<String>>>,
@@ -203,7 +204,7 @@ impl Engine {
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
-            registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            registered_projects: Arc::new(std::sync::Mutex::new(Vec::new())),
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
@@ -296,11 +297,7 @@ impl Engine {
     pub fn registered_projects(&self) -> Vec<String> {
         self.registered_projects
             .lock()
-            .map(|p| {
-                let mut roots: Vec<_> = p.iter().cloned().collect();
-                roots.sort();
-                roots
-            })
+            .map(|p| p.clone())
             .unwrap_or_default()
     }
 
@@ -408,6 +405,12 @@ impl Engine {
                 kind,
                 state,
             } => Response::Inventory(self.inventory(project_root, kind, state).await),
+            Request::ReorderProjects { project_roots } => {
+                match self.reorder_projects(project_roots).await {
+                    Ok(project_roots) => Response::ProjectOrder { project_roots },
+                    Err(response) => response,
+                }
+            }
             Request::ResolveAgent {
                 agent_id,
                 project_root,

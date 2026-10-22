@@ -112,6 +112,9 @@ final class AppState {
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
     #endif
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
+    #if os(macOS)
+    @ObservationIgnored private var localProjectOrderTask: Task<Void, Never>?
+    #endif
 
     private static let openProjectsKey = "PurePointOpenProjects"
 
@@ -292,6 +295,58 @@ final class AppState {
         }
         return false
     }
+
+    // MARK: - Project Order
+
+    /// The projects listed beside `project`: the local ones, or its machine's.
+    func siblingProjects(of project: ProjectState) -> [ProjectState] {
+        guard let machineId = project.key.machineId else { return projects }
+        return machines.first { $0.machine.id == machineId }?.projects ?? []
+    }
+
+    /// Move a project to `index` among its siblings. The order is saved on the machine that
+    /// owns the project, so every device lists it the same way.
+    func moveProject(_ project: ProjectState, to index: Int) {
+        if let machineId = project.key.machineId {
+            machines.first { $0.machine.id == machineId }?.moveProject(root: project.projectRoot, to: index)
+            return
+        }
+        #if os(macOS)
+        guard let next = ProjectOrder.moving(project.projectRoot, to: index, in: projects) else { return }
+        projects = next
+        persistOpenProjects()
+        let roots = next.map(\.projectRoot)
+        Task { [weak self] in
+            let response = try? await DaemonEndpoint.local.makeClient().send(.reorderProjects(projectRoots: roots))
+            if case .projectOrder(let saved) = response { self?.applyProjectOrder(saved) }
+        }
+        #endif
+    }
+
+    /// Sort the local projects into the local daemon's saved order. Projects it doesn't list
+    /// keep their relative order after the ones it does.
+    func applyProjectOrder(_ roots: [String]) {
+        let next = ProjectOrder.sorted(projects, by: roots)
+        guard next.map(\.projectRoot) != projects.map(\.projectRoot) else { return }
+        projects = next
+        persistOpenProjects()
+    }
+
+    #if os(macOS)
+    /// Follow the local daemon's project order, which other devices can change.
+    func startLocalProjectOrderRefresh() {
+        guard localProjectOrderTask == nil else { return }
+        localProjectOrderTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let response = try? await DaemonEndpoint.local.makeClient().send(.inventory(kind: "projects"))
+                if case .inventory(let report) = response {
+                    self?.applyProjectOrder(report.projects.map(\.projectRoot))
+                }
+                do { try await Task.sleep(for: MachineState.refreshInterval) } catch { return }
+            }
+        }
+    }
+    #endif
 
     func restoreProjects(projectRoot: String? = nil) {
         let paths = projectRoot.map { [$0] }

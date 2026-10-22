@@ -78,6 +78,28 @@ struct SidebarMenuModelTests {
         #expect(titles(SidebarMenus.contextMenu(for: nodes[0].children[0])) == ["Delete Worktree\u{2026}"])
     }
 
+    @Test func givenAProjectDropShouldMoveItOnlyWithinItsOwnSection() {
+        let a = makeProject(root: "/tmp/a", worktreeCount: 0)
+        let b = makeProject(root: "/tmp/b", worktreeCount: 0)
+        let c = makeProject(root: "/tmp/c", worktreeCount: 0)
+        let machine = MachineState(machine: Machine(name: "m", sshHost: "m"), appState: nil, registry: nil)
+        let roots = SidebarTree.build(projects: [a, b, c], machines: [machine], workspacesByProject: [:])
+        let drop = { (id: String, parent: SidebarNode?, index: Int) in
+            SidebarTree.projectDrop(projectId: id, parent: parent, childIndex: index, roots: roots)
+                .map { "\($0.project.projectRoot)@\($0.index)" }
+        }
+
+        // Dropping before the first row moves to the top; past the last local row moves to the end.
+        #expect(drop(c.projectId, nil, 0) == "/tmp/c@0")
+        #expect(drop(a.projectId, nil, 3) == "/tmp/a@2")
+        #expect(drop(a.projectId, nil, 2) == "/tmp/a@1")
+        // Its own place, below the local projects, or under a machine it isn't on: no move.
+        #expect(drop(a.projectId, nil, 0) == nil)
+        #expect(drop(a.projectId, nil, 1) == nil)
+        #expect(drop(a.projectId, nil, 4) == nil)
+        #expect(drop(a.projectId, roots[4], 0) == nil)
+    }
+
     @Test func givenAWorktreeAddButtonShouldOfferANewAgentOrTerminal() {
         #expect(titles(SidebarMenus.worktreeAddMenu) == ["New Agent", "New Terminal"])
     }

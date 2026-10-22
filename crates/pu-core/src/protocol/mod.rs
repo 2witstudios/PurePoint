@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{AgentStatus, WorktreeEntry};
 use indexmap::IndexMap;
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -88,6 +88,11 @@ pub enum Request {
         agent_id: String,
         #[serde(default)]
         project_root: Option<String>,
+    },
+    /// Set the registered projects' order, which every client shows. Registered
+    /// roots left out follow in their current order; unknown roots are ignored.
+    ReorderProjects {
+        project_roots: Vec<String>,
     },
     Health,
     Init {
@@ -497,6 +502,10 @@ pub enum Response {
         agent_id: String,
         project_root: Option<String>,
         worktree_id: Option<String>,
+    },
+    /// The registered projects in their new order.
+    ProjectOrder {
+        project_roots: Vec<String>,
     },
     HealthReport {
         pid: u32,

@@ -332,7 +332,39 @@ fn given_empty_diff_result_should_round_trip() {
     }
 }
 
+#[test]
+fn given_reorder_projects_request_should_round_trip() {
+    let req = Request::ReorderProjects {
+        project_roots: vec!["/b".into(), "/a".into()],
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"reorder_projects","project_roots":["/b","/a"]}"#
+    );
+    match serde_json::from_str(&json).unwrap() {
+        Request::ReorderProjects { project_roots } => assert_eq!(project_roots, ["/b", "/a"]),
+        other => panic!("expected ReorderProjects, got {other:?}"),
+    }
+}
+
 // --- Response round-trips ---
+
+#[test]
+fn given_project_order_should_round_trip() {
+    let resp = Response::ProjectOrder {
+        project_roots: vec!["/b".into(), "/a".into()],
+    };
+    let json = serde_json::to_string(&resp).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"project_order","project_roots":["/b","/a"]}"#
+    );
+    match serde_json::from_str(&json).unwrap() {
+        Response::ProjectOrder { project_roots } => assert_eq!(project_roots, ["/b", "/a"]),
+        other => panic!("expected ProjectOrder, got {other:?}"),
+    }
+}
 
 #[test]
 fn given_health_report_should_round_trip() {
@@ -491,7 +523,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 12);
+    assert_eq!(PROTOCOL_VERSION, 13);
 }
 
 // --- GridCommand round-trips ---

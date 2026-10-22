@@ -47,7 +47,7 @@ final class MachineState: Identifiable {
     @ObservationIgnored private var isUserDisconnecting = false
 
     /// How often the project list is re-read while the daemon is up.
-    private static let refreshInterval: Duration = .seconds(30)
+    static let refreshInterval: Duration = .seconds(30)
 
     var endpoint: DaemonEndpoint { .machine(machine.id) }
     var isConnectedOrConnecting: Bool { state != .disconnected }
@@ -376,6 +376,22 @@ final class MachineState: Identifiable {
         for project in restored {
             project.isUnavailable = false
             project.startWatching()
+        }
+    }
+
+    /// Move a project to `index` among this machine's projects and save the order on the
+    /// machine, so every device lists its projects the same way.
+    func moveProject(root: String, to index: Int) {
+        guard let next = ProjectOrder.moving(root, to: index, in: projects) else { return }
+        projects = next
+        let roots = next.map(\.projectRoot)
+        let client = endpoint.makeClient()
+        Task { [weak self] in
+            let response = try? await client.send(.reorderProjects(projectRoots: roots))
+            guard let self else { return }
+            if case .projectOrder = response { return }
+            await self.refreshProjects()
+            self.actionError = "Could not save the project order on \(self.machine.name)."
         }
     }
 

@@ -45,6 +45,11 @@ extension SidebarOutlineViewController {
             showConfirmation(.removeProject(project)) {
                 self.onRemoveProject?(project)
             }
+        case (.moveProjectUp, .project(let project)), (.moveProjectDown, .project(let project)):
+            guard let appState = project.appState,
+                let index = appState.siblingProjects(of: project).firstIndex(where: { $0 === project })
+            else { return }
+            appState.moveProject(project, to: index + (action == .moveProjectUp ? -1 : 1))
         case (.newAgentInWorktree, .worktree(let worktree)):
             guard let project = findProject(forWorktreeId: worktree.id) else { return }
             onShowCommandPalette?(project, .worktree(worktree.id), false)

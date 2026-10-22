@@ -100,6 +100,7 @@ class SidebarOutlineViewController: NSViewController, NSOutlineViewDataSource, N
         let contextMenu = NSMenu()
         contextMenu.delegate = self
         outlineView.menu = contextMenu
+        registerProjectDrag()
 
         scrollView.documentView = outlineView
         scrollView.hasVerticalScroller = true

@@ -8,6 +8,8 @@ import UserNotifications
     typealias Request = @MainActor (String, [String: Any]) async throws -> JSONValue
     @Published private(set) var workspaceManagement = false
     @Published private(set) var workspaceSupported = false
+    /// Whether the bridge can save a machine's project order.
+    @Published private(set) var projectOrderSupported = false
     @Published private(set) var permission: AgentTerminalPermission = .off
     @Published private(set) var machines: [AgentMachine] = []
     @Published private(set) var connected = false
@@ -215,7 +217,7 @@ import UserNotifications
         let sameHost = self.host == host
         resumeScope = sameHost ? resume : nil
         self.request = request; self.connected = connected
-        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; permissionRevision += 1; terminalPermissionRevision += 1
+        self.host = host; if !sameHost { machines = []; permission = .off }; workspaceManagement = false; workspaceSupported = false; projectOrderSupported = false; permissionRevision += 1; terminalPermissionRevision += 1
         loading = false; error = nil; discovering = connected
         guard connected else { return }
         let token = generation
@@ -239,6 +241,7 @@ import UserNotifications
         if envelope.type == "permissions" {
             workspaceManagement = envelope.workspaceManagement ?? false
             workspaceSupported = (try? envelope.workspace?["management"].decode(Bool.self)) ?? false
+            projectOrderSupported = (try? envelope.workspace?["projectOrder"].decode(Bool.self)) ?? false
             applyPermission(AgentTerminalPermission(rawValue: envelope.terminals ?? "") ?? .off)
             return
         }
@@ -252,6 +255,7 @@ import UserNotifications
     private func applyWorkspacePermission(_ data: JSONValue) {
         workspaceManagement = (try? data["workspaceManagement"].decode(Bool.self)) ?? false
         workspaceSupported = (try? data["workspace"]["management"].decode(Bool.self)) ?? false
+        projectOrderSupported = (try? data["workspace"]["projectOrder"].decode(Bool.self)) ?? false
     }
     var canManage: Bool { connected && permission == .control && workspaceManagement && workspaceSupported }
     var bridgeIdentity: String { host }
@@ -269,6 +273,21 @@ import UserNotifications
         await refresh()
         guard token == generation, revision == permissionRevision, canManage else { throw AgentControlFailure(message: "Connection or permission changed while refreshing. Operation may already have committed; check status.") }
         return value
+    }
+    var canReorderProjects: Bool { canManage && projectOrderSupported }
+    /// Saves a machine's project order on that machine, so every device lists it the same way.
+    func reorderProjects(machine: String, projectIds: [String]) async throws {
+        guard canReorderProjects else { throw AgentControlFailure(message: "Reordering projects requires workspace management and an updated bridge.") }
+        if let index = machines.firstIndex(where: { $0.id == machine }), let projects = machines[index].registeredProjects {
+            machines[index].registeredProjects = projectIds.compactMap { id in projects.first { $0.id == id } }
+                + projects.filter { !projectIds.contains($0.id) }
+        }
+        let receipt = try await workspaceRequest(
+            "workspace.reorderProjects",
+            fields: ["operationId": UUID().uuidString, "machine": machine, "projectIds": projectIds])
+        guard receipt.state == "succeeded" else {
+            throw AgentControlFailure(message: receipt.message ?? "Project order wasn't saved. Refresh and try again.")
+        }
     }
     func refreshWorkspaceForReview(machine: String, project: String) async -> Bool {
         let token = generation, revision = permissionRevision
