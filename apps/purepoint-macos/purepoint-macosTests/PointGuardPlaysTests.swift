@@ -136,4 +136,57 @@ struct PointGuardPlaysTests {
         #expect(PointGuardCourtGeometry.facesLeft(toward: pointer, logoX: 500, current: false))
         #expect(!PointGuardCourtGeometry.facesLeft(toward: pointer, logoX: 300, current: true))
     }
+
+    // MARK: - Docked (iPad) court
+
+    @Test func aTallPaneRunsThePortraitCourtOnlyUnderADockedComposer() {
+        let portrait = CGSize(width: 500, height: 900)
+        #expect(PointGuardCourtGeometry.layout(for: portrait, compact: false, docked: true) == .portrait)
+        #expect(PointGuardCourtGeometry.layout(for: portrait, compact: false, docked: false) == .stacked)
+    }
+
+    @Test func theKeyboardNeverTurnsAPortraitCourtWide() {
+        // An 11" iPad in portrait: the keyboard leaves a pane wider than tall, but the resting pane decides.
+        let underKeyboard = CGSize(width: 834, height: 640)
+        let resting = CGSize(width: 834, height: 1090)
+        #expect(
+            PointGuardCourtGeometry.layout(for: underKeyboard, resting: resting, compact: false, docked: true)
+                == .portrait)
+        #expect(PointGuardCourtGeometry.layout(for: underKeyboard, compact: false, docked: true) == .wide)
+    }
+
+    @Test func aWidePaneKeepsTheWideCourt() {
+        let landscape = CGSize(width: 900, height: 700)
+        #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: true) == .wide)
+        #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: false) == .wide)
+    }
+
+    @Test func smallAndCompactPanesStack() {
+        #expect(
+            PointGuardCourtGeometry.layout(for: CGSize(width: 320, height: 460), compact: false, docked: true)
+                == .stacked)
+        #expect(
+            PointGuardCourtGeometry.layout(for: CGSize(width: 500, height: 900), compact: true, docked: true)
+                == .stacked)
+    }
+
+    @Test func portraitPlaysSitOnTheirAnchorsUnderTheHeading() {
+        let positions = PointGuardCourtGeometry.portraitPositions(
+            in: CGSize(width: 500, height: 900), headingBottom: 300)
+        #expect(
+            positions == [
+                CGPoint(x: 105, y: 603), CGPoint(x: 395, y: 603), CGPoint(x: 165, y: 774), CGPoint(x: 335, y: 774),
+            ])
+    }
+
+    @Test func portraitPlaysStayInsideAShortNarrowPane() {
+        let size = CGSize(width: 360, height: 520)
+        let positions = PointGuardCourtGeometry.portraitPositions(in: size, headingBottom: 340)
+        #expect(positions[0] == CGPoint(x: 78, y: 388))
+        #expect(positions[1] == CGPoint(x: 282, y: 388))
+        #expect(positions[2].y == 480)
+        #expect(positions[3].x - positions[2].x >= 2 * PointGuardCourtGeometry.labelHalfWidth)
+        #expect(positions.allSatisfy { $0.x - PointGuardCourtGeometry.labelHalfWidth >= 0 })
+        #expect(positions.allSatisfy { $0.x + PointGuardCourtGeometry.labelHalfWidth <= size.width })
+    }
 }

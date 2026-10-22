@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// The court's own coordinate space, shared by hover tracking and the composer's measured edge.
+/// The court's own coordinate space, shared by hover tracking and the column's measured edge.
 private let courtSpace = "pointGuardCourt"
 
 /// Point Guard's new-conversation screen: a half-court with the logo at the top of the key,
-/// the composer under it, and four plays that each send a whole prompt when passed to.
+/// the composer under it, and four plays that each send a whole prompt when passed to. On the iPad the composer
+/// docks under the court instead, and a tall pane runs a portrait court.
 struct PointGuardCourtView<Composer: View>: View {
     let plays: [PointGuardPlay]
     let prompts: [PointGuardPrompt]
@@ -21,20 +22,45 @@ struct PointGuardCourtView<Composer: View>: View {
     @State private var hover: CGPoint?
     @State private var passing: Int?
     @State private var passTask: Task<Void, Never>?
-    @State private var composerBottom: CGFloat = 0
+    /// The bottom of the logo, heading and (on the Mac) composer, which no play may sit on.
+    @State private var columnBottom: CGFloat = 0
     @State private var facesLeft = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static var accent: Color { Color(nsColor: Theme.pointGuardAccent) }
 
+    /// The pane's size without the keyboard (iPad only), which decides whether the court stands portrait.
+    @State private var restingSize: CGSize?
+
     var body: some View {
+        if PointGuardCourtGeometry.docksComposer {
+            // One composer under every layout. The keyboard, a rotation or a split resize relays out the court above it
+            // without rebuilding the text field, which would drop its focus (and the keyboard) the moment it was tapped.
+            VStack(spacing: 0) {
+                layouts
+                slot
+            }
+            .background {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { restingSize = proxy.size }
+                        .onChange(of: proxy.size) { _, size in restingSize = size }
+                }
+                .ignoresSafeArea(.keyboard)
+            }
+        } else {
+            layouts
+        }
+    }
+
+    private var layouts: some View {
         GeometryReader { proxy in
-            if compact || proxy.size.width < PointGuardCourtGeometry.minimumSize.width
-                || proxy.size.height < PointGuardCourtGeometry.minimumSize.height
+            switch PointGuardCourtGeometry.layout(
+                for: proxy.size, resting: restingSize, compact: compact, docked: PointGuardCourtGeometry.docksComposer)
             {
-                stacked(height: proxy.size.height)
-            } else {
-                court(proxy.size)
+            case .wide: court(proxy.size, portrait: false)
+            case .portrait: court(proxy.size, portrait: true)
+            case .stacked: stacked(height: proxy.size.height)
             }
         }
         .onDisappear { passTask?.cancel() }
@@ -42,9 +68,12 @@ struct PointGuardCourtView<Composer: View>: View {
 
     // MARK: - Court
 
-    private func court(_ size: CGSize) -> some View {
-        let positions = PointGuardCourtGeometry.positions(
-            in: size, columnWidth: PurePointTheme.chatContentWidth, composerBottom: composerBottom)
+    private func court(_ size: CGSize, portrait: Bool) -> some View {
+        let positions =
+            portrait
+            ? PointGuardCourtGeometry.portraitPositions(in: size, headingBottom: columnBottom)
+            : PointGuardCourtGeometry.positions(
+                in: size, columnWidth: PurePointTheme.chatContentWidth, composerBottom: columnBottom)
         let pointer = reduceMotion ? nil : hover
         let drifted = positions.map { point in
             guard let pointer else { return point }
@@ -52,15 +81,16 @@ struct PointGuardCourtView<Composer: View>: View {
         }
         let near = pointer.flatMap { PointGuardCourtGeometry.nearestSlot(to: $0, among: drifted) }
         let lit = passing ?? near
-        let logo = PointGuardCourtGeometry.logoPoint(in: size)
+        let logo = PointGuardCourtGeometry.logoPoint(in: size, portrait: portrait)
+        let lines = portrait ? AnyShape(PortraitCourtLines(blocks: positions[2].y)) : AnyShape(CourtLines())
         // The logo faces the lit play, else the pointer. A turn is a discrete change, so it follows the raw hover
         // under Reduce Motion too, just without animating.
         let facing = lit.map { drifted[$0] } ?? hover
         return ZStack(alignment: .topLeading) {
-            CourtLines().stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
+            lines.stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
             if let pointer {
                 let center = UnitPoint(x: pointer.x / size.width, y: pointer.y / size.height)
-                CourtLines().stroke(Self.accent, lineWidth: 1.5)
+                lines.stroke(Self.accent, lineWidth: 1.5)
                     .mask(RadialGradient(colors: [.black, .clear], center: center, startRadius: 0, endRadius: 260))
                 RadialGradient(
                     colors: [Self.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 420)
@@ -72,7 +102,7 @@ struct PointGuardCourtView<Composer: View>: View {
                     .animation(.spring(response: 0.35, dampingFraction: 0.8), value: drifted[play.slot])
             }
             // Above the plays, so a play squeezed by a short pane can never take a click meant for the composer.
-            column(size, pointer: pointer)
+            column(size, pointer: pointer, portrait: portrait)
         }
         .frame(width: size.width, height: size.height)
         // A resize can carry the logo past a still pointer, so the logo's position re-decides the facing too.
@@ -104,25 +134,31 @@ struct PointGuardCourtView<Composer: View>: View {
         .allowsHitTesting(false).accessibilityHidden(true)
     }
 
-    private func column(_ size: CGSize, pointer: CGPoint?) -> some View {
-        VStack(spacing: 0) {
+    private func column(_ size: CGSize, pointer: CGPoint?, portrait: Bool) -> some View {
+        let diameter: CGFloat = portrait ? 96 : 128
+        return VStack(spacing: 0) {
             logoMark(
-                diameter: 128, tilt: pointer.map { PointGuardCourtGeometry.tilt(toward: $0, in: size) } ?? 0,
+                diameter: diameter, tilt: pointer.map { PointGuardCourtGeometry.tilt(toward: $0, in: size) } ?? 0,
                 facesLeft: facesLeft)
-            heading(size: 40).padding(.top, 36)
-            slot.padding(.top, 24)
-                .background {
-                    GeometryReader { proxy in
-                        let bottom = proxy.frame(in: .named(courtSpace)).maxY
-                        Color.clear
-                            .onAppear { composerBottom = bottom }
-                            .onChange(of: bottom) { _, bottom in composerBottom = bottom }
-                    }
-                }
+            // The portrait heading breaks into two lines, as on the phone.
+            heading(size: portrait ? 30 : 40).frame(maxWidth: portrait ? 300 : nil).padding(.top, portrait ? 24 : 36)
+            if !PointGuardCourtGeometry.docksComposer {
+                slot.padding(.top, 24)
+            }
+        }
+        .background {
+            GeometryReader { proxy in
+                let bottom = proxy.frame(in: .named(courtSpace)).maxY
+                Color.clear
+                    .onAppear { columnBottom = bottom }
+                    .onChange(of: bottom) { _, bottom in columnBottom = bottom }
+            }
         }
         .frame(maxWidth: PurePointTheme.chatContentWidth + 2 * PurePointTheme.chatHorizontalPadding)
         .frame(width: size.width)
-        .padding(.top, max(16, size.height * PointGuardCourtGeometry.logo.y - 64))
+        .padding(
+            .top,
+            max(16, PointGuardCourtGeometry.logoPoint(in: size, portrait: portrait).y - diameter / 2))
     }
 
     // MARK: - Narrow and sidebar
@@ -132,7 +168,9 @@ struct PointGuardCourtView<Composer: View>: View {
             VStack(spacing: 0) {
                 logoMark(diameter: 88, tilt: 0, facesLeft: false)
                 heading(size: 26).padding(.top, 24).padding(.horizontal, 16)
-                slot.padding(.top, 16)
+                if !PointGuardCourtGeometry.docksComposer {
+                    slot.padding(.top, 16)
+                }
                 VStack(spacing: 8) {
                     ForEach([0, 2], id: \.self) { row in
                         HStack(spacing: 8) {
@@ -141,7 +179,7 @@ struct PointGuardCourtView<Composer: View>: View {
                     }
                 }
                 .padding(.horizontal, compact ? 8 : PurePointTheme.chatHorizontalPadding)
-                .padding(.top, 8)
+                .padding(.top, PointGuardCourtGeometry.docksComposer ? 24 : 8)
             }
             .frame(maxWidth: PurePointTheme.chatContentWidth)
             .frame(maxWidth: .infinity)
@@ -296,5 +334,47 @@ private struct CourtLines: Shape {
         path.addQuadCurve(to: p(790, 40), control: p(500, 280))
         path.addLine(to: p(790, 24))
         return path
+    }
+}
+
+/// The portrait court, after the phone's: the half-court line through the logo, the basket end running on under the
+/// docked composer. Widths scale with the pane and heights follow the plays, so circles stay round and the arc stays
+/// just over the low blocks however far a short pane pushes them down.
+private struct PortraitCourtLines: Shape {
+    /// Where the low blocks stand, in the court's points.
+    let blocks: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let scale = rect.width / 390
+        func x(_ value: CGFloat) -> CGFloat { rect.minX + value * scale }
+        func y(_ value: CGFloat) -> CGFloat { rect.minY + value * scale }
+        func circle(_ center: CGPoint, _ r: CGFloat) -> CGRect {
+            CGRect(x: center.x - r * scale, y: center.y - r * scale, width: 2 * r * scale, height: 2 * r * scale)
+        }
+        let below = rect.maxY + 40 * scale
+        let halfCourt = rect.minY + rect.height * PointGuardCourtGeometry.portraitLogo.y
+        let arcTop = rect.minY + blocks - 40 * scale
+        let laneTop = arcTop + 115 * scale
+        var path = Path()
+        path.addRoundedRect(
+            in: CGRect(x: x(12), y: y(12), width: 366 * scale, height: below - y(12)),
+            cornerSize: CGSize(width: 6 * scale, height: 6 * scale))
+        path.move(to: CGPoint(x: x(12), y: halfCourt)); path.addLine(to: CGPoint(x: x(378), y: halfCourt))
+        path.addEllipse(in: circle(CGPoint(x: rect.midX, y: halfCourt), 86))
+        path.addEllipse(in: circle(CGPoint(x: rect.midX, y: halfCourt), 30))
+        // The far three-point line, peeking over the top edge.
+        path.move(to: CGPoint(x: x(70), y: y(12))); path.addLine(to: CGPoint(x: x(70), y: y(24)))
+        path.addQuadCurve(to: CGPoint(x: x(320), y: y(24)), control: CGPoint(x: rect.midX, y: halfCourt - 66 * scale))
+        path.addLine(to: CGPoint(x: x(320), y: y(12)))
+        // Three-point line, lane and free-throw circle at the basket end.
+        let arc = CGPoint(x: rect.midX, y: arcTop + 173 * scale)
+        path.move(to: CGPoint(x: x(22), y: max(below, arc.y))); path.addLine(to: CGPoint(x: x(22), y: arc.y))
+        path.addArc(
+            center: arc, radius: 173 * scale, startAngle: .degrees(180), endAngle: .degrees(360), clockwise: false)
+        path.addLine(to: CGPoint(x: x(368), y: max(below, arc.y)))
+        path.addRect(CGRect(x: rect.midX - 60 * scale, y: laneTop, width: 120 * scale, height: max(0, below - laneTop)))
+        path.addEllipse(in: circle(CGPoint(x: rect.midX, y: laneTop), 60))
+        // The basket end runs on past the bottom edge; keep only what lies on the court.
+        return path.lineIntersection(Path(rect))
     }
 }
