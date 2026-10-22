@@ -24,6 +24,36 @@ fn given_init_request_should_round_trip() {
 }
 
 #[test]
+fn given_remove_project_wire_form_should_default_to_refusing_live_agents() {
+    let req: Request =
+        serde_json::from_str(r#"{"type":"remove_project","project_root":"/test"}"#).unwrap();
+    match req {
+        Request::RemoveProject {
+            project_root,
+            suspend_agents,
+        } => {
+            assert_eq!(project_root, "/test");
+            assert!(!suspend_agents);
+        }
+        _ => panic!("expected RemoveProject"),
+    }
+}
+
+#[test]
+fn given_project_list_change_should_serialize_with_its_roots() {
+    let json = serde_json::to_value(Response::ProjectsChanged {
+        projects: vec!["/a".into()],
+    })
+    .unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"type": "projects_changed", "projects": ["/a"]})
+    );
+    let req: Request = serde_json::from_str(r#"{"type":"subscribe_projects"}"#).unwrap();
+    assert!(matches!(req, Request::SubscribeProjects));
+}
+
+#[test]
 fn given_spawn_request_should_default_agent_to_claude() {
     let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
     let req: Request = serde_json::from_str(json).unwrap();
@@ -522,7 +552,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 12);
+    assert_eq!(PROTOCOL_VERSION, 13);
 }
 
 // --- GridCommand round-trips ---

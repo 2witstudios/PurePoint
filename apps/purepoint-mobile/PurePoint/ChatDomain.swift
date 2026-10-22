@@ -427,6 +427,7 @@ enum MobileRPCTiming {
         case "workspace.createWorktree": return 100_000_000_000
         case "workspace.rename": return 100_000_000_000
         case "workspace.stop": return 100_000_000_000
+        case "workspace.removeProject": return 100_000_000_000
         default: return 35_000_000_000
         }
     }

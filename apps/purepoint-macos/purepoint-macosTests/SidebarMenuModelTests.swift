@@ -35,6 +35,14 @@ private func makeProject(root: String, worktreeCount: Int, status: AgentStatus =
     return project
 }
 
+/// A machine's project offers hiding on this device and removing from the machine.
+#if os(macOS)
+private let hideTitle = "Hide on This Mac\u{2026}"
+#else
+private let hideTitle = "Hide on This iPad\u{2026}"
+#endif
+private let remoteProjectActions = [hideTitle, "Remove from Machine\u{2026}"]
+
 @Suite(.serialized)
 @MainActor
 struct SidebarMenuModelTests {
@@ -57,7 +65,7 @@ struct SidebarMenuModelTests {
         let nodes = SidebarTree.build(
             projects: [project], machines: [machine], workspacesByProject: [project.projectId: [single]])
 
-        #expect(titles(SidebarMenus.contextMenu(for: nodes[0])) == ["Kill All Agents (1)", "-", "Remove Project\u{2026}"])
+        #expect(titles(SidebarMenus.contextMenu(for: nodes[0])) == ["Kill All Agents (1)", "-"] + remoteProjectActions)
         #expect(
             titles(SidebarMenus.contextMenu(for: nodes[0].children[0]))
                 == ["Kill All Agents (1)", "-", "Delete Worktree\u{2026}"])
@@ -74,7 +82,7 @@ struct SidebarMenuModelTests {
     @Test func givenDeadAgentsShouldOfferOnlyTheDestructiveRowActions() {
         let project = makeProject(root: "/tmp/dead", worktreeCount: 1, status: .broken)
         let nodes = SidebarTree.build(projects: [project], machines: [], workspacesByProject: [:])
-        #expect(titles(SidebarMenus.contextMenu(for: nodes[0])) == ["Remove Project\u{2026}"])
+        #expect(titles(SidebarMenus.contextMenu(for: nodes[0])) == remoteProjectActions)
         #expect(titles(SidebarMenus.contextMenu(for: nodes[0].children[0])) == ["Delete Worktree\u{2026}"])
     }
 
@@ -97,9 +105,18 @@ struct SidebarMenuModelTests {
                     confirmTitle: "Delete"))
         #expect(SidebarConfirmation.killWorktreeAgents(worktree).confirmTitle == "Kill All")
         #expect(SidebarConfirmation.closeWorkspace(agentCount: 3).message == "This will kill 3 agents across its panes.")
-        // A machine's project is only hidden; nothing on the machine changes.
+        // Hiding changes nothing on the machine.
         #expect(
-            SidebarConfirmation.removeProject(project).message.hasSuffix(
+            SidebarConfirmation.hideProject(project).message.hasSuffix(
                 "Nothing on the remote machine is changed."))
+        // Removing does, for every device, but keeps the files and suspends running agents.
+        #expect(
+            SidebarConfirmation.removeProject(project)
+                == SidebarConfirmation(
+                    title: "Remove confirm from Machine?",
+                    message: "It disappears from PurePoint on Machine and every device connected to it."
+                        + " Its 1 running agent is suspended and can be resumed once the project is added again."
+                        + " Any other session in the folder is stopped. The folder and .pu/ are kept.",
+                    confirmTitle: "Remove"))
     }
 }

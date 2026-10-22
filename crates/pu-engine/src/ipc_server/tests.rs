@@ -622,6 +622,70 @@ async fn given_subscribe_fs_should_stream_coalesced_file_events() {
     handle.abort();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_subscribe_projects_should_push_the_list_on_add_and_remove() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let root = project_root.to_string_lossy().into_owned();
+    // A loaded registry is pruned once served, which opens the stream.
+    let engine = Engine::with_project_registry(tmp.path().join("registry.json")).unwrap();
+    let server = IpcServer::bind(&sock_path, engine).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let req = serde_json::to_string(&Request::SubscribeProjects).unwrap();
+    writer
+        .write_all(format!("{req}\n").as_bytes())
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsSubscribed
+    ));
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsChanged { projects } if projects.is_empty()
+    ));
+
+    let send = |request: Request| {
+        let sock_path = sock_path.clone();
+        async move {
+            let stream = UnixStream::connect(&sock_path).await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let json = serde_json::to_string(&request).unwrap();
+            writer
+                .write_all(format!("{json}\n").as_bytes())
+                .await
+                .unwrap();
+            next_response(&mut BufReader::new(reader)).await
+        }
+    };
+    send(Request::Init {
+        project_root: root.clone(),
+    })
+    .await;
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsChanged { projects } if projects == vec![root.clone()]
+    ));
+    send(Request::RemoveProject {
+        project_root: root.clone(),
+        suspend_agents: false,
+    })
+    .await;
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsChanged { projects } if projects.is_empty()
+    ));
+
+    handle.abort();
+}
+
 async fn attachment_pair(
     engine: std::sync::Arc<Engine>,
     agent_id: String,
@@ -1395,11 +1459,11 @@ async fn assert_invalid_bytes_close_stream(sock_path: &std::path::Path, subscrib
     write_line(&mut writer, &request).await;
     let first = read_response(&mut reader).await;
     assert!(subscribed(&first), "{first:?}");
-    writer.write_all(b"\xff{}\n").await.unwrap();
-    // The daemon may already have closed the connection, so this write can fail with a
-    // broken pipe; either way the request must not run.
-    let health = serde_json::to_string(&Request::Health).unwrap() + "\n";
-    let _ = writer.write_all(health.as_bytes()).await;
+    // One write: the daemon may close as soon as it reads the bad line, and a
+    // second write would then race it and fail with a broken pipe.
+    let mut bytes = b"\xff{}\n".to_vec();
+    bytes.extend_from_slice((serde_json::to_string(&Request::Health).unwrap() + "\n").as_bytes());
+    writer.write_all(&bytes).await.unwrap();
     let responses = responses_until_close(&mut reader).await;
     assert!(
         !responses

@@ -8,7 +8,7 @@ Provide a quiet place to follow agent work: project conversation alongside compa
 
 ## Source and authority
 
-The owner approved the quiet v2 layout and v3 channel refinement, then requested implementation on 2026-10-09. The selected source is `designs/agent-watch/v3/manifest.json` and its SHA-256-pinned HTML snapshots. Implement native SwiftUI/AppKit controls, not the HTML comparison frame or sample data. Worktree screens contain no terminals. Existing file editing and workspace terminals remain available.
+The owner approved the quiet v2 layout and v3 channel refinement, then requested implementation on 2026-10-09. The selected source is [`docs/design/mockups/agent-watch/v3/manifest.json`](../design/mockups/agent-watch/v3/manifest.json) and its SHA-256-pinned HTML snapshots. Implement native SwiftUI/AppKit controls, not the HTML comparison frame or sample data. Worktree screens contain no terminals. Existing file editing and workspace terminals remain available.
 
 ## Scoped research and decisions
 
