@@ -26,6 +26,8 @@ nonisolated enum Theme {
     static let composerBackground = darkOnly((0.137, 0.137, 0.153), light: NSColor.black.withAlphaComponent(0.045))
     static let composerShadow = darkOnly((0, 0, 0), alpha: 0.3, light: .clear)
     static let userBubbleBackground = darkOnly((0.149, 0.149, 0.165), light: NSColor.black.withAlphaComponent(0.055))
+    /// The court's ball orange; deeper in light mode so lit play labels keep 4.5:1 on white.
+    static let pointGuardAccent = adaptive(dark: (1.0, 0.478, 0.102, 1.0), light: (0.74, 0.31, 0.0, 1.0))
 
     // MARK: - App Sidebar
     /// The project sidebar is a flush column beside the detail, not a floating panel.

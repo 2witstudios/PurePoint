@@ -25,7 +25,8 @@ struct ChatBubble<Content: View>: View {
     let sender: ChatBubbleSender
     var compact = false
     var assistantFill = ChatBubbleStyle.assistantFill
-    /// Text on the user fill; must contrast with `ChatBubbleStyle.userFill` in both appearances.
+    var userFill = ChatBubbleStyle.userFill
+    /// Text on the user fill; must contrast with `userFill` in both appearances.
     var userForeground = Color.white
     /// Minimum gap left beside an assistant bubble; `nil` uses the default inset.
     var assistantTrailingInset: CGFloat? = nil
@@ -40,7 +41,7 @@ struct ChatBubble<Content: View>: View {
                     .foregroundStyle(sender == .user ? userForeground : Color.primary)
                     .tint(sender == .user ? userForeground : Color.accentColor)
                     .background(
-                        sender == .user ? ChatBubbleStyle.userFill : assistantFill,
+                        sender == .user ? userFill : assistantFill,
                         in: ChatBubbleStyle.shape(sender))
             }
             if sender == .assistant { Spacer(minLength: assistantTrailingInset ?? (compact ? 28 : 48)) }

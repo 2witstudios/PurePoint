@@ -79,12 +79,13 @@ pu phone pair                 # show a one-time QR code in this terminal
 
 In the PurePoint app, open **Connections → Pair a computer → Scan pairing code**. If the terminal can't show the QR (it's too narrow, or output isn't a terminal), or you pass `--text`, `pu phone pair` prints a `purepoint-pair:` code instead. Copy it to the phone and use **Paste code**. The code works once and expires within 2 minutes (`--ttl`, at most 300 s). Leaving `pu phone pair` early in any way (Ctrl-C, closing the SSH session) revokes it.
 
-A new device can't do anything until you grant it access:
+A new device pairs with full access: agents, terminals, workspace management and Point Guard chat. Lower it per device:
 
 ```sh
 pu phone devices                                   # names, grants, chat level
-pu phone grant iPhone --terminals view             # watch agents and read Point Guard chat
-pu phone grant iPhone --terminals control --workspace on   # full control, including chat
+pu phone grant iPhone --workspace off --terminals view   # watch agents and read Point Guard chat
+pu phone grant iPhone --terminals off --workspace off    # no access
+pu phone grant iPhone --terminals control --workspace on # full control again, including chat
 pu phone rename iPhone "Work phone"
 pu phone revoke "Work phone"                       # closes its connections now
 ```

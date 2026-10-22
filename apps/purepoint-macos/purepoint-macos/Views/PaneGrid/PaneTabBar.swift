@@ -16,6 +16,7 @@ struct PaneTabBar: View {
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
     @Environment(\.showsWorkspaceSidebarToggle) private var showsWorkspaceSidebarToggle
+    @Environment(\.titlebarClearance) private var titlebarClearance
     @State private var isDropTargeted = false
     @State private var tabStripWidth: CGFloat = 0
 
@@ -63,6 +64,8 @@ struct PaneTabBar: View {
             actions
                 .fixedSize(horizontal: true, vertical: false)
         }
+        // Starts past the traffic lights in the top-left pane while the left sidebar is hidden.
+        .padding(.leading, titlebarClearance.leading)
         .frame(height: Self.height)
         .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color(nsColor: Theme.tabBarBackground))
         .overlay(alignment: .bottom) { Divider() }

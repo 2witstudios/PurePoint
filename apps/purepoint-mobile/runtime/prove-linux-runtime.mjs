@@ -236,6 +236,8 @@ try {
   assert.notEqual(replay.status, 200, "Enrollment tokens are single use");
   const devices = (await second.admin("devices.list")).devices;
   assert.equal(devices.length, 1);
+  assert.equal(devices[0].terminals, "control", "New devices pair with full access");
+  assert.equal(devices[0].workspaceManagement, true, "New devices pair with full access");
   assert.ok(!JSON.stringify(devices).includes(credential), "No credential material in device lists");
   // A device credential, or the chat token, is never owner authority.
   for (const bearer of [credential, second.chatToken])
@@ -317,7 +319,7 @@ try {
     await second.admin("devices.revoke", { deviceId });
   }
   const revoked = (await second.admin("devices.list")).devices;
-  assert.ok(revoked.find((d) => d.deviceId === deviceId).revokedAt, "Revocation is durable before success");
+  assert.ok(!revoked.some((d) => d.deviceId === deviceId), "Revocation is durable before success");
   // The revoked device's socket closes now; the other device stays connected.
   if (viewer.ws.readyState !== WebSocket.CLOSED) await once(viewer.ws, "close");
   assert.equal(manager.ws.readyState, WebSocket.OPEN);
@@ -351,7 +353,7 @@ try {
     assert.equal((await enroll(pasted, "Linux proof paste")).status, 200);
     const [exitCode] = await once(paired.child, "exit");
     assert.equal(exitCode, 0, paired.out());
-    assert.match(paired.out(), /Paired "Linux proof paste": terminals off, workspace off, chat none/);
+    assert.match(paired.out(), /Paired "Linux proof paste": terminals control, workspace on, chat send/);
     // An SSH drop (SIGHUP) before use revokes the code.
     const dropped = pairing();
     const abandoned = await dropped.code;
@@ -362,15 +364,13 @@ try {
   }
   await stop(second);
 
-  // 3. Restart: identity and trust survive; the revoked device stays revoked.
+  // 3. Restart: identity and trust survive; revoked devices stay gone.
   const third = await launch(true);
   assert.equal(third.ready.hostId, first.ready.hostId);
   assert.equal(third.ready.certificateSHA256, first.ready.certificateSHA256);
   const after = (await third.admin("devices.list")).devices;
-  assert.equal(after.length, pu ? 3 : 2);
-  assert.ok(after.find((d) => d.deviceId === deviceId).revokedAt);
-  const kept = after.find((d) => d.deviceId === tablet.deviceId);
-  assert.ok(!kept.revokedAt && kept.terminals === "off", "Grants persist across restart");
+  assert.deepEqual(after.map((d) => d.deviceId), [tablet.deviceId], "Revoked devices are not kept");
+  assert.equal(after[0].terminals, "off", "Grants persist across restart");
   await stop(third);
   console.log(
     `PASS ${inPlace ? "installed" : "relocated"} ${manifest.target} payload for pu ${manifest.puVersion}: empty HOME/stripped PATH, private Unix admin, pinned single-use enrollment, per-message grants over the pinned WebSocket, owner token separation, revocation with the other device still connected, lock collision, identity across restart${pu ? ", pu phone status/devices/grant/revoke/pair" : ""}.`,

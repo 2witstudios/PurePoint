@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>New — uncertain operation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.sec{font-size:11px;font-weight:650;letter-spacing:.04em;color:#A1A1AA;padding:18px 16px 6px}
+.grp{background:#222226;border-radius:12px;margin:0 12px;overflow:hidden}
+.row{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 14px;border-top:1px solid rgba(255,255,255,0.06)}
+.row:first-child{border-top:0}
+.seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#222226;border-radius:10px;padding:3px;gap:3px}
+.seg button{height:32px;border-radius:8px;font-size:13.5px;font-weight:600;color:#A1A1AA;text-align:center}
+.seg .on{background:#3A3A40;color:#ECECEE}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0E0E10; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 15px">
+  <div style="position: absolute; left: 10px; right: 10px; top: 46px; height: 20px; border-radius: 12px 12px 0 0; background: #18181B; opacity: 0.55"></div>
+  <section aria-label="New sheet, operation pending" style="position: absolute; left: 0; right: 0; top: 56px; bottom: 0; background: #18181B; border-radius: 12px 12px 0 0; display: flex; flex-direction: column">
+    <div style="width: 36px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.2); margin: 6px auto 0"></div>
+    <header style="display: flex; align-items: center; height: 48px; padding: 0 8px">
+      <span style="width: 64px"></span>
+      <h1 style="flex: 1; margin: 0; text-align: center; font-size: 16px; font-weight: 600">Starting Claude Code</h1>
+      <a href="Main.dc.html" style="width: 64px; height: 44px; display: grid; place-items: center; color: #FF8A3D; font-weight: 600">Close</a>
+    </header>
+
+    <div class="sec">REQUESTED</div>
+    <div class="grp">
+      <div class="row"><span style="flex: 1">Where</span><span class="mono" style="font-size: 12.5px; color: #A1A1AA">jono-mbp / pu/auth-hardening</span></div>
+      <div class="row"><span style="flex: 1">Agent</span><span style="color: #A1A1AA">Claude Code</span></div>
+    </div>
+
+    <div class="sec">STATUS</div>
+    <div class="grp" style="border: 1px solid rgba(255,179,64,0.35)">
+      <div style="padding: 14px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; color: #FFB340; font-weight: 650; font-size: 14px">
+          <svg class="ico" style="width: 16px; height: 16px" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>Uncertain
+        </div>
+        <p style="margin: 0; font-size: 14px; line-height: 1.45">The connection dropped before your Mac confirmed. Check status and the sidebar before starting anything else.</p>
+        <div class="mono" style="font-size: 11px; color: #A1A1AA">Operation 7f3c2a91-4e0b</div>
+      </div>
+      <button class="row" style="width: 100%; color: #FF8A3D; font-weight: 600">Check operation status</button>
+      <button class="row" style="width: 100%; color: #FF8A3D; font-weight: 600">Refresh workspace</button>
+    </div>
+    <p style="margin: 10px 28px 0; font-size: 12.5px; line-height: 1.45; color: #A1A1AA">Nothing is resent after reconnecting. An unknown status doesn't mean the launch failed.</p>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
