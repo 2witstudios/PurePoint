@@ -126,7 +126,7 @@ export async function acquirePrivateLock({
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        error ? reject(error) : resolve();
+        error ? reject(error) : resolve(undefined);
       };
       child.once("error", () => finish(new LockError("lock_helper_missing")));
       child.once("exit", () => finish(new LockError("lock_helper_failed")));
