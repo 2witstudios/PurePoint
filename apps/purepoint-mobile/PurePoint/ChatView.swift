@@ -443,8 +443,8 @@ struct PlaysHero: View {
             let column = min(size.width, 520)
             let logo = CGPoint(x: size.width / 2, y: top + height * 0.22)
             let spots = [
-                CGPoint(x: size.width / 2 - column * 0.29, y: top + height * 0.63), CGPoint(x: size.width / 2 + column * 0.29, y: top + height * 0.63),
-                CGPoint(x: size.width / 2 - 65, y: top + height * 0.83), CGPoint(x: size.width / 2 + 65, y: top + height * 0.83),
+                CGPoint(x: size.width / 2 - column * 0.29, y: top + height * 0.58), CGPoint(x: size.width / 2 + column * 0.29, y: top + height * 0.58),
+                CGPoint(x: size.width / 2 - 65, y: top + height * 0.74), CGPoint(x: size.width / 2 + 65, y: top + height * 0.74),
             ]
             let target = grab.flatMap { nearest(to: $0, among: spots) }
             let ball = grab ?? flight
