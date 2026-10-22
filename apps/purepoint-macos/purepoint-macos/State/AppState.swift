@@ -108,19 +108,38 @@ final class AppState {
 
     @ObservationIgnored private let service: any WorkspaceService
     @ObservationIgnored private let startProject: @MainActor (ProjectState) -> Void
+    /// Whether `restoreProjects()` follows the local daemon's project list (off in tests).
+    @ObservationIgnored private let followsLocalDaemon: Bool
     #if os(macOS)
     @ObservationIgnored private var binaryWatcher: ManifestWatcher?
     #endif
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
+    #if os(macOS)
+    /// Follows the local daemon's registered projects, which decide this Mac's sidebar.
+    @ObservationIgnored private var localProjectsSubscription: DaemonProjectsSubscription?
+    /// The local daemon's projects as last reported, to tell a removal from a project
+    /// whose `init` has not reached the daemon yet.
+    @ObservationIgnored private var lastLocalProjects = Set<String>()
+    #endif
+    /// Point Guard folders the user also opened as sidebar projects. Other Point Guard
+    /// folders stay out of the sidebar even though the daemon has them registered.
+    @ObservationIgnored private var shownPointGuardFolders = Set<String>()
+    /// Until the local daemon first reports its projects, a saved workspace selection may
+    /// belong to one that has not opened yet.
+    @ObservationIgnored private var awaitingLocalProjects = false
 
+    /// The sidebar list from before the daemon owned it; read once, then deleted.
     private static let openProjectsKey = "PurePointOpenProjects"
+    private static let shownPointGuardFoldersKey = "PurePointShownPointGuardFolders"
 
     init(
         service: any WorkspaceService = DaemonWorkspaceService(),
-        startProject: @escaping @MainActor (ProjectState) -> Void = { $0.startWatching() }
+        startProject: @escaping @MainActor (ProjectState) -> Void = { $0.startWatching() },
+        followsLocalDaemon: Bool = true
     ) {
         self.service = service
         self.startProject = startProject
+        self.followsLocalDaemon = followsLocalDaemon
         #if os(iOS)
         installLifecycleHooks()
         #endif
@@ -236,6 +255,7 @@ final class AppState {
             ?? ProjectState(projectRoot: root, service: service, registry: registry)
         project.appState = self
         projects.append(project)
+        if pointGuardFolders.contains(root) { shownPointGuardFolders.insert(root) }
         startProject(project)
         initializeActiveProjectIfNeeded(root: root)
 
@@ -258,10 +278,9 @@ final class AppState {
         }
         guard let index = projects.firstIndex(where: { $0.projectRoot == root }) else { return false }
         let project = projects.remove(at: index)
-        if root == pointGuardRoot || pointGuardFolders.contains(root)
-            || registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true
-        {
+        if isPointGuardFolder(root) {
             pointGuardFolders.insert(root)
+            shownPointGuardFolders.remove(root)
             pointGuardProjects[root] = project
         } else {
             project.stopWatching()
@@ -272,6 +291,39 @@ final class AppState {
         }
         persistOpenProjects()
         return projectState(forRoot: root) == nil
+    }
+
+    /// Whether Point Guard uses this local folder, so it must stay registered and followed
+    /// even when it is not in the sidebar.
+    func isPointGuardFolder(_ root: String) -> Bool {
+        root == pointGuardRoot || pointGuardFolders.contains(root)
+            || registry?.workspacesByProject[root]?.contains(where: \.isPointGuard) == true
+    }
+
+    /// Remove a project for every device that shows it: its machine's daemon forgets it
+    /// (`remove_project`), suspending its running agents and keeping its files, and each
+    /// device's sidebar follows. A local folder Point Guard still uses only leaves this
+    /// Mac's sidebar, since Point Guard needs it registered.
+    func removeProject(_ project: ProjectState) async throws {
+        if project.isRemote {
+            guard let machine = machines.first(where: { $0.machine.id == project.key.machineId }) else { return }
+            try await machine.removeProject(root: project.key.root, suspendAgents: true)
+            if activeProjectRoot == project.projectId { activeProjectRoot = projects.first?.projectRoot }
+            return
+        }
+        let root = project.projectRoot
+        if !isPointGuardFolder(root) {
+            let client = DaemonEndpoint.local.makeClient()
+            switch try await client.send(.removeProject(projectRoot: root, suspendAgents: true)) {
+            case .projectRemoved:
+                break
+            case .error(_, let message):
+                throw MachineOpenProjectError(message: message)
+            default:
+                throw MachineOpenProjectError(message: "The daemon did not remove \(root).")
+            }
+        }
+        closeProject(root)
     }
 
     /// Whether a path is too broad to open as a project: `/`, `$HOME`, or an ancestor
@@ -293,12 +345,20 @@ final class AppState {
         return false
     }
 
+    /// Open the projects this Mac shows. With a root (`--project-root`) only that one; otherwise
+    /// the local daemon's registered projects, followed from then on, so a project added or
+    /// removed on any device, or with `pu projects`, is added or removed here too.
     func restoreProjects(projectRoot: String? = nil) {
+        // The list saved before the daemon owned it is opened once, which registers each
+        // project with the daemon, and then deleted.
         let paths = projectRoot.map { [$0] }
             ?? UserDefaults.standard.stringArray(forKey: Self.openProjectsKey) ?? []
-        // Opening projects persists current state, so snapshot both saved lists first.
+        if projectRoot == nil { UserDefaults.standard.removeObject(forKey: Self.openProjectsKey) }
+        // Opening projects persists current state, so snapshot the saved lists first.
         let savedPointGuardFolders = UserDefaults.standard.stringArray(forKey: "PurePointPointGuardFolders") ?? []
         pointGuardFolders.formUnion(savedPointGuardFolders)
+        shownPointGuardFolders.formUnion(
+            UserDefaults.standard.stringArray(forKey: Self.shownPointGuardFoldersKey) ?? [])
         for path in paths {
             guard projectRoot != nil || FileManager.default.fileExists(atPath: path) else { continue }
             guard !isTooBroadProjectRoot(path) else { continue }
@@ -309,8 +369,56 @@ final class AppState {
             guard !isTooBroadProjectRoot(root) else { continue }
             ensurePointGuardProject(root: root)
         }
+        #if os(macOS)
+        if projectRoot == nil, followsLocalDaemon { followLocalProjects() }
+        #endif
         // Workspace layouts load lazily in WorkspaceRegistry.reconcile, on the first
         // manifest read for each project.
+    }
+
+    #if os(macOS)
+    private func followLocalProjects() {
+        guard localProjectsSubscription == nil else { return }
+        let subscription = DaemonProjectsSubscription(client: DaemonEndpoint.local.makeClient())
+        localProjectsSubscription = subscription
+        awaitingLocalProjects = true
+        Task {
+            // The daemon holds the project list, so it runs even before any project opens.
+            try? await DaemonLifecycle.ensureDaemon()
+            await subscription.start { [weak self] roots in self?.applyLocalProjects(roots) }
+        }
+    }
+    #endif
+
+    /// Match the sidebar to the local daemon's projects. A project that left the list was
+    /// removed (on another device, or with `pu projects remove`) and closes here; one that
+    /// joined opens, unless it is a Point Guard folder the user has not opened.
+    func applyLocalProjects(_ roots: [String]) {
+        #if os(macOS)
+        let registered = Set(roots)
+        // The daemon reports canonical roots; a project may have been opened by another path.
+        let canonical = Dictionary(
+            projects.map { (Self.canonicalPath($0.projectRoot), $0.projectRoot) }, uniquingKeysWith: { first, _ in first })
+        for root in lastLocalProjects.subtracting(registered) {
+            if let open = canonical[root] { closeProject(open) }
+        }
+        let hidden = Set(pointGuardProjects.keys.filter { !shownPointGuardFolders.contains($0) }.map(Self.canonicalPath))
+        for root in roots where canonical[root] == nil {
+            guard FileManager.default.fileExists(atPath: root), !isTooBroadProjectRoot(root) else { continue }
+            if hidden.contains(root) { continue }
+            openProject(root)
+        }
+        lastLocalProjects = registered
+        awaitingLocalProjects = false
+        #endif
+    }
+
+    /// The path with symlinks resolved, as the daemon's `canonicalize` reports it (unlike
+    /// `URL.resolvingSymlinksInPath`, which drops `/private`).
+    nonisolated static func canonicalPath(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     // MARK: - Machines
@@ -451,7 +559,8 @@ final class AppState {
 
     private func ensurePointGuardProject(root: String) {
         pointGuardFolders.insert(root)
-        UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
+        if projects.contains(where: { $0.projectRoot == root }) { shownPointGuardFolders.insert(root) }
+        persistOpenProjects()
         #if os(macOS)
         guard projectState(forRoot: root) == nil else { return }
         let project = ProjectState(projectRoot: root, service: service, registry: registry)
@@ -671,7 +780,9 @@ final class AppState {
             return pendingId
         }
         // An unreachable machine may never load its layouts; it must not hold the selection.
-        if localManagedProjects.allSatisfy({ registry.workspacesByProject[$0.projectId] != nil }) {
+        if !awaitingLocalProjects,
+            localManagedProjects.allSatisfy({ registry.workspacesByProject[$0.projectId] != nil })
+        {
             pendingSelectWorkspaceId = nil
         }
         return nil
@@ -679,9 +790,10 @@ final class AppState {
 
     // MARK: - Private
 
+    /// The daemon keeps which projects exist; this Mac only keeps which Point Guard folders
+    /// it shows.
     private func persistOpenProjects() {
-        let paths = projects.map(\.projectRoot)
-        UserDefaults.standard.set(paths, forKey: Self.openProjectsKey)
+        UserDefaults.standard.set(Array(shownPointGuardFolders), forKey: Self.shownPointGuardFoldersKey)
         UserDefaults.standard.set(Array(pointGuardFolders), forKey: "PurePointPointGuardFolders")
     }
 

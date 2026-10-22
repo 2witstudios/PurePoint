@@ -113,6 +113,21 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::InitResult { created } => {
             system::print_init_result(*created);
         }
+        Response::ProjectRemoved {
+            project_root,
+            removed,
+            suspended,
+        } => {
+            system::print_project_removed(project_root, *removed, suspended);
+        }
+        Response::ProjectsSubscribed => {
+            println!("Projects subscription active");
+        }
+        Response::ProjectsChanged { projects } => {
+            for root in projects {
+                println!("{root}");
+            }
+        }
         Response::SpawnResult {
             worktree_id,
             agent_id,

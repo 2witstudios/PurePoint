@@ -19,6 +19,7 @@ enum SidebarMenuAction: Equatable {
     case deleteWorktree
     case killAllProjectAgents
     case retryLayout
+    case hideProject
     case removeProject
     case newAgentInWorktree
     case newTerminalInWorktree
@@ -125,8 +126,26 @@ enum SidebarMenus {
         if project.isRemote, project.registry?.layoutErrorsByProject[project.projectId] != nil {
             entries.append(.action("Retry Layout", .retryLayout))
         }
-        entries.append(.action("Remove Project\u{2026}", .removeProject))
+        if project.isRemote {
+            // Hiding is this device's choice; removing changes the machine for every device.
+            entries.append(.action("Hide on \(deviceTitle)\u{2026}", .hideProject))
+            entries.append(.action("Remove from \(machineName(of: project))\u{2026}", .removeProject))
+        } else {
+            entries.append(.action("Remove Project\u{2026}", .removeProject))
+        }
         return entries
+    }
+
+    private static var deviceTitle: String {
+        #if os(macOS)
+        "This Mac"
+        #else
+        "This iPad"
+        #endif
+    }
+
+    static func machineName(of project: ProjectState) -> String {
+        project.appState?.machines.first { $0.machine.id == project.key.machineId }?.machine.name ?? "Machine"
     }
 }
 
@@ -191,20 +210,41 @@ extension SidebarConfirmation {
             message: "This will kill \(aliveCount) running agent\(aliveCount == 1 ? "" : "s") in this project.")
     }
 
+    static func hideProject(_ project: ProjectState) -> SidebarConfirmation {
+        SidebarConfirmation(
+            title: "Hide \(project.projectName)?",
+            message: "This hides the project in PurePoint on \(deviceName). Nothing on the remote machine is changed."
+                + unsavedWarning(unsavedFileNames(in: project)),
+            confirmTitle: "Hide")
+    }
+
     static func removeProject(_ project: ProjectState) -> SidebarConfirmation {
-        let unsaved =
-            project.isRemote
-            ? project.appState?.machines.first { $0.machine.id == project.key.machineId }?.unsavedFileNames(in: project)
-                ?? []
-            : []
+        if !project.isRemote, project.appState?.isPointGuardFolder(project.projectRoot) == true {
+            return SidebarConfirmation(
+                title: "Remove \(project.projectName)?",
+                message: "Point Guard still uses this folder, so it only leaves the sidebar on this Mac.",
+                confirmTitle: "Remove")
+        }
+        let machine = project.isRemote ? SidebarMenus.machineName(of: project) : nil
+        let aliveCount = project.allAgents.filter { $0.status.isAlive && !$0.suspended }.count
+        let agents =
+            aliveCount == 0
+            ? ""
+            : " Its \(aliveCount) running agent"
+                + (aliveCount == 1 ? " is suspended and resumes" : "s are suspended and resume")
+                + " when the project is added again."
         return SidebarConfirmation(
-            title: "Remove \(project.projectName)?",
-            message: project.isRemote
-                ? "This hides the project in PurePoint on \(deviceName). Nothing on the remote machine is changed."
-                    + unsavedWarning(unsaved)
-                : "This will close the project in PurePoint and delete .pu/manifest.json and .pu/agents/. "
-                    + "The project folder will not be deleted.",
+            title: machine.map { "Remove \(project.projectName) from \($0)?" } ?? "Remove \(project.projectName)?",
+            message: "It disappears from PurePoint on \(machine ?? "this Mac") and every device connected to it."
+                + agents + " The folder, including .pu/, is not changed."
+                + unsavedWarning(unsavedFileNames(in: project)),
             confirmTitle: "Remove")
+    }
+
+    private static func unsavedFileNames(in project: ProjectState) -> [String] {
+        guard project.isRemote else { return [] }
+        return project.appState?.machines.first { $0.machine.id == project.key.machineId }?
+            .unsavedFileNames(in: project) ?? []
     }
 
     /// The device a hidden project stays hidden on.

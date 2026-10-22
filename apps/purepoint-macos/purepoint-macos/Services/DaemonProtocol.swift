@@ -299,7 +299,12 @@ nonisolated enum DaemonRequest: Encodable {
     case channelEdit(projectRoot: String, messageId: String, text: String)
     case channelReact(projectRoot: String, messageId: String, active: Bool)
     case health
+    /// Adds the folder to the daemon's projects, initializing it if needed.
     case initProject(projectRoot: String)
+    /// Forgets a project on the daemon for every device; its files are untouched (protocol 13).
+    case removeProject(projectRoot: String, suspendAgents: Bool = false)
+    /// Streams the daemon's registered project roots, now and on every change (protocol 13).
+    case subscribeProjects
     case status(projectRoot: String, agentId: String? = nil)
     case attach(agentId: String, clientId: String? = nil)
     case input(agentId: String, data: Data)
@@ -405,6 +410,12 @@ nonisolated enum DaemonRequest: Encodable {
         case .initProject(let projectRoot):
             try container.encode("init", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
+        case .removeProject(let projectRoot, let suspendAgents):
+            try container.encode("remove_project", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(suspendAgents, forKey: .key("suspend_agents"))
+        case .subscribeProjects:
+            try container.encode("subscribe_projects", forKey: .key("type"))
         case .status(let projectRoot, let agentId):
             try container.encode("status", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -666,6 +677,9 @@ nonisolated enum DaemonResponse: Decodable {
     case channelMessage(ChannelMutation)
     case healthReport(pid: Int, uptimeSeconds: Int, protocolVersion: Int, agentCount: Int)
     case initResult(created: Bool)
+    case projectRemoved(projectRoot: String, removed: Bool, suspended: [String])
+    case projectsSubscribed
+    case projectsChanged(projects: [String])
     case statusReport(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
     case resync
     case ptySize(cols: Int, rows: Int, ownerClientId: String?)
@@ -730,6 +744,13 @@ nonisolated enum DaemonResponse: Decodable {
         case "init_result":
             let p = try InitResultPayload(from: decoder)
             self = .initResult(created: p.created)
+        case "project_removed":
+            let p = try ProjectRemovedPayload(from: decoder)
+            self = .projectRemoved(projectRoot: p.projectRoot, removed: p.removed, suspended: p.suspended)
+        case "projects_subscribed":
+            self = .projectsSubscribed
+        case "projects_changed":
+            self = .projectsChanged(projects: try ProjectsChangedPayload(from: decoder).projects)
         case "status_report":
             let p = try StatusReportPayload(from: decoder)
             self = .statusReport(worktrees: p.worktrees, agents: p.agents)
@@ -1033,6 +1054,22 @@ private nonisolated struct InitResultPayload: Decodable {
     let created: Bool
 }
 
+private nonisolated struct ProjectRemovedPayload: Decodable {
+    let projectRoot: String
+    let removed: Bool
+    let suspended: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case projectRoot = "project_root"
+        case removed
+        case suspended
+    }
+}
+
+private nonisolated struct ProjectsChangedPayload: Decodable {
+    let projects: [String]
+}
+
 private nonisolated struct HealthReportPayload: Decodable {
     let pid: Int
     let uptimeSeconds: Int
@@ -1215,7 +1252,7 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
 nonisolated enum DaemonProtocol {
     /// The protocol this app speaks. A daemon reporting another version is incompatible.
-    static let version = 12
+    static let version = 13
 }
 
 nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {

@@ -306,6 +306,56 @@ pub(super) async fn handle_status_stream(
     true
 }
 
+async fn send_projects(writer: &mut IpcWriter, engine: &Engine) -> bool {
+    let mut projects = engine.registered_projects();
+    projects.sort();
+    write_response(writer, &Response::ProjectsChanged { projects })
+        .await
+        .is_ok()
+}
+
+/// Streaming project registry: pushes the full list of registered roots now
+/// and after every add or remove, so every client shows the same projects.
+pub(super) async fn handle_projects_stream(
+    reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
+    writer: &mut IpcWriter,
+    engine: &Engine,
+) -> bool {
+    // Subscribe before the first send so no change between them is missed.
+    let mut rx = engine.subscribe_projects();
+    if !send_projects(writer, engine).await {
+        return true;
+    }
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        while rx.try_recv().is_ok() {}
+                        if !send_projects(writer, engine).await {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            frame = read_frame(reader, partial) => {
+                match frame {
+                    // Any request ends the projects stream.
+                    Ok(Frame::Line(_)) | Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    Err(_) => return false,
+                }
+            }
+        }
+    }
+    true
+}
+
 async fn write_output_chunks(
     writer: &mut IpcWriter,
     agent_id: &str,

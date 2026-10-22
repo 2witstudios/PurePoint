@@ -104,10 +104,10 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// List projects known to the daemon
+    /// List, add or remove the projects the daemon serves
     Projects {
         #[command(subcommand)]
-        action: InventoryAction,
+        action: ProjectsAction,
     },
     /// List agent instances (saved definitions use `pu agent`)
     Agents {
@@ -599,6 +599,34 @@ enum InventoryAction {
 }
 
 #[derive(Subcommand)]
+enum ProjectsAction {
+    /// List all registered projects by default; --project narrows the scope
+    List {
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a folder as a project, initializing it if needed (same as `pu init`)
+    Add {
+        /// Project folder (default: --project, then the current directory)
+        path: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a project from this daemon on every device; its files are kept
+    Remove {
+        /// Project folder (default: --project, then the current directory)
+        path: Option<String>,
+        /// Suspend the project's running agents instead of refusing
+        #[arg(long)]
+        suspend_agents: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ScheduleAction {
     /// List schedules
     List {
@@ -860,14 +888,7 @@ async fn async_main() {
                 commands::status::run(&socket, agent, json).await
             }
         }
-        Commands::Projects { action } => {
-            commands::inventory::run_list(
-                &socket,
-                pu_core::protocol::InventoryKind::Projects,
-                action,
-            )
-            .await
-        }
+        Commands::Projects { action } => commands::projects::run(&socket, action).await,
         Commands::Agents { action } => {
             commands::inventory::run_list(&socket, pu_core::protocol::InventoryKind::Agents, action)
                 .await
@@ -1177,6 +1198,16 @@ mod tests {
         for args in [
             vec!["pu", "status", "--global", "--json"],
             vec!["pu", "projects", "list", "--json"],
+            vec!["pu", "projects", "add", "--json"],
+            vec!["pu", "projects", "add", "/project"],
+            vec![
+                "pu",
+                "projects",
+                "remove",
+                "/project",
+                "--suspend-agents",
+                "--json",
+            ],
             vec!["pu", "agents", "list", "--state", "running", "--json"],
             vec!["pu", "worktrees", "list", "--global", "--json"],
         ] {

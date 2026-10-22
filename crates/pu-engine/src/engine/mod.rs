@@ -89,8 +89,10 @@ pub struct Engine {
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
-    /// Projects that have been initialized or used — scheduler scans these.
+    /// Projects added with `Init` and not removed since — scheduler scans these.
     registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Signalled whenever a project is added to or removed from the registry.
+    projects_changed: tokio::sync::broadcast::Sender<()>,
     /// Agents with a resume in progress, so two resumes of one agent can never
     /// both spawn `claude --resume` on the same transcript.
     resuming: Arc<std::sync::Mutex<HashSet<String>>>,
@@ -205,6 +207,7 @@ impl Engine {
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
             registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            projects_changed: tokio::sync::broadcast::channel(16).0,
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
@@ -436,6 +439,14 @@ impl Engine {
                 }
                 response
             }
+            Request::RemoveProject {
+                project_root,
+                suspend_agents,
+            } => {
+                self.handle_remove_project(&project_root, suspend_agents)
+                    .await
+            }
+            Request::SubscribeProjects => Response::ProjectsSubscribed,
             Request::Rename {
                 project_root,
                 agent_id,

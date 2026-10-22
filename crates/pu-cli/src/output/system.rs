@@ -24,6 +24,21 @@ pub(crate) fn print_init_result(created: bool) {
     }
 }
 
+pub(crate) fn print_project_removed(project_root: &str, removed: bool, suspended: &[String]) {
+    if !removed {
+        println!("{project_root} was not a registered project");
+        return;
+    }
+    println!("{} {project_root}", "Removed".green());
+    if !suspended.is_empty() {
+        println!(
+            "  Suspended {} agent(s); they resume when the project is added again",
+            suspended.len()
+        );
+    }
+    println!("  Files, including .pu/, were not changed");
+}
+
 pub(crate) fn print_config_report(default_agent: &str, agents: &[AgentConfigInfo]) {
     println!("{}", "Agent Configuration".bold());
     println!("  Default agent: {}", default_agent.green());

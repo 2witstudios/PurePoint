@@ -438,6 +438,7 @@ struct MobileProjectsView: View {
     @AccessibilityFocusState private var focusedAgent: String?
     @State private var launch: WorkspaceLaunchTarget?
     @State private var stop: AgentShortcut?
+    @State private var confirmRemove = false
     private var machine: AgentMachine? { model.machines.first { $0.id == machineID } }
     private var project: WorkspaceProject? { machine?.registeredProjects?.first { $0.id == projectID } }
     var body: some View {
@@ -459,6 +460,17 @@ struct MobileProjectsView: View {
                 self.stop = nil
             }
         } message: { Text(stop.map { "Stop \($0.agent.name) on \($0.machine.name), \($0.agent.projectRoot ?? "unknown project")? Other agents keep running." } ?? "") }
+        .confirmationDialog(
+            "Remove \(project?.name ?? "project") from \(machine?.name ?? "the machine")?", isPresented: $confirmRemove,
+            titleVisibility: .visible
+        ) {
+            Button("Remove from \(machine?.name ?? "machine")", role: .destructive) {
+                guard let machine, let project else { return }
+                launch = WorkspaceLaunchTarget(host: model.bridgeIdentity, machine: machine.id, machineName: machine.name, project: project.id, projectName: project.name, worktree: nil, kind: "removeProject")
+            }
+        } message: {
+            Text("It disappears from PurePoint on every device connected to \(machine?.name ?? "the machine"). Running agents are suspended and resume when the project is added again. Files, including .pu/, are not changed.")
+        }
         .task { await model.refresh() }
         .onChange(of: model.bridgeIdentity) { _, _ in projectID = nil; machineID = nil; highlighted = nil; launch = nil; stop = nil }
     }
@@ -496,6 +508,14 @@ struct MobileProjectsView: View {
                 }
                 .disabled(!model.canManage || !machine.online || !project.available)
                 .accessibilityLabel("New agent, worktree or terminal")
+                Menu {
+                    Button("Remove from \(machine.name)\u{2026}", systemImage: "trash", role: .destructive) { confirmRemove = true }
+                        // Older daemons cannot forget a project for every device.
+                        .disabled(!model.canManage || !machine.online || (machine.protocolVersion ?? 0) < 13)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("Project actions")
             } else {
                 Button { Task { await model.refresh() } } label: {
                     if model.loading { ProgressView() } else { Image(systemName: "arrow.clockwise") }
@@ -797,7 +817,7 @@ struct WorkspaceLaunchForm: View {
     // Mirrors the bridge: blank instructions add nothing to the preset.
     private func expandedPrompt(_ preset: WorkspaceCatalog.Preset) -> String { hasInstructions ? preset.prompt + "\n\n" + draft.prompt : preset.prompt }
     private var valid: Bool {
-        guard model.canManage, model.bridgeIdentity == target.host, model.machines.contains(where: { $0.id == target.machine && $0.online && $0.metadataStatus != "error" && $0.registeredProjects?.contains(where: { $0.id == target.project && $0.available }) == true }), draft.operationId == nil, !submitting else { return false }
+        guard model.canManage, model.bridgeIdentity == target.host, model.machines.contains(where: { $0.id == target.machine && $0.online && $0.metadataStatus != "error" && $0.registeredProjects?.contains(where: { $0.id == target.project && ($0.available || target.kind == "removeProject") }) == true }), draft.operationId == nil, !submitting else { return false }
         if target.kind == "rename" || target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree") {
             guard !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draft.name.utf8.count <= 80, !draft.name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
         }
@@ -882,15 +902,15 @@ struct WorkspaceLaunchForm: View {
                         Text("No operation is replayed after reconnect. Unknown status is not proof that launch failed.").font(.caption)
                     } else {
                         Text("\(target.machineName) / \(target.projectName) / \(draft.destination == "root" ? "project root" : draft.destination == "newWorktree" ? draft.name : draft.worktree)").font(.caption).foregroundStyle(.secondary)
-                        Button(role: target.kind == "stop" ? .destructive : nil) { Task { await submit() } } label: {
+                        Button(role: destructive ? .destructive : nil) { Task { await submit() } } label: {
                             Text(actionTitle).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 36)
                                 // The accent is near-white in dark mode, so the default white label would vanish.
-                                .foregroundStyle(target.kind == "stop" ? Color.white : Color(uiColor: .systemBackground))
-                        }.buttonStyle(.borderedProminent).tint(target.kind == "stop" ? Color.red : Color.accentColor).disabled(!valid)
+                                .foregroundStyle(destructive ? Color.white : Color(uiColor: .systemBackground))
+                        }.buttonStyle(.borderedProminent).tint(destructive ? Color.red : Color.accentColor).disabled(!valid)
                     }
                 }
             }
-            .navigationTitle(kind != nil ? "New in \(target.projectName)" : target.kind == "rename" ? "Rename agent" : target.kind == "stop" ? "Stop agent" : "New \(target.kind == "createWorktree" ? "worktree" : target.kind == "spawn" ? "agent" : "terminal")")
+            .navigationTitle(kind != nil ? "New in \(target.projectName)" : target.kind == "rename" ? "Rename agent" : target.kind == "stop" ? "Stop agent" : target.kind == "removeProject" ? "Remove project" : "New \(target.kind == "createWorktree" ? "worktree" : target.kind == "spawn" ? "agent" : "terminal")")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { save(); dismiss() }.keyboardShortcut(.cancelAction) } }
             .task {
                 if let data = UserDefaults.standard.data(forKey: key), let saved = try? JSONDecoder().decode(WorkspaceFormDraft.self, from: data) { draft = saved }
@@ -907,6 +927,7 @@ struct WorkspaceLaunchForm: View {
             .onDisappear { save() }
         }
     }
+    private var destructive: Bool { target.kind == "stop" || target.kind == "removeProject" }
     private var actionTitle: String {
         switch target.kind {
         case "spawn": return "Start agent"
@@ -914,6 +935,7 @@ struct WorkspaceLaunchForm: View {
         case "terminal": return "Open terminal"
         case "rename": return "Rename agent"
         case "stop": return "Confirm stop exact agent"
+        case "removeProject": return "Remove from \(target.machineName)"
         default: return "Confirm \(target.kind)"
         }
     }
@@ -941,7 +963,7 @@ struct WorkspaceLaunchForm: View {
         if target.kind == "rename" || target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree") { fields["name"] = draft.name }
         if target.kind == "createWorktree" || (target.kind == "spawn" && draft.destination == "newWorktree"), !draft.base.isEmpty { fields["base"] = draft.base }
         if let agent = target.agent { fields["agentId"] = agent }
-        if target.kind == "stop" { fields["confirm"] = true }
+        if target.kind == "stop" || target.kind == "removeProject" { fields["confirm"] = true }
         do {
             let result = try await model.workspaceRequest("workspace." + target.kind, fields: fields)
             draft.state = result.state; draft.message = result.message

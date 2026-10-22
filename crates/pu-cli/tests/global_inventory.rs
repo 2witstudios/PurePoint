@@ -336,3 +336,46 @@ async fn given_cli_outside_projects_should_query_and_control_agents_globally_wit
     wire(&socket, Request::Shutdown).await;
     handle.await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_projects_add_and_remove_should_change_what_every_client_lists() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let socket = tmp.path().join("test.sock");
+    let registry = pu_core::paths::project_registry_path(&socket);
+    let engine = pu_engine::engine::Engine::with_project_registry(registry).unwrap();
+    let server = pu_engine::ipc_server::IpcServer::bind(&socket, engine).unwrap();
+    let handle = tokio::spawn(async move {
+        server.run().await.unwrap();
+    });
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let root = project.canonicalize().unwrap();
+    let root_s = root.to_str().unwrap();
+
+    // A relative path resolves against the current directory.
+    let added = json(
+        &socket,
+        tmp.path(),
+        &["projects", "add", "project", "--json"],
+    )
+    .await;
+    assert_eq!(added["created"], true);
+    let listed = json(&socket, tmp.path(), &["projects", "list", "--json"]).await;
+    assert_eq!(listed["projects"][0]["project_root"], root_s);
+
+    let removed = json(
+        &socket,
+        tmp.path(),
+        &["projects", "remove", root_s, "--json"],
+    )
+    .await;
+    assert_eq!(removed["removed"], true);
+    assert!(root.join(".pu/manifest.json").exists());
+    let listed = json(&socket, tmp.path(), &["projects", "list", "--json"]).await;
+    assert_eq!(listed["projects"], serde_json::json!([]));
+    match wire(&socket, Request::Health).await {
+        Response::HealthReport { projects, .. } => assert!(projects.is_empty()),
+        other => panic!("unexpected {other:?}"),
+    }
+    handle.abort();
+}

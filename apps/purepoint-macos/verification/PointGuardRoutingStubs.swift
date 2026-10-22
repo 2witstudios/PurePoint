@@ -62,12 +62,22 @@ enum FileIOService {
     func disconnectForTermination(deadline: DispatchTime) {}
     func update(from machine: Machine) {}
     func hideProject(root: String) {}
+    func removeProject(root: String, suspendAgents: Bool) async throws {}
     static func isUserDisconnected(_ id: UUID) -> Bool { true }
 }
 enum DaemonLifecycle {
     static func findBinary() -> String? { nil }
     static func didLaunchDaemon() async -> Bool { false }
     static func restartDaemon() async throws {}
+    static func ensureDaemon() async throws {}
+}
+struct MachineOpenProjectError: LocalizedError {
+    let message: String
+}
+actor DaemonProjectsSubscription {
+    init(client: DaemonClient) {}
+    func start(onChange: @escaping @MainActor ([String]) -> Void) async {}
+    func stop() {}
 }
 @MainActor final class ManifestWatcher {
     init(path: String, onChange: @escaping () -> Void) {}
@@ -82,6 +92,7 @@ enum DaemonLifecycle {
 @MainActor final class ProjectState {
     let projectRoot: String
     var projectId: String { projectRoot }
+    var key: ProjectKey { ProjectKey(id: projectRoot) }
     var isRemote: Bool { false }
     let host: any ProjectHost = LocalProjectHost.shared
     let client = DaemonClient()

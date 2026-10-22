@@ -67,6 +67,17 @@ impl Engine {
         tx.subscribe()
     }
 
+    // --- Project Registry Push ---
+
+    /// Receiver signalled on every registry change (used by the IPC server).
+    pub fn subscribe_projects(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.projects_changed.subscribe()
+    }
+
+    pub(super) fn notify_projects_changed(&self) {
+        let _ = self.projects_changed.send(());
+    }
+
     // --- Status Push ---
 
     pub(super) async fn handle_subscribe_status(&self, project_root: &str) -> Response {

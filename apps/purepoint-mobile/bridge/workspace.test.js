@@ -25,6 +25,7 @@ async function fixture(t) {
     legacy = false,
     drop = false,
     holdMetadata = false,
+    protocolVersion = 10,
     catalogKeys = ["custom"],
     presetType = "custom";
   const server = net.createServer((socket) => {
@@ -53,7 +54,7 @@ async function fixture(t) {
         requests.push(r);
         events.emit(r.type, r);
         if (r.type === "health")
-          send({ type: "health_report", protocol_version: 10 });
+          send({ type: "health_report", protocol_version: protocolVersion });
         else if (r.type === "inventory") {
           if (holdMetadata) continue;
           if (partial && r.kind === "worktrees")
@@ -141,6 +142,13 @@ async function fixture(t) {
           send({ type: "kill_result", killed: [r.target.agent] });
         else if (r.type === "create_worktree")
           send({ type: "create_worktree_result", worktree_id: "wt-created" });
+        else if (r.type === "remove_project")
+          send({
+            type: "project_removed",
+            project_root: r.project_root,
+            removed: true,
+            suspended: [],
+          });
       }
     });
   });
@@ -178,6 +186,9 @@ async function fixture(t) {
     },
     holdMetadata(v) {
       holdMetadata = v;
+    },
+    protocolVersion(v) {
+      protocolVersion = v;
     },
     partial(v) {
       partial = v;
@@ -911,4 +922,31 @@ test("terminal, worktree, rename and stop retain their 65-second bridge caps and
     ).length,
     4,
   );
+});
+
+test("project removal needs confirmation and a daemon that can forget projects for every device", async (t) => {
+  const f = await fixture(t),
+    c = f.connect();
+  t.after(c.dispose);
+  const remove = (operationId, extra = {}) =>
+    c.request({
+      op: "workspace.removeProject",
+      operationId,
+      machine: "local",
+      projectId: "/registered",
+      ...extra,
+    });
+  assert.equal((await remove("remove-0001")).state, "failed");
+  const old = await remove("remove-0002", { confirm: true });
+  assert.equal(old.state, "failed");
+  assert.match(old.message, /Update the machine's daemon/);
+  assert.equal(f.requests.filter((r) => r.type === "remove_project").length, 0);
+
+  f.protocolVersion(13);
+  const removed = await remove("remove-0003", { confirm: true });
+  assert.equal(removed.state, "succeeded");
+  const sent = f.requests.filter((r) => r.type === "remove_project");
+  assert.deepEqual(sent, [
+    { type: "remove_project", project_root: "/registered", suspend_agents: true },
+  ]);
 });

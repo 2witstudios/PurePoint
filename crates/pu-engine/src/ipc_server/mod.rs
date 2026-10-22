@@ -50,6 +50,7 @@ enum StreamMode {
     Attach(String, Option<pu_core::protocol::Replay>, Option<String>),
     Grid(String),
     Status(String),
+    Projects,
     Fs { root: String, recursive: bool },
 }
 
@@ -63,6 +64,7 @@ impl StreamMode {
             } => Self::Attach(agent_id.clone(), *replay, client_id.clone()),
             Request::SubscribeGrid { project_root } => Self::Grid(project_root.clone()),
             Request::SubscribeStatus { project_root } => Self::Status(project_root.clone()),
+            Request::SubscribeProjects => Self::Projects,
             Request::SubscribeFs { root, recursive } => Self::Fs {
                 root: root.clone(),
                 recursive: *recursive,
@@ -369,6 +371,11 @@ impl IpcServer {
                         &project_root,
                     )
                     .await;
+                }
+            }
+            StreamMode::Projects => {
+                if matches!(response, Response::ProjectsSubscribed) {
+                    return streams::handle_projects_stream(reader, pending, writer, engine).await;
                 }
             }
             StreamMode::Fs { root, recursive } => {

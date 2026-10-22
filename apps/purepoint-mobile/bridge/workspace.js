@@ -5,6 +5,8 @@ export const workspaceFeatures = Object.freeze({
   inventory: true,
   management: true,
   operationStatus: true,
+  // Daemons at protocol 13 or later can forget a project for every device.
+  projectRemoval: true,
 });
 export const workspaceOperations = [
   "workspace.catalog",
@@ -14,6 +16,7 @@ export const workspaceOperations = [
   "workspace.terminal",
   "workspace.rename",
   "workspace.stop",
+  "workspace.removeProject",
 ];
 const fail = (code, message) => {
   throw new Error(`workspace_${code}: ${message}`);
@@ -114,6 +117,7 @@ const fields = {
   "workspace.terminal": ["target", "worktreeId"],
   "workspace.rename": ["agentId", "name"],
   "workspace.stop": ["agentId", "confirm"],
+  "workspace.removeProject": ["confirm"],
 };
 const fingerprint = (request) =>
   JSON.stringify(
@@ -162,7 +166,11 @@ export function workspaceConnection({
     if (metadata.metadataStatus !== "complete")
       fail("unsupported", "Complete authoritative project metadata required");
     const project = metadata.projects.find((p) => p.id === r.projectId);
-    if (!project || !project.available)
+    // An unavailable project can still be removed; nothing else runs in one.
+    if (
+      !project ||
+      (!project.available && r.op !== "workspace.removeProject")
+    )
       fail("target", "Registered available project required");
     return { machine, metadata, project };
   };
@@ -341,6 +349,21 @@ export function workspaceConnection({
             exclude: [],
           };
         }
+      } else if (r.op === "workspace.removeProject") {
+        if (r.confirm !== true)
+          fail("invalid", "Explicit removal confirmation required");
+        const { version } = await daemons.inspect(machine, {
+          signal: abort.signal,
+        });
+        check();
+        if (version < 13)
+          fail("unsupported", "Update the machine's daemon to remove projects");
+        // Running agents are suspended, not killed: they resume if the project is added again.
+        ipc = {
+          type: "remove_project",
+          project_root: project.id,
+          suspend_agents: true,
+        };
       } else if (r.op === "workspace.createWorktree") {
         if (!bounded(r.name, 80)) fail("invalid", "Worktree name required");
         ipc = {
@@ -442,6 +465,7 @@ export function workspaceConnection({
         "workspace.createWorktree": "create_worktree_result",
         "workspace.rename": "rename_result",
         "workspace.stop": "kill_result",
+        "workspace.removeProject": "project_removed",
       }[r.op];
       if (reply.type !== expected) throw new Error("Unexpected daemon receipt");
       entry.result = {

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{AgentStatus, WorktreeEntry};
 use indexmap::IndexMap;
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -93,6 +93,16 @@ pub enum Request {
     Init {
         project_root: String,
     },
+    /// Forget a registered project on this daemon. Files, including `.pu/`, are
+    /// untouched, so a later `Init` brings the project back as it was.
+    RemoveProject {
+        project_root: String,
+        /// Suspend the project's live agents instead of refusing the removal.
+        #[serde(default)]
+        suspend_agents: bool,
+    },
+    /// Stream the registered project roots: once now, then on every change.
+    SubscribeProjects,
     Spawn {
         project_root: String,
         prompt: String,
@@ -509,6 +519,16 @@ pub enum Response {
     },
     InitResult {
         created: bool,
+    },
+    ProjectRemoved {
+        project_root: String,
+        /// False when the root was not registered.
+        removed: bool,
+        suspended: Vec<String>,
+    },
+    ProjectsSubscribed,
+    ProjectsChanged {
+        projects: Vec<String>,
     },
     SpawnResult {
         worktree_id: Option<String>,

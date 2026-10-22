@@ -622,6 +622,68 @@ async fn given_subscribe_fs_should_stream_coalesced_file_events() {
     handle.abort();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn given_subscribe_projects_should_push_the_list_on_add_and_remove() {
+    let tmp = TempDir::new().unwrap();
+    let sock_path = tmp.path().join("test.sock");
+    let project_root = tmp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let root = project_root.to_string_lossy().into_owned();
+    let server = IpcServer::bind(&sock_path, Engine::new()).unwrap();
+    let handle = tokio::spawn(async move { server.run().await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let stream = UnixStream::connect(&sock_path).await.unwrap();
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let req = serde_json::to_string(&Request::SubscribeProjects).unwrap();
+    writer
+        .write_all(format!("{req}\n").as_bytes())
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsSubscribed
+    ));
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsChanged { projects } if projects.is_empty()
+    ));
+
+    let send = |request: Request| {
+        let sock_path = sock_path.clone();
+        async move {
+            let stream = UnixStream::connect(&sock_path).await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let json = serde_json::to_string(&request).unwrap();
+            writer
+                .write_all(format!("{json}\n").as_bytes())
+                .await
+                .unwrap();
+            next_response(&mut BufReader::new(reader)).await
+        }
+    };
+    send(Request::Init {
+        project_root: root.clone(),
+    })
+    .await;
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsChanged { projects } if projects == vec![root.clone()]
+    ));
+    send(Request::RemoveProject {
+        project_root: root.clone(),
+        suspend_agents: false,
+    })
+    .await;
+    assert!(matches!(
+        next_response(&mut reader).await,
+        Response::ProjectsChanged { projects } if projects.is_empty()
+    ));
+
+    handle.abort();
+}
+
 async fn attachment_pair(
     engine: std::sync::Arc<Engine>,
     agent_id: String,
