@@ -36,6 +36,8 @@ with tempfile.TemporaryDirectory(prefix="point-guard-sidebar-checks-") as folder
         str(source / "Views/Chat/MarkdownTextView.swift"),
         str(source / "Views/Chat/CodeBlockView.swift"),
         str(source / "Views/Chat/PiPointGuardChatView.swift"),
+        str(source / "Views/Chat/PointGuardCourtView.swift"),
+        str(source / "Models/PointGuardPlays.swift"),
         str(source / "Views/Chat/PiTranscriptScrollCoordinator.swift"),
         str(source / "Views/Chat/PointGuardView.swift"),
         str(source / "Views/Chat/PointGuardPaneControls.swift"),
