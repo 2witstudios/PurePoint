@@ -167,9 +167,9 @@ struct AgentLaunchRowModel: Identifiable {
 struct AgentLaunchTable: View {
     let caption: String
     let rows: [AgentLaunchRowModel]
-    let onSave: (AgentLaunchRowModel, String, String) async -> Void
-    let onAdd: (String, String) async -> Void
-    let onRemove: (AgentLaunchRowModel) async -> Void
+    let onSave: @MainActor (AgentLaunchRowModel, String, String) async -> Void
+    let onAdd: @MainActor (String, String) async -> Void
+    let onRemove: @MainActor (AgentLaunchRowModel) async -> Void
 
     /// New rows not saved yet: an agent exists once its command is entered.
     @State private var drafts: [UUID] = []
@@ -180,30 +180,9 @@ struct AgentLaunchTable: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Text("Launch command").frame(width: AgentLaunchRowView.commandWidth, alignment: .leading)
-                    Text("Arguments").frame(maxWidth: .infinity, alignment: .leading)
-                    Color.clear.frame(width: AgentLaunchRowView.removeWidth, height: 1)
-                }
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                ForEach(rows) { row in
-                    AgentLaunchRowView(
-                        command: row.command, launchArgs: row.launchArgs,
-                        commandHint: row.commandHint, launchArgsHint: row.launchArgsHint,
-                        onSave: { command, args in await onSave(row, command, args) },
-                        onRemove: row.removable ? { await onRemove(row) } : nil)
-                }
-                ForEach(drafts, id: \.self) { draft in
-                    AgentLaunchRowView(
-                        command: "", launchArgs: "", commandHint: "command", launchArgsHint: "",
-                        onSave: { command, args in
-                            guard !command.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                            drafts.removeAll { $0 == draft }
-                            await onAdd(command, args)
-                        },
-                        onRemove: { drafts.removeAll { $0 == draft } })
-                }
+                header
+                ForEach(rows) { row in savedRow(row) }
+                ForEach(drafts, id: \.self) { draft in draftRow(draft) }
             }
             Button {
                 drafts.append(UUID())
@@ -213,6 +192,39 @@ struct AgentLaunchTable: View {
             .controlSize(.small)
         }
     }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Launch command").frame(width: AgentLaunchRowView.commandWidth, alignment: .leading)
+            Text("Arguments").frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: AgentLaunchRowView.removeWidth, height: 1)
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.secondary)
+    }
+
+    private func savedRow(_ row: AgentLaunchRowModel) -> AgentLaunchRowView {
+        var remove: (@MainActor () async -> Void)?
+        if row.removable {
+            remove = { await onRemove(row) }
+        }
+        return AgentLaunchRowView(
+            command: row.command, launchArgs: row.launchArgs,
+            commandHint: row.commandHint, launchArgsHint: row.launchArgsHint,
+            onSave: { command, args in await onSave(row, command, args) },
+            onRemove: remove)
+    }
+
+    private func draftRow(_ draft: UUID) -> AgentLaunchRowView {
+        AgentLaunchRowView(
+            command: "", launchArgs: "", commandHint: "command", launchArgsHint: "",
+            onSave: { command, args in
+                guard !command.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                drafts.removeAll { $0 == draft }
+                await onAdd(command, args)
+            },
+            onRemove: { drafts.removeAll { $0 == draft } })
+    }
 }
 
 /// Two text fields, saved together when either is submitted or loses focus.
@@ -221,9 +233,9 @@ private struct AgentLaunchRowView: View {
     let launchArgs: String
     let commandHint: String
     let launchArgsHint: String
-    let onSave: (String, String) async -> Void
+    let onSave: @MainActor (String, String) async -> Void
     /// Nil for agents that can't be removed at this level.
-    let onRemove: (() async -> Void)?
+    let onRemove: (@MainActor () async -> Void)?
 
     static let commandWidth: CGFloat = 200
     static let removeWidth: CGFloat = 20
