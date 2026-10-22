@@ -134,7 +134,6 @@ fn config_to_report(
                 interactive: ac.interactive,
                 project_launch_args: ac.launch_args.as_deref().map(format_launch_args),
                 machine_launch_args: ac.machine_launch_args.as_deref().map(format_launch_args),
-                policy_launch_args: ac.policy_launch_args.as_deref().map(format_launch_args),
                 resolved_command: Some(resolved_command),
             }
         })
@@ -452,12 +451,10 @@ impl Engine {
             Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
             Request::GetGlobalAgentSettings => self.handle_global_agent_settings(None).await,
             Request::UpdateGlobalAgentSettings {
-                codex_yolo,
                 launch_args,
                 agent_status_tracking,
             } => {
                 self.handle_global_agent_settings(Some(config::GlobalAgentSettingsUpdate {
-                    codex_yolo,
                     agent_status_tracking,
                     launch_args: launch_args.unwrap_or_default(),
                 }))
@@ -913,7 +910,7 @@ impl Engine {
             };
             match result {
                 Ok(settings) => Response::GlobalAgentSettingsReport {
-                    codex_yolo: settings.codex_yolo,
+                    codex_yolo: false,
                     agent_status_tracking: settings.agent_status_tracking,
                     launch_args: settings
                         .launch_args
@@ -1162,20 +1159,16 @@ mod tests {
             interactive: true,
             launch_args,
             machine_launch_args: None,
-            policy_launch_args: None,
         }
     }
 
     #[test]
-    fn given_yolo_policy_should_report_project_launch_args_unchanged() {
-        // given — Codex YOLO rewrote the project's args into the policy slot
+    fn given_project_and_machine_launch_args_should_report_both_and_resolve_project() {
+        // given
         let mut cfg = pu_core::types::Config::default();
         let codex = cfg.agents.get_mut("codex").unwrap();
         codex.launch_args = Some(vec!["--search".into()]);
-        codex.policy_launch_args = Some(vec![
-            "--search".into(),
-            "--dangerously-bypass-approvals-and-sandbox".into(),
-        ]);
+        codex.machine_launch_args = Some(vec!["--sandbox".into(), "read-only".into()]);
 
         // when
         let Response::ConfigReport { agents, .. } = config_to_report(&cfg, Path::new("/"), &[])
@@ -1187,13 +1180,10 @@ mod tests {
         let codex = agents.iter().find(|a| a.name == "codex").unwrap();
         assert_eq!(codex.project_launch_args.as_deref(), Some("--search"));
         assert_eq!(
-            codex.policy_launch_args.as_deref(),
-            Some("--search --dangerously-bypass-approvals-and-sandbox")
+            codex.machine_launch_args.as_deref(),
+            Some("--sandbox read-only")
         );
-        assert_eq!(
-            codex.resolved_launch_args,
-            vec!["--search", "--dangerously-bypass-approvals-and-sandbox"]
-        );
+        assert_eq!(codex.resolved_launch_args, vec!["--search"]);
     }
 
     #[test]
@@ -1445,7 +1435,6 @@ mod tests {
             interactive: true,
             launch_args: None,
             machine_launch_args: None,
-            policy_launch_args: None,
         }
     }
 
@@ -1500,7 +1489,6 @@ mod workspace_catalog_tests {
             interactive: true,
             launch_args: None,
             machine_launch_args: None,
-            policy_launch_args: None,
         }
     }
 

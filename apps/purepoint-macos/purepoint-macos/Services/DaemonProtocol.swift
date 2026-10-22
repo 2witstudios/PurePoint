@@ -351,7 +351,7 @@ nonisolated enum DaemonRequest: Encodable {
     case getConfig(projectRoot: String)
     case getGlobalAgentSettings
     /// `launchArgs` maps agent type to its machine-level launch args string; a blank string removes it.
-    case updateGlobalAgentSettings(codexYolo: Bool? = nil, agentStatusTracking: Bool? = nil, launchArgs: [String: String]? = nil)
+    case updateGlobalAgentSettings(agentStatusTracking: Bool? = nil, launchArgs: [String: String]? = nil)
     /// `launchArgs` is the free-form launch args string; `nil` clears the project value.
     case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: String?)
     case shutdown
@@ -594,9 +594,8 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(projectRoot, forKey: .key("project_root"))
         case .getGlobalAgentSettings:
             try container.encode("get_global_agent_settings", forKey: .key("type"))
-        case .updateGlobalAgentSettings(let codexYolo, let agentStatusTracking, let launchArgs):
+        case .updateGlobalAgentSettings(let agentStatusTracking, let launchArgs):
             try container.encode("update_global_agent_settings", forKey: .key("type"))
-            try container.encodeIfPresent(codexYolo, forKey: .key("codex_yolo"))
             try container.encodeIfPresent(agentStatusTracking, forKey: .key("agent_status_tracking"))
             try container.encodeIfPresent(launchArgs, forKey: .key("launch_args"))
         case .updateAgentConfig(let projectRoot, let agentName, let launchArgs):
@@ -696,7 +695,7 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
     /// `launchArgs` is nil when the daemon predates machine-level launch args (protocol < 11).
-    case globalAgentSettingsReport(codexYolo: Bool, agentStatusTracking: Bool, launchArgs: [String: String]? = nil)
+    case globalAgentSettingsReport(agentStatusTracking: Bool, launchArgs: [String: String]? = nil)
     case inventory(InventoryReportPayload)
     case fsListResult(path: String, entries: [FsEntryPayload], truncated: Bool)
     case fsStatResult(FsStatPayload)
@@ -813,7 +812,7 @@ nonisolated enum DaemonResponse: Decodable {
         case "global_agent_settings_report":
             let p = try GlobalAgentSettingsPayload(from: decoder)
             self = .globalAgentSettingsReport(
-                codexYolo: p.codexYolo, agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs)
+                agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs)
         case "inventory":
             self = .inventory(try InventoryReportPayload(from: decoder))
         case "fs_list_result":
@@ -970,13 +969,11 @@ nonisolated struct SwarmDefInfo: Decodable {
 // MARK: - Response payload helpers
 
 private nonisolated struct GlobalAgentSettingsPayload: Decodable {
-    let codexYolo: Bool
     /// Absent from daemons that predate the setting, where tracking is always on.
     let agentStatusTracking: Bool?
     /// Absent from daemons that predate machine-level launch args.
     let launchArgs: [String: String]?
     enum CodingKeys: String, CodingKey {
-        case codexYolo = "codex_yolo"
         case agentStatusTracking = "agent_status_tracking"
         case launchArgs = "launch_args"
     }

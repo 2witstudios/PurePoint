@@ -2094,7 +2094,6 @@ fn given_update_agent_config_request_with_unbalanced_quote_should_be_rejected() 
 #[test]
 fn given_update_global_agent_settings_with_launch_args_should_round_trip() {
     let req = Request::UpdateGlobalAgentSettings {
-        codex_yolo: None,
         agent_status_tracking: None,
         launch_args: Some(
             [(
@@ -2106,7 +2105,6 @@ fn given_update_global_agent_settings_with_launch_args_should_round_trip() {
         ),
     };
     let json = serde_json::to_string(&req).unwrap();
-    assert!(!json.contains("codex_yolo"));
     match serde_json::from_str::<Request>(&json).unwrap() {
         Request::UpdateGlobalAgentSettings { launch_args, .. } => assert_eq!(
             launch_args.unwrap()["claude"],
@@ -2114,6 +2112,33 @@ fn given_update_global_agent_settings_with_launch_args_should_round_trip() {
         ),
         _ => panic!("expected UpdateGlobalAgentSettings"),
     }
+}
+
+#[test]
+fn given_legacy_update_global_agent_settings_with_codex_yolo_should_ignore_it() {
+    // Clients from before Codex YOLO was removed still send `codex_yolo`.
+    let json = r#"{"type":"update_global_agent_settings","codex_yolo":true,"agent_status_tracking":false}"#;
+    match serde_json::from_str::<Request>(json).unwrap() {
+        Request::UpdateGlobalAgentSettings {
+            agent_status_tracking,
+            launch_args,
+        } => {
+            assert_eq!(agent_status_tracking, Some(false));
+            assert!(launch_args.is_none());
+        }
+        _ => panic!("expected UpdateGlobalAgentSettings"),
+    }
+}
+
+#[test]
+fn given_global_agent_settings_report_should_still_send_codex_yolo_false_for_protocol_12_apps() {
+    let report = Response::GlobalAgentSettingsReport {
+        codex_yolo: false,
+        agent_status_tracking: true,
+        launch_args: IndexMap::new(),
+    };
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["codex_yolo"], serde_json::Value::Bool(false));
 }
 
 #[test]
@@ -2185,7 +2210,6 @@ fn given_config_report_response_should_round_trip() {
                 interactive: true,
                 project_launch_args: Some("--verbose".into()),
                 machine_launch_args: None,
-                policy_launch_args: None,
                 resolved_command: Some("claude --verbose".into()),
             },
             AgentConfigInfo {
@@ -2198,7 +2222,6 @@ fn given_config_report_response_should_round_trip() {
                 interactive: true,
                 project_launch_args: None,
                 machine_launch_args: Some("--sandbox workspace-write".into()),
-                policy_launch_args: None,
                 resolved_command: None,
             },
         ],

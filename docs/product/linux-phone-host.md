@@ -62,7 +62,7 @@ Everything in the bridge and runtime packaging that assumes macOS or the Mac app
 | `PointGuardServiceModel.swift:74-91` | Env scrubbing (`NODE_OPTIONS`, `NODE_PATH`, `PI_MOBILE_*`, `PU_*`), fixed `PATH`, cwd = home | Unit sets every bridge variable explicitly with `Environment=` and removes anything the user manager imported with `UnsetEnvironment=` (`NODE_OPTIONS`, `NODE_PATH`, `LD_PRELOAD`, `PI_MOBILE_*`, `PU_*`, owner bootstrap variables). `pu phone run` starts from an empty environment |
 | `PointGuardServiceModel.swift:93-99` | Owned child, lifetime pipe, readiness wait | systemd plus `pu phone status` readiness read over admin |
 | `PointGuardTailnet.swift:5-11, 37-42` | Tailnet IPv4 on a `utun*` interface, confirmed with `tailscale ip -4` from fixed macOS paths | Linux discovery (LPH-008) |
-| Connect phone sheet (`PointGuardSetupView.swift`) | QR display, close revokes, device list, terminal and workspace toggles | `pu phone pair`, `pu phone devices`, `pu phone grant` |
+| Connect phone sheet (`PointGuardSetupView.swift`) | QR display, close revokes, device list, one Access menu per device (maps onto the terminal and workspace grants) | `pu phone pair`, `pu phone devices`, `pu phone grant` |
 | Provider setup UI | OAuth/API key over `auth.*` admin ops | `pu phone login` (LPH-009) |
 
 ### Runtime packaging (`apps/purepoint-mobile/runtime/`)

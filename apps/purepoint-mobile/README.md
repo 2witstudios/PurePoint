@@ -1,6 +1,6 @@
 # PurePoint Mobile
 
-Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; the Agents surface shows delegated PurePoint workers and ordinary Shell panes across this Mac and connected machines, separately from Point Guard chat. Each paired phone defaults to Agents and terminals Off; the Mac owner can grant View or Control in Connect phone settings. The same grants decide Point Guard chat access (see below). Remote agents require this Mac, its bridge, and its existing machine forwards to remain connected. The phone never uses SSH.
+Native iPhone chat shares the Mac Point Guard's existing Pi session. Desktop and phone see the same conversation, tools and queue. Stop affects the observed Pi run and preserves device-specific draft recovery; the Agents surface shows delegated PurePoint workers and ordinary Shell panes across this Mac and connected machines, separately from Point Guard chat. Each newly paired device starts with Full access; the Mac owner can lower it per device to Terminals only, View only or No access in Point Guard setup. The same grants decide Point Guard chat access (see below). Remote agents require this Mac, its bridge, and its existing machine forwards to remain connected. The phone never uses SSH.
 
 ## Setup with the Mac app
 
@@ -14,7 +14,7 @@ On a headless Linux host, run `pu phone pair` and scan the terminal QR the same 
 
 After the pinned connection verifies, a host may describe itself (`hostKind` `mac` or `linux`, and a short `hostLabel`). The app uses this only for display: the label becomes the default name, Linux hosts get a server icon, and re-pair guidance says to run `pu phone pair` on that host. Hosts stay keyed by their verified host identity, so a Mac and a Linux host with the same label remain separate entries. Older bridges send neither field and behave as before.
 
-Saved devices reconnect on launch, foreground and network recovery with bounded retries. Revocation, a changed host identity or lost trust requires a deliberate new pairing code. The host can revoke or require re-pair for an individual device without resetting others. Legacy shared-token/plaintext phone pairing is unsupported and requires re-pair. Tailscale provides reachability; pinned TLS and device credentials provide authorization. Local Mac setup/chat remain available without Tailscale; reconnect Tailscale and restart the idle service to restore phone reachability.
+Saved devices reconnect on launch, foreground and network recovery with bounded retries. Revocation, a changed host identity or lost trust requires a deliberate new pairing code. The host can revoke an individual device without resetting others; revoked devices are removed from its list and must pair again to return. Legacy shared-token/plaintext phone pairing is unsupported and requires re-pair. Tailscale provides reachability; pinned TLS and device credentials provide authorization. Local Mac setup/chat remain available without Tailscale; reconnect Tailscale and restart the idle service to restore phone reachability.
 
 The service runs for the Mac app lifetime. Restart/update restores selected native session, provider/folder and device trust, but cannot recover unfinished generation or bridge-lifetime receipts. Uncertain prompts are never silently resent. Use the native status, recovery guidance and folder picker when startup fails; the app never adopts or stops an unknown process.
 
@@ -127,7 +127,7 @@ See [the researched contract and requirements](docs/contract.md) and [validation
 
 ## Workspace management authorization and recovery
 
-Connect phone settings has a separate **Workspace management** toggle, default off for every new or previously paired device. Mutations also require **Agents and terminals: Control**. View can browse registered projects, empty workspaces, worktrees and agents; Off denies the phone's direct fleet requests (`agents`, terminals, workspace operations). Registered machine IDs scope all project paths and agent/worktree IDs. No phone command, cwd, environment, SSH or arbitrary IPC passthrough exists. Point Guard chat follows the same grants, because Point Guard can list, message, spawn and stop agents on request.
+Workspace management is part of **Full access**, the default for newly paired devices. Devices paired before that default keep their stored grants (Workspace management off unless granted). Mutations also require terminal Control, so **Terminals only** and lower cannot change workspaces. View can browse registered projects, empty workspaces, worktrees and agents; Off denies the phone's direct fleet requests (`agents`, terminals, workspace operations). Registered machine IDs scope all project paths and agent/worktree IDs. No phone command, cwd, environment, SSH or arbitrary IPC passthrough exists. Point Guard chat follows the same grants, because Point Guard can list, message, spawn and stop agents on request.
 
 ## Point Guard chat access
 
