@@ -9,6 +9,12 @@ import SwiftUI
     func start(chat: PiChatModel) {}
 }
 @MainActor final class AgentsHubState {}
+@MainActor final class AgentSignalNotifications {
+    static let shared = AgentSignalNotifications()
+    var open: ((AgentSignalAlertPolicy.Agent) async -> Bool)?
+    func update(_ agents: [AgentSignalAlertPolicy.Agent], foregroundIdentity: String?) {}
+    func refreshBadge() {}
+}
 @MainActor final class AgentConfigState {}
 @MainActor final class ScheduleState {}
 @MainActor final class TriggersState {}
@@ -23,29 +29,61 @@ struct DaemonWorkspaceService: WorkspaceService {
     func manifestPath(projectRoot: String) -> String { "/dev/null" }
 }
 struct DaemonClient {
-    init(socketPath: String? = nil) {}
+    init(socketPath: String? = nil, transport: (any DaemonTransport)? = nil) {}
     func send(_ request: DaemonRequest) async throws -> DaemonResponse { .ok }
     func removeProject(root: String, suspendAgents: Bool, daemonName: String) async throws {}
 }
-// Project hosts: only the local, file-free surface AppState and persistence name.
+protocol DaemonTransport: Sendable {}
+struct UnixSocketTransport: DaemonTransport { let socketPath: String }
+// Project hosts: only the local surface AppState and persistence name. The local host
+// reads and writes the real disk, as layout saves through it must.
 struct HostFileData { let data: Data; let modifiedMs: Int64; let truncated: Bool }
-struct HostFileStat { let modifiedMs: Int64 }
+struct HostFileStat {
+    let exists: Bool
+    let modifiedMs: Int64
+    static let missing = HostFileStat(exists: false, modifiedMs: 0)
+}
 enum HostError: Error { case notFound(String), conflict(String) }
 protocol ProjectHost: Sendable {
     var isLocal: Bool { get }
+    func stat(path: String) throws -> HostFileStat
     func read(path: String, maxBytes: Int) throws -> HostFileData
     func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat
 }
 struct LocalProjectHost: ProjectHost {
     static let shared = LocalProjectHost()
     var isLocal: Bool { true }
-    func read(path: String, maxBytes: Int) throws -> HostFileData { throw CocoaError(.fileNoSuchFile) }
-    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
-        throw CocoaError(.fileWriteUnknown)
+    func stat(path: String) throws -> HostFileStat {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else { return .missing }
+        return HostFileStat(exists: true, modifiedMs: Self.milliseconds(attributes[.modificationDate] as? Date))
     }
+    func read(path: String, maxBytes: Int) throws -> HostFileData {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        return HostFileData(
+            data: data.prefix(maxBytes), modifiedMs: try stat(path: path).modifiedMs, truncated: data.count > maxBytes)
+    }
+    func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
+        if let expectedModifiedMs, try stat(path: path).modifiedMs != expectedModifiedMs {
+            throw HostError.conflict(path)
+        }
+        let url = URL(fileURLWithPath: path)
+        if createDirectories {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try data.write(to: url, options: .atomic)
+        return try stat(path: path)
+    }
+    static func milliseconds(_ date: Date?) -> Int64 {
+        Int64(((date?.timeIntervalSince1970 ?? 0) * 1000).rounded(.down))
+    }
+}
+enum HostIO {
+    static func value<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T { work() }
 }
 struct UnavailableProjectHost: ProjectHost {
     var isLocal: Bool { false }
+    func stat(path: String) throws -> HostFileStat { .missing }
     func read(path: String, maxBytes: Int) throws -> HostFileData { throw HostError.notFound(path) }
     func write(path: String, data: Data, expectedModifiedMs: Int64?, createDirectories: Bool) throws -> HostFileStat {
         throw HostError.notFound(path)
@@ -59,7 +97,7 @@ enum FileIOService {
     var projects: [ProjectState] = []
     init(machine: Machine, appState: AppState?, registry: WorkspaceRegistry?) { self.machine = machine }
     func connect() {}
-    func disconnect(remember: Bool = false) {}
+    func disconnect(remember: Bool = false, keepUnsaved: Bool = false) {}
     func disconnectForTermination(deadline: DispatchTime) {}
     func update(from machine: Machine) {}
     func hideProject(root: String) {}
@@ -77,7 +115,7 @@ struct MachineOpenProjectError: LocalizedError {
 }
 actor DaemonProjectsSubscription {
     init(client: DaemonClient) {}
-    func start(onChange: @escaping @MainActor ([String]) -> Void) async {}
+    func start(onChange: @escaping @MainActor @Sendable ([String]) -> Void) async {}
     func stop() {}
 }
 @MainActor final class ManifestWatcher {
@@ -95,7 +133,9 @@ actor DaemonProjectsSubscription {
     var projectId: String { projectRoot }
     var key: ProjectKey { ProjectKey(id: projectRoot) }
     var isRemote: Bool { false }
+    var isUnavailable = false
     let host: any ProjectHost = LocalProjectHost.shared
+    let remoteLayoutSaver: RemoteLayoutSaver? = nil
     let client = DaemonClient()
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
@@ -111,6 +151,10 @@ actor DaemonProjectsSubscription {
     func stopWatching() {}
     func agent(byId id: String) -> AgentModel? { allAgents.first { $0.id == id } }
     var allAgents: [AgentModel] { rootAgents + worktrees.flatMap(\.agents) }
+    func worktreeId(forAgentId agentId: String) -> String? {
+        worktrees.first { $0.agents.contains { $0.id == agentId } }?.id
+    }
+    func refresh() {}
     func sendDaemonRequest(
         _ request: DaemonRequest, onFailure: (() -> Void)? = nil,
         onSuccess: @escaping (DaemonResponse) -> Void

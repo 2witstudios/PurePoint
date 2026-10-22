@@ -313,7 +313,7 @@ nonisolated enum DaemonRequest: Encodable {
     case spawn(
         projectRoot: String, prompt: String, agent: String = "claude",
         name: String? = nil, base: String? = nil, root: Bool = false,
-        worktree: String? = nil, command: String? = nil)
+        worktree: String? = nil, command: String? = nil, placement: SpawnPlacement? = nil)
     case spawnShell(cwd: String)
     case kill(projectRoot: String, target: KillTarget)
     case rename(projectRoot: String, agentId: String, name: String)
@@ -442,7 +442,10 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(agentId, forKey: .key("agent_id"))
             try container.encode(cols, forKey: .key("cols"))
             try container.encode(rows, forKey: .key("rows"))
-        case .spawn(let projectRoot, let prompt, let agent, let name, let base, let root, let worktree, let command):
+        case .spawn(
+            let projectRoot, let prompt, let agent, let name, let base, let root, let worktree, let command,
+            let placement
+        ):
             try container.encode("spawn", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(prompt, forKey: .key("prompt"))
@@ -452,6 +455,7 @@ nonisolated enum DaemonRequest: Encodable {
             if root { try container.encode(root, forKey: .key("root")) }
             if let worktree { try container.encode(worktree, forKey: .key("worktree")) }
             if let command { try container.encode(command, forKey: .key("command")) }
+            if let placement { try container.encode(placement, forKey: .key("placement")) }
         case .spawnShell(let cwd):
             try container.encode("spawn_shell", forKey: .key("type"))
             try container.encode(cwd, forKey: .key("cwd"))
@@ -924,9 +928,10 @@ nonisolated struct AgentStatusReport: Decodable {
     let prompt: String?
     let suspended: Bool
     let signal: AgentSignalSnapshot?
+    let placement: SpawnPlacement?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, status, pid, prompt, suspended, signal
+        case id, name, status, pid, prompt, suspended, signal, placement
         case agentType = "agent_type"
         case exitCode = "exit_code"
         case idleSeconds = "idle_seconds"
@@ -950,6 +955,7 @@ nonisolated struct AgentStatusReport: Decodable {
         prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
         signal = try? container.decodeIfPresent(AgentSignalSnapshot.self, forKey: .signal)
         suspended = try container.decodeIfPresent(Bool.self, forKey: .suspended) ?? false
+        placement = try? container.decodeIfPresent(SpawnPlacement.self, forKey: .placement)
     }
 }
 

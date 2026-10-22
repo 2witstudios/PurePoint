@@ -694,6 +694,7 @@ impl Engine {
                 trigger_seq_index: None,
                 trigger_state: None,
                 trigger_total: None,
+                placement: None,
             }));
         }
         drop(sessions);

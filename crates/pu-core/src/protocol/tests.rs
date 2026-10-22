@@ -70,6 +70,33 @@ fn given_spawn_request_should_default_agent_to_claude() {
 }
 
 #[test]
+fn given_spawn_request_with_placement_should_parse() {
+    let json = r#"{"type":"spawn","project_root":"/test","prompt":"","placement":{"workspace":"ws-ag-1","surface":2}}"#;
+    let req: Request = serde_json::from_str(json).unwrap();
+    match req {
+        Request::Spawn { placement, .. } => assert_eq!(
+            placement,
+            Some(crate::types::SpawnPlacement {
+                workspace: "ws-ag-1".into(),
+                surface: 2,
+            })
+        ),
+        _ => panic!("expected Spawn"),
+    }
+}
+
+#[test]
+fn given_spawn_request_without_placement_should_omit_it() {
+    let json = r#"{"type":"spawn","project_root":"/test","prompt":""}"#;
+    let req: Request = serde_json::from_str(json).unwrap();
+    let Request::Spawn { placement, .. } = &req else {
+        panic!("expected Spawn")
+    };
+    assert!(placement.is_none());
+    assert!(!serde_json::to_string(&req).unwrap().contains("placement"));
+}
+
+#[test]
 fn given_spawn_request_with_all_fields_should_round_trip() {
     let req = Request::Spawn {
         project_root: "/test".into(),
@@ -85,6 +112,7 @@ fn given_spawn_request_with_all_fields_should_round_trip() {
         plan_mode: false,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -136,6 +164,7 @@ fn given_spawn_request_with_no_auto_true_should_round_trip() {
         plan_mode: false,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -171,6 +200,7 @@ fn given_spawn_request_with_extra_args_should_round_trip() {
         plan_mode: false,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -198,6 +228,7 @@ fn given_spawn_request_with_plan_mode_should_round_trip() {
         plan_mode: true,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();

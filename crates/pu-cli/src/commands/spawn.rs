@@ -87,6 +87,7 @@ pub async fn run(
             plan_mode,
             no_trigger,
             trigger,
+            placement: None,
         },
     )
     .await?;

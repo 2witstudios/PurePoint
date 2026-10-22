@@ -820,6 +820,7 @@ mod bare_launch_resume_tests {
                 plan_mode: false,
                 no_trigger: true,
                 trigger: None,
+                placement: None,
             })
             .await
         {

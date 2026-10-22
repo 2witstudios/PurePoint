@@ -196,6 +196,8 @@ pub struct AgentStatusReport {
     pub trigger_state: Option<crate::types::TriggerState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_total: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::types::SpawnPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -57,6 +57,8 @@ pub(super) struct SpawnParams {
     no_trigger: bool,
     /// Name of trigger to bind (from --trigger flag)
     trigger: Option<String>,
+    /// The app tab the agent is for, stored on its manifest entry.
+    placement: Option<pu_core::types::SpawnPlacement>,
 }
 
 pub(super) struct SaveTriggerParams {
@@ -505,6 +507,7 @@ impl Engine {
                 plan_mode,
                 no_trigger,
                 trigger,
+                placement,
             } => {
                 self.handle_spawn(SpawnParams {
                     project_root,
@@ -520,6 +523,7 @@ impl Engine {
                     plan_mode,
                     no_trigger,
                     trigger,
+                    placement,
                 })
                 .await
             }
@@ -1098,6 +1102,7 @@ mod tests {
                 plan_mode: false,
                 no_trigger: false,
                 trigger: None,
+                placement: None,
             })
             .await;
 
@@ -1124,6 +1129,65 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_spawn_with_placement_should_record_it_on_manifest_and_status() {
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let pr = project_root.to_string_lossy().to_string();
+        let placement = pu_core::types::SpawnPlacement {
+            workspace: "ws-ag-1".into(),
+            surface: 4,
+        };
+
+        let engine = Engine::new();
+        engine
+            .handle_request(Request::Init {
+                project_root: pr.clone(),
+            })
+            .await;
+        let resp = engine
+            .handle_request(Request::Spawn {
+                project_root: pr.clone(),
+                prompt: String::new(),
+                agent: "terminal".into(),
+                name: None,
+                base: None,
+                root: true,
+                worktree: None,
+                command: None,
+                no_auto: false,
+                extra_args: vec![],
+                plan_mode: false,
+                no_trigger: true,
+                trigger: None,
+                placement: Some(placement.clone()),
+            })
+            .await;
+        let agent_id = match resp {
+            Response::SpawnResult { agent_id, .. } => agent_id,
+            other => panic!("expected SpawnResult, got {other:?}"),
+        };
+
+        let m = pu_core::manifest::read_manifest(&project_root).unwrap();
+        let Some(pu_core::types::AgentLocation::Root(agent)) = m.find_agent(&agent_id) else {
+            panic!("agent missing from manifest");
+        };
+        assert_eq!(agent.placement, Some(placement.clone()));
+
+        let status = engine
+            .handle_request(Request::Status {
+                project_root: pr,
+                agent_id: Some(agent_id.clone()),
+            })
+            .await;
+        match status {
+            Response::AgentStatus(report) => assert_eq!(report.placement, Some(placement)),
+            other => panic!("expected AgentStatus, got {other:?}"),
+        }
+        engine.kill_agents(&[agent_id]).await;
     }
 
     #[test]

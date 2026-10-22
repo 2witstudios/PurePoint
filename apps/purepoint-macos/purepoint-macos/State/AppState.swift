@@ -421,7 +421,7 @@ final class AppState {
         guard localProjectsSubscription == nil else { return }
         let subscription = DaemonProjectsSubscription(client: DaemonEndpoint.local.makeClient())
         localProjectsSubscription = subscription
-        Task {
+        Task { [weak self] in
             // The daemon holds the project list, so it runs even before any project opens.
             try? await DaemonLifecycle.ensureDaemon()
             await subscription.start { [weak self] roots in self?.applyLocalProjects(roots) }
