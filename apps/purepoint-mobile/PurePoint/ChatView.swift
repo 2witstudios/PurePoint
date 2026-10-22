@@ -233,6 +233,8 @@ struct PointGuardScreen: View {
     private var court: some View {
         PlaysHero(enabled: model.chatGrant.canSend) { prompt in model.draft = prompt; composerFocused = false }
             .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
+            .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { value in if value.translation.height > 40 { composerFocused = false } })
+            .accessibilityAction(named: "Dismiss keyboard") { composerFocused = false }
             .onAppear { following = true }
     }
 
@@ -284,6 +286,8 @@ struct PointGuardScreen: View {
                 .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
                 .scrollDismissesKeyboard(.interactively)
                 .accessibilityAction(named: "Dismiss keyboard") { composerFocused = false }
+                // The transcript is rebuilt after the court or a session load, so it must open at the latest message itself.
+                .onAppear { following = true; proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: model.snapshot?.revision) { _, _ in if following { proxy.scrollTo("bottom", anchor: .bottom) } }
                 .onChange(of: model.snapshot?.sessionId) { _, _ in following = true; proxy.scrollTo("bottom", anchor: .bottom) }
                 if !following {
@@ -397,9 +401,10 @@ struct PointGuardScreen: View {
 struct PlaysHero: View {
     let enabled: Bool
     let call: (String) -> Void
-    @State private var ball: CGPoint?
-    @State private var dragging = false
-    @State private var target: Int?
+    /// The thumb on the logo; resets on its own when the system cancels the drag, so the ball can't get stuck.
+    @GestureState private var grab: CGPoint?
+    /// The ball flying to a play after release.
+    @State private var flight: CGPoint?
     @State private var passed: Int?
     @State private var passTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -422,9 +427,8 @@ struct PlaysHero: View {
             if geometry.size.height < Self.minimumCourtHeight { stacked(height: geometry.size.height) } else { court }
         }
         .ignoresSafeArea(.keyboard)
-        .sensoryFeedback(trigger: target) { _, new in new == nil ? nil : .selection }
         .sensoryFeedback(trigger: passed) { _, new in new == nil ? nil : .impact(weight: .light) }
-        .onDisappear { passTask?.cancel() }
+        .onDisappear { passTask?.cancel(); passTask = nil; flight = nil }
     }
 
     private var court: some View {
@@ -439,17 +443,19 @@ struct PlaysHero: View {
                 CGPoint(x: size.width / 2 - column * 0.29, y: top + height * 0.63), CGPoint(x: size.width / 2 + column * 0.29, y: top + height * 0.63),
                 CGPoint(x: size.width / 2 - 65, y: top + height * 0.83), CGPoint(x: size.width / 2 + 65, y: top + height * 0.83),
             ]
-            let lean = dragging && !reduceMotion ? max(-8, min(8, ((ball?.x ?? logo.x) / size.width * 100 - 50) * 0.18)) : 0
-            let flip: CGFloat = dragging && !reduceMotion && (ball?.x ?? logo.x) < size.width * 0.4 ? -1 : 1
+            let target = grab.flatMap { nearest(to: $0, among: spots) }
+            let ball = grab ?? flight
+            let lean = grab.map { reduceMotion ? 0 : max(-8, min(8, ($0.x / size.width * 100 - 50) * 0.18)) } ?? 0
+            let flip: CGFloat = grab.map { !reduceMotion && $0.x < size.width * 0.4 } == true ? -1 : 1
             let court = Court(logo: logo, top: top)
             ZStack {
                 court.stroke(Color.white.opacity(0.065), lineWidth: 1.25)
-                if dragging, let ball {
-                    let center = UnitPoint(x: ball.x / size.width, y: ball.y / size.height)
+                if let grab {
+                    let center = UnitPoint(x: grab.x / size.width, y: grab.y / size.height)
                     RadialGradient(colors: [Theme.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 320)
                     court.stroke(Theme.accent, lineWidth: 1.5)
                         .mask(RadialGradient(colors: [.black, .clear], center: center, startRadius: 0, endRadius: 200))
-                    Path { path in path.move(to: logo); path.addLine(to: target.map { spots[$0] } ?? ball) }
+                    Path { path in path.move(to: logo); path.addLine(to: target.map { spots[$0] } ?? grab) }
                         .stroke(target == nil ? Color.white.opacity(0.22) : Theme.accent, style: StrokeStyle(lineWidth: target == nil ? 1 : 1.75, lineCap: .round, dash: target == nil ? [2, 7] : []))
                 }
                 LogoRing(size: 96)
@@ -459,25 +465,22 @@ struct PlaysHero: View {
                     .animation(.spring(response: 0.4, dampingFraction: 0.8), value: lean)
                     .contentShape(Circle())
                     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("court"))
-                        .onChanged { value in
-                            guard enabled else { return }
-                            passTask?.cancel(); passTask = nil
-                            dragging = true; passed = nil; ball = value.location
-                            target = spots.indices.min { distance(spots[$0], value.location) < distance(spots[$1], value.location) }
-                                .flatMap { distance(spots[$0], value.location) < Self.reach ? $0 : nil }
+                        .updating($grab) { value, grab, _ in if enabled { grab = value.location } }
+                        .onChanged { _ in
+                            // A new grab takes the ball back from a pass still in the air.
+                            guard enabled, passTask != nil || passed != nil else { return }
+                            passTask?.cancel(); passTask = nil; flight = nil; passed = nil
                         }
-                        .onEnded { _ in
-                            guard dragging else { return }
-                            dragging = false
-                            if let target { pass(target, to: spots[target]) } else { ball = nil }
-                            target = nil
+                        .onEnded { value in
+                            guard enabled, let index = nearest(to: value.location, among: spots) else { return }
+                            pass(index, from: value.location, to: spots[index])
                         })
                     .position(logo)
                 Text("What play do you\nwant to run?").font(.system(size: 30, weight: .bold)).tracking(-0.6)
                     .multilineTextAlignment(.center).foregroundStyle(Color(hex: 0xF4F4F5))
                     .position(x: size.width / 2, y: top + height * 0.443)
                 ForEach(Self.plays.indices, id: \.self) { index in
-                    spot(index, lit: index == (target ?? passed)) { pass(index, to: spots[index]) }
+                    spot(index, lit: index == (target ?? passed)) { pass(index, from: nil, to: spots[index]) }
                         .position(x: spots[index].x, y: spots[index].y + 13)
                 }
                 if let ball {
@@ -493,6 +496,7 @@ struct PlaysHero: View {
                 }
             }
             .coordinateSpace(name: "court")
+            .sensoryFeedback(trigger: target) { _, new in new == nil ? nil : .selection }
         }
         .ignoresSafeArea(.container, edges: .vertical)
     }
@@ -513,23 +517,28 @@ struct PlaysHero: View {
         .scrollBounceBehavior(.basedOnSize)
     }
 
-    private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
-    /// Lights the play and, when the ball is in hand, flies it there before calling.
-    private func pass(_ index: Int, to spot: CGPoint) {
+    /// The play within reach of a point, if any.
+    private func nearest(to point: CGPoint, among spots: [CGPoint]) -> Int? {
+        let distances = spots.map { hypot($0.x - point.x, $0.y - point.y) }
+        return distances.indices.min { distances[$0] < distances[$1] }.flatMap { distances[$0] < Self.reach ? $0 : nil }
+    }
+    /// Lights the play and, when it was passed from the thumb at `start`, flies the ball there before calling.
+    private func pass(_ index: Int, from start: CGPoint?, to spot: CGPoint) {
         let prompt = Self.plays[index].prompt
         passTask?.cancel(); passTask = nil
         withAnimation(.easeOut(duration: 0.2)) { passed = index }
-        guard ball != nil, !reduceMotion else { ball = nil; call(prompt); return }
-        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { ball = spot }
+        guard let start, !reduceMotion else { flight = nil; call(prompt); return }
+        flight = start
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { flight = spot }
         passTask = Task {
             // A pass interrupted by the court going away or a new grab never calls.
             guard (try? await Task.sleep(for: .milliseconds(450))) != nil, !Task.isCancelled else { return }
-            ball = nil; passTask = nil; call(prompt)
+            flight = nil; passTask = nil; call(prompt)
         }
     }
     private func pill(_ index: Int, lit: Bool) -> some View {
         let play = Self.plays[index]
-        return Button { pass(index, to: .zero) } label: {
+        return Button { pass(index, from: nil, to: .zero) } label: {
             Label(play.label, systemImage: play.icon).font(.system(size: 14, weight: .medium)).lineLimit(1)
                 .foregroundStyle(lit ? Theme.ground : Theme.muted)
                 .frame(maxWidth: .infinity, minHeight: 44)
