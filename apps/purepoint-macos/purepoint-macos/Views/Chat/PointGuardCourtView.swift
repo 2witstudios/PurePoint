@@ -22,6 +22,7 @@ struct PointGuardCourtView<Composer: View>: View {
     @State private var passing: Int?
     @State private var passTask: Task<Void, Never>?
     @State private var composerBottom: CGFloat = 0
+    @State private var facesLeft = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static var accent: Color { Color(nsColor: Theme.pointGuardAccent) }
@@ -52,6 +53,8 @@ struct PointGuardCourtView<Composer: View>: View {
         let near = pointer.flatMap { PointGuardCourtGeometry.nearestSlot(to: $0, among: drifted) }
         let lit = passing ?? near
         let logo = PointGuardCourtGeometry.logoPoint(in: size)
+        // The logo faces the lit play, else the pointer.
+        let facing = lit.map { drifted[$0] } ?? pointer
         return ZStack(alignment: .topLeading) {
             CourtLines().stroke(Color.primary.opacity(0.065), lineWidth: 1.25)
             if let pointer {
@@ -61,7 +64,7 @@ struct PointGuardCourtView<Composer: View>: View {
                 RadialGradient(
                     colors: [Self.accent.opacity(0.08), .clear], center: center, startRadius: 0, endRadius: 420)
             }
-            passLines(from: logo, pointer: pointer, to: lit.map { drifted[$0] })
+            passLine(from: logo, to: lit.map { drifted[$0] })
             ForEach(plays) { play in
                 playButton(play, lit: lit == play.slot)
                     .position(drifted[play.slot])
@@ -69,15 +72,11 @@ struct PointGuardCourtView<Composer: View>: View {
             }
             // Above the plays, so a play squeezed by a short pane can never take a click meant for the composer.
             column(size, pointer: pointer)
-            if let ball = passing.map({ drifted[$0] }) ?? pointer {
-                Circle().fill(Self.accent).frame(width: 14, height: 14)
-                    .shadow(color: Self.accent.opacity(0.6), radius: 8)
-                    .position(ball)
-                    .animation(.spring(response: passing == nil ? 0.22 : 0.45, dampingFraction: 0.85), value: ball)
-                    .allowsHitTesting(false).accessibilityHidden(true)
-            }
         }
         .frame(width: size.width, height: size.height)
+        .onChange(of: facing) { _, target in
+            facesLeft = PointGuardCourtGeometry.facesLeft(toward: target, logoX: logo.x, current: facesLeft)
+        }
         .contentShape(Rectangle())
         .coordinateSpace(.named(courtSpace))
         .onContinuousHover(coordinateSpace: .named(courtSpace)) { phase in
@@ -88,18 +87,13 @@ struct PointGuardCourtView<Composer: View>: View {
         }
     }
 
-    private func passLines(from logo: CGPoint, pointer: CGPoint?, to target: CGPoint?) -> some View {
+    private func passLine(from logo: CGPoint, to target: CGPoint?) -> some View {
         ZStack {
             if let target {
                 Path {
                     $0.move(to: logo); $0.addLine(to: target)
                 }
                 .stroke(Self.accent, style: StrokeStyle(lineWidth: 1.75, lineCap: .round))
-            } else if let pointer {
-                Path {
-                    $0.move(to: logo); $0.addLine(to: pointer)
-                }
-                .stroke(Color.primary.opacity(0.22), style: StrokeStyle(lineWidth: 1, lineCap: .round, dash: [2, 7]))
             }
         }
         .allowsHitTesting(false).accessibilityHidden(true)
@@ -107,7 +101,9 @@ struct PointGuardCourtView<Composer: View>: View {
 
     private func column(_ size: CGSize, pointer: CGPoint?) -> some View {
         VStack(spacing: 0) {
-            logoMark(diameter: 128, tilt: pointer.map { PointGuardCourtGeometry.tilt(toward: $0, in: size) } ?? 0)
+            logoMark(
+                diameter: 128, tilt: pointer.map { PointGuardCourtGeometry.tilt(toward: $0, in: size) } ?? 0,
+                facesLeft: facesLeft)
             heading(size: 40).padding(.top, 36)
             slot.padding(.top, 24)
                 .background {
@@ -129,7 +125,7 @@ struct PointGuardCourtView<Composer: View>: View {
     private func stacked(height: CGFloat) -> some View {
         ScrollView {
             VStack(spacing: 0) {
-                logoMark(diameter: 88, tilt: 0)
+                logoMark(diameter: 88, tilt: 0, facesLeft: false)
                 heading(size: 26).padding(.top, 24).padding(.horizontal, 16)
                 slot.padding(.top, 16)
                 VStack(spacing: 8) {
@@ -151,9 +147,11 @@ struct PointGuardCourtView<Composer: View>: View {
 
     // MARK: - Pieces
 
-    private func logoMark(diameter: CGFloat, tilt: Double) -> some View {
+    private func logoMark(diameter: CGFloat, tilt: Double, facesLeft: Bool) -> some View {
         Image("PurePointLogo").resizable().scaledToFit()
             .frame(width: diameter * 0.6, height: diameter * 0.6)
+            .scaleEffect(x: facesLeft ? -1 : 1, y: 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.9), value: facesLeft)
             .rotationEffect(.degrees(tilt))
             .animation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.8), value: tilt)
             .frame(width: diameter, height: diameter)
@@ -250,7 +248,7 @@ struct PointGuardCourtView<Composer: View>: View {
         }
     }
 
-    /// Passes the ball, then sends once it lands.
+    /// Draws the pass to the play, then sends once it lands.
     private func run(_ play: PointGuardPlay) {
         guard canRun, passing == nil else { return }
         guard !reduceMotion else { return onRun(play) }
