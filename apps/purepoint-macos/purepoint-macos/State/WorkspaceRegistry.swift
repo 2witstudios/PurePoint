@@ -108,10 +108,14 @@ final class WorkspaceRegistry {
         saveWorkItems[projectId]?.cancel()
         saveWorkItems[projectId] = nil
         pendingSaves.remove(projectId)
+        // The base as the reconciler would show it now: the grouping it derives from the
+        // manifest comes out the same on every Mac, so only what the user did here is "ours".
+        var base = layoutBases[projectId] ?? []
+        if let live = liveByProject[projectId] {
+            base = decoded(WorkspaceReconciler.reconcile(stored: base, live: live), projectId: projectId)
+        }
         let merged = WorkspaceLayoutMerge.merge(
-            base: layoutBases[projectId] ?? [],
-            ours: decoded(workspacesByProject[projectId] ?? [], projectId: projectId),
-            theirs: workspaces)
+            base: base, ours: decoded(workspacesByProject[projectId] ?? [], projectId: projectId), theirs: workspaces)
         layoutBases[projectId] = workspaces
         workspacesByProject[projectId] = merged
         pruneActiveSelection()
@@ -625,6 +629,9 @@ final class WorkspaceRegistry {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
     }
 
+    /// Whether a layout change of this project is waiting out the save debounce.
+    func hasPendingSave(projectRoot: String) -> Bool { pendingSaves.contains(projectRoot) }
+
     /// Write a project's pending layout change now rather than after the debounce.
     func saveNow(projectRoot: String) {
         guard pendingSaves.contains(projectRoot), let item = saveWorkItems[projectRoot] else { return }
@@ -650,7 +657,9 @@ final class WorkspaceRegistry {
 
     /// Write a local project's layout, unless another Mac changed the file since this app
     /// last read or wrote it — then adopt that layout instead of overwriting it.
-    private func saveLocal(_ workspaces: [Workspace], projectRoot: String, activeWorkspaceId: String?) {
+    private func saveLocal(
+        _ workspaces: [Workspace], projectRoot: String, activeWorkspaceId: String?, retryAfterConflict: Bool = true
+    ) {
         guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else {
             return
         }
@@ -663,6 +672,14 @@ final class WorkspaceRegistry {
             localLayoutStamps[projectRoot] = modified
             adoptExternalLayout(
                 projectRoot, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectRoot))
+            // Write the merge now rather than after the debounce: the caller may be a spawn
+            // that needs its tab on disk, or quit.
+            guard retryAfterConflict, pendingSaves.remove(projectRoot) != nil else { return }
+            saveWorkItems[projectRoot]?.cancel()
+            saveWorkItems[projectRoot] = nil
+            saveLocal(
+                workspacesByProject[projectRoot] ?? [], projectRoot: projectRoot,
+                activeWorkspaceId: self.activeWorkspaceId(inProject: projectRoot), retryAfterConflict: false)
         case .skipped:
             break
         }

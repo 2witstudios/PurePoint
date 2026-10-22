@@ -462,7 +462,18 @@ final class ProjectState: Identifiable {
             return
         }
         Task {
-            _ = await HostIO.value { saver.flush(until: .now() + 5) }
+            // A save that met another Mac's write merges and queues the merge; write that too.
+            for _ in 0..<2 {
+                _ = await HostIO.value { saver.flush(until: .now() + 5) }
+                await Task.yield()
+                guard registry.hasPendingSave(projectRoot: root) else { break }
+                registry.saveNow(projectRoot: root)
+            }
+            // The tab may have been closed, or the project closed, while the layout was written.
+            guard registry.workspace(id: workspaceId)?.surface(id: surfaceId)?.content == .empty else {
+                registry.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
+                return
+            }
             self.sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)
         }
     }

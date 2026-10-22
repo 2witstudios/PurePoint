@@ -460,9 +460,11 @@ nonisolated struct LiveAgent: Equatable, Sendable {
 ///
 /// Two apps write the same `.pu/workspaces.json` and every save is conditional, so a save that
 /// finds the document changed has to take the other Mac's edits without dropping its own.
-/// `base` is the document as this app last read or wrote it. A workspace only this app changed
-/// or added keeps this app's version; one the other Mac changed, added or removed takes theirs,
-/// including when both changed it — the document on disk is what both Macs share.
+/// `base` is the document as this app last read or wrote it. A workspace this app changed or
+/// added keeps this app's version — also when the other Mac changed it too, so a tab just split
+/// here for a spawn survives — and everything else takes theirs. The other Mac then adopts the
+/// result: its copy of each workspace is unchanged from its base, so it takes ours and no
+/// further write follows.
 nonisolated enum WorkspaceLayoutMerge {
     static func merge(base: [Workspace], ours: [Workspace], theirs: [Workspace]) -> [Workspace] {
         let baseById = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -470,14 +472,15 @@ nonisolated enum WorkspaceLayoutMerge {
         let theirIds = Set(theirs.map(\.id))
         var result: [Workspace] = []
         for their in theirs {
-            guard their == baseById[their.id] else {
-                result.append(their)
-                continue
+            let original = baseById[their.id]
+            if let mine = oursById[their.id] {
+                result.append(mine != original ? mine : their)
+            } else if their != original {
+                result.append(their)  // removed here, changed there: keep it
             }
-            // Untouched on their side: this app's version, unless this app removed it.
-            if let mine = oursById[their.id] { result.append(mine) }
         }
-        result.append(contentsOf: ours.filter { !theirIds.contains($0.id) && baseById[$0.id] == nil })
+        // Added here, or changed here and removed there.
+        result.append(contentsOf: ours.filter { !theirIds.contains($0.id) && $0 != baseById[$0.id] })
         return result
     }
 }

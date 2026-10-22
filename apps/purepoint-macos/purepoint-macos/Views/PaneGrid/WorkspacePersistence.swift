@@ -236,7 +236,7 @@ nonisolated enum WorkspacePersistence {
 
     /// Save a remote project's layout through its host, never downgrading a newer document.
     /// The write is conditional on the modification time of the document this app last read
-    /// or wrote (`expectedModifiedMs`), else of the one just read. When the document changed
+    /// or wrote (`expectedModifiedMs`, nil when there was none). When the document changed
     /// meanwhile (another Mac, or `pu grid` on the machine) nothing is written: the outcome
     /// carries that document so the caller adopts it instead of reverting it. Nothing is
     /// written either when the current document cannot be read (anything but a missing file).
@@ -250,7 +250,8 @@ nonisolated enum WorkspacePersistence {
         do {
             let existing = try host.read(path: path, maxBytes: maxRemoteLayoutBytes)
             if existing.truncated || isNewerThanSupported(data: existing.data) { return .skipped }
-            if let expectedModifiedMs, existing.modifiedMs != expectedModifiedMs {
+            // A document this app has not seen (none when it last read) is someone else's.
+            if existing.modifiedMs != expectedModifiedMs {
                 return .conflict(existing.data, modifiedMs: existing.modifiedMs)
             }
             onDisk = existing.modifiedMs

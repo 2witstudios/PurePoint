@@ -277,6 +277,25 @@ struct WorkspaceRegistryTests {
         #expect(onDisk.map(\.paneCount) == [2, 2])
     }
 
+    @Test func givenBothMacsChangedTheSameWorkspaceOneSaveShouldKeepThisMacsNewTabOnDisk() throws {
+        let project = root + "-same"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        var theirs = registry.workspaces(forProject: project)
+        theirs[0].split(leafId: 0, axis: .horizontal)
+        try writeLayoutFromAnotherMac(theirs, projectRoot: project)
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+        let tab = try #require(registry.workspace(id: "ws-ag-a")?.focusedSurface).id
+
+        registry.saveNow(projectRoot: project)  // as a spawn does: conflicts, merges, writes
+
+        #expect(registry.workspace(id: "ws-ag-a")?.surface(id: tab)?.content == .empty)
+        let onDisk = try WorkspacePersistence.loadForRegistry(projectRoot: project)
+        #expect(onDisk.first?.surface(id: tab)?.content == .empty)
+        #expect(!registry.hasPendingSave(projectRoot: project))
+    }
+
     @Test func givenAgentSpawnedIntoPointGuardOnAnotherMacShouldLandInThisMacsPointGuard() throws {
         let project = root + "-pg"
         defer { try? FileManager.default.removeItem(atPath: project) }

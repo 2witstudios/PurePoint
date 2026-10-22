@@ -609,6 +609,15 @@ struct RemoteLayoutPersistenceTests {
         #expect(outcome == .written(modifiedMs: 30))
     }
 
+    @Test func givenDocumentCreatedSinceItWasReadAsMissingSaveShouldAdoptIt() {
+        let theirs = #"{"version":3,"workspaces":[]}"#
+        let host = FakeHost(reads: [file(theirs, modifiedMs: 20)])
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: nil)
+        #expect(outcome == .conflict(Data(theirs.utf8), modifiedMs: 20))
+        #expect(host.writeCount == 0)
+    }
+
     @Test func givenDocumentDeletedSinceReadSaveShouldWriteItAgain() {
         let host = FakeHost(
             reads: [.failure(.notFound("gone"))],

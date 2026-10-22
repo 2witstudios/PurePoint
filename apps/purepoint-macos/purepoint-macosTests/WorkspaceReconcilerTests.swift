@@ -439,14 +439,16 @@ struct WorkspaceReconcilerTests {
         #expect(merged == [ours[0], theirs[1]])
     }
 
-    @Test func givenBothMacsChangedTheSameWorkspaceMergeShouldTakeTheirs() {
+    @Test func givenBothMacsChangedTheSameWorkspaceMergeShouldKeepOurs() {
         let base = [Workspace.adopting(agentId: "ag-a", container: .projectRoot)]
         var ours = base
         ours[0].split(leafId: 0, axis: .vertical)
         var theirs = base
         theirs[0].split(leafId: 0, axis: .horizontal)
 
-        #expect(WorkspaceLayoutMerge.merge(base: base, ours: ours, theirs: theirs) == theirs)
+        // Ours keeps a tab split here for a spawn; the other Mac then adopts it unchanged.
+        #expect(WorkspaceLayoutMerge.merge(base: base, ours: ours, theirs: theirs) == ours)
+        #expect(WorkspaceLayoutMerge.merge(base: theirs, ours: theirs, theirs: ours) == ours)
     }
 
     @Test func givenWorkspacesAddedAndRemovedMergeShouldApplyEachSidesChange() {
@@ -458,6 +460,15 @@ struct WorkspaceReconcilerTests {
         let merged = WorkspaceLayoutMerge.merge(base: [a, b], ours: [a, mine], theirs: [b, theirsNew])
 
         #expect(merged.map(\.id) == [theirsNew.id, mine.id])
+    }
+
+    @Test func givenWorkspaceChangedOnOneMacAndRemovedOnTheOtherMergeShouldKeepIt() {
+        let a = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        var changed = a
+        changed.split(leafId: 0, axis: .vertical)
+
+        #expect(WorkspaceLayoutMerge.merge(base: [a], ours: [changed], theirs: []) == [changed])
+        #expect(WorkspaceLayoutMerge.merge(base: [a], ours: [], theirs: [changed]) == [changed])
     }
 
     @Test func givenPointGuardPlacementFromAnotherMacShouldBeRekeyedToThisApp() {
