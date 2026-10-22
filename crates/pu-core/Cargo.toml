@@ -15,7 +15,7 @@ rand = "0.10"
 uuid = { workspace = true }
 indexmap = { workspace = true }
 fs4 = "1.1"
-sha2 = "0.10"
+sha2 = "0.11"
 shell-words = "1"
 
 [dev-dependencies]
