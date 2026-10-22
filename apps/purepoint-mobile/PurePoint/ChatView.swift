@@ -231,7 +231,10 @@ struct PointGuardScreen: View {
         (model.snapshot?.messages ?? []).isEmpty && (model.snapshot?.notices ?? []).isEmpty && !model.busy
     }
     private var court: some View {
-        PlaysHero(enabled: model.chatGrant.canSend) { prompt in model.draft = prompt; composerFocused = false }
+        let token = model.selectionToken
+        // A new court per session, so a pass still in the air is cancelled rather than landing in the next conversation's draft.
+        return PlaysHero(enabled: model.chatGrant.canSend) { prompt in guard model.isSelected(token) else { return }; model.draft = prompt; composerFocused = false }
+            .id(model.snapshot?.sessionId)
             .simultaneousGesture(TapGesture().onEnded { composerFocused = false })
             .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { value in if value.translation.height > 40 { composerFocused = false } })
             .accessibilityAction(named: "Dismiss keyboard") { composerFocused = false }
