@@ -527,7 +527,7 @@ struct HomeView: View {
                     }
                     if model.loading && model.machines.isEmpty { ProgressView().frame(maxWidth: .infinity).padding(.top, 30) }
                 }
-                ForEach(actions.unresolved) { launch in
+                ForEach(actions.unresolved.filter { $0.host == model.bridgeIdentity }) { launch in
                     NoticeBanner(text: "\(launch.title) couldn't be confirmed.", systemImage: "questionmark.circle.fill", actionTitle: "Review") { actions.review = launch }.padding(.horizontal, 4).padding(.top, 8)
                 }
             }.padding(.horizontal, 8).padding(.bottom, 16)

@@ -404,11 +404,12 @@ struct PlaysHero: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Play { let label: String; let icon: String; let prompt: String }
+    // Same built-in plays as the desktop court (PointGuardPlay.builtIns), slot order left/right wing, left/right block.
     private static let plays = [
-        Play(label: "Catch me up", icon: "square.stack.3d.up", prompt: "Give me an update on all my projects — what moved, what is blocked, and what needs me next."),
-        Play(label: "What’s next?", icon: "safari", prompt: "Look across my projects and tell me what I should work on next, and why."),
-        Play(label: "Tidy my desktop", icon: "square.grid.2x2", prompt: "Organize my desktop — group the files into folders that make sense and clear the clutter."),
-        Play(label: "What’s running?", icon: "waveform.path.ecg", prompt: "What is running on my machine right now? Agents, apps, and anything using a lot of memory or CPU."),
+        Play(label: "Catch me up", icon: "square.stack.3d.up", prompt: "Give me an update on all my projects — what moved, what's blocked, and what needs me next."),
+        Play(label: "What's next?", icon: "safari", prompt: "Look across my projects and tell me what I should work on next, and why."),
+        Play(label: "Tidy my desktop", icon: "square.grid.2x2", prompt: "Organize my desktop — group the files into folders that make sense and clear the clutter. Show me the plan before you move anything."),
+        Play(label: "What's running?", icon: "waveform.path.ecg", prompt: "What's running on my machine right now? Agents, apps, and anything using a lot of memory or CPU."),
     ]
     private static let height: CGFloat = 470
 
