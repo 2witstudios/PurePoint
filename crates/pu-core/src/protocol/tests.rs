@@ -24,6 +24,36 @@ fn given_init_request_should_round_trip() {
 }
 
 #[test]
+fn given_remove_project_wire_form_should_default_to_refusing_live_agents() {
+    let req: Request =
+        serde_json::from_str(r#"{"type":"remove_project","project_root":"/test"}"#).unwrap();
+    match req {
+        Request::RemoveProject {
+            project_root,
+            suspend_agents,
+        } => {
+            assert_eq!(project_root, "/test");
+            assert!(!suspend_agents);
+        }
+        _ => panic!("expected RemoveProject"),
+    }
+}
+
+#[test]
+fn given_project_list_change_should_serialize_with_its_roots() {
+    let json = serde_json::to_value(Response::ProjectsChanged {
+        projects: vec!["/a".into()],
+    })
+    .unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"type": "projects_changed", "projects": ["/a"]})
+    );
+    let req: Request = serde_json::from_str(r#"{"type":"subscribe_projects"}"#).unwrap();
+    assert!(matches!(req, Request::SubscribeProjects));
+}
+
+#[test]
 fn given_spawn_request_should_default_agent_to_claude() {
     let json = r#"{"type":"spawn","project_root":"/test","prompt":"fix bug"}"#;
     let req: Request = serde_json::from_str(json).unwrap();
@@ -37,6 +67,33 @@ fn given_spawn_request_should_default_agent_to_claude() {
         }
         _ => panic!("expected Spawn"),
     }
+}
+
+#[test]
+fn given_spawn_request_with_placement_should_parse() {
+    let json = r#"{"type":"spawn","project_root":"/test","prompt":"","placement":{"workspace":"ws-ag-1","surface":2}}"#;
+    let req: Request = serde_json::from_str(json).unwrap();
+    match req {
+        Request::Spawn { placement, .. } => assert_eq!(
+            placement,
+            Some(crate::types::SpawnPlacement {
+                workspace: "ws-ag-1".into(),
+                surface: 2,
+            })
+        ),
+        _ => panic!("expected Spawn"),
+    }
+}
+
+#[test]
+fn given_spawn_request_without_placement_should_omit_it() {
+    let json = r#"{"type":"spawn","project_root":"/test","prompt":""}"#;
+    let req: Request = serde_json::from_str(json).unwrap();
+    let Request::Spawn { placement, .. } = &req else {
+        panic!("expected Spawn")
+    };
+    assert!(placement.is_none());
+    assert!(!serde_json::to_string(&req).unwrap().contains("placement"));
 }
 
 #[test]
@@ -55,6 +112,7 @@ fn given_spawn_request_with_all_fields_should_round_trip() {
         plan_mode: false,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -106,6 +164,7 @@ fn given_spawn_request_with_no_auto_true_should_round_trip() {
         plan_mode: false,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -141,6 +200,7 @@ fn given_spawn_request_with_extra_args_should_round_trip() {
         plan_mode: false,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -168,6 +228,7 @@ fn given_spawn_request_with_plan_mode_should_round_trip() {
         plan_mode: true,
         no_trigger: false,
         trigger: None,
+        placement: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -231,11 +292,17 @@ fn given_logs_request_should_default_tail_to_500() {
 fn given_attach_request_should_round_trip() {
     let req = Request::Attach {
         agent_id: "ag-abc".into(),
+        replay: None,
+        client_id: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
     match parsed {
-        Request::Attach { agent_id } => assert_eq!(agent_id, "ag-abc"),
+        Request::Attach {
+            agent_id,
+            replay: None,
+            client_id: None,
+        } => assert_eq!(agent_id, "ag-abc"),
         _ => panic!("expected Attach"),
     }
 }
@@ -326,7 +393,39 @@ fn given_empty_diff_result_should_round_trip() {
     }
 }
 
+#[test]
+fn given_reorder_projects_request_should_round_trip() {
+    let req = Request::ReorderProjects {
+        project_roots: vec!["/b".into(), "/a".into()],
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"reorder_projects","project_roots":["/b","/a"]}"#
+    );
+    match serde_json::from_str(&json).unwrap() {
+        Request::ReorderProjects { project_roots } => assert_eq!(project_roots, ["/b", "/a"]),
+        other => panic!("expected ReorderProjects, got {other:?}"),
+    }
+}
+
 // --- Response round-trips ---
+
+#[test]
+fn given_project_order_should_round_trip() {
+    let resp = Response::ProjectOrder {
+        project_roots: vec!["/b".into(), "/a".into()],
+    };
+    let json = serde_json::to_string(&resp).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"project_order","project_roots":["/b","/a"]}"#
+    );
+    match serde_json::from_str(&json).unwrap() {
+        Response::ProjectOrder { project_roots } => assert_eq!(project_roots, ["/b", "/a"]),
+        other => panic!("expected ProjectOrder, got {other:?}"),
+    }
+}
 
 #[test]
 fn given_health_report_should_round_trip() {
@@ -485,7 +584,7 @@ fn given_kill_request_without_exclude_should_default_empty() {
 #[test]
 fn given_protocol_version_should_be_current() {
     // Intentional hardcoded check — update when the protocol version is bumped.
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(PROTOCOL_VERSION, 14);
 }
 
 // --- GridCommand round-trips ---
@@ -2063,6 +2162,87 @@ fn given_update_agent_config_request_with_args_should_round_trip() {
     }
 }
 
+#[test]
+fn given_update_agent_config_request_with_string_args_should_split_them() {
+    // given — the Settings text field sends the free-form string
+    let json = r#"{"type":"update_agent_config","project_root":"/test","agent_name":"claude","launch_args":"--model opus --append-system-prompt 'be terse'"}"#;
+    // when
+    let parsed: Request = serde_json::from_str(json).unwrap();
+    // then
+    match parsed {
+        Request::UpdateAgentConfig { launch_args, .. } => assert_eq!(
+            launch_args.unwrap(),
+            vec!["--model", "opus", "--append-system-prompt", "be terse"]
+        ),
+        _ => panic!("expected UpdateAgentConfig"),
+    }
+}
+
+#[test]
+fn given_update_agent_config_request_with_unbalanced_quote_should_be_rejected() {
+    let json = r#"{"type":"update_agent_config","project_root":"/test","agent_name":"claude","launch_args":"--x 'oops"}"#;
+    assert!(serde_json::from_str::<Request>(json).is_err());
+}
+
+#[test]
+fn given_update_global_agent_settings_with_launch_args_should_round_trip() {
+    let req = Request::UpdateGlobalAgentSettings {
+        agent_status_tracking: None,
+        launch_args: Some(
+            [(
+                "claude".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    match serde_json::from_str::<Request>(&json).unwrap() {
+        Request::UpdateGlobalAgentSettings { launch_args, .. } => assert_eq!(
+            launch_args.unwrap()["claude"],
+            "--dangerously-skip-permissions"
+        ),
+        _ => panic!("expected UpdateGlobalAgentSettings"),
+    }
+}
+
+#[test]
+fn given_legacy_update_global_agent_settings_with_codex_yolo_should_ignore_it() {
+    // Clients from before Codex YOLO was removed still send `codex_yolo`.
+    let json = r#"{"type":"update_global_agent_settings","codex_yolo":true,"agent_status_tracking":false}"#;
+    match serde_json::from_str::<Request>(json).unwrap() {
+        Request::UpdateGlobalAgentSettings {
+            agent_status_tracking,
+            launch_args,
+        } => {
+            assert_eq!(agent_status_tracking, Some(false));
+            assert!(launch_args.is_none());
+        }
+        _ => panic!("expected UpdateGlobalAgentSettings"),
+    }
+}
+
+#[test]
+fn given_global_agent_settings_report_should_still_send_codex_yolo_false_for_protocol_12_apps() {
+    let report = Response::GlobalAgentSettingsReport {
+        codex_yolo: false,
+        agent_status_tracking: true,
+        launch_args: IndexMap::new(),
+    };
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["codex_yolo"], serde_json::Value::Bool(false));
+}
+
+#[test]
+fn given_legacy_global_agent_settings_report_should_default_launch_args() {
+    let json = r#"{"type":"global_agent_settings_report","codex_yolo":false}"#;
+    match serde_json::from_str::<Response>(json).unwrap() {
+        Response::GlobalAgentSettingsReport { launch_args, .. } => assert!(launch_args.is_empty()),
+        _ => panic!("expected GlobalAgentSettingsReport"),
+    }
+}
+
 // --- Input submit field ---
 
 #[test]
@@ -2071,6 +2251,7 @@ fn given_input_with_submit_should_round_trip() {
         agent_id: "ag-abc".into(),
         data: b"hello world".to_vec(),
         submit: true,
+        cancel_on_disconnect: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -2079,6 +2260,7 @@ fn given_input_with_submit_should_round_trip() {
             agent_id,
             data,
             submit,
+            ..
         } => {
             assert_eq!(agent_id, "ag-abc");
             assert_eq!(data, b"hello world");
@@ -2108,21 +2290,32 @@ fn given_update_agent_config_request_with_none_should_round_trip() {
 #[test]
 fn given_config_report_response_should_round_trip() {
     let resp = Response::ConfigReport {
+        terminal_available: Some(true),
         default_agent: "claude".into(),
         agents: vec![
             AgentConfigInfo {
+                id: None,
+                available: None,
                 name: "claude".into(),
                 command: "claude".into(),
                 launch_args: Some(vec!["--verbose".into()]),
                 resolved_launch_args: vec!["--verbose".into()],
                 interactive: true,
+                project_launch_args: Some("--verbose".into()),
+                machine_launch_args: None,
+                resolved_command: Some("claude --verbose".into()),
             },
             AgentConfigInfo {
+                id: None,
+                available: None,
                 name: "codex".into(),
                 command: "codex".into(),
                 launch_args: None,
                 resolved_launch_args: vec!["--sandbox".into(), "workspace-write".into()],
                 interactive: true,
+                project_launch_args: None,
+                machine_launch_args: Some("--sandbox workspace-write".into()),
+                resolved_command: None,
             },
         ],
     };
@@ -2132,6 +2325,7 @@ fn given_config_report_response_should_round_trip() {
         Response::ConfigReport {
             default_agent,
             agents,
+            ..
         } => {
             assert_eq!(default_agent, "claude");
             assert_eq!(agents.len(), 2);
@@ -2164,6 +2358,7 @@ fn given_input_with_submit_false_should_round_trip() {
         agent_id: "ag-abc".into(),
         data: b"raw keys".to_vec(),
         submit: false,
+        cancel_on_disconnect: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -2184,11 +2379,13 @@ fn given_minimal_fs_requests_should_apply_spec_defaults() {
             recursive,
             include_hidden,
             max_entries,
+            directories_only,
         } => {
             assert_eq!(path, "/p");
             assert!(!recursive);
             assert!(include_hidden);
             assert_eq!(max_entries, 20_000);
+            assert!(!directories_only);
         }
         other => panic!("expected FsList, got {other:?}"),
     }
@@ -2207,6 +2404,18 @@ fn given_minimal_fs_requests_should_apply_spec_defaults() {
         Request::FsWrite {
             expected_modified_ms: None,
             create_dirs: false,
+            ..
+        }
+    ));
+    let parsed: Request = serde_json::from_str(
+        r#"{"type":"attach_file","upload_id":"u1","name":"a.png","data_base64":"aGk="}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        parsed,
+        Request::AttachFile {
+            offset: 0,
+            done: false,
             ..
         }
     ));
@@ -2245,6 +2454,7 @@ fn given_fs_and_git_requests_should_round_trip_with_snake_case_tags() {
                 recursive: true,
                 include_hidden: false,
                 max_entries: 5,
+                directories_only: true,
             },
             "fs_list",
         ),
@@ -2270,6 +2480,16 @@ fn given_fs_and_git_requests_should_round_trip_with_snake_case_tags() {
                 path: "/p/a".into(),
             },
             "fs_delete",
+        ),
+        (
+            Request::AttachFile {
+                upload_id: "u1".into(),
+                name: "shot.png".into(),
+                offset: 4,
+                data_base64: "aGk=".into(),
+                done: true,
+            },
+            "attach_file",
         ),
         (
             Request::SubscribeFs {
@@ -2351,6 +2571,13 @@ fn given_fs_and_git_responses_should_round_trip_with_spec_shapes() {
                 paths: vec!["/p/a".into()],
             },
             "fs_event",
+        ),
+        (
+            Response::AttachFileResult {
+                received: 6,
+                path: Some("/h/.pu/attachments/u1/shot.png".into()),
+            },
+            "attach_file_result",
         ),
         (
             Response::GitExecResult {

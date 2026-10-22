@@ -256,6 +256,26 @@ import Foundation
         precondition(fixture.canceled.contains("live-stop-id"), "Rejected Stop must preserve explicit cancellation")
         try! await service.stopOwnedForQuit()
         precondition(!child.isRunning && !service.ready, "Deliberate quit must await its exact child exit")
+        // Device labels say what each tier allows, including Point Guard chat.
+        precondition(PointGuardPhoneAccess.summary(terminals: "control", workspaceManagement: true).contains("run commands"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "control", workspaceManagement: false).contains("reads Point Guard chat"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "view", workspaceManagement: true).contains("reads Point Guard chat"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "off", workspaceManagement: true).contains("No access"))
+        precondition(PointGuardPhoneAccess.summary(terminals: "admin", workspaceManagement: true).contains("No access"))
+        for level in PointGuardPhoneAccess.Level.allCases {
+            precondition(PointGuardPhoneAccess.Level(terminals: level.terminals, workspaceManagement: level.workspaceManagement) == level)
+        }
+        precondition(PointGuardPhoneAccess.Level(terminals: "view", workspaceManagement: true) == .view)
+        precondition(PointGuardPhoneAccess.Level(terminals: "admin", workspaceManagement: true) == .off)
+        // Access writes come from the stored grants, so a legacy management grant under View is cleared.
+        precondition(PointGuardPhoneAccess.steps(terminals: "view", workspaceManagement: true, to: .terminals)
+            == [.workspaceManagement(false), .terminals("control")])
+        precondition(PointGuardPhoneAccess.steps(terminals: "off", workspaceManagement: true, to: .off) == [.workspaceManagement(false)])
+        precondition(PointGuardPhoneAccess.steps(terminals: "view", workspaceManagement: false, to: .full)
+            == [.terminals("control"), .workspaceManagement(true)])
+        precondition(PointGuardPhoneAccess.steps(terminals: "control", workspaceManagement: true, to: .view)
+            == [.workspaceManagement(false), .terminals("view")])
+        precondition(PointGuardPhoneAccess.steps(terminals: "control", workspaceManagement: true, to: .full).isEmpty)
         print("Native auth/enrollment late-response and failed-cleanup retry checks passed")
     }
 }

@@ -67,6 +67,17 @@ impl Engine {
         tx.subscribe()
     }
 
+    // --- Project Registry Push ---
+
+    /// Receiver signalled on every registry change (used by the IPC server).
+    pub fn subscribe_projects(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.projects_changed.subscribe()
+    }
+
+    pub(super) fn notify_projects_changed(&self) {
+        let _ = self.projects_changed.send(());
+    }
+
     // --- Status Push ---
 
     pub(super) async fn handle_subscribe_status(&self, project_root: &str) -> Response {
@@ -205,6 +216,7 @@ impl Engine {
                         self.live_agent_status_sync(&agent.id, agent, &sessions);
                     agent.status = status;
                     agent.exit_code = exit_code;
+                    agent.signal = self.signal_snapshot(&agent.id);
                 }
                 wt
             })
@@ -328,8 +340,7 @@ mod natural_exit_tests {
         }
     }
 
-    async fn wait_for_exit(handle: &AgentHandle) {
-        let mut rx = handle.exit_rx.clone();
+    async fn wait_for_exit(mut rx: tokio::sync::watch::Receiver<Option<i32>>) {
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while rx.borrow_and_update().is_none() {
                 if rx.changed().await.is_err() {
@@ -344,7 +355,23 @@ mod natural_exit_tests {
     #[tokio::test]
     async fn given_agent_killed_by_shutdown_should_leave_agent_resumable() {
         let engine = Engine::new();
-        let handle = spawn_process(&engine, "/bin/sleep", &["30"]).await;
+        // Ready output proves the child has exec'd in its own process group.
+        // Ignoring TERM forces shutdown through SIGKILL escalation.
+        let handle = spawn_process(
+            &engine,
+            "/bin/sh",
+            &["-c", "trap '' TERM; printf ready; exec /bin/sleep 30"],
+        )
+        .await;
+        let mut output = handle.output_buffer.subscribe();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while handle.output_buffer.current_offset() < b"ready".len() {
+                output.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("child must establish its process group and TERM handler");
+        assert_eq!(handle.output_buffer.read_tail(5), b"ready");
         let pid = handle.pid;
         let exit_rx = handle.exit_rx.clone();
         let tmp = project_with(agent("ag-1", Some(pid), false));
@@ -356,13 +383,14 @@ mod natural_exit_tests {
         engine.watch_natural_exit(&control.path().to_string_lossy(), "ag-2", 42, control_rx);
         engine.sessions.lock().await.insert("ag-1".into(), handle);
 
-        engine
-            .kill_all_sessions(std::time::Duration::from_secs(2))
-            .await;
+        engine.kill_all_sessions(std::time::Duration::ZERO).await;
+        // SIGKILL is asynchronous; shutdown need not have published waitpid yet.
+        wait_for_exit(exit_rx.clone()).await;
         assert!(
             exit_rx.borrow().is_some(),
             "shutdown should have stopped ag-1"
         );
+        assert_eq!(*exit_rx.borrow(), Some(128 + libc::SIGKILL));
         control_tx.send(Some(0)).unwrap();
         wait_for_status(&control, "ag-2", AgentStatus::Broken).await;
 
@@ -378,7 +406,7 @@ mod natural_exit_tests {
         let pid = handle.pid;
         let exit_rx = handle.exit_rx.clone();
         let tmp = project_with(agent("ag-1", Some(pid), false));
-        wait_for_exit(&handle).await;
+        wait_for_exit(handle.exit_rx.clone()).await;
         engine.sessions.lock().await.insert("ag-1".into(), handle);
 
         engine

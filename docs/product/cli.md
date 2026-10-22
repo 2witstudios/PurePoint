@@ -25,7 +25,7 @@ Key behaviors:
 
 ## Decisions
 
-! [CLI-001] Auto-start with a 3s wall-clock startup budget, exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health (up to three 2s-bounded probes, 200ms apart; a `BUSY` reply counts as a live daemon), then spawns `pu-engine` (found on `PATH`, else next to the `pu` executable, else in `~/.pu/bin` or `~/.cargo/bin`) in its own session (`setsid`, null stdin/stdout) so it outlives an SSH session that started it with stderr redirected to `~/.pu/daemon.log`. A redundant spawn is harmless: it exits on the daemon lock. Then polls `Request::Health` with exponential backoff (10ms doubling to 640ms) inside a 3s timeout that includes the probes. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
+! [CLI-001] Auto-start with a 3s wall-clock startup budget, exits with error pointing to `~/.pu/daemon.log` — CLI calls `ensure_daemon()` which first checks health (up to three 2s-bounded probes, 200ms apart; a `BUSY` reply counts as a live daemon), then spawns `pu-engine` (a bundled `pu` uses only its app's `Contents/MacOS/pu-engine`; otherwise `PU_ENGINE_PATH` if set, else next to the `pu` executable, else `~/.pu/bin`; never a bare `PATH` search, and only an executable owned by the user or root that others can't write) in its own session (`setsid`, null stdin/stdout) so it outlives an SSH session that started it with stderr redirected to `~/.pu/daemon.log`. A redundant spawn is harmless: it exits on the daemon lock. Then polls `Request::Health` with exponential backoff (10ms doubling to 640ms) inside a 3s timeout that includes the probes. On timeout: `CliError::Other("daemon did not start within 3 seconds")`. Implemented in `pu-cli/src/daemon_ctrl.rs`.
 
 ! [CLI-002] `--json` flag for machine-readable output — provides raw JSON responses for conductor agents and scripts. Available on nearly every command: `init`, `spawn`, `status`, `bench`, `play`, `kill`, `logs`, `health`, `pulse`, `diff`, `clean`, and all CRUD subcommands (`prompt`, `agent`, `swarm`, `schedule`, `trigger`). Per-command flag (not global). Implemented across command handlers in `pu-cli/src/commands/`.
 
@@ -33,10 +33,12 @@ Key behaviors:
 
 | Command | Args/Flags | Description |
 |---|---|---|
-| `pu init` | `--json` | Register current project with daemon |
+| `pu init` | `--json` | Add the current project to the daemon (same as `pu projects add`) |
 | `pu spawn [prompt]` | `--agent`, `--name`, `--base`, `--root`, `--worktree`, `--template`, `--file`, `--command`, `--var KEY=VALUE`, `--no-auto`, `--agent-args`, `--plan`, `--no-trigger`, `--trigger`, `--json` | Spawn an agent (in worktree or root) |
 | `pu status` | `--global`, `--agent <id>`, `--json` | Show project, global summary, or agent status |
 | `pu projects list` | `--global`, `--json` | List daemon-known projects |
+| `pu projects add [path]` | `--json` | Add a folder as a project, initializing it if needed; path defaults to `--project`, then cwd. Works with `--machine` given an absolute path |
+| `pu projects remove [path]` | `--suspend-agents`, `--json` | Remove a project from the daemon for every device; files, including `.pu/`, are kept. Refuses while agents run unless `--suspend-agents` |
 | `pu agents list` | `--global`, `--state running\|suspended\|broken\|unknown`, `--json` | List agent instances with ownership |
 | `pu worktrees list` | `--global`, `--json` | List worktrees with ownership |
 | `pu bench [agent_id]` | `--all`, `--json` | Suspend (bench) agents |
@@ -47,6 +49,7 @@ Key behaviors:
 | `pu logs <agent_id>` | `--tail <n>` (default 500), `--json` | Deprecated raw terminal diagnostic bytes |
 | `pu send <agent_id> [text]` | `--no-enter`, `--keys <key>`, `--json` | Send text or control keys to agent terminal. Claude agents get screen-confirmed delivery (full text submitted as one turn, or non-zero exit); no nudge needed |
 | `pu health` | `--json` | Check daemon health |
+| `pu daemon proxy` | honours global `--socket` | Relay stdin/stdout to the daemon socket as one connection, for SSH exec channels. Never starts the daemon (see below) |
 | `pu pulse` | `--json` | Workspace overview (agents, runtimes, git stats) |
 | `pu diff` | `--worktree <id>`, `--stat`, `--json` | Show git diffs across worktrees |
 | `pu watch` | `--interval <ms>` (default 800) | Live TUI dashboard |
@@ -92,6 +95,12 @@ Key behaviors:
 | `pu machine remove <name>` | `--json` | Forget a machine; its daemon and agents keep running |
 | `pu machine status [name]` | `--json` | Probe machine daemons over SSH: `running`, `busy`, `stopped`, `incompatible` or `unreachable`. Never starts a daemon |
 | `pu machine start <name>` | — | Start a machine's daemon by running `pu health` there over ssh |
+| `pu phone install` / `uninstall` | `--now`, `--port` | Linux only: write, enable (and start) or remove the `pu-pointguard.service` user unit for the payload matching this `pu` (LPH-003). Uninstall keeps device trust |
+| `pu phone start` / `stop` / `restart` / `status` | `--force` (stop, restart), `--json` (status) | Service lifecycle. `stop`/`restart` ask the bridge to stop only while idle; `restart` moves to this `pu`'s payload and prunes older ones |
+| `pu phone run` | `--port` | Run the bridge in the foreground with an empty, explicit environment (hosts without systemd) |
+| `pu phone pair` | `--ttl <1-300>`, `--text` | Terminal QR (or `purepoint-pair:` paste code) for one single-use enrollment; revoked on any exit except success (LPH-007) |
+| `pu phone devices` / `grant` / `rename` / `revoke` | `--json`; `--terminals off\|view\|control`, `--workspace on\|off` | Device administration by name or unique id prefix (≥ 4 characters). Grants apply downgrades first and print the derived chat level (LPH-013) |
+| `pu phone login` / `model` / `cwd` | `[provider]`, `--api-key-stdin`; `[<provider>/<model>]`; `<path>` | Headless provider sign-in over the owner admin socket, model choice and working folder (LPH-009) |
 | `pu --machine <name> <command>` | conflicts with `--socket` | Run a command against a machine's daemon (see below) |
 
 ## Research Notes
@@ -133,3 +142,14 @@ See [Machines over SSH](machines.md) (MACH-003, MACH-006, MACH-008). `pu --machi
 - `PU_SSH` overrides the ssh binary (default `/usr/bin/ssh`); used by tests.
 
 Validation: `crates/pu-cli/tests/machines.rs` drives real CLI processes through a fake `PU_SSH` against an in-process daemon, including a stopped daemon (no local daemon started, no sockets left) and an unreachable host.
+
+## Daemon proxy (`pu daemon proxy`)
+
+See [Machines over SSH](machines.md) (MACH-003). Clients that cannot `ssh -L` a Unix socket (the iPad app) open an SSH exec channel running `pu daemon proxy`; each channel is exactly one daemon connection carrying newline-delimited JSON.
+
+- Connects to the daemon socket (`~/.pu/daemon.sock`, or `--socket`) and copies stdin to the socket and socket output to stdout byte-for-byte. Stdin EOF half-closes the socket's write side and the proxy keeps draining replies; the daemon closing the connection ends the proxy with exit 0, even while stdin is still open. Stdout is flushed before exit.
+- Never starts a daemon: `daemon_ctrl::ensure_daemon` is not on this path. A missing or refusing socket exits 1 with ``error: cannot connect to the daemon at <socket> (<os error>); start it with `pu daemon start` `` on stderr.
+- Stdout carries only daemon bytes. Every diagnostic goes to stderr, and the plugin freshness check is skipped so the proxy has no side work.
+- Implemented in `crates/pu-cli/src/commands/daemon_proxy.rs`.
+
+Validation: unit tests in `daemon_proxy.rs` relay 256 KiB both ways through an echo daemon, check half-close draining and daemon-side close; `crates/pu-cli/tests/daemon_proxy.rs` runs the real binary against a fake protocol daemon and the in-process `pu-engine` daemon (a `{"type":"health"}` line yields exactly the health response line) and against a missing socket (non-zero exit, empty stdout, no daemon started).

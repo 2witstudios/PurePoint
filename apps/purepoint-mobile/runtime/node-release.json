@@ -8,6 +8,14 @@
     "x64": {
       "name": "node-v22.23.3-darwin-x64.tar.gz",
       "sha256": "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8"
+    },
+    "linux-arm64": {
+      "name": "node-v22.23.3-linux-arm64.tar.gz",
+      "sha256": "5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2"
+    },
+    "linux-x64": {
+      "name": "node-v22.23.3-linux-x64.tar.gz",
+      "sha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af"
     }
   }
 }

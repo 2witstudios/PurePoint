@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 nonisolated enum CodexConversationIndex {
@@ -156,3 +157,4 @@ nonisolated enum CodexConversationIndex {
         return String(decoding: data, as: UTF8.self)
     }
 }
+#endif

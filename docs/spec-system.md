@@ -60,7 +60,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 |---|---|---|
 | Data Model | DM | EXPLORING |
 | CLI | CLI | DECIDED |
-| Daemon | DMN | EXPLORING |
+| Daemon | DMN | CONVERGING |
 | Agent Lifecycle | AL | CONVERGING |
 | Worktree Management | WT | SEED |
 | Orchestration | ORCH | SEED |
@@ -72,6 +72,8 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Point Guard Setup | PGSET | SPECIFIED |
 | Configuration | CFG | SEED |
 | Machines | MACH | SPECIFIED |
+| Linux Phone Host | LPH | SPECIFIED |
+| iPad App | IPAD | SPECIFIED |
 
 ### Reference (Inventory)
 Reference material for existing codebases and PurePoint CLI commands.

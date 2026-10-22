@@ -17,12 +17,6 @@ final class KeyBindingState {
     private var overrides: [HotkeyAction: KeyBinding] = [:]
 
     init() {
-        // Start with all defaults
-        var result: [HotkeyAction: KeyBinding] = [:]
-        for action in HotkeyAction.allCases {
-            result[action] = action.defaultBinding
-        }
-
         // Load overrides from UserDefaults
         var loadedOverrides: [HotkeyAction: KeyBinding] = [:]
         if let data = UserDefaults.standard.data(forKey: Self.userDefaultsKey),
@@ -30,14 +24,47 @@ final class KeyBindingState {
         {
             for (rawAction, binding) in saved {
                 if let action = HotkeyAction(rawValue: rawAction) {
-                    result[action] = binding
                     loadedOverrides[action] = binding
                 }
             }
         }
 
-        bindings = result
+        bindings = Self.resolve(defaults: Self.defaultBindings, overrides: loadedOverrides)
         overrides = loadedOverrides
+    }
+
+    // MARK: - Resolution
+
+    static var defaultBindings: [HotkeyAction: KeyBinding] {
+        Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map { ($0, $0.defaultBinding) })
+    }
+
+    /// The bindings in effect: every saved override wins, and an action still on a default that an
+    /// override has claimed (e.g. a newly added action whose default the user had already given to
+    /// another action) takes a default some override gave up instead — the same swap the Settings
+    /// "Override" button makes. Defaults are unique, so there is always a freed default for each
+    /// displaced action and no two actions share a binding.
+    static func resolve(
+        defaults: [HotkeyAction: KeyBinding], overrides: [HotkeyAction: KeyBinding]
+    ) -> [HotkeyAction: KeyBinding] {
+        let claimed = Set(overrides.values)
+        var freed = HotkeyAction.allCases.compactMap { action -> KeyBinding? in
+            guard overrides[action] != nil, let binding = defaults[action], !claimed.contains(binding) else {
+                return nil
+            }
+            return binding
+        }
+
+        var result = overrides
+        for action in HotkeyAction.allCases where overrides[action] == nil {
+            guard let binding = defaults[action] else { continue }
+            if !claimed.contains(binding) {
+                result[action] = binding
+            } else if !freed.isEmpty {
+                result[action] = freed.removeFirst()
+            }
+        }
+        return result
     }
 
     // MARK: - Queries
@@ -66,33 +93,34 @@ final class KeyBindingState {
         return nil
     }
 
-    /// Reverse lookup: find which action matches an NSEvent
+    #if os(macOS)
+    /// Reverse lookup: find which action matches an NSEvent. iOS delivers bindings as
+    /// `UIKeyCommand`s instead (IPAD-6.11, IPAD-6.12).
     func action(for event: NSEvent) -> HotkeyAction? {
         for (action, binding) in bindings {
             if binding.matches(event) { return action }
         }
         return nil
     }
+    #endif
 
     // MARK: - Mutations
 
     func setBinding(_ binding: KeyBinding, for action: HotkeyAction) {
-        bindings[action] = binding
         overrides[action] = binding
+        bindings = Self.resolve(defaults: Self.defaultBindings, overrides: overrides)
         persist()
     }
 
     func resetBinding(for action: HotkeyAction) {
-        bindings[action] = action.defaultBinding
         overrides.removeValue(forKey: action)
+        bindings = Self.resolve(defaults: Self.defaultBindings, overrides: overrides)
         persist()
     }
 
     func resetAllBindings() {
         overrides.removeAll()
-        for action in HotkeyAction.allCases {
-            bindings[action] = action.defaultBinding
-        }
+        bindings = Self.defaultBindings
         persist()
     }
 

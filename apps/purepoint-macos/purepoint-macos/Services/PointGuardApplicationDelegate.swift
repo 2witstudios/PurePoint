@@ -1,9 +1,14 @@
+#if os(macOS)
 import AppKit
 
 /// Quit and update wait for the exact owned runtime; busy work needs a deliberate choice.
 @MainActor final class PointGuardApplicationDelegate: NSObject, NSApplicationDelegate {
     weak var pointGuardService: PointGuardServiceModel?
     private var terminationPending = false
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Install before launch-time notification responses, independently of window restoration.
+        _ = AgentSignalNotifications.shared
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let service = pointGuardService else { return .terminateNow }
         guard !terminationPending else { return .terminateLater }
@@ -43,3 +48,4 @@ import AppKit
         return .terminateLater
     }
 }
+#endif

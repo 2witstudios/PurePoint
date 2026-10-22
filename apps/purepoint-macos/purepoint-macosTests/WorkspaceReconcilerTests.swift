@@ -314,4 +314,185 @@ struct WorkspaceReconcilerTests {
             #expect(WorkspacePersistence.load(projectRoot: root).isEmpty)
         }
     }
+
+    // MARK: - Spawn placement
+
+    /// ag-a with an empty tab split beside it, as a split made on any Mac leaves it.
+    private func makeSplitWaitingForAgent() -> (Workspace, Int) {
+        var workspace = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        workspace.split(leafId: 0, axis: .vertical)
+        return (workspace, workspace.focusedSurface!.id)
+    }
+
+    @Test func givenAgentSpawnedForAnEmptyTabShouldPlaceItThere() {
+        let (workspace, tab) = makeSplitWaitingForAgent()
+        let agents = [
+            LiveAgent(id: "ag-a", container: .projectRoot),
+            LiveAgent(
+                id: "ag-new", container: .projectRoot, placement: SpawnPlacement(workspace: workspace.id, surface: tab)),
+        ]
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.map(\.id) == [workspace.id])
+        #expect(result[0].surface(id: tab)?.content == .agent("ag-new"))
+    }
+
+    @Test func givenPlacementTabAlreadyHoldsAnAgentShouldAdoptTheNewAgentSeparately() {
+        let (workspace, _) = makeSplitWaitingForAgent()
+        let agents = [
+            LiveAgent(id: "ag-a", container: .projectRoot),
+            LiveAgent(
+                id: "ag-new", container: .projectRoot, placement: SpawnPlacement(workspace: workspace.id, surface: 0)),
+        ]
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.map(\.id) == [workspace.id, "ws-ag-new"])
+    }
+
+    @Test func givenPlacementWorkspaceIsUnknownShouldAdoptTheAgentSeparately() {
+        let (workspace, tab) = makeSplitWaitingForAgent()
+        let agents = [
+            LiveAgent(id: "ag-a", container: .projectRoot),
+            LiveAgent(
+                id: "ag-new", container: .projectRoot, placement: SpawnPlacement(workspace: "ws-gone", surface: tab)),
+        ]
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.map(\.id) == [workspace.id, "ws-ag-new"])
+    }
+
+    @Test func givenPlacementInAnotherContainerShouldAdoptTheAgentSeparately() {
+        let (workspace, tab) = makeSplitWaitingForAgent()
+        let agents = [
+            LiveAgent(id: "ag-a", container: .projectRoot),
+            LiveAgent(
+                id: "ag-new", container: .worktree("wt-1"),
+                placement: SpawnPlacement(workspace: workspace.id, surface: tab)),
+        ]
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.first { $0.agentIds == ["ag-new"] }?.container == .worktree("wt-1"))
+    }
+
+    @Test func givenPlacedAgentShouldStayWhereTheLayoutHasItEvenIfItsPlacementDiffers() {
+        let (workspace, tab) = makeSplitWaitingForAgent()
+        let elsewhere = Workspace.adopting(agentId: "ag-new", container: .projectRoot)
+        let agents = [
+            LiveAgent(id: "ag-a", container: .projectRoot),
+            LiveAgent(
+                id: "ag-new", container: .projectRoot, placement: SpawnPlacement(workspace: workspace.id, surface: tab)),
+        ]
+
+        let result = WorkspaceReconciler.reconcile(stored: [workspace, elsewhere], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.first { $0.id == workspace.id }?.surface(id: tab)?.content == .empty)
+        #expect(result.first { $0.id == "ws-ag-new" }?.agentIds == ["ag-new"])
+    }
+
+    @Test func givenEmptyWorkspaceWaitingForItsAgentShouldBeKeptAndFilled() {
+        let waiting = Workspace(
+            id: "ws-new", container: .projectRoot, root: .leaf(id: 0), focusedLeafId: 0, nextLeafId: 1)
+        let tab = waiting.focusedSurface!.id
+        let agents = [
+            LiveAgent(
+                id: "ag-new", container: .projectRoot, placement: SpawnPlacement(workspace: "ws-new", surface: tab))
+        ]
+
+        let result = WorkspaceReconciler.reconcile(stored: [waiting], live: agents)
+
+        expectInvariant(result, agents)
+        #expect(result.map(\.id) == ["ws-new"])
+    }
+
+    @Test func givenAgentEntryWithPlacementShouldDecodeIt() throws {
+        let json = """
+            {"id":"ag-1","name":"a","agentType":"claude","status":"running","startedAt":"2026-01-01T00:00:00Z",
+             "placement":{"workspace":"ws-ag-a","surface":2}}
+            """
+        let entry = try JSONDecoder().decode(AgentEntry.self, from: Data(json.utf8))
+        #expect(AgentModel(from: entry).placement == SpawnPlacement(workspace: "ws-ag-a", surface: 2))
+    }
+
+    // MARK: - Layout merge
+
+    @Test func givenEachMacChangedADifferentWorkspaceMergeShouldKeepBothChanges() {
+        let base = [
+            Workspace.adopting(agentId: "ag-a", container: .projectRoot),
+            .adopting(agentId: "ag-b", container: .projectRoot),
+        ]
+        var ours = base
+        ours[0].split(leafId: 0, axis: .vertical)
+        var theirs = base
+        theirs[1].split(leafId: 0, axis: .horizontal)
+
+        let merged = WorkspaceLayoutMerge.merge(base: base, ours: ours, theirs: theirs)
+
+        #expect(merged == [ours[0], theirs[1]])
+    }
+
+    @Test func givenBothMacsChangedTheSameWorkspaceMergeShouldKeepOurs() {
+        let base = [Workspace.adopting(agentId: "ag-a", container: .projectRoot)]
+        var ours = base
+        ours[0].split(leafId: 0, axis: .vertical)
+        var theirs = base
+        theirs[0].split(leafId: 0, axis: .horizontal)
+
+        // Ours keeps a tab split here for a spawn; the other Mac then adopts it unchanged.
+        #expect(WorkspaceLayoutMerge.merge(base: base, ours: ours, theirs: theirs) == ours)
+        #expect(WorkspaceLayoutMerge.merge(base: theirs, ours: theirs, theirs: ours) == ours)
+    }
+
+    @Test func givenWorkspacesAddedAndRemovedMergeShouldApplyEachSidesChange() {
+        let a = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        let b = Workspace.adopting(agentId: "ag-b", container: .projectRoot)
+        let mine = Workspace.adopting(agentId: "ag-mine", container: .projectRoot)
+        let theirsNew = Workspace.adopting(agentId: "ag-theirs", container: .projectRoot)
+        // We removed b and added mine; they removed a and added theirsNew.
+        let merged = WorkspaceLayoutMerge.merge(base: [a, b], ours: [a, mine], theirs: [b, theirsNew])
+
+        #expect(merged.map(\.id) == [theirsNew.id, mine.id])
+    }
+
+    @Test func givenWorkspaceChangedOnOneMacAndRemovedOnTheOtherMergeShouldKeepIt() {
+        let a = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        var changed = a
+        changed.split(leafId: 0, axis: .vertical)
+
+        #expect(WorkspaceLayoutMerge.merge(base: [a], ours: [changed], theirs: []) == [changed])
+        #expect(WorkspaceLayoutMerge.merge(base: [a], ours: [], theirs: [changed]) == [changed])
+    }
+
+    @Test func givenWorkspaceClosedHereAndUntouchedThereMergeShouldNotBringItBack() {
+        // Closed here: its agent is already gone from this app's live list, so the base as this
+        // app reconciles it holds only the file tab. The other Mac's copy is the base document.
+        var closed = Workspace.adopting(agentId: "ag-x", container: .projectRoot)
+        closed.newTab(leafId: 0, content: .file(path: "/p/README.md"))
+        var reconciledHere = closed
+        _ = reconciledHere.removeSurfaces { $0.content == .agent("ag-x") }
+
+        let merged = WorkspaceLayoutMerge.merge(base: [closed], ours: [], theirs: [closed], oursBase: [reconciledHere])
+
+        #expect(merged.isEmpty)
+    }
+
+    @Test func givenPointGuardPlacementFromAnotherMacShouldBeRekeyedToThisApp() {
+        let agent = LiveAgent(
+            id: "ag-new", container: .projectRoot,
+            placement: SpawnPlacement(workspace: "ws-point-guard:machine:abc:/srv/app", surface: 3))
+
+        let rekeyed = agent.placementRekeyed(projectRoot: "/srv/app")
+
+        #expect(
+            rekeyed.placement == SpawnPlacement(workspace: Workspace.pointGuardId(projectRoot: "/srv/app"), surface: 3))
+        #expect(LiveAgent(id: "ag-x", container: .projectRoot).placementRekeyed(projectRoot: "/p").placement == nil)
+    }
 }

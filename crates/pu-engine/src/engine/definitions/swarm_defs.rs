@@ -311,6 +311,7 @@ impl Engine {
                             plan_mode: false,
                             no_trigger: false,
                             trigger: None,
+                            placement: None,
                         })
                         .await;
 
@@ -357,6 +358,7 @@ impl Engine {
                         plan_mode: false,
                         no_trigger: false,
                         trigger: None,
+                        placement: None,
                     })
                     .await;
                 if let Response::SpawnResult { agent_id, .. } = resp {

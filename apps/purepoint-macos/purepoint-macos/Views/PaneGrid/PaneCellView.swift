@@ -11,6 +11,7 @@ struct PaneCellView: View {
     let isFocused: Bool
     @Environment(AppState.self) private var appState
     @Environment(WorkspaceRegistry.self) private var registry
+    @Environment(\.titlebarClearance) private var titlebarClearance
 
     private var workspace: Workspace? { registry.workspace(id: workspaceId) }
 
@@ -18,11 +19,29 @@ struct PaneCellView: View {
 
     private var fileRootPath: String? { appState.fileRoot(forWorkspace: workspaceId, registry: registry) }
 
+    private var tabBar: PaneTabBar {
+        PaneTabBar(workspaceId: workspaceId, leafId: leafId, isFocused: isFocused)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            PaneTabBar(workspaceId: workspaceId, leafId: leafId, isFocused: isFocused)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        cell
+            // Only the top-left pane's strip sits under the traffic lights.
+            .environment(\.titlebarClearance, workspace?.root.firstLeafId == leafId ? titlebarClearance : .none)
+    }
+
+    @ViewBuilder
+    private var cell: some View {
+        // The point guard chat draws the tab bar beside its conversation rail, so the rail's
+        // header and the tab strip share one row.
+        if activeTab?.content == .pointGuard {
+            PointGuardChatSurfaceView(isFocused: isFocused, tabBar: AnyView(tabBar))
+                .simultaneousGesture(TapGesture().onEnded { _ in focus() })
+        } else {
+            VStack(spacing: 0) {
+                tabBar
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -38,8 +57,8 @@ struct PaneCellView: View {
                     .onTapGesture(perform: focus)
             }
         case .pointGuard:
-            PointGuardChatSurfaceView(isFocused: isFocused)
-                .simultaneousGesture(TapGesture().onEnded { _ in focus() })
+            // Rendered by `body`, alongside its tab bar.
+            EmptyView()
         case .file(let path):
             if let rootPath = fileRootPath, let surface = activeTab {
                 FilePaneView(

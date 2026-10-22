@@ -24,6 +24,22 @@ impl Engine {
             Some(h) => h.pid,
             None => return,
         };
+        let launch = self
+            .signal_states
+            .lock()
+            .unwrap()
+            .get(&agent_id)
+            .map(|state| state.launch_id());
+        let Some(discovery) = self
+            .native_sources
+            .codex_reader(launch.as_deref(), pid, &cwd)
+        else {
+            tracing::warn!(
+                agent_id,
+                "native identity discovery capacity unavailable; exact ID required"
+            );
+            return;
+        };
         tokio::spawn(async move {
             let mut captured = None;
             loop {
@@ -31,7 +47,7 @@ impl Engine {
                     .lock()
                     .await
                     .get(&agent_id)
-                    .is_some_and(|h| h.pid == pid);
+                    .is_some_and(|h| h.pid == pid && h.exit_rx.borrow().is_none());
                 if !owned && captured.is_none() {
                     tracing::warn!(
                         agent_id,
@@ -41,7 +57,7 @@ impl Engine {
                     break;
                 }
                 if captured.is_none() {
-                    match discover_codex(pid, &cwd).await {
+                    match discovery.discover().await {
                         Ok(binding) => captured = Some(binding),
                         Err(SourceError::Ambiguous) => {
                             tracing::warn!(
@@ -356,6 +372,24 @@ sleep 30
                 other => panic!("{other:?}"),
             }
         }
+        // Wait for the background binder itself. Calling Read first would hide
+        // a broken watcher because Read also has an explicit discovery fallback.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let manifest = pu_core::manifest::read_manifest(&root).unwrap();
+                if agents.iter().all(|id| {
+                    manifest
+                        .agents
+                        .get(id)
+                        .is_some_and(|agent| agent.session_id.as_deref() == Some(id.as_str()))
+                }) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("Automatic owned-session binding must finish without Read");
         // when: automatic capture must bind each process, without explicit --session
         let reports = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {

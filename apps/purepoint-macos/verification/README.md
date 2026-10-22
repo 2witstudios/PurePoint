@@ -84,3 +84,26 @@ Point Guard workspace checks also verify explicit names in serialized spawn requ
 Full target compilation and visual/keyboard acceptance remain owner-run in Xcode:
 turn off Settings → General → Use point guard names, launch via Cmd+N, pane tabs/splits
 and the sidebar's New Terminal action, then verify names and Escape navigation.
+
+Deferred Point Guard transcript following can be checked independently:
+
+```sh
+python3 apps/purepoint-macos/verification/check-pi-transcript-scroll.py
+```
+
+This compiles the production scroll coordinator with a standalone async acceptance
+harness. It checks the main-queue boundary, burst coalescing, late content resizing,
+at-bottom no-ops, repeated/alternating geometry, eligibility rechecking, Latest-style
+resumption, cancellation/replacement on transcript lifecycle changes, and completed
+tool disclosure expand/collapse/re-expand without a new output revision. Both grouped
+and nested tool disclosure bindings signal user layout intent before changing state,
+clearing geometry dedupe while retaining deferred scrolling and eligibility checks. The sidebar
+check above also compiles the real chat view with this coordinator. These checks do
+not reproduce the reported macOS 26.2 layout crash; live streaming, tool expansion,
+scrollback, Latest and session switching still need visual verification in Xcode.
+
+The bundle seal check that guards the Point Guard bridge launch runs against throwaway ad-hoc signed bundles (intact, modified bridge script, re-signed, missing):
+
+```sh
+python3 apps/purepoint-macos/verification/check-bundle-seal.py
+```

@@ -66,11 +66,35 @@ nonisolated struct AgentEntry: Codable, Sendable {
     let suspended: Bool?
     let suspendedAt: String?
     let command: String?
+    var signal: AgentSignalSnapshot? = nil
+    var placement: SpawnPlacement? = nil
 
     // Explicit CodingKeys document the camelCase wire format
     // matching Rust's #[serde(rename_all = "camelCase")] on types::AgentEntry.
     private enum CodingKeys: String, CodingKey {
-        case id, name, status, prompt, error, pid, suspended, command
+        case id, name, status, prompt, error, pid, suspended, command, signal, placement
         case agentType, startedAt, completedAt, exitCode, sessionId, suspendedAt
+    }
+}
+
+extension AgentEntry {
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        agentType = try c.decode(String.self, forKey: .agentType)
+        status = try c.decode(AgentStatus.self, forKey: .status)
+        prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
+        startedAt = try c.decode(String.self, forKey: .startedAt)
+        completedAt = try c.decodeIfPresent(String.self, forKey: .completedAt)
+        exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        pid = try c.decodeIfPresent(Int.self, forKey: .pid)
+        sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
+        suspended = try c.decodeIfPresent(Bool.self, forKey: .suspended)
+        suspendedAt = try c.decodeIfPresent(String.self, forKey: .suspendedAt)
+        command = try c.decodeIfPresent(String.self, forKey: .command)
+        signal = try? c.decodeIfPresent(AgentSignalSnapshot.self, forKey: .signal)
+        placement = try? c.decodeIfPresent(SpawnPlacement.self, forKey: .placement)
     }
 }

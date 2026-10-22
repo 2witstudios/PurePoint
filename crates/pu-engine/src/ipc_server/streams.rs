@@ -1,21 +1,25 @@
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
-
-use crate::engine::Engine;
+use crate::engine::{AttachmentCursor, Engine};
 use pu_core::protocol::{Request, Response};
 
 use super::{
-    ATTACH_OUTPUT_CHUNK_SIZE, IpcReader, IpcWriter, MAX_MESSAGE_SIZE, parse_stream_request,
-    write_response,
+    ATTACH_OUTPUT_CHUNK_SIZE, Frame, IpcReader, IpcWriter, parse_stream_request, read_frame,
+    reject_frame_too_large, write_response,
 };
 
 /// Streaming attach sub-loop: sends all buffered output, then streams new output
-/// while accepting Input/Resize commands from the client.
+/// while accepting Input/Resize commands from the client. Like every stream
+/// handler, returns whether the connection may go back to request mode, and
+/// reads through the connection's `partial` line buffer so a line that is
+/// still arriving when the stream ends is finished in request mode.
 pub(super) async fn handle_attach_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     agent_id: &str,
-) {
+    replay: Option<pu_core::protocol::Replay>,
+    client_id: Option<String>,
+) -> bool {
     let (buffer, master_fd, mut exit_rx) = match engine.get_attach_handles(agent_id).await {
         Some(handles) => handles,
         None => {
@@ -27,63 +31,116 @@ pub(super) async fn handle_attach_stream(
                 },
             )
             .await;
-            return;
+            return true;
         }
     };
 
-    tracing::debug!(agent_id, "attach stream started");
+    let snapshot = replay == Some(pu_core::protocol::Replay::Snapshot);
+    let identified = client_id.is_some();
+    let (attachment, mut size_rx) = engine.register_attachment(agent_id, client_id).await;
+    // Always unregister, including failures writing initial replay.
+    let keep_open = run_attachment(
+        reader,
+        partial,
+        writer,
+        engine,
+        agent_id,
+        snapshot,
+        identified,
+        attachment,
+        &mut size_rx,
+        buffer,
+        master_fd,
+        &mut exit_rx,
+    )
+    .await;
+    engine.unregister_attachment(agent_id, attachment).await;
+    keep_open
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn run_attachment(
+    reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
+    writer: &mut IpcWriter,
+    engine: &Engine,
+    agent_id: &str,
+    snapshot: bool,
+    identified: bool,
+    attachment: u64,
+    size_rx: &mut tokio::sync::broadcast::Receiver<crate::engine::PtySize>,
+    buffer: std::sync::Arc<crate::output_buffer::OutputBuffer>,
+    master_fd: std::sync::Arc<std::os::fd::OwnedFd>,
+    exit_rx: &mut tokio::sync::watch::Receiver<Option<i32>>,
+) -> bool {
     let mut watcher = buffer.subscribe();
-
-    // Send buffered output in fixed-size chunks so the client can start rendering quickly.
-    let mut offset = 0;
-    let (data, new_offset) = buffer.read_from(offset);
-    offset = new_offset;
-    if !data.is_empty() && write_output_chunks(writer, agent_id, &data).await.is_err() {
-        tracing::debug!(agent_id, "attach stream ended: write error on initial data");
-        return;
+    let (data, offset, initial_size) = engine
+        .attachment_replay(agent_id, &buffer, snapshot, size_rx)
+        .await;
+    if write_response(
+        writer,
+        &Response::AttachReady {
+            buffered_bytes: data.len(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return true;
     }
-
-    // If process already exited, we've sent all buffered output above — return
-    // immediately. Without this, the streaming loop deadlocks: watcher never fires
-    // (no new output), exit_rx.changed() is disabled, and reader blocks forever.
+    let mut cursor = AttachmentCursor {
+        offset,
+        size: initial_size.clone(),
+        snapshot,
+        identified,
+    };
+    if identified && write_size(writer, initial_size).await.is_err() {
+        return true;
+    }
+    if write_output_chunks(writer, agent_id, &data).await.is_err() {
+        return true;
+    }
     if exit_rx.borrow().is_some() {
-        tracing::debug!(agent_id, "attach stream: process already exited");
-        return;
+        return true;
     }
 
-    let mut line = String::new();
     loop {
         tokio::select! {
+            biased;
+            result = size_rx.recv(), if identified => {
+                if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break }
+                let update = engine.attachment_update(agent_id, &buffer, &mut cursor, size_rx, Some(result)).await;
+                if write_attachment_update(writer, agent_id, update).await.is_err() { break }
+            }
             Ok(()) = watcher.changed() => {
-                let (data, new_offset) = buffer.read_from(offset);
-                offset = new_offset;
-                if !data.is_empty()
-                    && write_output_chunks(writer, agent_id, &data).await.is_err()
-                {
-                    tracing::debug!(agent_id, "attach stream ended: write error");
-                    break;
-                }
+                let update = engine.attachment_update(agent_id, &buffer, &mut cursor, size_rx, None).await;
+                if write_attachment_update(writer, agent_id, update).await.is_err() { break }
             }
             Ok(()) = exit_rx.changed() => {
-                // Drain any remaining buffered output
-                let (data, _) = buffer.read_from(offset);
-                if !data.is_empty() {
-                    let _ = write_output_chunks(writer, agent_id, &data).await;
-                }
-                tracing::debug!(agent_id, "attach stream ended: process exited");
+                let update = engine.attachment_update(agent_id, &buffer, &mut cursor, size_rx, None).await;
+                let _ = write_attachment_update(writer, agent_id, update).await;
                 break;
             }
-            result = async {
-                line.clear();
-                reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
-            } => {
-                match parse_stream_request(result, &line) {
+            frame = read_frame(reader, partial) => {
+                let line = match frame {
+                    Ok(Frame::Line(line)) => line,
+                    Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    // Unreadable input leaves no trustworthy line boundary.
+                    Err(_) => return false,
+                };
+                match parse_stream_request(&line) {
                     Some(Request::Input { data, .. }) => {
                         engine.write_to_pty(&master_fd, &data).await.ok();
                     }
                     Some(Request::Resize { cols, rows, .. }) => {
-                        engine.resize_pty(&master_fd, cols, rows).await.ok();
+                        engine.attachment_resize(agent_id, attachment, cols, rows, false).await;
+                    }
+                    Some(Request::ClaimSize { cols, rows }) => {
+                        engine.attachment_resize(agent_id, attachment, cols, rows, true).await;
                     }
                     _ => break,
                 }
@@ -91,22 +148,52 @@ pub(super) async fn handle_attach_stream(
         }
     }
     tracing::debug!(agent_id, "attach stream ended");
+    true
+}
+
+pub(super) async fn write_attachment_update(
+    writer: &mut IpcWriter,
+    agent_id: &str,
+    update: crate::engine::AttachmentUpdate,
+) -> std::io::Result<()> {
+    if update.resync {
+        write_response(writer, &Response::Resync).await?;
+    }
+    for size in update.sizes {
+        write_size(writer, size).await?;
+    }
+    write_output_chunks(writer, agent_id, &update.data).await
+}
+
+async fn write_size(
+    writer: &mut IpcWriter,
+    size: (u16, u16, Option<String>),
+) -> std::io::Result<()> {
+    write_response(
+        writer,
+        &Response::PtySize {
+            cols: size.0,
+            rows: size.1,
+            owner_client_id: size.2,
+        },
+    )
+    .await
 }
 
 /// Streaming grid subscription: forwards GridEvent broadcasts to subscriber,
 /// accepts incoming GridCommand requests from the subscriber connection.
 pub(super) async fn handle_grid_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     project_root: &str,
-) {
+) -> bool {
     let mut rx = engine.subscribe_grid(project_root).await;
     let pr = project_root.to_string();
 
     tracing::debug!(project_root, "grid stream started");
 
-    let mut line = String::new();
     loop {
         tokio::select! {
             result = rx.recv() => {
@@ -126,11 +213,18 @@ pub(super) async fn handle_grid_stream(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            result = async {
-                line.clear();
-                reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
-            } => {
-                match parse_stream_request(result, &line) {
+            frame = read_frame(reader, partial) => {
+                let line = match frame {
+                    Ok(Frame::Line(line)) => line,
+                    Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    // Unreadable input leaves no trustworthy line boundary.
+                    Err(_) => return false,
+                };
+                match parse_stream_request(&line) {
                     Some(Request::GridCommand { command, .. }) => {
                         let resp = engine.handle_grid_command(&pr, command).await;
                         if write_response(writer, &resp).await.is_err() {
@@ -143,6 +237,7 @@ pub(super) async fn handle_grid_stream(
         }
     }
     tracing::debug!(project_root, "grid stream ended");
+    true
 }
 
 /// Computes and sends a full status snapshot. Returns `false` if the write failed.
@@ -159,10 +254,11 @@ async fn send_status(writer: &mut IpcWriter, engine: &Engine, project_root: &str
 /// Client receives real-time updates without polling.
 pub(super) async fn handle_status_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     project_root: &str,
-) {
+) -> bool {
     let mut rx = engine.subscribe_status(project_root).await;
     let pr = project_root.to_string();
 
@@ -170,10 +266,9 @@ pub(super) async fn handle_status_stream(
 
     // Send initial status immediately
     if !send_status(writer, engine, &pr).await {
-        return;
+        return true;
     }
 
-    let mut line = String::new();
     loop {
         tokio::select! {
             result = rx.recv() => {
@@ -194,15 +289,71 @@ pub(super) async fn handle_status_stream(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            _ = async {
-                line.clear();
-                reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
-            } => {
-                break;
+            frame = read_frame(reader, partial) => {
+                match frame {
+                    // Any request ends the status stream.
+                    Ok(Frame::Line(_)) | Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    Err(_) => return false,
+                }
             }
         }
     }
     tracing::debug!(project_root, "status stream ended");
+    true
+}
+
+async fn send_projects(writer: &mut IpcWriter, engine: &Engine) -> bool {
+    let projects = engine.registered_projects();
+    write_response(writer, &Response::ProjectsChanged { projects })
+        .await
+        .is_ok()
+}
+
+/// Streaming project registry: pushes the full list of registered roots now
+/// and after every add or remove, so every client shows the same projects.
+pub(super) async fn handle_projects_stream(
+    reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
+    writer: &mut IpcWriter,
+    engine: &Engine,
+) -> bool {
+    // Subscribe before the first send so no change between them is missed.
+    let mut rx = engine.subscribe_projects();
+    engine.registry_ready().await;
+    if !send_projects(writer, engine).await {
+        return true;
+    }
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        while rx.try_recv().is_ok() {}
+                        if !send_projects(writer, engine).await {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            frame = read_frame(reader, partial) => {
+                match frame {
+                    // Any request ends the projects stream.
+                    Ok(Frame::Line(_)) | Ok(Frame::Eof) => break,
+                    Ok(Frame::TooLarge) => {
+                        reject_frame_too_large(writer).await;
+                        return false;
+                    }
+                    Err(_) => return false,
+                }
+            }
+        }
+    }
+    true
 }
 
 async fn write_output_chunks(
@@ -289,6 +440,7 @@ where
 /// under `root` until the client disconnects (or sends anything).
 pub(super) async fn handle_fs_stream(
     reader: &mut IpcReader,
+    partial: &mut Vec<u8>,
     writer: &mut IpcWriter,
     engine: &Engine,
     root: &str,
@@ -363,7 +515,6 @@ pub(super) async fn handle_fs_stream(
 
     let mut pending: BTreeSet<String> = BTreeSet::new();
     let mut flush_at: Option<tokio::time::Instant> = None;
-    let mut line = String::new();
     loop {
         let flush = async {
             match flush_at {
@@ -399,10 +550,11 @@ pub(super) async fn handle_fs_stream(
                     break;
                 }
             }
-            _ = async {
-                line.clear();
-                reader.take(MAX_MESSAGE_SIZE).read_line(&mut line).await
-            } => {
+            frame = read_frame(reader, partial) => {
+                // The connection closes after a watch stream either way.
+                if matches!(frame, Ok(Frame::TooLarge)) {
+                    reject_frame_too_large(writer).await;
+                }
                 break;
             }
         }

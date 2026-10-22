@@ -12,7 +12,7 @@ This guide walks you from install to your first agent.
 
 Download the latest `.dmg` from [Releases](https://github.com/2witstudios/purepoint/releases).
 
-Open the DMG, drag PurePoint to Applications, and launch. The app installs the `pu` CLI to `~/.pu/bin/pu` on first launch.
+Open the DMG, drag PurePoint to Applications, and launch. The app installs the `pu` CLI and its `pu-engine` daemon to `~/.pu/bin` on first launch.
 
 Add to your shell config (`~/.zshrc` or `~/.bashrc`):
 

@@ -2,6 +2,7 @@
 all-features = true
 
 [advisories]
+yanked = "deny"
 ignore = [
   # unsafe-libyaml (via serde_yaml_ng) is archived; no fix exists. Unmaintained,
   # not a known vulnerability — drop once pu-core moves to a safe-Rust YAML parser.
@@ -31,7 +32,9 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+# Path dependencies inside the workspace carry no version and are allowed.
+wildcards = "deny"
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]

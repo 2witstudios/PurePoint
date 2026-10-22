@@ -4,6 +4,7 @@ use clap::Subcommand;
 use pu_core::protocol::{Request, Response};
 
 use crate::client;
+use crate::commands::daemon_proxy;
 use crate::daemon_ctrl;
 use crate::error::CliError;
 use crate::service::{self, Manager};
@@ -25,6 +26,9 @@ pub enum DaemonAction {
     },
     /// Remove the user service installed by `pu daemon install`
     Uninstall,
+    /// Relay stdin/stdout to the daemon socket for SSH clients; never starts
+    /// the daemon
+    Proxy,
 }
 
 pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Result<(), CliError> {
@@ -59,6 +63,7 @@ pub async fn run(socket: &Path, custom_socket: bool, action: DaemonAction) -> Re
             }
             Ok(())
         }
+        DaemonAction::Proxy => daemon_proxy::run(socket).await,
     }
 }
 
@@ -153,11 +158,8 @@ async fn status(socket: &Path, custom_socket: bool) -> Result<(), CliError> {
 fn install(socket: &Path, custom_socket: bool, now: bool) -> Result<(), CliError> {
     require_default_socket(custom_socket)?;
     let manager = current_manager()?;
-    let engine = daemon_ctrl::find_daemon_binary().ok_or_else(|| {
-        CliError::Other(
-            "pu-engine not found on PATH, next to pu, or in ~/.pu/bin or ~/.cargo/bin".into(),
-        )
-    })?;
+    let engine = daemon_ctrl::find_daemon_binary()
+        .map_err(|reasons| CliError::Other(format!("no usable pu-engine ({reasons})")))?;
     // The service file outlives this shell; never record a relative path.
     let engine = std::fs::canonicalize(&engine)?;
     for note in service::install(manager, &engine, socket, now)? {

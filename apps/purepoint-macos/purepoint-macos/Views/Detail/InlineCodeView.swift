@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -24,17 +25,12 @@ struct InlineCodeView: NSViewRepresentable {
 }
 
 final class InlineCodeNSView: NSView {
-    private struct Row {
-        let range: NSRange
-        let line: DiffLine?
-    }
-
     private let textView: NSTextView
     private var highlighter: SyntaxHighlightManager?
     private var hunks: [Hunk] = []
     private var language: EditorLanguage = .plaintext
-    private var rows: [Row] = []
-    private let gutterWidth: CGFloat = 42
+    private var rows: [DiffTextRendering.InlineRow] = []
+    private let gutterWidth = DiffTextRendering.inlineGutterWidth
 
     init() {
         let storage = NSTextStorage()
@@ -50,7 +46,7 @@ final class InlineCodeNSView: NSView {
         textView.isSelectable = true
         textView.drawsBackground = false
         textView.isRichText = false
-        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.textContainerInset = DiffTextRendering.inlineInset
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         // TextKit can resize the text view during layout. Keep it within the
@@ -89,27 +85,8 @@ final class InlineCodeNSView: NSView {
     }
 
     private func render() {
-        let text = NSMutableAttributedString()
-        rows = []
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 2
-        paragraph.defaultTabInterval = 24
-        func append(_ content: String, line: DiffLine?) {
-            let start = text.length
-            text.append(
-                NSAttributedString(
-                    string: content + "\n",
-                    attributes: [
-                        .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                        .foregroundColor: line == nil ? NSColor.tertiaryLabelColor : Theme.primaryText,
-                        .paragraphStyle: paragraph,
-                    ]))
-            rows.append(Row(range: NSRange(location: start, length: text.length - start), line: line))
-        }
-        for (index, hunk) in hunks.enumerated() {
-            if index > 0 { append("⋯", line: nil) }
-            for line in hunk.lines { append(line.content, line: line) }
-        }
+        let (text, rows) = DiffTextRendering.inlineCode(hunks: hunks)
+        self.rows = rows
         textView.textStorage?.setAttributedString(text)
         // Source only: line numbers and +/- markers are drawn in the gutter,
         // so they cannot confuse the existing tree-sitter syntax highlighter.
@@ -132,33 +109,7 @@ final class InlineCodeNSView: NSView {
             rect.origin.x = 0
             rect.size.width = bounds.width
             guard rect.intersects(dirtyRect) else { continue }
-            let color: NSColor
-            switch row.line?.type {
-            case .addition: color = Theme.additionBackground
-            case .deletion: color = Theme.deletionBackground
-            case .context: color = Theme.cardBackground
-            case nil: color = Theme.cardHeaderBackground
-            }
-            color.setFill()
-            rect.fill()
-            guard let line = row.line else { continue }
-            let lineNo = line.newLineNo ?? line.oldLineNo
-            if let lineNo {
-                let number = NSString(string: String(lineNo))
-                let attrs: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ]
-                number.draw(
-                    at: NSPoint(x: 27 - number.size(withAttributes: attrs).width, y: rect.minY), withAttributes: attrs)
-            }
-            let marker = line.type == .addition ? "+" : line.type == .deletion ? "−" : ""
-            NSString(string: marker).draw(
-                at: NSPoint(x: 32, y: rect.minY),
-                withAttributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-                    .foregroundColor: line.type == .addition ? Theme.additionText : Theme.deletionText,
-                ])
+            DiffTextRendering.drawInlineRow(row, in: rect)
         }
     }
 
@@ -167,3 +118,4 @@ final class InlineCodeNSView: NSView {
         render()
     }
 }
+#endif

@@ -142,7 +142,11 @@ nonisolated enum LocalCopyError: LocalizedError {
     case tooLarge
 
     var errorDescription: String? {
+        #if os(macOS)
         "Remote files over 8 MB cannot be copied to this Mac from PurePoint."
+        #else
+        "Remote files over 8 MB cannot be copied to this iPad from PurePoint."
+        #endif
     }
 }
 

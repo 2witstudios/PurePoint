@@ -24,6 +24,9 @@ target/
 node_modules/
 npm-debug.log*
 
+# Python
+__pycache__/
+
 # Build
 dist/
 build/
@@ -36,21 +39,11 @@ build/
 .env.local
 .env.*.local
 
-# Claude Code
+# Agent and PurePoint runtime state
 .claude/
-
-# Point Guard
+.pu/
+# Legacy runtime state from older Point Guard checkouts
 .ppg/
-.ppg/results/
-.ppg/logs/
-.ppg/manifest.json
-.ppg/prompts/
-.ppg/agent-prompts/
-.ppg/swarms/
-.ppg/conductor-context.md
 
 # Tree-sitter local overrides (cloned per-developer, not project source)
 apps/purepoint-macos/LocalPackages/
-
-# PurePoint runtime
-.pu/

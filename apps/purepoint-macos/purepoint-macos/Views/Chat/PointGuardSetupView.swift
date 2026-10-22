@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import CoreImage.CIFilterBuiltins
 import SwiftUI
@@ -86,23 +87,18 @@ struct PointGuardSetupView: View {
                     }.padding(8)
                 }
                 GroupBox("Phone") {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 12) {
                         if let recovery = service.remoteRecovery { Text(recovery).foregroundStyle(.secondary).textSelection(.enabled) }
                         HStack {
-                            Text("Pair once. Saved devices reconnect securely through Tailscale.")
+                            Text("Pair once. Saved devices reconnect through Tailscale.")
+                                .foregroundStyle(.secondary)
                             Spacer()
                             Button("Connect phone") { showPhone = true; Task { await service.connectPhone() } }
                         }
-                        ForEach(service.devices.indices, id: \.self) { index in
-                            let device = service.devices[index]
-                            HStack {
-                                Text(device["name"].text ?? "Phone")
-                                Spacer()
-                                if case .null = device["revokedAt"] {
-                                    Button("Require re-pair") { if let id = device["deviceId"].text { Task { await service.rotateDevice(id) } } }
-                                    Button("Revoke") { if let id = device["deviceId"].text { Task { await service.revokeDevice(id) } } }
-                                } else { Text("Revoked").foregroundStyle(.secondary) }
-                            }
+                        let devices = service.devices.compactMap { device in device["deviceId"].text.map { (id: $0, device: device) } }
+                        ForEach(devices, id: \.id) { row in
+                            Divider()
+                            deviceRow(id: row.id, row.device)
                         }
                     }.padding(8)
                 }
@@ -124,6 +120,30 @@ struct PointGuardSetupView: View {
         .onChange(of: service.auth["prompt"]["id"].text) { _, _ in response = "" }
         .onChange(of: service.auth["status"].text) { _, value in if value != "pending" { response = "" } }
         .sheet(isPresented: $showPhone) { PointGuardPhoneView(service: service, isPresented: $showPhone) }
+    }
+    private func deviceRow(id: String, _ device: PiJSONValue) -> some View {
+        let busy = service.deviceUpdates.contains(id)
+        let name = device["name"].text ?? "Phone"
+        let manages: Bool = { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false }()
+        let level = PointGuardPhoneAccess.Level(terminals: device["terminals"].text ?? "off", workspaceManagement: manages)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Label(name, systemImage: name.localizedCaseInsensitiveContains("ipad") ? "ipad" : "iphone")
+                Spacer()
+                Picker("Access", selection: Binding(
+                    get: { level },
+                    set: { next in Task { await service.setAccess(id, to: next) } }
+                )) {
+                    ForEach(PointGuardPhoneAccess.Level.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+                .disabled(busy)
+                Button("Revoke", role: .destructive) { Task { await service.revokeDevice(id) } }
+                    .disabled(busy)
+            }
+            Text(PointGuardPhoneAccess.summary(terminals: level.terminals, workspaceManagement: level.workspaceManagement))
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
     @ViewBuilder private var loginInteraction: some View {
         if service.auth["provider"].text == provider, let status = service.auth["status"].text {
@@ -176,7 +196,7 @@ struct PointGuardPhoneView: View {
     var body: some View {
         VStack(spacing: 16) {
             Text("Connect your phone").font(.title2)
-            Text("Open the iPhone app → Connection → Scan Mac QR code. Keep Tailscale connected on both devices.")
+            Text("Open the iPhone app → Connections → Scan pairing code. Keep Tailscale connected on both devices.")
             if service.enrollmentStatus == "consumed" {
                 Label("Phone connected", systemImage: "checkmark.circle.fill")
             } else if let payload = service.enrollment["payload"].text, let image = qr(payload) {
@@ -217,3 +237,4 @@ struct PointGuardPhoneView: View {
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 }
+#endif

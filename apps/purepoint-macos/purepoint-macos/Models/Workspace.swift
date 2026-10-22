@@ -432,10 +432,61 @@ nonisolated enum FocusDirection: Sendable {
 
 // MARK: - Reconciler
 
+/// The tab an agent was spawned for, as recorded on its manifest entry.
+nonisolated struct SpawnPlacement: Codable, Hashable, Sendable {
+    let workspace: String
+    let surface: Int
+}
+
 /// One live agent as the manifest reports it.
 nonisolated struct LiveAgent: Equatable, Sendable {
     let id: String
     let container: WorkspaceContainer
+    var placement: SpawnPlacement? = nil
+
+    /// A Point Guard workspace's ID embeds the project key of the app that made it, and every
+    /// app re-keys it to its own on load (see `WorkspacePersistence`). A placement another Mac
+    /// recorded names that Mac's ID, so it is re-keyed the same way.
+    func placementRekeyed(projectRoot: String) -> LiveAgent {
+        guard let placement, placement.workspace.hasPrefix("ws-point-guard:") else { return self }
+        var agent = self
+        agent.placement = SpawnPlacement(
+            workspace: Workspace.pointGuardId(projectRoot: projectRoot), surface: placement.surface)
+        return agent
+    }
+}
+
+/// Folds a layout document another Mac wrote into this app's layout, one workspace at a time.
+///
+/// Two apps write the same `.pu/workspaces.json` and every save is conditional, so a save that
+/// finds the document changed has to take the other Mac's edits without dropping its own.
+/// `base` is the document as this app last read or wrote it; their changes are measured against
+/// it. Ours are measured against `oursBase` (by default the same), which a caller can set to the
+/// base as its own reconciler shows it, so grouping derived from the manifest is not an edit.
+/// A workspace this app changed or added keeps this app's version — also when the other Mac
+/// changed it too, so a tab just split here for a spawn survives — and everything else takes
+/// theirs. The other Mac then adopts the result: its copy of each workspace is unchanged from
+/// its base, so it takes ours and no further write follows.
+nonisolated enum WorkspaceLayoutMerge {
+    static func merge(
+        base: [Workspace], ours: [Workspace], theirs: [Workspace], oursBase: [Workspace]? = nil
+    ) -> [Workspace] {
+        let baseById = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let oursBaseById = Dictionary((oursBase ?? base).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let oursById = Dictionary(ours.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let theirIds = Set(theirs.map(\.id))
+        var result: [Workspace] = []
+        for their in theirs {
+            if let mine = oursById[their.id] {
+                result.append(mine != oursBaseById[their.id] ? mine : their)
+            } else if their != baseById[their.id] {
+                result.append(their)  // removed here, changed there: keep it
+            }
+        }
+        // Added here, or changed here and removed there.
+        result.append(contentsOf: ours.filter { !theirIds.contains($0.id) && $0 != oursBaseById[$0.id] })
+        return result
+    }
 }
 
 /// The single function that turns (stored layout, manifest) into the canonical workspace list.
@@ -451,8 +502,17 @@ nonisolated enum WorkspaceReconciler {
     /// 3. Every workspace holds a live agent or a file tab, or is waiting on a spawn
     ///    (`reserved`) — no ghost rows.
     /// 4. Each workspace's container matches where its agents actually live.
+    /// 5. An agent no tab holds yet goes into the empty tab it was spawned for, when that tab
+    ///    is still there — so every app showing the project places it the same way.
     static func reconcile(stored: [Workspace], live: [LiveAgent], reserved: Set<String> = []) -> [Workspace] {
         let containerByAgent = Dictionary(live.map { ($0.id, $0.container) }, uniquingKeysWith: { first, _ in first })
+        let storedAgentIds = Set(stored.flatMap(\.agentIds))
+        var agentByPlacement: [SpawnPlacement: LiveAgent] = [:]
+        for agent in live where !storedAgentIds.contains(agent.id) {
+            guard let placement = agent.placement, agentByPlacement[placement] == nil else { continue }
+            agentByPlacement[placement] = agent
+        }
+        let placementWorkspaceIds = Set(agentByPlacement.keys.map(\.workspace))
 
         var claimed = Set<String>()
         var result: [Workspace] = []
@@ -485,6 +545,18 @@ nonisolated enum WorkspaceReconciler {
                 }
             }
 
+            if placementWorkspaceIds.contains(workspace.id) {
+                for (_, surface) in workspace.surfaces where surface.content == .empty {
+                    let placement = SpawnPlacement(workspace: workspace.id, surface: surface.id)
+                    guard let agent = agentByPlacement[placement], !claimed.contains(agent.id),
+                        workspace.agentIds.isEmpty || workspace.container == agent.container,
+                        !workspace.isPointGuard || agent.container == .projectRoot
+                    else { continue }
+                    workspace.setContent(.agent(agent.id), forSurface: surface.id)
+                    claimed.insert(agent.id)
+                }
+            }
+
             // A workspace exists to hold what the user opened. One left with only empty tabs
             // is a ghost row — unless one of those tabs is waiting for its agent.
             guard !workspace.isGhost || reserved.contains(workspace.id) else { continue }
@@ -510,9 +582,12 @@ nonisolated enum WorkspaceReconciler {
     /// Flatten a project's manifest into the ordered agent list the reconciler expects.
     /// Root agents first, then each worktree's agents — manifest order throughout.
     static func liveAgents(rootAgents: [AgentModel], worktrees: [WorktreeModel]) -> [LiveAgent] {
-        var live = rootAgents.map { LiveAgent(id: $0.id, container: .projectRoot) }
+        var live = rootAgents.map { LiveAgent(id: $0.id, container: .projectRoot, placement: $0.placement) }
         for worktree in worktrees {
-            live.append(contentsOf: worktree.agents.map { LiveAgent(id: $0.id, container: .worktree(worktree.id)) })
+            live.append(
+                contentsOf: worktree.agents.map {
+                    LiveAgent(id: $0.id, container: .worktree(worktree.id), placement: $0.placement)
+                })
         }
         return live
     }

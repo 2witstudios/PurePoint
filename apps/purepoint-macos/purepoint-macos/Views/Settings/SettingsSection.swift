@@ -6,7 +6,10 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case agents
     case hotkeys
     case display
+    // About holds the Sparkle update check, which the iPad does not have (REQ-IPAD-040).
+    #if os(macOS)
     case about
+    #endif
 
     var id: String { rawValue }
 
@@ -17,7 +20,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .agents: "Agents"
         case .hotkeys: "Hotkeys"
         case .display: "Display"
+        #if os(macOS)
         case .about: "About"
+        #endif
         }
     }
 
@@ -28,7 +33,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .agents: "cpu"
         case .hotkeys: "keyboard"
         case .display: "paintbrush"
+        #if os(macOS)
         case .about: "info.circle"
+        #endif
         }
     }
 }

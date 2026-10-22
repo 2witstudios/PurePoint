@@ -23,14 +23,24 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
     let sessionId: String?
     let suspended: Bool
     let command: String?
+    var signal: AgentSignalSnapshot? = nil
+    /// The tab this agent was spawned for, if any.
+    var placement: SpawnPlacement? = nil
 
     var displayName: String {
         name.isEmpty ? id : name
     }
 
+    func signalPresentation(available: Bool = true, now: Date = Date()) -> AgentSignalPresentation {
+        guard available else { return .unknown }
+        if suspended { return .init(label: "Suspended", eventID: nil, needsAttention: false) }
+        return signal?.presentation(agentID: id, sessionID: sessionId, available: status.isAlive, now: now) ?? .unknown
+    }
+
     init(
         id: String, name: String, agentType: String, status: AgentStatus, prompt: String, startedAt: String,
-        sessionId: String? = nil, suspended: Bool = false, command: String? = nil
+        sessionId: String? = nil, suspended: Bool = false, command: String? = nil, signal: AgentSignalSnapshot? = nil,
+        placement: SpawnPlacement? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +51,8 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
         self.sessionId = sessionId
         self.suspended = suspended
         self.command = command
+        self.signal = signal
+        self.placement = placement
     }
 
     init(from entry: AgentEntry) {
@@ -53,7 +65,9 @@ nonisolated struct AgentModel: Identifiable, Equatable, Sendable {
             startedAt: entry.startedAt,
             sessionId: entry.sessionId,
             suspended: entry.suspended ?? false,
-            command: entry.command
+            command: entry.command,
+            placement: entry.placement
         )
+        signal = entry.signal
     }
 }

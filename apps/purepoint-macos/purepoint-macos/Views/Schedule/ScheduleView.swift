@@ -8,11 +8,15 @@ struct ScheduleView: View {
     }
 
     private var projectRoots: [String] {
-        appState.projects.map(\.projectRoot)
+        appState.libraryProjectRoots
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            #if os(iOS)
+            LibraryMachineBar()
+            Divider()
+            #endif
             ScheduleHeaderView(state: state)
             Divider()
             calendarContent
@@ -21,9 +25,11 @@ struct ScheduleView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: Bindable(state).showingCreationSheet) {
             ScheduleEventSheet(state: state, editingEvent: nil)
+                .presentedControlDefaults()
         }
         .sheet(isPresented: Bindable(state).showingEditSheet) {
             ScheduleEventSheet(state: state, editingEvent: state.selectedEvent)
+                .presentedControlDefaults()
         }
         .task {
             await state.loadSchedules(projectRoots: projectRoots)
@@ -33,6 +39,12 @@ struct ScheduleView: View {
                 await state.loadSchedules(projectRoots: projectRoots)
             }
         }
+        #if os(iOS)
+        // The library follows the selected machine (IPAD-012); reload when it or its projects change.
+        .onChange(of: appState.libraryProjectRoots) { _, _ in
+            Task { await state.loadSchedules(projectRoots: projectRoots) }
+        }
+        #endif
     }
 
     @ViewBuilder

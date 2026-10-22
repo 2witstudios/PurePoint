@@ -24,7 +24,7 @@ struct ScheduleEventSheet: View {
     private var isEditing: Bool { editingEvent != nil }
 
     private var projectRoots: [String] {
-        appState.projects.map(\.projectRoot)
+        appState.libraryProjectRoots
     }
 
     private static let previewFormatter: DateFormatter = {
@@ -266,6 +266,10 @@ struct ScheduleEventSheet: View {
                 Task { await saveAndDismiss() }
             }
             .keyboardShortcut(.defaultAction)
+            #if os(iOS)
+            // The Mac draws the default button prominent on its own.
+            .buttonStyle(.borderedProminent)
+            #endif
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 20)

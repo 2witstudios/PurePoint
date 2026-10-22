@@ -292,20 +292,28 @@ nonisolated struct ScheduleInfoPayload: Decodable {
 }
 
 nonisolated enum DaemonRequest: Encodable {
-    case channelRead(projectRoot: String, after: UInt64? = nil, before: UInt64? = nil, limit: Int = 100, query: String? = nil, parentId: String? = nil, knownRevision: UInt64? = nil)
+    case channelRead(
+        projectRoot: String, after: UInt64? = nil, before: UInt64? = nil, limit: Int = 100, query: String? = nil,
+        parentId: String? = nil, knownRevision: UInt64? = nil)
     case channelSend(projectRoot: String, text: String, parentId: String? = nil, references: [ChannelReference] = [])
     case channelEdit(projectRoot: String, messageId: String, text: String)
     case channelReact(projectRoot: String, messageId: String, active: Bool)
     case health
+    /// Adds the folder to the daemon's projects, initializing it if needed.
     case initProject(projectRoot: String)
+    /// Forgets a project on the daemon for every device; its files are untouched (protocol 13).
+    case removeProject(projectRoot: String, suspendAgents: Bool = false)
+    /// Streams the daemon's registered project roots, now and on every change (protocol 13).
+    case subscribeProjects
     case status(projectRoot: String, agentId: String? = nil)
-    case attach(agentId: String)
+    case attach(agentId: String, clientId: String? = nil)
     case input(agentId: String, data: Data)
+    case claimSize(cols: Int, rows: Int)
     case resize(agentId: String, cols: Int, rows: Int)
     case spawn(
         projectRoot: String, prompt: String, agent: String = "claude",
         name: String? = nil, base: String? = nil, root: Bool = false,
-        worktree: String? = nil, command: String? = nil)
+        worktree: String? = nil, command: String? = nil, placement: SpawnPlacement? = nil)
     case spawnShell(cwd: String)
     case kill(projectRoot: String, target: KillTarget)
     case rename(projectRoot: String, agentId: String, name: String)
@@ -347,19 +355,28 @@ nonisolated enum DaemonRequest: Encodable {
     case deleteTrigger(projectRoot: String, name: String, scope: String)
     case getConfig(projectRoot: String)
     case getGlobalAgentSettings
-    case updateGlobalAgentSettings(codexYolo: Bool)
-    case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: [String]?)
+    /// `launchArgs` maps agent type to its machine-level launch args string; a blank string removes it.
+    case updateGlobalAgentSettings(agentStatusTracking: Bool? = nil, launchArgs: [String: String]? = nil)
+    /// `launchArgs` is the free-form launch args string; `nil` clears the project value.
+    case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: String?)
     case shutdown
     /// The daemon's registered projects; no project root means all of them.
     case inventory(kind: String, projectRoot: String? = nil)
+    /// Save the order of the daemon's registered projects, which every client shows (protocol 14).
+    case reorderProjects(projectRoots: [String])
     // File and git access confined to registered projects (machines.md, protocol 9).
     case fsList(path: String, recursive: Bool = false, includeHidden: Bool = true, maxEntries: Int = 20_000)
+    /// `fs_list` with `directories_only`: the subdirectories of any directory on the machine,
+    /// for choosing a folder to open as a project. `~` is the daemon user's home.
+    case fsBrowse(path: String, includeHidden: Bool, maxEntries: Int = 20_000)
     case fsStat(path: String)
     case fsRead(path: String, maxBytes: Int = 1_048_576)
     case fsWrite(path: String, data: Data, expectedModifiedMs: Int64? = nil, createDirs: Bool = false)
     case fsDelete(path: String)
     case subscribeFs(root: String, recursive: Bool = true)
     case gitExec(cwd: String, program: String, args: [String], stdin: Data? = nil, timeoutMs: Int = 30_000)
+    /// One chunk of a file sent to the daemon's machine (protocol 12); see `AttachmentUpload`.
+    case attachFile(uploadId: String, name: String, offset: Int, data: Data, done: Bool)
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: DynamicCodingKey.self)
@@ -395,13 +412,27 @@ nonisolated enum DaemonRequest: Encodable {
         case .initProject(let projectRoot):
             try container.encode("init", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
+        case .removeProject(let projectRoot, let suspendAgents):
+            try container.encode("remove_project", forKey: .key("type"))
+            try container.encode(projectRoot, forKey: .key("project_root"))
+            try container.encode(suspendAgents, forKey: .key("suspend_agents"))
+        case .subscribeProjects:
+            try container.encode("subscribe_projects", forKey: .key("type"))
         case .status(let projectRoot, let agentId):
             try container.encode("status", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             if let agentId { try container.encode(agentId, forKey: .key("agent_id")) }
-        case .attach(let agentId):
+        case .attach(let agentId, let clientId):
             try container.encode("attach", forKey: .key("type"))
             try container.encode(agentId, forKey: .key("agent_id"))
+            if let clientId {
+                try container.encode(clientId, forKey: .key("client_id"))
+                try container.encode("snapshot", forKey: .key("replay"))
+            }
+        case .claimSize(let cols, let rows):
+            try container.encode("claim_size", forKey: .key("type"))
+            try container.encode(cols, forKey: .key("cols"))
+            try container.encode(rows, forKey: .key("rows"))
         case .input(let agentId, let data):
             try container.encode("input", forKey: .key("type"))
             try container.encode(agentId, forKey: .key("agent_id"))
@@ -411,7 +442,10 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(agentId, forKey: .key("agent_id"))
             try container.encode(cols, forKey: .key("cols"))
             try container.encode(rows, forKey: .key("rows"))
-        case .spawn(let projectRoot, let prompt, let agent, let name, let base, let root, let worktree, let command):
+        case .spawn(
+            let projectRoot, let prompt, let agent, let name, let base, let root, let worktree, let command,
+            let placement
+        ):
             try container.encode("spawn", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(prompt, forKey: .key("prompt"))
@@ -421,6 +455,7 @@ nonisolated enum DaemonRequest: Encodable {
             if root { try container.encode(root, forKey: .key("root")) }
             if let worktree { try container.encode(worktree, forKey: .key("worktree")) }
             if let command { try container.encode(command, forKey: .key("command")) }
+            if let placement { try container.encode(placement, forKey: .key("placement")) }
         case .spawnShell(let cwd):
             try container.encode("spawn_shell", forKey: .key("type"))
             try container.encode(cwd, forKey: .key("cwd"))
@@ -576,9 +611,10 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(projectRoot, forKey: .key("project_root"))
         case .getGlobalAgentSettings:
             try container.encode("get_global_agent_settings", forKey: .key("type"))
-        case .updateGlobalAgentSettings(let codexYolo):
+        case .updateGlobalAgentSettings(let agentStatusTracking, let launchArgs):
             try container.encode("update_global_agent_settings", forKey: .key("type"))
-            try container.encode(codexYolo, forKey: .key("codex_yolo"))
+            try container.encodeIfPresent(agentStatusTracking, forKey: .key("agent_status_tracking"))
+            try container.encodeIfPresent(launchArgs, forKey: .key("launch_args"))
         case .updateAgentConfig(let projectRoot, let agentName, let launchArgs):
             try container.encode("update_agent_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
@@ -591,12 +627,21 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode("inventory", forKey: .key("type"))
             try container.encode(kind, forKey: .key("kind"))
             try container.encodeIfPresent(projectRoot, forKey: .key("project_root"))
+        case .reorderProjects(let projectRoots):
+            try container.encode("reorder_projects", forKey: .key("type"))
+            try container.encode(projectRoots, forKey: .key("project_roots"))
         case .fsList(let path, let recursive, let includeHidden, let maxEntries):
             try container.encode("fs_list", forKey: .key("type"))
             try container.encode(path, forKey: .key("path"))
             try container.encode(recursive, forKey: .key("recursive"))
             try container.encode(includeHidden, forKey: .key("include_hidden"))
             try container.encode(maxEntries, forKey: .key("max_entries"))
+        case .fsBrowse(let path, let includeHidden, let maxEntries):
+            try container.encode("fs_list", forKey: .key("type"))
+            try container.encode(path, forKey: .key("path"))
+            try container.encode(includeHidden, forKey: .key("include_hidden"))
+            try container.encode(maxEntries, forKey: .key("max_entries"))
+            try container.encode(true, forKey: .key("directories_only"))
         case .fsStat(let path):
             try container.encode("fs_stat", forKey: .key("type"))
             try container.encode(path, forKey: .key("path"))
@@ -624,6 +669,13 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(args, forKey: .key("args"))
             try container.encodeIfPresent(stdin?.base64EncodedString(), forKey: .key("stdin_base64"))
             try container.encode(timeoutMs, forKey: .key("timeout_ms"))
+        case .attachFile(let uploadId, let name, let offset, let data, let done):
+            try container.encode("attach_file", forKey: .key("type"))
+            try container.encode(uploadId, forKey: .key("upload_id"))
+            try container.encode(name, forKey: .key("name"))
+            try container.encode(offset, forKey: .key("offset"))
+            try container.encode(data.base64EncodedString(), forKey: .key("data_base64"))
+            try container.encode(done, forKey: .key("done"))
         }
     }
 }
@@ -633,7 +685,12 @@ nonisolated enum DaemonResponse: Decodable {
     case channelMessage(ChannelMutation)
     case healthReport(pid: Int, uptimeSeconds: Int, protocolVersion: Int, agentCount: Int)
     case initResult(created: Bool)
+    case projectRemoved(projectRoot: String, removed: Bool, suspended: [String], killed: [String])
+    case projectsSubscribed
+    case projectsChanged(projects: [String])
     case statusReport(worktrees: [WorktreeEntry], agents: [AgentStatusReport])
+    case resync
+    case ptySize(cols: Int, rows: Int, ownerClientId: String?)
     case attachReady(bufferedBytes: Int)
     case output(agentId: String, data: Data)
     case spawnResult(worktreeId: String?, agentId: String, status: String)
@@ -660,8 +717,11 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerList(triggers: [TriggerInfoPayload])
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
-    case globalAgentSettingsReport(codexYolo: Bool)
+    /// `launchArgs` is nil when the daemon predates machine-level launch args (protocol < 11).
+    case globalAgentSettingsReport(agentStatusTracking: Bool, launchArgs: [String: String]? = nil)
     case inventory(InventoryReportPayload)
+    /// The registered projects in their saved order.
+    case projectOrder(projectRoots: [String])
     case fsListResult(path: String, entries: [FsEntryPayload], truncated: Bool)
     case fsStatResult(FsStatPayload)
     case fsReadResult(path: String, data: Data, size: UInt64, modifiedMs: Int64, truncated: Bool)
@@ -669,6 +729,7 @@ nonisolated enum DaemonResponse: Decodable {
     case fsSubscribed
     case fsEvent(root: String, paths: [String])
     case gitExecResult(exitCode: Int32, stdout: Data, stderr: Data, truncated: Bool)
+    case attachFileResult(received: UInt64, path: String?)
     case ok
     case shuttingDown
     case error(code: String, message: String)
@@ -693,9 +754,22 @@ nonisolated enum DaemonResponse: Decodable {
         case "init_result":
             let p = try InitResultPayload(from: decoder)
             self = .initResult(created: p.created)
+        case "project_removed":
+            let p = try ProjectRemovedPayload(from: decoder)
+            self = .projectRemoved(
+                projectRoot: p.projectRoot, removed: p.removed, suspended: p.suspended, killed: p.killed ?? [])
+        case "projects_subscribed":
+            self = .projectsSubscribed
+        case "projects_changed":
+            self = .projectsChanged(projects: try ProjectsChangedPayload(from: decoder).projects)
         case "status_report":
             let p = try StatusReportPayload(from: decoder)
             self = .statusReport(worktrees: p.worktrees, agents: p.agents)
+        case "resync":
+            self = .resync
+        case "pty_size":
+            let p = try PtySizePayload(from: decoder)
+            self = .ptySize(cols: p.cols, rows: p.rows, ownerClientId: p.ownerClientId)
         case "attach_ready":
             let p = try AttachReadyPayload(from: decoder)
             self = .attachReady(bufferedBytes: p.bufferedBytes)
@@ -770,9 +844,12 @@ nonisolated enum DaemonResponse: Decodable {
             self = .configReport(defaultAgent: p.defaultAgent, agents: p.agents)
         case "global_agent_settings_report":
             let p = try GlobalAgentSettingsPayload(from: decoder)
-            self = .globalAgentSettingsReport(codexYolo: p.codexYolo)
+            self = .globalAgentSettingsReport(
+                agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs)
         case "inventory":
             self = .inventory(try InventoryReportPayload(from: decoder))
+        case "project_order":
+            self = .projectOrder(projectRoots: try ProjectOrderPayload(from: decoder).projectRoots)
         case "fs_list_result":
             let p = try FsListResultPayload(from: decoder)
             self = .fsListResult(path: p.path, entries: p.entries, truncated: p.truncated)
@@ -798,6 +875,9 @@ nonisolated enum DaemonResponse: Decodable {
             self = .gitExecResult(
                 exitCode: p.exitCode, stdout: Data(base64Encoded: p.stdoutBase64) ?? Data(),
                 stderr: Data(base64Encoded: p.stderrBase64) ?? Data(), truncated: p.truncated)
+        case "attach_file_result":
+            let p = try AttachFileResultPayload(from: decoder)
+            self = .attachFileResult(received: p.received, path: p.path)
         case "ok":
             self = .ok
         case "shutting_down":
@@ -817,11 +897,20 @@ nonisolated struct AgentConfigPayload: Decodable {
     let launchArgs: [String]?
     let resolvedLaunchArgs: [String]
     let interactive: Bool
+    /// Project launch args string; `nil` when the project leaves it unset.
+    var projectLaunchArgs: String? = nil
+    /// Machine-level ("all projects") launch args string for this agent.
+    var machineLaunchArgs: String? = nil
+    /// Command line preview: base command plus resolved launch args.
+    var resolvedCommand: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case name, command, interactive
         case launchArgs = "launch_args"
         case resolvedLaunchArgs = "resolved_launch_args"
+        case projectLaunchArgs = "project_launch_args"
+        case machineLaunchArgs = "machine_launch_args"
+        case resolvedCommand = "resolved_command"
     }
 }
 
@@ -838,9 +927,11 @@ nonisolated struct AgentStatusReport: Decodable {
     let sessionId: String?
     let prompt: String?
     let suspended: Bool
+    let signal: AgentSignalSnapshot?
+    let placement: SpawnPlacement?
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, status, pid, prompt, suspended
+        case id, name, status, pid, prompt, suspended, signal, placement
         case agentType = "agent_type"
         case exitCode = "exit_code"
         case idleSeconds = "idle_seconds"
@@ -862,7 +953,9 @@ nonisolated struct AgentStatusReport: Decodable {
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
+        signal = try? container.decodeIfPresent(AgentSignalSnapshot.self, forKey: .signal)
         suspended = try container.decodeIfPresent(Bool.self, forKey: .suspended) ?? false
+        placement = try? container.decodeIfPresent(SpawnPlacement.self, forKey: .placement)
     }
 }
 
@@ -913,9 +1006,13 @@ nonisolated struct SwarmDefInfo: Decodable {
 // MARK: - Response payload helpers
 
 private nonisolated struct GlobalAgentSettingsPayload: Decodable {
-    let codexYolo: Bool
+    /// Absent from daemons that predate the setting, where tracking is always on.
+    let agentStatusTracking: Bool?
+    /// Absent from daemons that predate machine-level launch args.
+    let launchArgs: [String: String]?
     enum CodingKeys: String, CodingKey {
-        case codexYolo = "codex_yolo"
+        case agentStatusTracking = "agent_status_tracking"
+        case launchArgs = "launch_args"
     }
 }
 
@@ -968,6 +1065,25 @@ private nonisolated struct RunSwarmResultPayload: Decodable {
 
 private nonisolated struct InitResultPayload: Decodable {
     let created: Bool
+}
+
+private nonisolated struct ProjectRemovedPayload: Decodable {
+    let projectRoot: String
+    let removed: Bool
+    let suspended: [String]
+    /// Sessions the manifest did not list, stopped rather than suspended.
+    let killed: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case projectRoot = "project_root"
+        case removed
+        case suspended
+        case killed
+    }
+}
+
+private nonisolated struct ProjectsChangedPayload: Decodable {
+    let projects: [String]
 }
 
 private nonisolated struct HealthReportPayload: Decodable {
@@ -1152,7 +1268,7 @@ private nonisolated struct DynamicCodingKey: CodingKey {
 
 nonisolated enum DaemonProtocol {
     /// The protocol this app speaks. A daemon reporting another version is incompatible.
-    static let version = 9
+    static let version = 14
 }
 
 nonisolated struct InventoryProjectPayload: Decodable, Sendable, Equatable {
@@ -1183,6 +1299,14 @@ nonisolated struct InventoryReportPayload: Decodable, Sendable {
         projectRoot = try container.decodeIfPresent(String.self, forKey: .projectRoot)
         complete = try container.decodeIfPresent(Bool.self, forKey: .complete) ?? true
         projects = try container.decodeIfPresent([InventoryProjectPayload].self, forKey: .projects) ?? []
+    }
+}
+
+nonisolated struct ProjectOrderPayload: Decodable, Sendable {
+    let projectRoots: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case projectRoots = "project_roots"
     }
 }
 
@@ -1248,6 +1372,11 @@ private nonisolated struct FsWriteResultPayload: Decodable {
     }
 }
 
+private nonisolated struct AttachFileResultPayload: Decodable {
+    let received: UInt64
+    let path: String?
+}
+
 private nonisolated struct FsEventPayload: Decodable {
     let root: String
     let paths: [String]
@@ -1264,5 +1393,15 @@ private nonisolated struct GitExecResultPayload: Decodable {
         case exitCode = "exit_code"
         case stdoutBase64 = "stdout_base64"
         case stderrBase64 = "stderr_base64"
+    }
+}
+
+private nonisolated struct PtySizePayload: Decodable {
+    let cols: Int
+    let rows: Int
+    let ownerClientId: String?
+    enum CodingKeys: String, CodingKey {
+        case cols, rows
+        case ownerClientId = "owner_client_id"
     }
 }

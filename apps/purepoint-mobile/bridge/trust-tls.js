@@ -1,14 +1,21 @@
-import { mkdir, lstat, readFile, rename, rm, mkdtemp } from "node:fs/promises";
+import {
+  mkdir,
+  lstat,
+  readFile,
+  rename,
+  rm,
+  mkdtemp,
+  writeFile,
+  chmod,
+} from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { mintHostIdentity } from "./identity.js";
 import {
   X509Certificate,
   createPrivateKey,
   createPublicKey,
   createHash,
 } from "node:crypto";
-const execute = promisify(execFile);
 export async function privateEntry(file, directory = false) {
   const info = await lstat(file);
   if (
@@ -48,29 +55,18 @@ export async function ensureHostTLS(directory, assertHeld = () => {}) {
   if (created) {
     const temporary = await mkdtemp(path.join(directory, ".identity-"));
     try {
-      // Absolute OS tool, fixed arguments, no shell or caller-controlled certificate fields.
+      // In-process minting: no OS tool, PATH lookup or caller-controlled fields.
       assertHeld();
-      await execute(
-        "/usr/bin/openssl",
-        [
-          "req",
-          "-x509",
-          "-newkey",
-          "rsa:2048",
-          "-nodes",
-          "-sha256",
-          "-days",
-          "3650",
-          "-subj",
-          "/CN=Point Guard",
-          "-keyout",
-          path.join(temporary, "key.pem"),
-          "-out",
-          path.join(temporary, "cert.pem"),
-        ],
-        { timeout: 15000, maxBuffer: 65536 },
-      );
-      const { chmod } = await import("node:fs/promises");
+      const minted = mintHostIdentity();
+      await writeFile(path.join(temporary, "key.pem"), minted.key, {
+        mode: 0o600,
+        flag: "wx",
+      });
+      await writeFile(path.join(temporary, "cert.pem"), minted.cert, {
+        mode: 0o600,
+        flag: "wx",
+      });
+      // Modes are explicit, independent of the process umask.
       await chmod(path.join(temporary, "key.pem"), 0o600);
       await chmod(path.join(temporary, "cert.pem"), 0o600);
       assertHeld();
@@ -79,7 +75,7 @@ export async function ensureHostTLS(directory, assertHeld = () => {}) {
       await rename(path.join(temporary, "cert.pem"), certFile);
     } catch {
       throw new Error(
-        "Could not provision Point Guard TLS identity with /usr/bin/openssl. Check private state permissions; partial identity needs deliberate recovery.",
+        "Could not provision Point Guard TLS identity. Check private state permissions; partial identity needs deliberate recovery.",
       );
     } finally {
       await rm(temporary, { recursive: true, force: true });

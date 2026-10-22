@@ -1,5 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+#endif
 
 /// Native presentation of the same authoritative Pi session used by the phone.
 struct PiPointGuardChatView: View {
@@ -7,19 +10,36 @@ struct PiPointGuardChatView: View {
     @Binding var showSidebar: Bool
     var isFocused = true
     var compact = false
+    var tabBar: AnyView = AnyView(EmptyView())
     @State private var search = ""
     @State private var pendingSession: PiConversation?
     @State private var confirmNew = false
     @State private var confirmResume = false
     @State private var followOutput = true
     @State private var scrollingTranscript = false
+    @State private var transcriptVisible = false
+    @State private var transcriptScroll = PiTranscriptScrollCoordinator()
+    @State private var transcriptWindow = PiTranscriptWindow()
     @State private var showFiles = false
     @State private var importingAttachment = false
+    @State private var playbook = PointGuardPlaybook.shared
+    @State private var fetchingPlay = false
+    /// The snapshot revision a court send went out at, until its reply lands.
+    @State private var awaitingReply: Int?
+    #if os(iOS)
+    @State private var showPhotos = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    #endif
     @FocusState private var composerFocused: Bool
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact) {
+        lifecycle(attachmentPickers(conversationLayout))
+            .sheet(item: dialogBinding) { dialog in dialogSheet(dialog) }
+    }
+
+    private var conversationLayout: some View {
+        PointGuardConversationLayout(isExpanded: $showSidebar, compact: compact, tabBar: tabBar) {
             Button {
                 if model.busy { confirmNew = true } else { Task { await model.changeSession() } }
             } label: {
@@ -32,51 +52,77 @@ struct PiPointGuardChatView: View {
             sidebar
         } content: {
             VStack(spacing: 0) {
-                // Fades the transcript into the composer without reaching the error banner below it.
-                transcript.overlay(alignment: .bottom) {
-                    let surface = Color(nsColor: Theme.chatBackground)
-                    LinearGradient(colors: [surface.opacity(0), surface], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 24).allowsHitTesting(false)
+                if showsCourt {
+                    court
+                } else {
+                    // Fades the transcript into the composer without reaching the error banner below it.
+                    transcript.overlay(alignment: .bottom) {
+                        let surface = Color(nsColor: Theme.chatBackground)
+                        LinearGradient(colors: [surface.opacity(0), surface], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 24).allowsHitTesting(false)
+                    }
                 }
-                if let error = model.error {
-                    InlineErrorBanner(message: error) { model.error = nil }
-                }
-                if model.browsing == nil { composer }
+                // The iPad court docks its composer under the court and shows the banner over it, as a conversation does.
+                if !(showsCourt && PointGuardCourtGeometry.docksComposer) { errorBanner }
+                if model.browsing == nil && !showsCourt { composer }
             }
             .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: Theme.chatBackground))
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]) {
-            result in
-            importAttachment(result)
-        }
-        .task { if model.connected { await model.loadConversations() } }
-        .onChange(of: model.connected) { _, connected in
-            if connected { Task { await model.loadConversations() } }
-        }
-        .onChange(of: model.busy) { _, busy in
-            if !busy && model.connected { Task { await model.loadConversations() } }
-        }
-        .onChange(of: model.snapshot?.sessionId) { _, _ in
-            Task { await model.loadConversations() }
-        }
-        .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
-            Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
-        }
-        .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
-            Button("Stop and resume") {
-                if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
+    }
+
+    private func attachmentPickers(_ content: some View) -> some View {
+        content
+            // The iPad also attaches photos through PhotosPicker, with the same limits (IPAD-8.3).
+            .fileImporter(
+                isPresented: $showFiles, allowedContentTypes: [.image, .plainText, .sourceCode, .json, .pdf]
+            ) { result in
+                importAttachment(result)
             }
-        }
-        .sheet(
-            item: Binding(
-                get: { model.snapshot?.dialogs.first },
-                set: { dialog in
-                    if dialog == nil, let current = model.snapshot?.dialogs.first {
-                        Task { await model.answer(current, cancelled: true) }
-                    }
-                })
-        ) { dialog in PiDialogView(model: model, dialog: dialog).id(dialog.id) }
+            #if os(iOS)
+            .photosPicker(isPresented: $showPhotos, selection: $selectedPhoto, matching: .images)
+            .onChange(of: selectedPhoto) { _, item in
+                if let item { importPhoto(item) }
+            }
+            #endif
+    }
+
+    private func lifecycle(_ content: some View) -> some View {
+        content
+            .task { if model.connected { await model.loadConversations() } }
+            .onChange(of: model.connected) { _, connected in
+                if connected { Task { await model.loadConversations() } }
+            }
+            .onChange(of: model.busy) { _, busy in
+                if !busy && model.connected { Task { await model.loadConversations() } }
+            }
+            .onChange(of: model.snapshot?.sessionId) { _, _ in
+                Task { await model.loadConversations() }
+            }
+            .onChange(of: model.snapshot?.revision) { _, _ in awaitingReply = nil }
+            .onChange(of: model.recoverable.count) { _, _ in awaitingReply = nil }
+            .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew) {
+                Button("Stop and start new") { Task { await model.changeSession(stopFirst: true) } }
+            }
+            .confirmationDialog("Stop Point Guard before resuming this conversation?", isPresented: $confirmResume) {
+                Button("Stop and resume") {
+                    if let pendingSession { Task { await model.changeSession(to: pendingSession.id, stopFirst: true) } }
+                }
+            }
+    }
+
+    private var dialogBinding: Binding<PiExtensionDialog?> {
+        Binding(
+            get: { model.snapshot?.dialogs.first },
+            set: { dialog in
+                if dialog == nil, let current = model.snapshot?.dialogs.first {
+                    Task { await model.answer(current, cancelled: true) }
+                }
+            })
+    }
+
+    private func dialogSheet(_ dialog: PiExtensionDialog) -> some View {
+        PiDialogView(model: model, dialog: dialog).id(dialog.id).presentedControlDefaults()
     }
 
     private var sidebar: some View {
@@ -124,7 +170,10 @@ struct PiPointGuardChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                // Eager on purpose: every update of a `.textSelection` overlay invalidates layout
+                // (AppKit line-break/font resets), and LazyVStack re-updated those overlays on each
+                // pass while scrolling, so layout never settled and the main thread hung.
+                VStack(alignment: .leading, spacing: 12) {
                     if let history = model.browsing {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Reading: " + history.title).font(.system(size: 12, weight: .medium))
@@ -140,21 +189,9 @@ struct PiPointGuardChatView: View {
                                 Button("Back to live") { model.browsing = nil }
                             }
                         }
-                        ForEach(PiTranscriptRows.make(messages: history.messages, tools: [])) { row in
-                            switch row {
-                            case .message(let message): messageView(message)
-                            case .activity(let tools): PiToolActivityView(tools: tools)
-                            }
-                        }
-                    } else if model.transcriptRows.isEmpty {
-                        emptyState.padding(.vertical, 70)
+                        transcriptRows(PiTranscriptRows.make(messages: history.messages, tools: []))
                     } else {
-                        ForEach(model.transcriptRows) { row in
-                            switch row {
-                            case .message(let message): messageView(message)
-                            case .activity(let tools): PiToolActivityView(tools: tools)
-                            }
-                        }
+                        transcriptRows(model.transcriptRows)
                     }
                     if model.browsing == nil && model.busy {
                         TypingIndicatorBubble(compact: compact, fill: Self.replyFill)
@@ -176,31 +213,75 @@ struct PiPointGuardChatView: View {
             } action: { _, atBottom in
                 if atBottom && !scrollingTranscript { followOutput = true }
             }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, _ in
-                // Markdown finishes parsing after the snapshot arrives. Follow its final layout too.
-                if followOutput && !scrollingTranscript && model.browsing == nil { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onScrollGeometryChange(for: PiTranscriptScrollCoordinator.Geometry.self) { geometry in
+                PiTranscriptScrollCoordinator.Geometry(
+                    contentHeight: geometry.contentSize.height,
+                    viewportHeight: geometry.containerSize.height,
+                    visibleBottom: geometry.contentOffset.y + geometry.containerSize.height)
+            } action: { old, geometry in
+                transcriptScroll.update(
+                    contentHeight: geometry.contentHeight, viewportHeight: geometry.viewportHeight,
+                    visibleBottom: geometry.visibleBottom)
+                // Markdown and expanded tool output can resize after the snapshot arrives.
+                // Offset-only changes from our own scroll must not request another scroll.
+                if old.contentHeight != geometry.contentHeight || old.viewportHeight != geometry.viewportHeight {
+                    requestTranscriptScroll(proxy)
+                }
             }
             .onScrollPhaseChange { oldPhase, phase, context in
-                if phase == .tracking || phase == .interacting { scrollingTranscript = true; followOutput = false }
+                if phase == .tracking || phase == .interacting {
+                    transcriptScroll.cancel()
+                    scrollingTranscript = true
+                    followOutput = false
+                }
                 if phase == .idle && oldPhase != .animating {
                     scrollingTranscript = false
                     let geometry = context.geometry
                     if geometry.containerSize.height > 0 {
                         followOutput = geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 96
+                        if followOutput { requestTranscriptScroll(proxy) }
                     }
                 }
             }
-            .onChange(of: model.snapshot?.sessionId) { _, _ in
+            .onAppear {
+                transcriptVisible = true
+                transcriptScroll.reset()
+                requestTranscriptScroll(proxy)
+            }
+            .onDisappear {
+                transcriptVisible = false
+                transcriptScroll.reset()
+            }
+            .onChange(of: ObjectIdentifier(model)) { _, _ in
+                transcriptScroll.reset()
+                transcriptWindow.reset()
+                scrollingTranscript = false
                 followOutput = true
-                proxy.scrollTo("bottom", anchor: .bottom)
+                requestTranscriptScroll(proxy)
+            }
+            .onChange(of: model.browsing?.sessionId) { _, _ in
+                transcriptScroll.reset()
+                transcriptWindow.reset()
+                if model.browsing == nil { requestTranscriptScroll(proxy) }
+            }
+            .onChange(of: model.snapshot?.sessionId) { _, _ in
+                transcriptScroll.reset()
+                transcriptWindow.reset()
+                scrollingTranscript = false
+                followOutput = true
+                requestTranscriptScroll(proxy)
             }
             .onChange(of: model.snapshot?.revision) { _, _ in
-                if followOutput && model.browsing == nil { proxy.scrollTo("bottom", anchor: .bottom) }
+                transcriptScroll.outputChanged()
+                requestTranscriptScroll(proxy)
             }
             .overlay(alignment: .bottomTrailing) {
                 if !followOutput {
                     Button("Latest", systemImage: "arrow.down") {
-                        followOutput = true; proxy.scrollTo("bottom", anchor: .bottom)
+                        followOutput = true
+                        scrollingTranscript = false
+                        transcriptScroll.outputChanged()
+                        requestTranscriptScroll(proxy)
                     }
                     .buttonStyle(.bordered).padding(12)
                 }
@@ -208,20 +289,105 @@ struct PiPointGuardChatView: View {
         }
     }
 
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 30)).foregroundStyle(Color.accentColor)
-            Text("What would you like to work on?").font(.system(size: 24, weight: .semibold))
-            Text(
-                model.connected
-                    ? "Plan a change, direct your agents, or explore an idea with Point Guard."
-                    : "Finish setting up Point Guard in Settings to start a conversation."
-            )
-            .font(.system(size: 14)).foregroundStyle(.secondary)
-            if !model.connected {
-                Button("Open settings") { appState.showSettings = true }.buttonStyle(.bordered)
+    @ViewBuilder
+    private func transcriptRows(_ rows: [PiTranscriptRow]) -> some View {
+        let hidden = transcriptWindow.firstIndex(in: rows)
+        if hidden > 0 {
+            Button("Show earlier messages (\(hidden) more)") { transcriptWindow.showEarlier(in: rows) }
+                .buttonStyle(.borderless).font(.system(size: 12))
+                .frame(maxWidth: .infinity)
+        }
+        ForEach(transcriptWindow.visible(rows)) { row in
+            switch row {
+            case .message(let message): messageView(message)
+            case .activity(let tools): PiToolActivityView(tools: tools, onLayoutChange: transcriptScroll.userLayoutChanged)
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func requestTranscriptScroll(_ proxy: ScrollViewProxy) {
+        guard transcriptVisible, followOutput, !scrollingTranscript, model.browsing == nil else { return }
+        let sessionId = model.snapshot?.sessionId
+        let modelId = ObjectIdentifier(model)
+        transcriptScroll.request(canScroll: {
+            transcriptVisible && followOutput && !scrollingTranscript && model.browsing == nil
+                && model.snapshot?.sessionId == sessionId && ObjectIdentifier(model) == modelId
+        }, scroll: {
+            proxy.scrollTo("bottom", anchor: .bottom)
+        })
+    }
+
+    /// A new conversation opens on the court until its first message is on its way. After a send from the court it
+    /// stays down until the bridge's next snapshot (which carries the message) or a failed send; this is view state,
+    /// so an old receipt can't keep a later launch off the court.
+    private var showsCourt: Bool {
+        model.browsing == nil && model.transcriptRows.isEmpty && !model.busy && awaitingReply == nil
+            && !model.submissions.contains { $0.status == "Sending" }
+    }
+
+    private var court: some View {
+        PointGuardCourtView(
+            plays: playbook.plays, prompts: playbook.prompts ?? [], canRun: model.canSendPlay && !fetchingPlay,
+            connected: model.connected, compact: compact,
+            composer: {
+                VStack(spacing: 0) {
+                    if PointGuardCourtGeometry.docksComposer { errorBanner }
+                    composer
+                }
+            },
+            onRun: { [session = model.snapshot?.sessionId] play in runPlay(play, in: session) },
+            onAssign: { playbook.assign(slot: $0, prompt: $1) }, onReset: { playbook.reset(slot: $0) },
+            onOpenSettings: { appState.showSettings = true }
+        )
+        .task { await refreshPlays() }
+    }
+
+    /// Re-lists the global prompts so edits, deletions and new prompts made elsewhere show on the court.
+    private func refreshPlays() async {
+        if let prompts = await appState.pointGuardPrompts() { playbook.prompts = prompts }
+    }
+
+    /// Sends from the court and keeps it down until the reply's snapshot lands.
+    private func sendFromCourt(_ send: () -> Void) {
+        let revision = model.snapshot?.revision
+        let previous = model.submissions.last?.id
+        send()
+        if model.submissions.last?.id != previous { awaitingReply = revision }
+    }
+
+    /// Runs a play in the session it was clicked in; a session switched in the meantime drops it.
+    private func runPlay(_ play: PointGuardPlay, in session: String?) {
+        guard session != nil, model.snapshot?.sessionId == session else { return }
+        followOutput = true
+        guard case .saved(let name) = play.source else { return sendFromCourt { model.submit(play: play.prompt) } }
+        guard !fetchingPlay else { return }
+        fetchingPlay = true
+        Task {
+            defer { fetchingPlay = false }
+            // A saved play sends its prompt as it is now; one deleted or now needing input is refused, not swapped.
+            if let prompt = await appState.pointGuardPrompt(named: name), !prompt.needsInput {
+                guard !prompt.body.isEmpty else {
+                    model.error = "The saved prompt \u{201C}\(name)\u{201D} is empty, so there's nothing to send."
+                    return
+                }
+                guard model.snapshot?.sessionId == session else { return }
+                guard model.canSendPlay else {
+                    model.error = "Point Guard got busy. Run the play again once it's free."
+                    return
+                }
+                sendFromCourt { model.submit(play: prompt.body) }
+                return
+            }
+            let prompts = await appState.pointGuardPrompts()
+            if let prompts { playbook.prompts = prompts }
+            if let prompts, !prompts.contains(where: { $0.name == name && !$0.needsInput }) {
+                model.error =
+                    "The saved prompt \u{201C}\(name)\u{201D} was deleted or now needs input, so this play is back to its default."
+            } else {
+                model.error =
+                    "Couldn't load the saved prompt \u{201C}\(name)\u{201D}. Check the connection to PurePoint and try again."
+            }
+        }
     }
 
     private static let replyFill = Color(nsColor: Theme.userBubbleBackground)
@@ -249,6 +415,12 @@ struct PiPointGuardChatView: View {
                     if let error = message.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var errorBanner: some View {
+        if let error = model.error {
+            InlineErrorBanner(message: error) { model.error = nil }
         }
     }
 
@@ -296,6 +468,7 @@ struct PiPointGuardChatView: View {
                         return .handled
                     }
                 HStack(spacing: compact ? 8 : 12) {
+                    #if os(macOS)
                     Button {
                         showFiles = true
                     } label: {
@@ -309,6 +482,24 @@ struct PiPointGuardChatView: View {
                     }
                     .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
                     .accessibilityLabel("Add attachment").help("Attach an image, text file, or PDF")
+                    #else
+                    // The same plus control; touch and pointer pick photos or files from its menu.
+                    Menu {
+                        Button("Photos", systemImage: "photo") { showPhotos = true }
+                        Button("Files", systemImage: "folder") { showFiles = true }
+                    } label: {
+                        Group {
+                            if importingAttachment {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "plus").font(.system(size: 18))
+                            }
+                        }.frame(width: 34, height: 34).contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .buttonStyle(.plain).disabled(importingAttachment || model.attachments.count >= 4)
+                    .accessibilityLabel("Add attachment").help("Attach a photo, image, text file, or PDF")
+                    #endif
                     Spacer(minLength: 0)
                     if model.busy {
                         Menu {
@@ -400,9 +591,36 @@ struct PiPointGuardChatView: View {
         }
     }
 
+    #if os(iOS)
+    private func importPhoto(_ item: PhotosPickerItem) {
+        let draftKey = model.draftKey
+        Task {
+            importingAttachment = true
+            defer { importingAttachment = false; selectedPhoto = nil }
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    throw PiComposerError("This photo could not be opened.")
+                }
+                let file = try await Task.detached(priority: .userInitiated) {
+                    try PiAttachmentImport.image(data, name: "Photo.jpg")
+                }.value
+                guard model.draftKey == draftKey else {
+                    model.error = "The conversation changed. Attach the photo again to your current draft."
+                    return
+                }
+                model.addAttachment(file)
+                composerFocused = true
+            } catch {
+                model.error = error.localizedDescription
+            }
+        }
+    }
+    #endif
+
     private func submitDraft(mode: String? = nil) {
         followOutput = true
-        model.submit(mode: mode ?? (model.busy ? "after" : "send"))
+        let send = { model.submit(mode: mode ?? (model.busy ? "after" : "send")) }
+        if showsCourt { sendFromCourt(send) } else { send() }
         composerFocused = true
     }
 
@@ -437,16 +655,24 @@ private struct PiAttachmentChip: View {
 
 private struct PiToolActivityView: View {
     let tools: [PiToolActivity]
+    let onLayoutChange: () -> Void
     @State private var expanded = false
     private var running: Int { tools.filter { $0.state == "running" }.count }
     private var failed: Int { tools.filter { $0.state == "failed" }.count }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
+        DisclosureGroup(isExpanded: Binding(
+            get: { expanded },
+            set: { value in
+                guard expanded != value else { return }
+                onLayoutChange()
+                expanded = value
+            })
+        ) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                     if index > 0 { Divider() }
-                    PiToolDetailView(tool: tool)
+                    PiToolDetailView(tool: tool, onLayoutChange: onLayoutChange)
                 }
             }.padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
         } label: {
@@ -474,8 +700,18 @@ private struct PiToolActivityView: View {
 
 private struct PiToolDetailView: View {
     let tool: PiToolActivity
+    let onLayoutChange: () -> Void
+    @State private var expanded = false
+
     var body: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: Binding(
+            get: { expanded },
+            set: { value in
+                guard expanded != value else { return }
+                onLayoutChange()
+                expanded = value
+            })
+        ) {
             ScrollView(.horizontal) {
                 Text(tool.text.isEmpty ? "No output" : tool.text)
                     .font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
@@ -524,8 +760,15 @@ private struct PiDialogView: View {
                     Button("No") { Task { await model.answer(dialog, confirmed: false) } }
                     Button("Confirm") { Task { await model.answer(dialog, confirmed: true) } }.keyboardShortcut(
                         .defaultAction)
+                        #if os(iOS)
+                        .buttonStyle(.borderedProminent)
+                        #endif
                 } else if dialog.method != "select" {
                     Button("Send") { Task { await model.answer(dialog, value: text) } }.keyboardShortcut(.defaultAction)
+                        #if os(iOS)
+                        // The Mac draws the default button prominent on its own.
+                        .buttonStyle(.borderedProminent)
+                        #endif
                 }
             }
         }.padding(24).frame(width: 420).onAppear { text = dialog.prefill ?? "" }

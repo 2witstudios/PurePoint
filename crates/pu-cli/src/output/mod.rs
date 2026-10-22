@@ -43,6 +43,7 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         return Ok(());
     }
     match response {
+        Response::Resync | Response::PtySize { .. } => {}
         Response::Inventory(report) => {
             let c = &report.summary;
             println!(
@@ -94,6 +95,11 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::ChannelHistory { .. } | Response::ChannelMessage { .. } => {
             print!("{}", crate::commands::channel::format_response(response));
         }
+        Response::ProjectOrder { project_roots } => {
+            for root in project_roots {
+                println!("{root}");
+            }
+        }
         Response::HealthReport {
             pid,
             uptime_seconds,
@@ -111,6 +117,22 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         }
         Response::InitResult { created } => {
             system::print_init_result(*created);
+        }
+        Response::ProjectRemoved {
+            project_root,
+            removed,
+            suspended,
+            killed,
+        } => {
+            system::print_project_removed(project_root, *removed, suspended, killed);
+        }
+        Response::ProjectsSubscribed => {
+            println!("Projects subscription active");
+        }
+        Response::ProjectsChanged { projects } => {
+            for root in projects {
+                println!("{root}");
+            }
         }
         Response::SpawnResult {
             worktree_id,
@@ -320,12 +342,20 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         Response::GateResult { passed, output } => {
             execution::print_gate_result(*passed, output);
         }
-        Response::GlobalAgentSettingsReport { codex_yolo } => {
-            println!("Codex YOLO for all projects: {codex_yolo}");
+        Response::GlobalAgentSettingsReport {
+            agent_status_tracking,
+            launch_args,
+            ..
+        } => {
+            println!("Agent status tracking: {agent_status_tracking}");
+            for (agent, args) in launch_args {
+                println!("Launch args for {agent} (all projects): {args}");
+            }
         }
         Response::ConfigReport {
             default_agent,
             agents,
+            ..
         } => {
             system::print_config_report(default_agent, agents);
         }
@@ -335,7 +365,8 @@ pub fn print_response(response: &Response, json_mode: bool) -> Result<(), CliErr
         | Response::FsWriteResult { .. }
         | Response::FsSubscribed
         | Response::FsEvent { .. }
-        | Response::GitExecResult { .. } => {
+        | Response::GitExecResult { .. }
+        | Response::AttachFileResult { .. } => {
             println!("{}", serde_json::to_string_pretty(response)?);
         }
     }

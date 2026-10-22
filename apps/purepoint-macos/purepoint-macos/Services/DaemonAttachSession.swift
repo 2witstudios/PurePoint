@@ -1,15 +1,15 @@
-import AppKit
 import Foundation
-import Network
 import SwiftTerm
 
 /// Manages a single attach connection per terminal view.
 /// Connects to the daemon, streams Output messages, and feeds bytes to the terminal.
-/// Actor isolation serializes all writes to the NWConnection, preventing garbled JSON.
+/// Actor isolation serializes all writes to the daemon stream, preventing garbled JSON.
 actor DaemonAttachSession {
     let agentId: String
-    private weak var terminalView: TerminalView?
-    private var connection: NWConnection?
+    private let clientId = "mac:" + UUID().uuidString
+    private var desiredSize: (Int, Int)?
+    private weak var terminalView: PlatformTerminalView?
+    private var connection: (any DaemonByteStream)?
     private var stopped = false
     private(set) var isAgentGone = false
     /// True once the daemon closed an attached stream on its own, which it does
@@ -31,12 +31,14 @@ actor DaemonAttachSession {
 
     init(
         agentId: String,
-        terminalView: TerminalView,
+        terminalView: PlatformTerminalView,
         resetBeforeReplay: Bool = false,
+        localCols: Int = 120, localRows: Int = 40,
         onFirstOutput: (() -> Void)? = nil,
         onOutput: (@MainActor @Sendable () -> Void)? = nil,
-        client: DaemonClient = DaemonClient()
+        client: DaemonClient = DaemonEndpoint.local.makeClient()
     ) {
+        self.desiredSize = (localCols, localRows)
         self.client = client
         self.agentId = agentId
         self.terminalView = terminalView
@@ -72,6 +74,15 @@ actor DaemonAttachSession {
                 isAgentGone = true
                 break
             } catch {
+                #if os(iOS)
+                // A suspended app loses its SSH streams: reconnect when it returns to the foreground,
+                // without spending retries while it is in the background.
+                if await AppActivity.shared.isInBackground {
+                    await AppActivity.shared.untilForeground()
+                    retries = 0
+                    continue
+                }
+                #endif
                 // Connection lost — attempt reconnect with backoff
                 retries += 1
                 print("[DaemonAttach \(agentId.prefix(8))] retry \(retries): \(error.localizedDescription)")
@@ -92,17 +103,50 @@ actor DaemonAttachSession {
         try? await DaemonClient.write(.input(agentId: agentId, data: data), to: conn)
     }
 
+    /// Sends input that must not be lost, such as an uploaded file's path, and
+    /// reports whether it was written. Unlike `sendInput`, it waits up to
+    /// `timeout` for a reconnect when the attach connection is down.
+    func deliverInput(_ data: Data, timeout: Duration = .seconds(5)) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        var failed: (any DaemonByteStream)?
+        while !stopped, !isAgentGone, !didStreamEnd {
+            // Retry only on a new connection: a failed one stays set until replaced.
+            if let conn = connection, conn !== failed {
+                do {
+                    try await DaemonClient.write(.input(agentId: agentId, data: data), to: conn)
+                    return true
+                } catch {
+                    failed = conn
+                }
+            }
+            guard ContinuousClock.now < deadline else { break }
+            do {
+                try await Task.sleep(for: .milliseconds(100))
+            } catch {
+                break
+            }
+        }
+        return false
+    }
+
     /// Send resize notification to the daemon. Awaiting ensures actor serializes writes.
     func sendResize(cols: Int, rows: Int) async {
-        if rows > 0 { termRows = rows }
+        guard cols > 0, rows > 0 else { return }
+        desiredSize = (cols, rows)
         guard let conn = connection else { return }
         try? await DaemonClient.write(.resize(agentId: agentId, cols: cols, rows: rows), to: conn)
+    }
+
+    /// Focus is an explicit ownership claim; typing never changes ownership.
+    func claimSize() async {
+        guard let size = desiredSize, let conn = connection else { return }
+        try? await DaemonClient.write(.claimSize(cols: size.0, rows: size.1), to: conn)
     }
 
     /// Stop the attach session.
     func stop() {
         stopped = true
-        connection?.cancel()
+        connection?.close()
         connection = nil
     }
 
@@ -114,11 +158,16 @@ actor DaemonAttachSession {
         let tv = self.terminalView
 
         let (conn, reader) = try await client.connect()
-        self.connection?.cancel()
+        // `stop()` may have run while connecting; it could not close this stream.
+        guard !stopped else {
+            conn.close()
+            throw CancellationError()
+        }
+        self.connection?.close()
         self.connection = conn
 
         // Send attach request
-        try await DaemonClient.write(.attach(agentId: agentId), to: conn)
+        try await DaemonClient.write(.attach(agentId: agentId, clientId: clientId), to: conn)
 
         // Read AttachReady
         let firstLine = try await reader.readLine()
@@ -136,21 +185,11 @@ actor DaemonAttachSession {
         }
         print("[DaemonAttach \(agentId.prefix(8))] attached successfully")
 
-        // Send initial resize so PTY matches the terminal view's actual dimensions.
-        // The sizeChanged delegate fires during terminal creation (before connection
-        // exists), so this is the first opportunity to sync the PTY size.
-        let (initialCols, initialRows) = await MainActor.run {
-            guard let tv else { return (0, 0) }
-            let term = tv.getTerminal()
-            return (term.cols, term.rows)
+        let focused = await MainActor.run {
+            guard let tv else { return false }
+            return tv.hasKeyboardFocus
         }
-        if initialRows > 0 { termRows = initialRows }
-        if initialCols > 0 && initialRows > 0 {
-            try await DaemonClient.write(
-                .resize(agentId: agentId, cols: initialCols, rows: initialRows),
-                to: conn
-            )
-        }
+        if focused { await claimSize() }
 
         // The daemon replays exactly `bufferedBytes` before live output begins.
         var replayRemaining = bufferedBytes
@@ -167,6 +206,15 @@ actor DaemonAttachSession {
             let response = DaemonClient.parse(line)
 
             switch response {
+            case .resync:
+                replayRemaining = 0
+                await MainActor.run { tv?.feed(byteArray: [0x1b, 0x63]) }
+            case .ptySize(let cols, let rows, _):
+                termRows = rows
+                await MainActor.run {
+                    guard let tv else { return }
+                    tv.applyReportedPtySize(cols: cols, rows: rows)
+                }
             case .output(_, let data):
                 guard !data.isEmpty else { continue }
                 if let cb = onFirstOutput {

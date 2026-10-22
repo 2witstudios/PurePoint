@@ -45,6 +45,21 @@ Pinned remote HTTPS/WSS reuses [Node HTTPS](https://nodejs.org/api/https.html) a
 - Given legacy shared-token remote pairing, should preserve local recovery/native data and require QR v1 without authorization downgrade.
 - Given composed candidate, should pass independent complete exact-head review and applicable CI, both advertised package architectures, nested ad-hoc signing/entitlements/launch and state-preserving replacement fixture; human Developer ID/notarization/device acceptance stays pending.
 
+### Point Guard chat access from device grants
+
+Terminal and workspace grants bound a phone's direct controls, but Point Guard itself has a shell and the bundled `pu` CLI. Chat is therefore gated by the same grants, enforced by the bridge before any chat op reaches Pi and before any snapshot or editor offer is broadcast.
+
+! [PGSET-012] Point Guard chat follows the existing device grants: read needs Agents and terminals View or Control; send needs Control and Workspace management; Off has no chat — chat send is effectively full control of the Mac, so a separate toggle would suggest a restriction that does not exist. No new trust field or migration: existing devices get exactly the access their grants imply. Tagging Point Guard's own `pu` calls with the requesting device is a separate defense-in-depth item.
+
+- REQ-PGSET-001: Given a remote chat op, should derive the device's chat access from its current grants and check it before dispatch: `sync`, `sessions` and `history` need View or Control; `send` (every mode), `stop`, `new`, `resume` and `answer` need Control and Workspace management; any other non-terminal op is rejected without dispatch.
+- REQ-PGSET-002: Given a chat snapshot or editor offer, should deliver it only to connected devices with View or Control.
+- REQ-PGSET-003: Given the owner lowers a device's grants, should stop its chat broadcasts and reject further chat ops before the trust write completes, not run its chat actions still waiting in the queue, withhold results of its chat ops already in flight, and push the derived chat access to its connections; an upgrade applies after the durable write.
+- REQ-PGSET-004: Given malformed grant values, should treat chat as Off (fail closed); loopback desktop chat is the owner and always sends.
+- REQ-PGSET-005: Given Point Guard setup, should show each paired device with one Access choice — Full access (Control + Workspace management, including chatting with Point Guard, which can run commands and manage agents on this Mac), Terminals only, View only (reads Point Guard chat) or No access — with a per-device summary of what it allows. Newly paired devices start with Full access. Revoked devices are not listed.
+- REQ-PGSET-006: Given a phone with read-only chat, should show the conversation and history with sending, new/resume and extension answers disabled and explained; given Off, should lock chat with an explanation while the connection stays up; a live change should apply without reconnecting.
+
+Phone: `permissions` results and events include the derived `chat: off|read|send`.
+
 ### Existing native Pi directory permissions
 
 Given an existing user-owned native Pi agent directory with group/other read or traverse permissions but no group/other write permissions, should reuse it without changing its mode or canonical auth/settings/session data. New native directories are created owner-only (0700). Existing native directories must be real directories, not symlinks, and owned by the current user; reject group/other-writable directories with sanitized actionable recovery. Native auth files remain strictly owner-only regular files with valid JSON; unsafe/corrupt files are never silently repaired. Managed Point Guard and trust directories remain strictly owner-only.
@@ -128,9 +143,9 @@ Coordinator adopts pinned TLS on remote WSS, separate loopback native chat/admin
 - serve(controller,{host:'127.0.0.1',port:0,localAdmin:{token:<desktop-chat-token>,clientId:<persisted desktop client ID>}}) => loopback native CHAT only. Option name retained for proposed compatibility but token is desktop-chat token, never admin-token. Prefer rename localClient in final code to avoid confusion: serve(...,{localAdmin:{token,clientId}}). No remote trust/no pairing routes in localClient mode. Runtime provisions private desktop-chat-token (ensureToken) + desktop clientId UUID into admin.json. Credential header and message must equal server configured clientId. Runtime admin port separately validates its admin-token.
 - trust.createEnrollment({endpoint,ttlSeconds?}) => {enrollmentId,payload:<JSON QR string>,expiresAt}; endpoint explicit remote wss /v1.
 - trust.enrollmentStatus(enrollmentId) => {enrollmentId,status:'pending'|'consumed'|'expired'|'revoked'|'unknown',expiresAt?}; restart yields unknown.
-- trust.listDevices() => [{deviceId,clientId,name,createdAt,revokedAt?}]; no hash/credentials. trust.revokeDevice(deviceId) => Promise<void>. trust.rotateDevice(deviceId) => Promise<void> invalidates selected device, deliberate re-enrollment; unrelated devices survive.
+- trust.listDevices() => [{deviceId,clientId,name,createdAt,terminals,workspaceManagement}]; no hash/credentials. trust.revokeDevice(deviceId) => Promise<void> removes the device from trust (legacy `revokedAt` entries are dropped on open). trust.rotateDevice(deviceId) => Promise<void> is an alias of revokeDevice kept for the `devices.rotate` admin op (no Mac or `pu phone` UI calls it): the device must deliberately re-enroll; unrelated devices survive.
 - trust.revokeEnrollment(enrollmentId) => void. trust.authorize(credential) => {deviceId,clientId} | null.
-- trust.enroll({enrollmentToken,name}) => Promise<{version:1,hostId,deviceId,clientId,credential}>. Event 'revoked', deviceId, synchronously after persisted mutation.
+- trust.enroll({enrollmentToken,name}) => Promise<{version:1,hostId,deviceId,clientId,credential}>; the new device is stored with `terminals: "control"` and `workspaceManagement: true`. Event 'revoked', deviceId, synchronously after persisted mutation.
 Admin adapter runtime handler: pairing.create {endpoint,ttlSeconds?} -> trust.createEnrollment; pairing.status {enrollmentId} -> enrollmentStatus; devices.list -> {devices:trust.listDevices()}; devices.revoke {deviceId} -> revokeDevice; devices.rotate {deviceId} -> rotateDevice; pairing.revoke {enrollmentId}->revokeEnrollment. No these operations exposed by remote listener. Native UI reads public QR string only from returned payload; devices have no admin capabilities.
 
 ## Edge Cases

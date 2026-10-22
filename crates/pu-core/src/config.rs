@@ -2,13 +2,35 @@ use std::path::Path;
 
 use crate::error::PuError;
 use crate::paths;
-use crate::types::{AgentConfig, Config};
+use crate::types::{AgentConfig, Config, LaunchArgs};
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalAgentSettings {
-    #[serde(default)]
-    pub codex_yolo: bool,
+    /// Observe agent status (working/idle/question) through the native adapters.
+    #[serde(default = "crate::serde_defaults::default_true")]
+    pub agent_status_tracking: bool,
+    /// Per-agent-type launch args for every project on this machine, used when a
+    /// project's `.pu/config.yaml` leaves `launchArgs` unset.
+    #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
+    pub launch_args: indexmap::IndexMap<String, LaunchArgs>,
+}
+
+impl Default for GlobalAgentSettings {
+    fn default() -> Self {
+        Self {
+            agent_status_tracking: true,
+            launch_args: indexmap::IndexMap::new(),
+        }
+    }
+}
+
+/// Changes to apply in `save_global_agent_settings`; `None` keeps the stored value.
+#[derive(Debug, Default)]
+pub struct GlobalAgentSettingsUpdate {
+    pub agent_status_tracking: Option<bool>,
+    /// Machine-level launch args string per agent type; a blank string removes it.
+    pub launch_args: indexmap::IndexMap<String, String>,
 }
 
 pub fn load_global_agent_settings() -> Result<GlobalAgentSettings, PuError> {
@@ -20,14 +42,47 @@ pub fn load_global_agent_settings() -> Result<GlobalAgentSettings, PuError> {
     }
 }
 
-pub fn save_global_agent_settings(codex_yolo: bool) -> Result<GlobalAgentSettings, PuError> {
+/// Update the given settings, keeping the stored value of any left as `None`.
+pub fn save_global_agent_settings(
+    update: GlobalAgentSettingsUpdate,
+) -> Result<GlobalAgentSettings, PuError> {
     use fs4::FileExt;
+    // Validate before touching the file so a bad value never replaces a good one.
+    let defaults = crate::types::default_agents();
+    let mut launch_args = Vec::with_capacity(update.launch_args.len());
+    for (agent, text) in update.launch_args {
+        if !defaults.contains_key(&agent) {
+            return Err(PuError::InvalidArgument(format!(
+                "unknown agent type: {agent}"
+            )));
+        }
+        let args = if text.trim().is_empty() {
+            None
+        } else {
+            Some(crate::types::parse_launch_args(&text).map_err(PuError::InvalidArgument)?)
+        };
+        launch_args.push((agent, args));
+    }
     let dir = paths::global_pu_dir()?;
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("agent-settings.yaml");
     let lock = std::fs::File::create(path.with_extension("yaml.lock"))?;
     FileExt::lock(&lock)?;
-    let settings = GlobalAgentSettings { codex_yolo };
+    // A malformed file is an error, never silently replaced: it would erase every stored setting.
+    let mut settings = load_global_agent_settings()?;
+    if let Some(enabled) = update.agent_status_tracking {
+        settings.agent_status_tracking = enabled;
+    }
+    for (agent, args) in launch_args {
+        match args {
+            Some(args) => {
+                settings.launch_args.insert(agent, LaunchArgs(args));
+            }
+            None => {
+                settings.launch_args.shift_remove(&agent);
+            }
+        }
+    }
     let yaml = serde_yaml_ng::to_string(&settings)?;
     let tmp_path = path.with_extension("yaml.tmp");
     let mut tmp = std::fs::File::create(&tmp_path)?;
@@ -37,71 +92,11 @@ pub fn save_global_agent_settings(codex_yolo: bool) -> Result<GlobalAgentSetting
     Ok(settings)
 }
 
-/// Remove only Codex permission options, preserving ordered and repeated values.
-fn without_codex_permissions(args: Vec<String>) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        if matches!(
-            arg.as_str(),
-            "-s" | "--sandbox" | "-a" | "--ask-for-approval" | "--approval-mode"
-        ) {
-            args.next();
-        } else if !matches!(
-            arg.as_str(),
-            "--full-auto"
-                | "--approve-for-me"
-                | "--yolo"
-                | "--dangerously-bypass-approvals-and-sandbox"
-                | "--no-daemon"
-        ) && ![
-            "--sandbox=",
-            "--ask-for-approval=",
-            "--approval-mode=",
-            "-s",
-            "-a",
-        ]
-        .iter()
-        .any(|prefix| arg.starts_with(prefix))
-        {
-            result.push(arg);
-        }
-    }
-    result
-}
-
 fn apply_global_agent_settings(config: &mut Config, settings: &GlobalAgentSettings) {
-    if !settings.codex_yolo {
-        return;
-    }
-    if let Some(agent) = config.agents.get_mut("codex") {
-        let tokens: Vec<String> = agent
-            .command
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
-        // Wrapper flags belong to the wrapper, not to Codex.
-        if let Some(codex_index) = tokens.iter().position(|token| {
-            Path::new(token)
-                .file_name()
-                .is_some_and(|name| name == "codex")
-        }) {
-            let prefix_len = codex_index + 1;
-            let mut command = tokens[..prefix_len].to_vec();
-            command.extend(without_codex_permissions(tokens[prefix_len..].to_vec()));
-            agent.command = command.join(" ");
+    for (name, args) in &settings.launch_args {
+        if let Some(agent) = config.agents.get_mut(name) {
+            agent.machine_launch_args = Some(args.0.clone());
         }
-        // Without an explicit Codex executable, the whole command belongs to
-        // an opaque wrapper. Only launch_args can safely be normalized.
-        let mut args = without_codex_permissions(crate::types::resolved_launch_args(
-            "codex",
-            agent.launch_args.as_deref(),
-        ));
-        args.extend([
-            "--dangerously-bypass-approvals-and-sandbox".into(),
-            "--no-daemon".into(),
-        ]);
-        agent.launch_args = Some(args);
     }
 }
 
@@ -185,6 +180,7 @@ pub fn update_agent_config(
                 prompt_flag: None,
                 interactive: true,
                 launch_args: None,
+                machine_launch_args: None,
             })
         });
 
@@ -215,36 +211,28 @@ envFiles:
   - .env.local
 
 # Agent launch configuration — uncomment and customize as needed.
-# Agents not listed here use built-in defaults.
+# Agents launch with their bare command (claude, codex, opencode) and no
+# permission or auto-approve flags unless you add them here. launchArgs is one
+# free-form string, split like a shell command line (quotes are respected).
+#
+# To set your own default for every project on this machine instead, put it in
+# ~/.pu/agent-settings.yaml:
+#   launchArgs:
+#     claude: "--dangerously-skip-permissions"
+# A project launchArgs (even "") takes precedence over the machine default.
 # agents:
 #   claude:
 #     name: claude
 #     command: claude
-#     launchArgs:                  # Default: ["--dangerously-skip-permissions"]
-#       - "--dangerously-skip-permissions"
-#       # --permission-mode <default|acceptEdits|plan|bypassPermissions>
-#       # --model <sonnet|opus|haiku>
-#       # --effort <low|medium|high>
-#       # --allowedTools <tools...>
-#       # --append-system-prompt <prompt>
-#       # --max-budget-usd <amount>
+#     launchArgs: "--model opus --append-system-prompt 'Be terse.'"
 #   codex:
 #     name: codex
 #     command: codex
-#     launchArgs:                  # Default: ["--sandbox", "workspace-write",
-#       - "--sandbox"              #           "--ask-for-approval", "on-request"]
-#       - "workspace-write"
-#       - "--ask-for-approval"
-#       - "on-request"
-#       # -s <read-only|workspace-write|danger-full-access>  (sandbox mode)
-#       # -a <untrusted|on-request|never>  (approval mode)
-#       # --model <model>
+#     launchArgs: "--sandbox workspace-write --ask-for-approval on-request"
 #   opencode:
 #     name: opencode
 #     command: opencode
-#     launchArgs: []               # Default: [] (auto-approves in run mode)
-#       # --model <provider/model>
-#       # --variant <effort>
+#     launchArgs: "--auto"
 "#;
     std::fs::write(&path, yaml)?;
     Ok(())
@@ -270,59 +258,42 @@ mod tests {
     }
 
     #[test]
-    fn global_yolo_applies_to_multiple_projects_and_disable_restores_files() {
+    fn status_tracking_defaults_on_and_updates() {
         let _home = TestHome::new();
-        assert!(!load_global_agent_settings().unwrap().codex_yolo);
+        assert!(load_global_agent_settings().unwrap().agent_status_tracking);
+        let settings = save_global_agent_settings(GlobalAgentSettingsUpdate {
+            agent_status_tracking: Some(false),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!settings.agent_status_tracking);
+        assert!(!load_global_agent_settings().unwrap().agent_status_tracking);
+    }
+
+    #[test]
+    fn given_legacy_codex_yolo_key_should_load_and_drop_it_on_save() {
+        // given — a settings file written before Codex YOLO was removed
+        let home = TestHome::new();
+        let path = home.0.path().join(".pu/agent-settings.yaml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "codexYolo: true\nagentStatusTracking: false\nlaunchArgs:\n  codex: --search\n",
+        )
+        .unwrap();
+        // when
+        let settings = load_global_agent_settings().unwrap();
+        // then — the stale key is ignored and the other settings survive
+        assert!(!settings.agent_status_tracking);
+        assert_eq!(settings.launch_args["codex"].0, ["--search"]);
         let project = TempDir::new().unwrap();
-        std::fs::create_dir_all(paths::pu_dir(project.path())).unwrap();
-        let yaml = "agents:\n  codex:\n    name: codex\n    command: wrapper -a authentication codex -s workspace-write --search\n    launchArgs: [--ask-for-approval=on-request, -m, custom-model, -c, a=1, -c, b=2]\n";
-        std::fs::write(paths::config_path(project.path()), yaml).unwrap();
-        let original = load_config_strict(project.path()).unwrap();
-        save_global_agent_settings(true).unwrap();
-        let cfg = load_config_strict(project.path()).unwrap();
-        assert_eq!(
-            cfg.agents["codex"].command,
-            "wrapper -a authentication codex --search"
-        );
-        assert_eq!(
-            cfg.agents["codex"].launch_args.as_ref().unwrap(),
-            &[
-                "-m",
-                "custom-model",
-                "-c",
-                "a=1",
-                "-c",
-                "b=2",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--no-daemon"
-            ]
-        );
-        assert_eq!(
-            cfg.agents["claude"].launch_args,
-            original.agents["claude"].launch_args
-        );
-        let other = TempDir::new().unwrap();
-        assert!(
-            load_config_strict(other.path()).unwrap().agents["codex"]
-                .launch_args
-                .as_ref()
-                .unwrap()
-                .contains(&"--no-daemon".into())
-        );
-        save_global_agent_settings(false).unwrap();
-        let restored = load_config_strict(project.path()).unwrap();
-        assert_eq!(
-            restored.agents["codex"].command,
-            original.agents["codex"].command
-        );
-        assert_eq!(
-            restored.agents["codex"].launch_args,
-            original.agents["codex"].launch_args
-        );
-        assert_eq!(
-            std::fs::read_to_string(paths::config_path(project.path())).unwrap(),
-            yaml
-        );
+        let config = load_config_strict(project.path()).unwrap();
+        assert_eq!(resolved(&config, "codex"), ["--search"]);
+        // when — any save rewrites the file without it
+        save_global_agent_settings(GlobalAgentSettingsUpdate::default()).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("codexYolo"), "{content}");
+        assert!(content.contains("agentStatusTracking: false"), "{content}");
     }
 
     #[test]
@@ -331,7 +302,7 @@ mod tests {
         std::fs::create_dir_all(home.0.path().join(".pu")).unwrap();
         std::fs::write(
             home.0.path().join(".pu/agent-settings.yaml"),
-            "codexYolo: [broken",
+            "agentStatusTracking: [broken",
         )
         .unwrap();
         let project = TempDir::new().unwrap();
@@ -341,50 +312,38 @@ mod tests {
     #[test]
     fn failed_global_save_retains_confirmed_setting() {
         let home = TestHome::new();
-        save_global_agent_settings(true).unwrap();
+        let tracking = |enabled: bool| GlobalAgentSettingsUpdate {
+            agent_status_tracking: Some(enabled),
+            ..Default::default()
+        };
+        save_global_agent_settings(tracking(false)).unwrap();
         std::fs::create_dir(home.0.path().join(".pu/agent-settings.yaml.tmp")).unwrap();
-        assert!(save_global_agent_settings(false).is_err());
-        assert!(load_global_agent_settings().unwrap().codex_yolo);
+        assert!(save_global_agent_settings(tracking(true)).is_err());
+        assert!(!load_global_agent_settings().unwrap().agent_status_tracking);
     }
 
     #[test]
-    fn global_yolo_preserves_encapsulated_wrapper_command() {
-        let mut config = Config::default();
-        let command = "codex-wrapper  -a account --sandbox wrapper-profile";
-        config.agents.get_mut("codex").unwrap().command = command.into();
-        apply_global_agent_settings(&mut config, &GlobalAgentSettings { codex_yolo: true });
-        assert_eq!(config.agents["codex"].command, command);
-        assert_eq!(
-            config.agents["codex"].launch_args.as_ref().unwrap(),
-            &["--dangerously-bypass-approvals-and-sandbox", "--no-daemon"]
-        );
-    }
-
-    #[test]
-    fn yolo_removes_legacy_and_duplicate_permission_options() {
-        let args = [
-            "--full-auto",
-            "--approval-mode=full-auto",
-            "--sandbox=read-only",
-            "-a",
-            "never",
-            "--yolo",
-            "--no-daemon",
-            "--search",
-        ];
-        assert_eq!(
-            without_codex_permissions(args.into_iter().map(str::to_owned).collect()),
-            ["--search"]
-        );
-    }
-
-    #[test]
-    fn yolo_removes_attached_short_permission_options() {
-        let args = ["-s=workspace-write", "-anever", "--search", "-mcustom"];
-        assert_eq!(
-            without_codex_permissions(args.into_iter().map(str::to_owned).collect()),
-            ["--search", "-mcustom"]
-        );
+    fn given_malformed_machine_settings_should_refuse_save_and_keep_file() {
+        for content in [
+            "agentStatusTracking: true\nlaunchArgs: [broken",
+            "agentStatusTracking: true\nlaunchArgs:\n  claude: \"--append-system-prompt 'oops\"\n",
+        ] {
+            // given
+            let home = TestHome::new();
+            let path = home.0.path().join(".pu/agent-settings.yaml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            // when
+            let result = save_global_agent_settings(GlobalAgentSettingsUpdate {
+                launch_args: [("codex".to_string(), "--search".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+            // then
+            assert!(result.is_err(), "save should fail for {content:?}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
+        }
     }
 
     #[test]
@@ -471,12 +430,14 @@ envFiles: [".env"]
         // Comments should document key flags for discoverability
         assert!(content.contains("--dangerously-skip-permissions"));
         assert!(content.contains("--ask-for-approval"));
-        assert!(content.contains("--permission-mode"));
+        assert!(content.contains("agent-settings.yaml"));
         assert!(content.contains("--model"));
+        assert!(!content.contains("# Default: ["));
     }
 
     #[test]
     fn given_config_with_one_agent_should_merge_code_defaults() {
+        let _home = TestHome::new();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
@@ -552,7 +513,8 @@ agents:
     }
 
     #[test]
-    fn given_config_with_empty_launch_args_should_disable_auto_mode() {
+    fn given_config_with_empty_launch_args_should_launch_bare() {
+        let _home = TestHome::new();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
@@ -575,7 +537,8 @@ agents:
     }
 
     #[test]
-    fn given_config_without_launch_args_should_use_defaults() {
+    fn given_config_without_launch_args_should_launch_bare() {
+        let _home = TestHome::new();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
@@ -586,9 +549,117 @@ agents:
         let config = load_config(root);
         let claude = &config.agents["claude"];
         assert!(claude.launch_args.is_none());
-        // resolved_launch_args should return defaults when not set
-        let args = crate::types::resolved_launch_args("claude", claude.launch_args.as_deref());
-        assert_eq!(args, vec!["--dangerously-skip-permissions"]);
+        // then — no permission flags are added by default
+        let args = crate::types::resolved_launch_args("claude", claude.configured_launch_args());
+        assert!(args.is_empty());
+    }
+
+    fn write_machine_settings(home: &TestHome, yaml: &str) {
+        std::fs::create_dir_all(home.0.path().join(".pu")).unwrap();
+        std::fs::write(home.0.path().join(".pu/agent-settings.yaml"), yaml).unwrap();
+    }
+
+    fn resolved(config: &Config, agent: &str) -> Vec<String> {
+        crate::types::resolved_launch_args(agent, config.agents[agent].configured_launch_args())
+    }
+
+    #[test]
+    fn given_machine_launch_args_should_apply_to_projects_without_their_own() {
+        // given
+        let home = TestHome::new();
+        write_machine_settings(
+            &home,
+            "launchArgs:\n  claude: --dangerously-skip-permissions --model opus\n",
+        );
+        let project = TempDir::new().unwrap();
+        // when
+        let config = load_config_strict(project.path()).unwrap();
+        // then
+        assert_eq!(
+            resolved(&config, "claude"),
+            ["--dangerously-skip-permissions", "--model", "opus"]
+        );
+        assert!(config.agents["claude"].launch_args.is_none());
+        assert!(resolved(&config, "codex").is_empty());
+    }
+
+    #[test]
+    fn given_project_launch_args_should_override_machine_launch_args() {
+        // given
+        let home = TestHome::new();
+        write_machine_settings(
+            &home,
+            "launchArgs:\n  claude: --dangerously-skip-permissions\n",
+        );
+        let project = TempDir::new().unwrap();
+        std::fs::create_dir_all(paths::pu_dir(project.path())).unwrap();
+        std::fs::write(
+            paths::config_path(project.path()),
+            "agents:\n  claude:\n    name: claude\n    command: claude\n    launchArgs: \"\"\n  opencode:\n    name: opencode\n    command: opencode\n    launchArgs: --model x/y\n",
+        )
+        .unwrap();
+        // when
+        let config = load_config_strict(project.path()).unwrap();
+        // then — an explicit empty project value wins over the machine default
+        assert!(resolved(&config, "claude").is_empty());
+        assert_eq!(resolved(&config, "opencode"), ["--model", "x/y"]);
+    }
+
+    #[test]
+    fn given_malformed_machine_launch_args_should_fail_config_resolution() {
+        let home = TestHome::new();
+        write_machine_settings(
+            &home,
+            "launchArgs:\n  claude: \"--append-system-prompt 'oops\"\n",
+        );
+        let project = TempDir::new().unwrap();
+        let err = load_config_strict(project.path()).unwrap_err();
+        assert!(err.to_string().contains("invalid launch args"), "{err}");
+        // and the non-strict loader falls back to the bare defaults
+        assert!(resolved(&load_config(project.path()), "claude").is_empty());
+    }
+
+    #[test]
+    fn given_machine_launch_args_update_should_set_and_remove_per_agent() {
+        // given
+        let _home = TestHome::new();
+        let update = |agent: &str, text: &str| GlobalAgentSettingsUpdate {
+            launch_args: [(agent.to_string(), text.to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        // when
+        save_global_agent_settings(update("claude", "--model 'claude opus'")).unwrap();
+        save_global_agent_settings(update("codex", "--search")).unwrap();
+        let settings = save_global_agent_settings(update("codex", "  ")).unwrap();
+        // then
+        assert_eq!(settings.launch_args["claude"].0, ["--model", "claude opus"]);
+        assert!(!settings.launch_args.contains_key("codex"));
+        assert_eq!(
+            load_global_agent_settings().unwrap().launch_args["claude"].0,
+            ["--model", "claude opus"]
+        );
+    }
+
+    #[test]
+    fn given_invalid_machine_launch_args_update_should_keep_stored_value() {
+        let _home = TestHome::new();
+        let update = |agent: &str, text: &str| GlobalAgentSettingsUpdate {
+            launch_args: [(agent.to_string(), text.to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        save_global_agent_settings(update("claude", "--verbose")).unwrap();
+        let bad_quote = save_global_agent_settings(update("claude", "--x 'oops")).unwrap_err();
+        let unknown = save_global_agent_settings(update("nope", "--verbose")).unwrap_err();
+        assert_eq!(bad_quote.code(), "INVALID_ARGUMENT");
+        assert_eq!(unknown.code(), "INVALID_ARGUMENT");
+        assert_eq!(
+            load_global_agent_settings().unwrap().launch_args["claude"].0,
+            ["--verbose"]
+        );
     }
 
     #[test]
@@ -634,6 +705,27 @@ agents:
     }
 
     #[test]
+    fn given_update_agent_config_should_write_launch_args_as_string() {
+        let _home = TestHome::new();
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();
+
+        update_agent_config(
+            root,
+            "claude",
+            Some(vec!["--append-system-prompt".into(), "be terse".into()]),
+        )
+        .unwrap();
+
+        let written = std::fs::read_to_string(crate::paths::config_path(root)).unwrap();
+        assert!(
+            written.contains("launchArgs: --append-system-prompt 'be terse'"),
+            "{written}"
+        );
+    }
+
+    #[test]
     fn given_update_agent_config_with_none_should_reset_to_defaults() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -648,6 +740,7 @@ agents:
 
     #[test]
     fn given_update_agent_config_should_preserve_other_agents() {
+        let _home = TestHome::new();
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(crate::paths::pu_dir(root)).unwrap();

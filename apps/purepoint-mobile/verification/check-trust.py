@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix='pg-mobile-trust-', dir='/tmp') as direc
     temp = Path(directory)
     recovery = (root / 'verification/RecoveryChecks.swift').read_text().split('// Run verification/')[0]
     (temp / 'TrustModel.swift').write_text((root / 'PurePoint/ChatModel.swift').read_text() + '\n' + recovery + '\n' + (root / 'verification/TrustChecks.swift').read_text())
-    subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors', str(root / 'PurePoint/ChatDomain.swift'), str(root / 'PurePoint/PairingSecret.swift'), str(temp / 'TrustModel.swift'), '-o', str(temp / 'checks')], check=True)
+    subprocess.run(['swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors', str(root / 'PurePoint/ChatDomain.swift'), str(root / 'PurePoint/PairingSecret.swift'), str(root / 'PurePoint/AgentControlDomain.swift'), str(root / 'PurePoint/AgentControlModel.swift'), str(temp / 'TrustModel.swift'), '-o', str(temp / 'checks')], check=True)
     fixture = subprocess.Popen(['node', str(root / 'verification/trust-fixture.js'), directory], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
         if fixture.stdout.readline().strip() != 'ready':

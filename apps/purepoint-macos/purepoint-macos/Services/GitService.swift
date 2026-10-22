@@ -818,6 +818,7 @@ actor GitService {
             }
         }
 
+        #if os(macOS)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["gh"]
@@ -838,6 +839,7 @@ actor GitService {
                 return path
             }
         }
+        #endif
         return nil
     }
 }

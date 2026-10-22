@@ -1,9 +1,47 @@
+import { terminalConnection, terminalOperation } from "./terminals.js";
 import http from "node:http";
 import https from "node:https";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { allowedHost } from "./endpoints.js";
 export { allowedHost } from "./endpoints.js";
+const chatLevels = ["off", "read", "send"];
+/** Every chat op and the chat access it needs. Anything else never reaches the controller. */
+const chatOperations = new Map([
+  ["sync", "read"],
+  ["sessions", "read"],
+  ["history", "read"],
+  ["send", "send"],
+  ["stop", "send"],
+  ["new", "send"],
+  ["resume", "send"],
+  ["answer", "send"],
+]);
+/**
+ * Point Guard chat follows the existing device grants. Point Guard has a shell and
+ * the `pu` CLI, so sending is full control: it needs Control and Workspace management.
+ * Reading needs View or Control. The loopback desktop principal is the owner.
+ */
+export function chatLevel(identity) {
+  if (!identity) return "off";
+  if (identity.owner === true) return "send";
+  if (identity.terminals === "control" && identity.workspaceManagement === true)
+    return "send";
+  return ["view", "control"].includes(identity.terminals) ? "read" : "off";
+}
+const chatAllowed = (granted, needed) =>
+  chatLevels.includes(granted) &&
+  chatLevels.indexOf(granted) >= chatLevels.indexOf(needed);
+function chatGate(granted, op) {
+  const needed = chatOperations.get(op);
+  if (!needed) throw new Error("Unsupported bridge operation");
+  if (chatAllowed(granted, needed)) return;
+  throw new Error(
+    granted === "read"
+      ? "Point Guard chat is read-only on this device. Sending needs Agents and terminals: Control and Workspace management. Change this on the host this device is paired with."
+      : "Point Guard chat needs Agents and terminals: View or Control on this device. Change this on the host this device is paired with.",
+  );
+}
 function authenticated(header, token) {
   if (typeof header !== "string") return false;
   const actual = Buffer.from(header);
@@ -12,7 +50,17 @@ function authenticated(header, token) {
 }
 export async function serve(
   controller,
-  { host, port, trust = null, localAdmin = null, tls = null },
+  {
+    host,
+    port,
+    trust = null,
+    localAdmin = null,
+    tls = null,
+    daemons = undefined,
+    terminalQueueLimit = undefined,
+    hostInfo = undefined,
+    allowPeer = undefined,
+  },
 ) {
   if (!allowedHost(host))
     throw new Error(
@@ -39,7 +87,7 @@ export async function serve(
   const principal = (header) => {
     if (localAdmin)
       return authenticated(header, localAdmin.token)
-        ? { clientId: localAdmin.clientId }
+        ? { clientId: localAdmin.clientId, owner: true }
         : null;
     return typeof header === "string" && header.startsWith("Bearer ")
       ? trust.authorize(header.slice(7))
@@ -70,7 +118,16 @@ export async function serve(
       const identity = principal(req.headers.authorization);
       respond(
         identity ? 200 : 401,
-        identity ? { version: 1, hostId: trust.hostId, ...identity } : null,
+        identity
+          ? {
+              version: 1,
+              hostId: trust.hostId,
+              ...(hostInfo
+                ? { hostKind: hostInfo.hostKind, hostLabel: hostInfo.hostLabel }
+                : {}),
+              ...identity,
+            }
+          : null,
       );
       return;
     }
@@ -109,7 +166,7 @@ export async function serve(
     } catch {
       if (!res.headersSent && !res.destroyed)
         respond(401, {
-          error: "Enrollment unavailable. Scan a new Mac QR code.",
+          error: "Enrollment unavailable. Create a new pairing code on the host.",
         });
     } finally {
       req.setTimeout(0);
@@ -119,6 +176,17 @@ export async function serve(
   const server = tls
     ? https.createServer(tls, handler)
     : http.createServer(handler);
+  // Pre-authentication limits: bounded sockets and absolute header/request
+  // deadlines, so unauthenticated peers cannot hold the listener.
+  server.maxConnections = 64;
+  server.headersTimeout = 10000;
+  server.requestTimeout = 10000;
+  server.keepAliveTimeout = 5000;
+  if (allowPeer)
+    // Raw TCP accept, before any TLS handshake or request parsing.
+    server.on("connection", (/** @type {import("node:net").Socket} */ socket) => {
+      if (!allowPeer(socket.remoteAddress ?? "")) socket.destroy();
+    });
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 1024 * 1024,
@@ -126,6 +194,7 @@ export async function serve(
   });
 
   const identities = new WeakMap();
+  const terminals = new WeakMap();
   server.on("upgrade", (req, socket, head) => {
     let code = 401;
     if (req.url !== "/v1" || req.headers.origin) code = 403;
@@ -135,6 +204,13 @@ export async function serve(
         const clientId = req.headers["x-pointguard-client-id"];
         if (clientId !== identity.clientId) code = 403;
         else if (wss.clients.size >= 32) code = 503;
+        else if (
+          identity.deviceId &&
+          [...wss.clients].filter(
+            (ws) => identities.get(ws)?.deviceId === identity.deviceId,
+          ).length >= 4
+        )
+          code = 503;
         else code = 101;
       }
     }
@@ -169,14 +245,37 @@ export async function serve(
   const broadcast = (record) => {
     const serialized = JSON.stringify(record);
     for (const ws of wss.clients)
-      if (principal(identities.get(ws)?.credential))
+      if (
+        chatAllowed(
+          chatLevel(principal(identities.get(ws)?.credential)),
+          "read",
+        )
+      )
         sendSerialized(ws, serialized);
   };
   const snapshot = broadcast;
   const editor = broadcast;
   controller.on("snapshot", snapshot);
   controller.on("editor", editor);
+  const workspaceLedger = new Map();
   wss.on("connection", (ws) => {
+    const identity = identities.get(ws);
+    const terminal = terminalConnection({
+      ws,
+      identity,
+      permission: () => principal(identity.credential)?.terminals ?? "off",
+      management: () =>
+        principal(identity.credential)?.workspaceManagement === true,
+      chat: () => chatLevel(principal(identity.credential)),
+      ledger: workspaceLedger,
+      send: (data) => send(ws, data),
+      daemons,
+      queueLimit: terminalQueueLimit,
+    });
+    terminals.set(ws, terminal);
+    if (trust) terminal.notify();
+    const terminalRequestIds = new Set();
+    const activeTerminalRequestIds = new Set();
     let outstanding = 0;
     let alive = true;
     ws.on("pong", () => {
@@ -198,34 +297,70 @@ export async function serve(
       }
       outstanding++;
       let id = "";
+      let terminalRequest = false;
       try {
         const r = JSON.parse(bytes.toString());
         id = typeof r.id === "string" ? r.id : "";
-        if (!principal(identities.get(ws)?.credential)) {
+        const current = principal(identities.get(ws)?.credential);
+        if (!current) {
           ws.close(4001, "Device trust revoked; re-pair deliberately");
           return;
         }
         if (r.clientId !== identities.get(ws).clientId)
           throw new Error("Client identity does not match this connection");
-        const data = await controller.request(r);
+        if (terminalOperation(r.op)) {
+          if (r.version !== 1 || !id || id.length > 128)
+            throw new Error("Terminal request version and ID required");
+          if (terminalRequestIds.has(id) || activeTerminalRequestIds.has(id))
+            throw new Error(
+              "Duplicate terminal request; uncertain input is never replayed",
+            );
+          if (terminalRequestIds.size >= 4096)
+            terminalRequestIds.delete(terminalRequestIds.values().next().value);
+          terminalRequestIds.add(id);
+          activeTerminalRequestIds.add(id);
+          terminalRequest = true;
+        } else chatGate(chatLevel(current), r.op);
+        // Re-read live grants: queued chat actions run only if still permitted.
+        const permitted = () =>
+          chatAllowed(
+            chatLevel(principal(identities.get(ws)?.credential)),
+            chatOperations.get(r.op),
+          );
+        const data = await (terminalOperation(r.op)
+          ? terminal.request(r)
+          : controller.request(r, { allowed: permitted }));
+        // A downgrade during the request withholds results it no longer grants.
+        if (!terminalOperation(r.op) && !permitted())
+          throw new Error("Point Guard chat permission changed");
         send(ws, { type: "receipt", id, ok: true, data });
         if (r.op === "sync") send(ws, data);
       } catch (e) {
         send(ws, { type: "receipt", id, ok: false, error: e.message });
       } finally {
+        if (terminalRequest) activeTerminalRequestIds.delete(id);
         outstanding--;
       }
     });
     ws.on("error", () => {});
     ws.on("close", () => {
+      terminal.dispose();
       clearInterval(heartbeat);
     });
   });
   const revoked = (deviceId) => {
     for (const ws of wss.clients)
-      if (identities.get(ws)?.deviceId === deviceId)
+      if (identities.get(ws)?.deviceId === deviceId) {
+        terminals.get(ws)?.dispose();
         ws.close(4001, "Device trust revoked; re-pair deliberately");
+      }
   };
+  const permissions = (deviceId) => {
+    for (const ws of wss.clients)
+      if (identities.get(ws)?.deviceId === deviceId)
+        terminals.get(ws)?.changed();
+  };
+  trust?.on("permissions", permissions);
   trust?.on("revoked", revoked);
   try {
     await new Promise((resolve, reject) => {
@@ -233,6 +368,7 @@ export async function serve(
       server.listen(port, host, () => resolve(null));
     });
   } catch (error) {
+    trust?.off("permissions", permissions);
     trust?.off("revoked", revoked);
     controller.off("snapshot", snapshot);
     controller.off("editor", editor);
@@ -241,10 +377,14 @@ export async function serve(
   return {
     address: () => server.address(),
     shutdown: async () => {
+      trust?.off("permissions", permissions);
       trust?.off("revoked", revoked);
       controller.off("snapshot", snapshot);
       controller.off("editor", editor);
-      for (const ws of wss.clients) ws.terminate();
+      for (const ws of wss.clients) {
+        terminals.get(ws)?.dispose();
+        ws.terminate();
+      }
       await new Promise((resolve) =>
         wss.close(() => server.close(() => resolve(null))),
       );

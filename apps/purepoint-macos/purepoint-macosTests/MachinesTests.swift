@@ -207,20 +207,27 @@ struct MachineSSHTests {
     @Test func givenHostWithPortEveryCommandShouldUseTheDestination() {
         let host = "jane@studio:2222"
         #expect(MachineSSH.resolveHomeArguments(sshHost: host).dropLast().last == "ssh://jane@studio:2222")
-        #expect(MachineSSH.forwardArguments(localSocket: "/l", remoteHome: "/h", sshHost: host).last == "ssh://jane@studio:2222")
+        #expect(
+            MachineSSH.forwardArguments(localSocket: "/l", remoteHome: "/h", sshHost: host).last
+                == "ssh://jane@studio:2222")
         #expect(MachineSSH.startDaemonArguments(sshHost: host).dropLast().last == "ssh://jane@studio:2222")
     }
 
     @Test func givenRecordedPidShouldOnlyMatchThisMachinesSSHForward() {
         let socket = "/Users/me/.pu/machines/abc/daemon.sock"
         let forward = MachineSSH.forwardArguments(localSocket: socket, remoteHome: "/home/me", sshHost: "studio")
-        #expect(ForwardPidFile.isForward(executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward, localSocket: socket))
+        #expect(
+            ForwardPidFile.isForward(executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward, localSocket: socket))
         // Reused by the user's own ssh session, another machine's forward, or another program.
-        #expect(!ForwardPidFile.isForward(executablePath: "/usr/bin/ssh", arguments: ["ssh", "studio"], localSocket: socket))
         #expect(
             !ForwardPidFile.isForward(
-                executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward, localSocket: "/Users/me/.pu/machines/xyz/daemon.sock"))
-        #expect(!ForwardPidFile.isForward(executablePath: "/bin/zsh", arguments: ["zsh"] + forward, localSocket: socket))
+                executablePath: "/usr/bin/ssh", arguments: ["ssh", "studio"], localSocket: socket))
+        #expect(
+            !ForwardPidFile.isForward(
+                executablePath: "/usr/bin/ssh", arguments: ["ssh"] + forward,
+                localSocket: "/Users/me/.pu/machines/xyz/daemon.sock"))
+        #expect(
+            !ForwardPidFile.isForward(executablePath: "/bin/zsh", arguments: ["zsh"] + forward, localSocket: socket))
         #expect(!ForwardPidFile.isForward(executablePath: nil, arguments: nil, localSocket: socket))
     }
 
@@ -296,7 +303,8 @@ struct HealthProbeTests {
         #expect(MachineConnection.classify(nil) == .failed)
         #expect(
             MachineConnection.classify(
-                .healthReport(pid: 1, uptimeSeconds: 1, protocolVersion: DaemonProtocol.version, agentCount: 0)) == .running)
+                .healthReport(pid: 1, uptimeSeconds: 1, protocolVersion: DaemonProtocol.version, agentCount: 0))
+                == .running)
         #expect(
             MachineConnection.classify(.healthReport(pid: 1, uptimeSeconds: 1, protocolVersion: 2, agentCount: 0))
                 == .incompatible(2))
@@ -306,8 +314,48 @@ struct HealthProbeTests {
 // MARK: - Daemon file and git requests (protocol 9)
 
 struct DaemonProjectHostRequestTests {
-    @Test func givenProtocolShouldBeVersionNine() {
-        #expect(DaemonProtocol.version == 9)
+    @Test func givenProtocolShouldBeCurrentVersion() {
+        #expect(DaemonProtocol.version == 14)
+    }
+
+    @Test func givenReorderProjectsShouldSendTheWholeOrder() throws {
+        let object = try json(.reorderProjects(projectRoots: ["/b", "/a"]))
+        #expect(object["type"] as? String == "reorder_projects")
+        #expect(object["project_roots"] as? [String] == ["/b", "/a"])
+    }
+
+    @Test func givenProjectOrderReplyShouldParse() {
+        let response = DaemonClient.parse(Data(#"{"type":"project_order","project_roots":["/b","/a"]}"#.utf8))
+        guard case .projectOrder(let roots) = response else {
+            Issue.record("expected projectOrder, got \(response)")
+            return
+        }
+        #expect(roots == ["/b", "/a"])
+    }
+
+    @Test func givenRemoveProjectShouldNameTheRootAndWhetherToSuspendAgents() throws {
+        let object = try json(.removeProject(projectRoot: "/srv/app", suspendAgents: true))
+        #expect(object["type"] as? String == "remove_project")
+        #expect(object["project_root"] as? String == "/srv/app")
+        #expect(object["suspend_agents"] as? Bool == true)
+        #expect(try json(.subscribeProjects)["type"] as? String == "subscribe_projects")
+    }
+
+    @Test func givenProjectRegistryRepliesShouldDecodeRootsAndRemoval() {
+        guard case .projectsChanged(let projects) = decode(#"{"type":"projects_changed","projects":["/a","/b"]}"#)
+        else {
+            Issue.record("projects_changed did not decode")
+            return
+        }
+        #expect(projects == ["/a", "/b"])
+        guard
+            case .projectRemoved(let root, let removed, let suspended, let killed) = decode(
+                #"{"type":"project_removed","project_root":"/a","removed":true,"suspended":["ag-1"],"killed":["sh-2"]}"#)
+        else {
+            Issue.record("project_removed did not decode")
+            return
+        }
+        #expect(root == "/a" && removed && suspended == ["ag-1"] && killed == ["sh-2"])
     }
 
     @Test func givenInventoryShouldAskForEveryRegisteredProject() throws {
@@ -405,7 +453,8 @@ struct DaemonProjectHostRequestTests {
         #expect(String(decoding: data, as: UTF8.self) == "hi")
         #expect(size == 2 && modified == 5)
 
-        let stat = decode(#"{"type":"fs_stat_result","path":"/a","exists":false,"is_dir":false,"size":0,"modified_ms":0}"#)
+        let stat = decode(
+            #"{"type":"fs_stat_result","path":"/a","exists":false,"is_dir":false,"size":0,"modified_ms":0}"#)
         guard case .fsStatResult(let payload) = stat else {
             Issue.record("unexpected \(stat)")
             return
@@ -413,7 +462,8 @@ struct DaemonProjectHostRequestTests {
         #expect(!payload.exists)
 
         let exec = decode(
-            #"{"type":"git_exec_result","exit_code":1,"stdout_base64":"b3V0","stderr_base64":"ZXJy","truncated":false}"#)
+            #"{"type":"git_exec_result","exit_code":1,"stdout_base64":"b3V0","stderr_base64":"ZXJy","truncated":false}"#
+        )
         guard case .gitExecResult(let code, let stdout, let stderr, _) = exec else {
             Issue.record("unexpected \(exec)")
             return
@@ -443,10 +493,15 @@ struct DaemonProjectHostRequestTests {
 
     @Test func givenCanonicalListingPathsShouldRebaseOntoTheRequestedRoot() {
         #expect(
-            DaemonProjectHost.rebase("/private/var/app/src/a.swift", canonicalRoot: "/private/var/app", requestedRoot: "/var/app")
+            DaemonProjectHost.rebase(
+                "/private/var/app/src/a.swift", canonicalRoot: "/private/var/app", requestedRoot: "/var/app")
                 == "/var/app/src/a.swift")
-        #expect(DaemonProjectHost.rebase("/private/var/app", canonicalRoot: "/private/var/app", requestedRoot: "/var/app") == "/var/app")
-        #expect(DaemonProjectHost.rebase("/elsewhere/a", canonicalRoot: "/private/var/app", requestedRoot: "/var/app") == "/elsewhere/a")
+        #expect(
+            DaemonProjectHost.rebase("/private/var/app", canonicalRoot: "/private/var/app", requestedRoot: "/var/app")
+                == "/var/app")
+        #expect(
+            DaemonProjectHost.rebase("/elsewhere/a", canonicalRoot: "/private/var/app", requestedRoot: "/var/app")
+                == "/elsewhere/a")
     }
 
     @Test func givenDaemonErrorCodesShouldMapToHostErrors() {
@@ -525,7 +580,10 @@ private final class FakeHost: ProjectHost, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         writes.append((data, expectedModifiedMs))
-        let next = writeResults.isEmpty ? .success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 99)) : writeResults.removeFirst()
+        let next =
+            writeResults.isEmpty
+            ? .success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 99))
+            : writeResults.removeFirst()
         return try next.get()
     }
 
@@ -540,7 +598,9 @@ private final class FakeHost: ProjectHost, @unchecked Sendable {
 }
 
 private func file(_ text: String, modifiedMs: Int64 = 10, truncated: Bool = false) -> Result<HostFileData, HostError> {
-    .success(HostFileData(data: Data(text.utf8), size: UInt64(text.utf8.count), modifiedMs: modifiedMs, truncated: truncated))
+    .success(
+        HostFileData(data: Data(text.utf8), size: UInt64(text.utf8.count), modifiedMs: modifiedMs, truncated: truncated)
+    )
 }
 
 private let emptyLayoutDocument = #"{"version":3,"workspaces":[]}"#
@@ -548,7 +608,8 @@ private let emptyLayoutDocument = #"{"version":3,"workspaces":[]}"#
 struct RemoteLayoutPersistenceTests {
     @Test func givenNoLayoutFileShouldLoadAnEmptyLayout() throws {
         let host = FakeHost(reads: [.failure(.notFound("gone"))])
-        let layout = try WorkspacePersistence.loadRemote(projectRoot: "/srv/app", projectId: "machine:x:/srv/app", host: host)
+        let layout = try WorkspacePersistence.loadRemote(
+            projectRoot: "/srv/app", projectId: "machine:x:/srv/app", host: host)
         #expect(layout.workspaces.isEmpty)
         #expect(layout.modifiedMs == nil)
     }
@@ -566,7 +627,8 @@ struct RemoteLayoutPersistenceTests {
 
     @Test func givenUnreadableDocumentSaveShouldNotWrite() {
         let host = FakeHost(reads: [.failure(.daemon(code: "io_error", message: "x"))])
-        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 10)
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 10)
         #expect(outcome == .skipped)
         #expect(host.writeCount == 0)
     }
@@ -581,8 +643,28 @@ struct RemoteLayoutPersistenceTests {
         let host = FakeHost(
             reads: [file(emptyLayoutDocument, modifiedMs: 5)],
             writes: [.success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
-        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
         #expect(host.writes.map(\.expectedModifiedMs) == [5])
+        #expect(outcome == .written(modifiedMs: 30))
+    }
+
+    @Test func givenDocumentCreatedSinceItWasReadAsMissingSaveShouldAdoptIt() {
+        let theirs = #"{"version":3,"workspaces":[]}"#
+        let host = FakeHost(reads: [file(theirs, modifiedMs: 20)])
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: nil)
+        #expect(outcome == .conflict(Data(theirs.utf8), modifiedMs: 20))
+        #expect(host.writeCount == 0)
+    }
+
+    @Test func givenDocumentDeletedSinceReadSaveShouldWriteItAgain() {
+        let host = FakeHost(
+            reads: [.failure(.notFound("gone"))],
+            writes: [.success(HostFileStat(exists: true, isDirectory: false, size: 1, modifiedMs: 30))])
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        #expect(host.writes.map(\.expectedModifiedMs) == [nil])
         #expect(outcome == .written(modifiedMs: 30))
     }
 
@@ -590,7 +672,8 @@ struct RemoteLayoutPersistenceTests {
         // Another Mac wrote the layout after this app last read it (5 → 20).
         let theirs = #"{"version":3,"workspaces":[]}"#
         let host = FakeHost(reads: [file(theirs, modifiedMs: 20)])
-        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
         #expect(outcome == .conflict(Data(theirs.utf8), modifiedMs: 20))
         #expect(host.writeCount == 0)
     }
@@ -599,7 +682,8 @@ struct RemoteLayoutPersistenceTests {
         let host = FakeHost(
             reads: [file(emptyLayoutDocument, modifiedMs: 5), file(emptyLayoutDocument, modifiedMs: 20)],
             writes: [.failure(.conflict("changed"))])
-        let outcome = WorkspacePersistence.saveRemote(Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
+        let outcome = WorkspacePersistence.saveRemote(
+            Data("{}".utf8), projectRoot: "/srv/app", host: host, expectedModifiedMs: 5)
         #expect(host.writeCount == 1)
         #expect(outcome == .conflict(Data(emptyLayoutDocument.utf8), modifiedMs: 20))
     }
@@ -668,7 +752,9 @@ struct RemoteLayoutRestoreTests {
 
         registry.reconcile(
             projectRoot: projectId,
-            rootAgents: [AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")],
+            rootAgents: [
+                AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")
+            ],
             worktrees: [])
         // The agents show while the layout is unreadable; nothing is saved meanwhile.
         #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
@@ -691,7 +777,9 @@ struct RemoteLayoutRestoreTests {
         #expect(registry.layoutErrorsByProject[projectId] == nil)
         registry.reconcile(
             projectRoot: projectId,
-            rootAgents: [AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")],
+            rootAgents: [
+                AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")
+            ],
             worktrees: [])
         #expect(registry.workspaces(forProject: projectId).map(\.id) == ["ws-ag-a"])
         registry.saveAll()
@@ -747,7 +835,8 @@ struct WorkspaceFilesIdentityTests {
 @MainActor
 struct RemoteLayoutConflictTests {
     private let projectId = ProjectKey(machineId: UUID(), root: "/srv/app").id
-    private let agent = AgentModel(id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")
+    private let agent = AgentModel(
+        id: "ag-a", name: "a", agentType: "claude", status: .running, prompt: "", startedAt: "")
 
     @Test func givenUnchangedRemoteLayoutQuitShouldNotRewriteIt() async {
         let registry = WorkspaceRegistry(loadWorkspaces: { _ in [] })
@@ -773,7 +862,7 @@ struct RemoteLayoutConflictTests {
             changed.nextSurfaceId += 50
             return changed
         }
-        registry.adoptRemoteLayout(projectId, workspaces: theirs)
+        registry.adoptExternalLayout(projectId, workspaces: theirs)
         #expect(registry.workspaces(forProject: projectId) == theirs)
         registry.forgetProject(projectId)
     }
@@ -830,13 +919,15 @@ struct RemoteEditorTests {
         #expect(throws: HostError.self) {
             try host.write(path: "/tmp/x", data: Data(), expectedModifiedMs: nil, createDirectories: false)
         }
-        #expect(!host.run(HostCommand(program: "git", executablePath: "/usr/bin/git", args: ["status"], cwd: "/")).success)
+        #expect(
+            !host.run(HostCommand(program: "git", executablePath: "/usr/bin/git", args: ["status"], cwd: "/")).success)
     }
 }
 
 struct LocalCopyTests {
     @Test func givenLocalCopyShouldBeQuarantined() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pp-quarantine-\(UUID().uuidString).command")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "pp-quarantine-\(UUID().uuidString).command")
         try Data("echo hi".utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         FileIOService.quarantine(url)

@@ -45,6 +45,13 @@ pub struct ProjectInventoryEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInventoryEntry {
+    /// Optional passive observation; absence means unknown, never idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<crate::signals::SignalSnapshot>,
+    #[serde(default)]
+    pub screen_aware: bool,
+    #[serde(default)]
+    pub phase: Option<String>,
     pub project_root: Option<String>,
     pub cwd: String,
     pub worktree_id: Option<String>,

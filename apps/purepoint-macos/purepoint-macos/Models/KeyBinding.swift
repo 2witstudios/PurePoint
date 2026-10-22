@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import SwiftUI
 
 // MARK: - HotkeyCategory
@@ -36,6 +38,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     case focusSidebar
     case focusContent
     case toggleSidebar
+    case toggleWorkspaceSidebar
     case navDashboard
     case navAgents
     case navSchedule
@@ -78,6 +81,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .focusSidebar: "Focus Sidebar"
         case .focusContent: "Focus Content"
         case .toggleSidebar: "Toggle Sidebar"
+        case .toggleWorkspaceSidebar: "Toggle Workspace Sidebar"
         case .navDashboard: "Dashboard"
         case .navAgents: "Agents"
         case .navSchedule: "Schedule"
@@ -103,7 +107,9 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     var category: HotkeyCategory {
         switch self {
         case .newAgent, .openProject, .settings: .application
-        case .focusSidebar, .focusContent, .toggleSidebar, .navDashboard, .navAgents, .navSchedule: .navigation
+        case .focusSidebar, .focusContent, .toggleSidebar, .toggleWorkspaceSidebar, .navDashboard, .navAgents,
+            .navSchedule:
+            .navigation
         case .splitBelow, .splitRight, .closePane, .focusUp, .focusDown, .focusLeft, .focusRight: .panes
         case .closeAgent, .newTab, .nextTab, .previousTab, .selectTab1, .selectTab2, .selectTab3, .selectTab4,
             .selectTab5, .selectTab6, .selectTab7, .selectTab8, .selectLastTab, .breakTab:
@@ -121,6 +127,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
         case .focusSidebar: KeyBinding(key: .character("["), modifiers: [.command])
         case .focusContent: KeyBinding(key: .character("]"), modifiers: [.command])
         case .toggleSidebar: KeyBinding(key: .character("\\"), modifiers: [.command])
+        case .toggleWorkspaceSidebar: KeyBinding(key: .character("\\"), modifiers: [.command, .option])
         case .navDashboard: KeyBinding(key: .character("1"), modifiers: [.control])
         case .navAgents: KeyBinding(key: .character("2"), modifiers: [.control])
         case .navSchedule: KeyBinding(key: .character("3"), modifiers: [.control])
@@ -151,7 +158,7 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
     /// Actions handled by the NSEvent monitor (not SwiftUI .commands menus)
     var isMonitorHandled: Bool {
         switch self {
-        case .focusSidebar, .focusContent, .toggleSidebar,
+        case .focusSidebar, .focusContent, .toggleSidebar, .toggleWorkspaceSidebar,
             .navDashboard, .navAgents, .navSchedule,
             .toggleChatSidebar:
             return true
@@ -210,6 +217,7 @@ enum KeyModifier: String, Codable, Hashable, Comparable {
         }
     }
 
+    #if os(macOS)
     var nsEventFlag: NSEvent.ModifierFlags {
         switch self {
         case .control: .control
@@ -218,6 +226,7 @@ enum KeyModifier: String, Codable, Hashable, Comparable {
         case .command: .command
         }
     }
+    #endif
 
     /// Sort order for display: ⌃ ⌥ ⇧ ⌘
     private var sortOrder: Int {
@@ -372,6 +381,7 @@ struct KeyBinding: Codable, Equatable, Hashable {
         return result
     }
 
+    #if os(macOS)
     /// Check if this binding matches an NSEvent
     func matches(_ event: NSEvent) -> Bool {
         // Check modifiers (mask off irrelevant bits)
@@ -428,6 +438,7 @@ struct KeyBinding: Codable, Equatable, Hashable {
         }
         return nil
     }
+    #endif
 }
 
 // MARK: - Notification

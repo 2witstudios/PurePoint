@@ -6,9 +6,12 @@ import Network
 private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefaults }
 
 @MainActor final class ChatModel: ObservableObject {
+    let agentControl = AgentControlModel()
     @Published var snapshot: Snapshot? { didSet { if !projectingSnapshot, let snapshot { transcriptRows = TranscriptRows.make(messages: snapshot.messages, tools: snapshot.tools) } else if snapshot == nil { transcriptRows = [] } } }
     private(set) var transcriptRows: [TranscriptRow] = []
     @Published var connected = false
+    /// Mirrors the chat access the host derives from this phone's grants; the bridge enforces it.
+    @Published private(set) var chatGrant: ChatGrant = .send
     @Published var connectionStatus = "Not connected"
     @Published var error: String?
     @Published var draft = "" { didSet { saveDraft() } }
@@ -44,6 +47,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var machineSubmissions: [String: [Submission]] = [:]
     private var machineCanceledIds: [String: [String]] = [:]
     private var cachedSnapshots: [String: Snapshot] = [:]
+    // Chat access is per Mac; a machine last seen at Off never shows cached chat.
+    private var machineChatGrants: [String: ChatGrant] = [:]
     private var machineEditorOffers: [String: String] = [:]
     private var machinePrincipals: [String: String] = [:]
     private var repairedMachines: Set<String> = []
@@ -54,6 +59,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private var receiveTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
+    private var agentRequests: [String: Int] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
     private var drafts: [String: String] = [:]
     private var attachmentDrafts: [String: [ComposerAttachment]] = [:]
@@ -80,7 +86,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     @Published private(set) var pairing = false
     var demo = false
     var busy: Bool { snapshot?.busy ?? false }
-    var canSend: Bool { connected && !recoveryFailed && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
+    var canSend: Bool { connected && chatGrant.canSend && !recoveryFailed && snapshot?.error == nil && (!demo || !busy) && !changingSession && (!busy || attachments.isEmpty) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
     var draftKey: String { machineKey + ":" + (snapshot?.sessionId ?? machineSessions[machineKey] ?? "local") }
     var recoverable: [Submission] { submissions.filter { $0.recoverable } }
 
@@ -112,7 +118,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         let legacyEndpoint = defaults.value.string(forKey: "pi.endpoint") ?? ""
         if let stored = defaults.value.data(forKey: "pi.machines.v1") {
             if stored.count <= 1024 * 1024, let decoded = try? JSONDecoder().decode(MachineRegistry.self, from: stored), decoded.valid { registry = decoded }
-            else { registryUnavailable = true; error = "Saved Mac list could not be read. Local data has been kept. Re-pair deliberately to reconnect." }
+            else { registryUnavailable = true; error = "Saved computer list could not be read. Local data has been kept. Re-pair deliberately to reconnect." }
         } else { registry = MachineRegistry.migrate(endpoint: legacyEndpoint) }
         endpoint = registry.selected?.endpoint ?? (registryUnavailable ? legacyEndpoint : "")
         machineSessions = defaults.value.dictionary(forKey: "pi.machineSessions") as? [String: String] ?? [:]
@@ -147,7 +153,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                     let currentIds = Set(current.map(\.id))
                     self.machineSubmissions[key] = Self.retainedSubmissions(items.filter { !currentIds.contains($0.id) }.map { item in
                         var item = item
-                        if item.status == "Sending" || (item.status == "Queued" && (self.repairedMachines.contains(key) || (item.clientId != nil && self.machinePrincipals[key] != nil && item.clientId != self.machinePrincipals[key]))) { item.status = "Delivery uncertain · Inspect Mac history"; item.recoverable = true }
+                        if item.status == "Sending" || (item.status == "Queued" && (self.repairedMachines.contains(key) || (item.clientId != nil && self.machinePrincipals[key] != nil && item.clientId != self.machinePrincipals[key]))) { item.status = "Delivery uncertain · Inspect history on the computer"; item.recoverable = true }
                         return item
                     } + current)
                 }
@@ -251,8 +257,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func saveActiveMachine() {
         saveDraft(); saveAttachmentDraft(); saveSubmissions(); saveCanceledIds()
         machineEditorIds[machineKey] = seenEditorIds
-        machineEditorOffers[machineKey] = editorOffer
-        if let state = snapshot {
+        machineEditorOffers[machineKey] = chatGrant.canRead ? editorOffer : nil
+        machineChatGrants[machineKey] = chatGrant
+        if !chatGrant.canRead { cachedSnapshots[machineKey] = nil } else if let state = snapshot {
             cachedSnapshots[machineKey] = Snapshot(version: state.version, epoch: state.epoch, revision: state.revision, busy: false, sessionId: state.sessionId, title: state.title, messages: state.messages, tools: state.tools, queue: [], dialogs: [], notices: [], capabilities: state.capabilities)
         }
     }
@@ -269,7 +276,8 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     private func activateMachine(_ machine: SavedMachine) {
         retryTask?.cancel(); detach(); selectionGeneration += 1; switchingMachine = true
         endpoint = machine.endpoint; demo = false; clientId = ""; wantsConnection = false
-        snapshot = cachedSnapshots[machineKey]; cursor.reset(); conversations = []; browsing = nil; editorOffer = machineEditorOffers[machineKey]
+        chatGrant = machineChatGrants[machineKey] ?? .send
+        snapshot = chatGrant.canRead ? cachedSnapshots[machineKey] : nil; cursor.reset(); conversations = []; browsing = nil; editorOffer = chatGrant.canRead ? machineEditorOffers[machineKey] : nil
         seenEditorIds = machineEditorIds[machineKey] ?? []; changingSession = false; error = nil; pairingError = nil
         canceledIdHistory = Self.recentCanceledIds(machineCanceledIds[machineKey] ?? [])
         seenCanceledIds = Set(canceledIdHistory)
@@ -283,7 +291,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         machineSubmissions[machine] = (machineSubmissions[machine] ?? []).map { item in
             var item = item
             if (item.status == "Queued" || item.status == "Sending") && (pairedAgain || (item.clientId != nil && item.clientId != principal)) {
-                item.status = "Delivery uncertain after re-pair · Inspect Mac history"; item.recoverable = true
+                item.status = "Delivery uncertain after re-pair · Inspect history on the computer"; item.recoverable = true
             }
             return item
         }
@@ -291,7 +299,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     // Bind migrated metadata only after the saved credential and pin verify this identity.
     private func bindVerifiedHost(_ trust: TrustedHost) throws {
         if let selected = selectedMachine, !selected.id.hasPrefix("legacy:"), selected.id != trust.hostId {
-            throw TrustFailure("Selected Mac identity changed. Scan a new QR code deliberately.")
+            throw TrustFailure("Selected computer identity changed.")
         }
         if selectedMachine?.id.hasPrefix("legacy:") == true {
             _ = registry.remember(hostId: trust.hostId, endpoint: trust.endpoint); persistRegistry()
@@ -299,7 +307,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     }
 
     func pair(_ code: PairingCode) {
-        guard PairingCode.parse((try? String(data: JSONEncoder().encode(PairingWire(code)), encoding: .utf8)) ?? "") != nil else { pairingError = "This QR expired. Create a new code on your Mac."; return }
+        guard PairingCode.parse((try? String(data: JSONEncoder().encode(PairingWire(code)), encoding: .utf8)) ?? "") != nil else { pairingError = "This pairing code expired. Create a new one and try again."; return }
         pairingTask?.cancel(); pairingGeneration += 1; trustWriter.advance(to: pairingGeneration); let attempt = pairingGeneration
         pairing = true; pairingError = nil
         pairingTask = Task { [weak self] in
@@ -313,12 +321,12 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.httpBody = try JSONSerialization.data(withJSONObject: ["version": 1, "enrollmentToken": code.enrollmentToken, "name": "iPhone"])
                 let (data, response) = try await session.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw TrustFailure("Enrollment expired, used or revoked. Create a new Mac QR code.") }
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw TrustFailure("Enrollment expired, used or revoked.") }
                 let device = try JSONDecoder().decode(EnrolledDevice.self, from: data)
-                guard device.version == 1, device.hostId == code.hostId else { throw TrustFailure("Mac identity changed. Scan a new QR code deliberately.") }
+                guard device.version == 1, device.hostId == code.hostId else { throw TrustFailure("Computer identity changed.") }
                 saved = TrustedHost(version: 1, endpoint: code.endpoint, hostId: code.hostId, certificateSHA256: code.certificateSHA256, deviceId: device.deviceId, clientId: device.clientId, credential: device.credential)
                 }
-                guard saved.valid, saved.endpoint == code.endpoint, saved.hostId == code.hostId, saved.certificateSHA256 == code.certificateSHA256 else { throw TrustFailure("The Mac returned mismatched device trust. Scan a new QR code.") }
+                guard saved.valid, saved.endpoint == code.endpoint, saved.hostId == code.hostId, saved.certificateSHA256 == code.certificateSHA256 else { throw TrustFailure("The computer returned mismatched device trust.") }
                 guard let self, !Task.isCancelled, attempt == self.pairingGeneration else { return }
                 try await self.trustWriter.commit(saved, generation: attempt)
                 guard !Task.isCancelled, attempt == self.pairingGeneration, self.trustWriter.accept(generation: attempt) else { return }
@@ -327,7 +335,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
             } catch {
                 guard let self, attempt == self.pairingGeneration else { return }
                 self.pairing = false; self.pairingTask = nil
-                self.pairingError = pin.identityRejected ? "Mac certificate does not match this QR. Scan a new code deliberately." : "Pairing failed. " + error.localizedDescription + " Create a new Mac QR code; enrollment is never replayed."
+                self.pairingError = pin.identityRejected ? "The computer's certificate does not match this pairing code. Create a new code deliberately." : "Pairing failed. " + error.localizedDescription + " Create a new pairing code; enrollment is never replayed."
             }
         }
     }
@@ -346,34 +354,36 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         guard !registryUnavailable else { return }
         guard !demo, foreground, socket == nil, connectionTask == nil else { return }
         guard let url = ConnectionAddress.url(endpoint), url.scheme == "wss" else {
-            if !endpoint.isEmpty { requirePairing("Legacy or invalid Mac trust. Scan a new Mac QR code.") }
+            if !endpoint.isEmpty { requirePairing("Legacy or invalid saved trust.") }
             return
         }
         if resetRetryBudget { retryBudget.reset() }
         wantsConnection = true; retryTask?.cancel()
-        let address = endpoint; generation += 1; let current = generation
-        connectionStatus = "Connecting to your Mac…"
+        let address = endpoint; let loadTrust = trustLoader; generation += 1; let current = generation
+        connectionStatus = "Connecting to your computer…"
         connectionTask = Task { [weak self] in
             await self?.recoveryTask?.value
             await self?.trustWriter.drain()
             var session: URLSession?; var pin: PinnedHostSession?
             do {
-                guard let saved = try await Task.detached(priority: .userInitiated, operation: { try self?.trustLoader(address) }).value else { throw TrustFailure("No saved device trust. Scan a new Mac QR code.") }
+                guard let saved = try await Task.detached(priority: .userInitiated, operation: { try loadTrust(address) }).value else { throw TrustFailure("No saved device trust.") }
                 guard let self, !Task.isCancelled, current == self.generation else { return }
-                guard saved.valid, saved.endpoint == address else { throw TrustFailure("Saved Mac trust is invalid. Scan a new QR code deliberately.") }
-                if let selected = self.selectedMachine, !selected.id.hasPrefix("legacy:"), selected.id != saved.hostId { throw TrustFailure("Selected Mac identity changed. Scan a new QR code deliberately.") }
+                guard saved.valid, saved.endpoint == address else { throw TrustFailure("Saved trust for this computer is invalid.") }
+                if let selected = self.selectedMachine, !selected.id.hasPrefix("legacy:"), selected.id != saved.hostId { throw TrustFailure("Selected computer identity changed.") }
                 let delegate = PinnedHostSession(endpoint: address, certificateSHA256: saved.certificateSHA256)
                 let connection = delegate.makeSession(); session = connection; pin = delegate
                 var verify = URLRequest(url: Self.httpURL(address, path: "/pair/verify"))
                 verify.setValue("Bearer " + saved.credential, forHTTPHeaderField: "Authorization")
                 let (data, response) = try await connection.data(for: verify)
                 let status = (response as? HTTPURLResponse)?.statusCode
-                if status == 401 || status == 403 { throw TrustFailure("This phone’s trust was revoked or lost. Scan a new Mac QR code deliberately.") }
-                guard status == 200 else { throw MobileError("Mac trust verification is unavailable.") }
+                if status == 401 || status == 403 { throw TrustFailure("This phone’s trust was revoked or lost.") }
+                guard status == 200 else { throw MobileError("Trust verification is unavailable on this computer.") }
                 let verified = try JSONDecoder().decode(VerifiedDevice.self, from: data)
-                guard verified.version == 1, verified.hostId == saved.hostId, verified.deviceId == saved.deviceId, verified.clientId == saved.clientId else { throw TrustFailure("Saved Mac identity changed. Scan a new QR code deliberately.") }
+                guard verified.version == 1, verified.hostId == saved.hostId, verified.deviceId == saved.deviceId, verified.clientId == saved.clientId else { throw TrustFailure("Saved computer identity changed.") }
+                let host = HostIdentity.fromVerify(data)
                 guard !Task.isCancelled, current == self.generation, self.foreground, self.wantsConnection, self.endpoint == address else { connection.invalidateAndCancel(); return }
                 try self.bindVerifiedHost(saved)
+                if self.registry.describe(hostId: saved.hostId, as: host) { self.persistRegistry() }
                 self.adoptPrincipal(saved.clientId, machine: self.machineKey)
                 self.submissions = self.machineSubmissions[self.machineKey] ?? self.submissions
                 self.connectionTask = nil; self.clientId = saved.clientId; self.hostSession = connection; self.hostPin = delegate
@@ -382,14 +392,14 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 session?.invalidateAndCancel()
                 guard let self, !Task.isCancelled, current == self.generation else { return }
                 self.connectionTask = nil
-                if pin?.identityRejected == true || error is TrustFailure { self.requirePairing(pin?.identityRejected == true ? "Mac certificate changed. Scan a new QR code deliberately." : error.localizedDescription) }
+                if pin?.identityRejected == true || error is TrustFailure { self.requirePairing(pin?.identityRejected == true ? "The computer's certificate changed." : error.localizedDescription) }
                 else { self.connectionLost(error.localizedDescription) }
             }
         }
     }
     private func startConnection(url: URL, credential: String, session: URLSession) {
         generation += 1; let current = generation
-        cursor.reset(); connectionStatus = "Connecting to your Mac…"; error = nil
+        cursor.reset(); connectionStatus = "Connecting to your computer…"; error = nil
         var request = URLRequest(url: url); request.setValue("Bearer " + credential, forHTTPHeaderField: "Authorization")
         request.setValue(clientId, forHTTPHeaderField: "X-PointGuard-Client-ID")
         let task = session.webSocketTask(with: request); task.maximumMessageSize = 4 * 1024 * 1024; socket = task; task.resume()
@@ -406,16 +416,27 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 }
             } catch {
                 guard let self, current == self.generation else { return }
-                if task.closeCode.rawValue == 4001 || self.hostPin?.identityRejected == true { self.requirePairing("Mac trust changed or this phone was revoked. Scan a new QR code deliberately.") }
+                if task.closeCode.rawValue == 4001 || self.hostPin?.identityRejected == true { self.requirePairing("Trust changed or this phone was revoked.") }
                 else { self.connectionLost(error.localizedDescription) }
             }
         }
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.syncState()
+                // The bridge pushes this phone's grants before any receipt, so a sync the
+                // host refused for chat Off is settled here and agents still connect.
+                do { try await self.syncState() } catch where current == self.generation && !self.chatGrant.canRead {}
                 guard current == self.generation else { return }
-                self.connected = true; self.connectionStatus = "Connected to your Mac"; self.retryBudget.reset()
+                let transport = self.generation
+                self.agentControl.transport(host: self.machineKey, connected: true) { [weak self] op, fields in
+                    guard let self, self.generation == transport, self.socket != nil else { throw MobileError("Agent connection changed. Reopen the agent before continuing.") }
+                    let id = UUID().uuidString
+                    self.agentRequests[id] = transport
+                    defer { self.agentRequests.removeValue(forKey: id) }
+                    return try await self.call(op, fields: fields, id: id)
+                }
+                // Terminal discovery and remote fleet health never gate Pi chat.
+                self.connected = true; self.connectionStatus = "Connected to your computer"; self.retryBudget.reset()
             } catch { if current == self.generation { self.connectionLost(error.localizedDescription) } }
         }
     }
@@ -424,13 +445,13 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if active { retryBudget.reset(); if wantsConnection { connect(resetRetryBudget: false) } }
         else {
             writer.flush(); retryTask?.cancel(); cancelPairing()
-            detach(); if wantsConnection { connectionStatus = "Paused on this phone · Point Guard continues on your Mac" }
+            detach(); if wantsConnection { connectionStatus = "Paused on this phone · Point Guard continues on your computer" }
         }
     }
     private func networkChanged(reachable: Bool) {
         guard foreground, wantsConnection else { return }
         if reachable { retryBudget.reset(); if socket == nil { connect(resetRetryBudget: false) } }
-        else { retryTask?.cancel(); detach(); connectionStatus = "Waiting for network · Point Guard continues on your Mac" }
+        else { retryTask?.cancel(); detach(); connectionStatus = "Waiting for network · Point Guard continues on your computer" }
     }
     func disconnect(cancelPairing: Bool = true) {
         if cancelPairing {
@@ -439,18 +460,22 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Not connected"
     }
     private func detach() {
+        agentControl.transport(host: machineKey, connected: false)
         generation += 1; connectionTask?.cancel(); connectionTask = nil; connected = false; receiveTask?.cancel(); receiveTask = nil; socket?.cancel(with: .goingAway, reason: nil); socket = nil
         hostSession?.invalidateAndCancel(); hostSession = nil; hostPin = nil
         let outstanding = pending; pending = [:]; for timeout in timeouts.values { timeout.cancel() }; timeouts = [:]
         for continuation in outstanding.values { continuation.resume(throwing: MobileError("Connection interrupted. Delivery may be uncertain. Inspect the conversation before sending again.")) }
     }
+    /// Re-pair guidance worded for the selected computer's verified, display-only kind.
+    var repairHint: String { HostCopy.repairHint(kind: selectedMachine?.host.kind, label: selectedMachine?.host.label) }
     private func requirePairing(_ reason: String) {
-        wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Re-pair with your Mac"; error = reason
+        agentControl.revokeAccess()
+        wantsConnection = false; retryTask?.cancel(); detach(); connectionStatus = "Re-pair needed"; error = reason + " " + repairHint
     }
     private func connectionLost(_ reason: String) {
-        retryTask?.cancel(); detach(); connectionStatus = "Connection lost · Point Guard continues on your Mac"; error = reason + " Check PurePoint on your Mac and Tailscale."
+        retryTask?.cancel(); detach(); connectionStatus = "Connection lost · Point Guard continues on your computer"; error = reason + " Check PurePoint on the computer and Tailscale."
         guard foreground, wantsConnection else { return }
-        guard let delay = retryBudget.nextDelay() else { connectionStatus = "Reconnect paused · Check your Mac and network"; return }
+        guard let delay = retryBudget.nextDelay() else { connectionStatus = "Reconnect paused · Check the computer and network"; return }
         let token = selectionGeneration
         retryTask = Task { [weak self] in try? await Task.sleep(nanoseconds: delay * 1_000_000_000); guard !Task.isCancelled, self?.isSelected(token) == true else { return }; self?.connect(resetRetryBudget: false) }
     }
@@ -460,16 +485,34 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         case .snapshot(let state, let rows): try apply(state, rows: rows); return
         case .envelope(let envelope): record = envelope
         }
+        if record.type == "permissions" { applyChatGrant(ChatGrant.from(record.chat), resync: true) }
+        if record.type == "permissions" || record.type.hasPrefix("terminal.") { agentControl.receive(record); return }
         switch record.type {
         case "receipt":
             guard let id = record.id, let continuation = pending.removeValue(forKey: id) else { return }
             timeouts.removeValue(forKey: id)?.cancel()
-            if record.ok == true { continuation.resume(returning: record.data ?? .null) } else { continuation.resume(throwing: MobileError(record.error ?? "The Mac rejected this action.")) }
+            if record.ok == true { continuation.resume(returning: record.data ?? .null) } else { continuation.resume(throwing: MobileError(record.error ?? "The computer rejected this action.")) }
         case "editor": if let id = record.id, !seenEditorIds.contains(id) { seenEditorIds.insert(id); editorOffer = record.text }
         default: throw MobileError("Unsupported bridge response. Update the app and bridge together.")
         }
     }
+    /// A downgrade hides chat content at once; regaining read access fetches the current conversation.
+    private func applyChatGrant(_ grant: ChatGrant, resync: Bool) {
+        let previous = chatGrant
+        chatGrant = grant
+        machineChatGrants[machineKey] = grant
+        if !grant.canRead {
+            saveDraft(); snapshot = nil; cursor.reset(); editorOffer = nil; browsing = nil; conversations = []
+            cachedSnapshots[machineKey] = nil; machineEditorOffers[machineKey] = nil
+        } else if resync && !previous.canRead && connected {
+            let current = generation
+            Task { [weak self] in
+                do { try await self?.syncState() } catch { if let self, current == self.generation { self.error = error.localizedDescription } }
+            }
+        }
+    }
     private func apply(_ state: Snapshot, rows: [TranscriptRow]? = nil) throws {
+        guard chatGrant.canRead else { return }
         guard state.version == 1 else { throw MobileError("Unsupported bridge version. Update the app and bridge together.") }
         guard cursor.accept(epoch: state.epoch, revision: state.revision) else { return }
         let previous = snapshot?.sessionId
@@ -517,7 +560,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         try apply(state, rows: rows)
     }
     private func call(_ op: String, fields: [String: Any] = [:], id: String = UUID().uuidString) async throws -> JSONValue {
-        guard let socket else { throw MobileError("Connect to your Mac before sending.") }
+        guard let socket else { throw MobileError("Connect to your computer before sending.") }
         var record = fields; record["version"] = 1
         record["clientId"] = clientId; record["id"] = id; record["op"] = op
         let data = try JSONSerialization.data(withJSONObject: record)
@@ -525,9 +568,9 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             timeouts[id] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 35_000_000_000)
+                try? await Task.sleep(nanoseconds: MobileRPCTiming.timeoutNanoseconds(for: op))
                 guard !Task.isCancelled, let self, let continuation = self.pending.removeValue(forKey: id) else { return }
-                self.timeouts.removeValue(forKey: id); continuation.resume(throwing: MobileError("No acknowledgement from your Mac. Delivery is uncertain; inspect history before sending again."))
+                self.timeouts.removeValue(forKey: id); continuation.resume(throwing: MobileError(op == "agent.prompt" ? "Delivery uncertain: no prompt acknowledgement. Inspect the agent terminal before sending again. Your submitted text remains saved." : "No acknowledgement from your computer. Delivery is uncertain; inspect history before sending again."))
             }
             Task { [weak self] in
                 do { try await socket.send(.string(text)) }
@@ -545,7 +588,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         let files = attachments
         let content: ComposerPayload
         do { content = try ComposerPayload.make(text: text, attachments: files) } catch { self.error = error.localizedDescription; return }
-        guard content.images.isEmpty || demo || state.capabilities?.contains("images") == true else { error = "Restart the updated Mac bridge before sending images."; return }
+        guard content.images.isEmpty || demo || state.capabilities?.contains("images") == true else { error = "Update and restart Point Guard on the computer before sending images."; return }
         let id = UUID().uuidString
         let origin = machineKey; let token = selectionGeneration; let transport = generation
         submissions.append(Submission(id: id, text: text, sessionId: state.sessionId, status: "Sending", recoverable: false, attachments: files, clientId: clientId)); draft = ""; attachments = []
@@ -564,7 +607,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
                 return
             }
             do {
-                guard isSelected(token), transport == generation else { throw MobileError("Connection changed before sending. Restore this message on its original Mac.") }
+                guard isSelected(token), transport == generation else { throw MobileError("Connection changed before sending. Restore this message on its original computer.") }
                 if demo { await demoReply(content.message); updateSubmission(id, status: "Accepted", recoverable: false, machine: origin); return }
                 let data = try await call("send", fields: ["epoch": state.epoch, "text": content.message, "mode": mode, "images": content.images], id: id)
                 let disposition = data["disposition"].text ?? "accepted"
@@ -577,7 +620,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         func updated(_ item: Submission) -> Submission {
             var item = item; item.status = status; item.recoverable = recoverable
             if status == "Queued", let principal = machinePrincipals[key], item.clientId != principal {
-                item.status = "Delivery uncertain after re-pair · Inspect Mac history"; item.recoverable = true
+                item.status = "Delivery uncertain after re-pair · Inspect history on the computer"; item.recoverable = true
             }
             return item
         }
@@ -603,6 +646,7 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     func stop(selection: Int? = nil) async -> Bool {
         if let selection, !isSelected(selection) { return false }
         let current = generation
+        guard chatGrant.canSend else { error = chatGrant.explanation; return false }
         guard let state = snapshot, let run = state.runId else { return !busy }
         do {
             _ = try await call("stop", fields: ["epoch": state.epoch, "runId": run])
@@ -613,17 +657,20 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
         if let selection, !isSelected(selection) { return }
         let current = generation
         if demo { conversations = [Conversation(id: "previous", title: "A previous thought", date: nil)]; return }
+        guard chatGrant.canRead else { error = chatGrant.explanation; return }
         do { let value = try await call("sessions")["sessions"]; let result = try await Task.detached(priority: .userInitiated) { try value.decode([Conversation].self) }.value; guard current == generation else { return }; conversations = result } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func browse(_ conversation: Conversation, selection: Int? = nil) async {
         if let selection, !isSelected(selection) { return }
         let current = generation
+        guard chatGrant.canRead else { error = chatGrant.explanation; return }
         if demo { browsing = History(sessionId: conversation.id, title: conversation.title, messages: [ChatMessage(id: "old", role: "assistant", text: "There is room here for a fresh idea.")]); return }
         do { let value = try await call("history", fields: ["sessionId": conversation.id]); let result = try await Task.detached(priority: .userInitiated) { try value.decode(History.self) }.value; guard current == generation else { return }; browsing = result } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func changeSession(to id: String? = nil, stopFirst: Bool = false, selection: Int? = nil) async {
         if let selection, !isSelected(selection) { return }
         let current = generation
+        guard chatGrant.canSend else { error = chatGrant.explanation; return }
         guard !changingSession, let state = snapshot else { return }; changingSession = true; defer { if current == generation { changingSession = false } }
         if busy { guard stopFirst, await stop() else { return } }
         guard current == generation else { return }
@@ -636,12 +683,13 @@ private struct RecoveryPreferences: @unchecked Sendable { let value: UserDefault
     func answer(_ dialog: ExtensionDialog, value: String? = nil, optionId: String? = nil, confirmed: Bool? = nil, cancelled: Bool = false, selection: Int? = nil) async {
         if let selection, !isSelected(selection) { return }
         let current = generation
+        guard chatGrant.canSend else { error = chatGrant.explanation; return }
         guard let state = snapshot, state.dialogs.contains(where: { $0.id == dialog.id }) else { return }
         var fields: [String: Any] = ["epoch": state.epoch, "dialogId": dialog.id, "cancelled": cancelled]; if let optionId { fields["optionId"] = optionId }; if let value { fields["value"] = value }; if let confirmed { fields["confirmed"] = confirmed }
         do { _ = try await call("answer", fields: fields) } catch { if current == generation { self.error = error.localizedDescription } }
     }
     func exploreDemo() {
-        disconnect(); demo = true; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()
+        disconnect(); demo = true; chatGrant = .send; connected = true; connectionStatus = "On-device preview"; error = nil; cursor.reset()
         snapshot = Snapshot(version: 1, epoch: "preview", revision: 1, busy: false, sessionId: "preview", title: "PurePoint", messages: [ChatMessage(id: "welcome", role: "assistant", text: "What would you like to work on?")], tools: [], queue: [], dialogs: [], notices: [])
     }
     private func demoReply(_ text: String) async {

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Owns the delta-buffering state machine for streaming assistant responses.
@@ -189,3 +190,4 @@ enum StreamEventResult {
     case sessionId(String)
     case error(String)
 }
+#endif

@@ -4,13 +4,20 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Pull requests skip packaging proofs their changes cannot affect and the
+  # Intel legs; main, the nightly run and manual runs prove everything.
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request runs are cancelled; main, nightly and manual
+  # runs each finish their full proof.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -23,12 +30,22 @@ jobs:
     outputs:
       macos: ${{ steps.paths.outputs.macos }}
       mobile: ${{ steps.paths.outputs.mobile }}
+      mobile_swift: ${{ steps.paths.outputs.mobile_swift }}
+      packaging: ${{ steps.paths.outputs.packaging }}
+      release_archive: ${{ steps.paths.outputs.release_archive }}
+      universal: ${{ steps.paths.outputs.universal }}
+      linux_phone: ${{ steps.paths.outputs.linux_phone }}
+      runtime_targets: ${{ steps.paths.outputs.runtime_targets }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Check CI routing
+      # minisign lets the install script tests also check signature
+      # compatibility with the reference implementation.
+      - name: Install minisign
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends minisign
+      - name: Check CI routing and release scripts
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Detect changed components
         id: paths
@@ -44,15 +61,15 @@ jobs:
       run:
         working-directory: apps/purepoint-mobile
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
       - name: Build isolated lock helper for bridge proofs
@@ -61,6 +78,12 @@ jobs:
           CARGO_TARGET_DIR="$RUNNER_TEMP/bridge-lock-cargo" cargo build --locked -p pu-cli --bin pu-point-guard-lock
           printf 'POINT_GUARD_LOCK_HELPER_PATH=%s/bridge-lock-cargo/debug/pu-point-guard-lock\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: npm ci --ignore-scripts
+      # Registry signatures and provenance of every installed package, and no
+      # known high-severity advisory in what ships with the app.
+      - name: Verify npm package signatures
+        run: npm audit signatures
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
       - run: npm run check
       - run: npm test
       - name: Interrupted package download recovery
@@ -69,23 +92,23 @@ jobs:
   mobile-swift:
     name: Mobile Swift & iOS tests
     needs: changes
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.mobile_swift == 'true'
     runs-on: macos-26
     timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/purepoint-mobile
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
           cache: npm
           cache-dependency-path: apps/purepoint-mobile/package-lock.json
       - run: npm ci --ignore-scripts
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
       - name: Build isolated lock helper for actual trust fixtures
@@ -102,11 +125,13 @@ jobs:
           swiftc PurePoint/ChatDomain.swift verification/ResponsivenessChecks.swift -o "$RUNNER_TEMP/mobile-responsiveness"
           "$RUNNER_TEMP/mobile-responsiveness"
           sh verification/check-recovery.sh
+          sh verification/check-agent-control.sh
+          sh verification/check-navigation.sh
           sh verification/check-machines.sh
           sh verification/check-trust-rollback.sh
           python3 verification/check-machine-network.py
           python3 verification/check-trust.py
-          swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/ChatModel.swift
+          swiftc -typecheck -strict-concurrency=complete -warnings-as-errors PurePoint/ChatDomain.swift PurePoint/PairingSecret.swift PurePoint/AgentControlDomain.swift PurePoint/AgentControlModel.swift PurePoint/ChatModel.swift
           swiftc -frontend -parse PurePoint/*.swift PurePointTests/*.swift
           plutil -lint PurePoint.xcodeproj/project.pbxproj PurePoint/Info.plist
       - name: iOS simulator tests
@@ -116,6 +141,7 @@ jobs:
           xcodebuild build-for-testing \
             -project PurePoint.xcodeproj \
             -scheme PurePoint-Debug \
+            -onlyUsePackageVersionsFromResolvedFile \
             -destination "platform=iOS Simulator,id=$simulator_id" \
             -derivedDataPath "$RUNNER_TEMP/mobile-derived" \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
@@ -129,7 +155,7 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM=""
       - name: Retain iOS signature and XCTest diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mobile-diagnostics
           path: ${{ runner.temp }}/mobile-diagnostics
@@ -147,22 +173,33 @@ jobs:
       PROJECT: apps/purepoint-macos/purepoint-macos.xcodeproj
       DESTINATION: "platform=macOS"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
 
       - name: Isolate macOS artifact Rust output
         run: printf 'CARGO_TARGET_DIR=%s/macos-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      # Pinned release, checked against its SHA-256 instead of Homebrew's moving formula.
       - name: Install xcbeautify
-        run: brew install xcbeautify
+        env:
+          XCBEAUTIFY_VERSION: 3.2.1
+          XCBEAUTIFY_SHA256: 87fdbe786f71d7b2ee28c5c1ca97087587292f2c5c6f9e721cf02db8b2a3c241
+        run: |
+          ARCHIVE="$RUNNER_TEMP/xcbeautify.zip"
+          curl -fsSL --proto '=https' \
+            "https://github.com/cpisciotta/xcbeautify/releases/download/${XCBEAUTIFY_VERSION}/xcbeautify-${XCBEAUTIFY_VERSION}-universal-apple-macosx.zip" \
+            -o "$ARCHIVE"
+          echo "${XCBEAUTIFY_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/xcbeautify"
+          echo "$RUNNER_TEMP/xcbeautify/release" >> "$GITHUB_PATH"
 
       - name: Checkout pinned local tree-sitter packages
         run: bash .github/scripts/checkout-tree-sitter.sh
@@ -202,7 +239,7 @@ jobs:
           PKGEOF
           done
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
       - name: Prepare actual shared bridge dependencies and isolated helper
@@ -216,6 +253,8 @@ jobs:
         run: python3 apps/purepoint-macos/verification/check-point-guard-service.py
       - name: Check pane-local Point Guard conversation sidebar
         run: python3 apps/purepoint-macos/verification/check-point-guard-sidebar.py
+      - name: Check app bundle seal before bridge launch
+        run: python3 apps/purepoint-macos/verification/check-bundle-seal.py
 
       - name: Compile app and test bundles
         timeout-minutes: 18
@@ -224,6 +263,7 @@ jobs:
             xcodebuild build-for-testing \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
+            -onlyUsePackageVersionsFromResolvedFile \
             -destination "$DESTINATION" \
             -derivedDataPath "$RUNNER_TEMP/purepoint-derived" \
             CODE_SIGN_IDENTITY="-" \
@@ -249,7 +289,7 @@ jobs:
 
       - name: Retain macOS failure diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-diagnostics
           path: ${{ runner.temp }}/macos-diagnostics
@@ -259,25 +299,21 @@ jobs:
   runtime-package:
     name: Point Guard package (${{ matrix.architecture }})
     needs: changes
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.packaging == 'true'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-26
-            architecture: arm64
-          - runner: macos-26-intel
-            architecture: x64
+        include: ${{ fromJSON(needs.changes.outputs.runtime_targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
       - name: Set isolated build directory
@@ -302,7 +338,7 @@ jobs:
       - name: Relocated clean native startup and state-preserving replacement
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/PointGuardProof.app"
       - name: Retain nonpublishing proof artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: point-guard-runtime-${{ matrix.architecture }}
           path: ${{ runner.temp }}/PointGuardProof.app
@@ -311,7 +347,7 @@ jobs:
   runtime-universal:
     name: Point Guard universal package (${{ matrix.architecture }})
     needs: [changes, runtime-package]
-    if: needs.changes.outputs.mobile == 'true'
+    if: needs.changes.outputs.universal == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -323,17 +359,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: point-guard-runtime-arm64
           path: ${{ runner.temp }}/arm64-input
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: point-guard-runtime-x64
           path: ${{ runner.temp }}/x64-input
@@ -348,7 +384,7 @@ jobs:
       - name: Launch relocated universal runtime on native architecture
         run: node apps/purepoint-mobile/runtime/prove-runtime.mjs "$RUNNER_TEMP/UniversalProof.app"
       - name: Retain nonpublishing universal proof artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: point-guard-runtime-universal-${{ matrix.architecture }}
           path: ${{ runner.temp }}/UniversalProof.app
@@ -361,10 +397,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.89"
           components: rustfmt, clippy
@@ -374,23 +410,169 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
 
+  # Linux phone host (LPH): `pu phone` unit tests, then the x64 bridge payload
+  # packaged, installed by install.sh into a throwaway HOME, and launched in a
+  # clean environment with a pinned-TLS enrollment, revocation and restart.
+  # The bridge's own tests already run on Linux in mobile-bridge.
+  runtime-linux:
+    name: Linux phone access payload (x64)
+    needs: changes
+    if: needs.changes.outputs.linux_phone == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Alpine 3.22, pinned by digest. The digest is checked on pull, so any
+      # mirror that serves it is equally trusted.
+      ALPINE_DIGEST: sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.89"
+      - name: Set isolated Rust output
+        run: printf 'CARGO_TARGET_DIR=%s/linux-phone-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: pu phone unit tests
+        run: cargo test --locked -p pu-cli phone
+      - name: Build pu, pu-engine and the lock helper
+        run: cargo build --locked -p pu-cli -p pu-engine
+      - name: Package the x64 payload
+        run: |
+          PU_VERSION=$(python3 apps/purepoint-mobile/runtime/package-runtime.py --print-pu-version)
+          python3 apps/purepoint-mobile/runtime/package-runtime.py --layout dir \
+            --target linux-x64 \
+            --out "$RUNNER_TEMP/phone" \
+            --lock-helper "$CARGO_TARGET_DIR/debug/pu-point-guard-lock" \
+            --pu-version "$PU_VERSION" \
+            --cache "$RUNNER_TEMP/node-cache"
+          {
+            echo "PU_VERSION=$PU_VERSION"
+            echo "PHONE_NAME=purepoint-pointguard-${PU_VERSION}-x86_64-linux-gnu"
+          } >> "$GITHUB_ENV"
+      - name: Launch relocated payload in a clean environment
+        run: |
+          "$RUNNER_TEMP/phone/$PHONE_NAME/bin/node" apps/purepoint-mobile/runtime/prove-linux-runtime.mjs \
+            "$RUNNER_TEMP/phone/$PHONE_NAME" "$CARGO_TARGET_DIR/debug/pu"
+      - name: Install with install.sh into a throwaway HOME and launch in place
+        run: |
+          # Same layout as a release tarball; install.sh only copies pu and pu-engine.
+          NAME="purepoint-ci-x86_64-linux"
+          mkdir -p "$RUNNER_TEMP/pu-archive/$NAME"
+          cp "$CARGO_TARGET_DIR/debug/pu" "$CARGO_TARGET_DIR/debug/pu-engine" "$RUNNER_TEMP/pu-archive/$NAME/"
+          tar -C "$RUNNER_TEMP/pu-archive" -czf "$RUNNER_TEMP/$NAME.tar.gz" "$NAME"
+          echo "PU_TARBALL=$RUNNER_TEMP/$NAME.tar.gz" >> "$GITHUB_ENV"
+          SMOKE_HOME="$RUNNER_TEMP/smoke-home"
+          mkdir -m 700 "$SMOKE_HOME"
+          run_install() {
+            env -i HOME="$SMOKE_HOME" PATH=/usr/bin:/bin PU_ARCHIVE="$RUNNER_TEMP/$NAME.tar.gz" \
+              PU_PHONE_ARCHIVE="$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz" sh scripts/install.sh
+          }
+          run_install
+          INSTALLED="$SMOKE_HOME/.pu/pointguard/$PU_VERSION"
+          "$INSTALLED/bin/node" apps/purepoint-mobile/runtime/prove-linux-runtime.mjs \
+            "$INSTALLED" "$SMOKE_HOME/.pu/bin/pu" --in-place
+          # A second install never modifies the existing version directory.
+          BEFORE=$(stat -c '%i %Y' "$INSTALLED")
+          run_install | grep -F "already installed"
+          [ "$(stat -c '%i %Y' "$INSTALLED")" = "$BEFORE" ]
+      # The runner is an ephemeral VM with systemd as PID 1, so this step uses
+      # its real HOME and user manager to prove the unit pu phone writes.
+      - name: Run phone access as a systemd user service
+        run: |
+          env -i HOME="$HOME" PATH=/usr/bin:/bin PU_ARCHIVE="$PU_TARBALL" \
+            PU_PHONE_ARCHIVE="$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz" sh scripts/install.sh
+          sudo loginctl enable-linger "$USER"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
+          for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 0.2; done
+          PU="$HOME/.pu/bin/pu"
+          UNIT_FILE="$HOME/.config/systemd/user/pu-pointguard.service"
+          ready() {
+            for _ in $(seq 60); do
+              if "$PU" phone status --json > "$RUNNER_TEMP/status.json" &&
+                [ "$(jq -r '.pointGuard.phase // empty' "$RUNNER_TEMP/status.json")" = ready ]; then
+                return 0
+              fi
+              sleep 1
+            done
+            cat "$RUNNER_TEMP/status.json"
+            return 1
+          }
+          "$PU" phone install --now
+          ready
+          grep -qxF 'NoNewPrivileges=yes' "$UNIT_FILE"
+          grep -qxF 'UMask=0077' "$UNIT_FILE"
+          [ "$(stat -c %a "$UNIT_FILE")" = 644 ]
+          # Owner admin is a private Unix socket, not a TCP port.
+          STATE="$HOME/.local/state/purepoint/point-guard"
+          [ "$(stat -c %a "$STATE/admin")" = 700 ]
+          [ "$(stat -c %a "$STATE/admin/admin.sock")" = 600 ]
+          "$PU" phone devices | grep -F "No paired devices"
+          HOST=$(jq -r .pointGuard.hostId "$RUNNER_TEMP/status.json")
+          # The bridge's environment excludes inherited loader and Node options.
+          PID=$(systemctl --user show -p MainPID --value pu-pointguard.service)
+          if tr '\0' '\n' < "/proc/$PID/environ" | grep -E '^(NODE_OPTIONS|LD_PRELOAD|PU_ENGINE_PATH)='; then exit 1; fi
+          "$PU" phone restart
+          ready
+          [ "$(jq -r .pointGuard.hostId "$RUNNER_TEMP/status.json")" = "$HOST" ]
+          # An idle stop exits 0, so Restart=on-failure never resurrects it.
+          "$PU" phone stop
+          sleep 8
+          [ "$(systemctl --user is-active pu-pointguard.service || true)" = inactive ]
+          "$PU" phone uninstall
+          [ ! -e "$UNIT_FILE" ]
+          # Device trust and host identity outlive the service.
+          [ -f "$STATE/trust/trust.json" ]
+      - name: Point Guard service journal
+        if: failure()
+        run: XDG_RUNTIME_DIR="/run/user/$(id -u)" journalctl --user -u pu-pointguard.service --no-pager | tail -200 || true
+      - name: Pull the pinned Alpine image
+        run: |
+          for attempt in 1 2 3; do
+            for registry in public.ecr.aws/docker/library mirror.gcr.io/library docker.io/library; do
+              if docker pull --quiet "$registry/alpine@$ALPINE_DIGEST"; then
+                echo "ALPINE_IMAGE=$registry/alpine@$ALPINE_DIGEST" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            done
+            sleep $((attempt * 20))
+          done
+          exit 1
+      - name: Refuse phone access on musl and keep pu installed
+        run: |
+          set +e
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$PWD/scripts/install.sh:/install.sh:ro" \
+            -v "$PU_TARBALL:/pu.tar.gz:ro" \
+            -v "$RUNNER_TEMP/phone/$PHONE_NAME.tar.gz:/phone.tar.gz:ro" \
+            -e HOME=/tmp -e PU_ARCHIVE=/pu.tar.gz -e PU_PHONE_ARCHIVE=/phone.tar.gz \
+            "$ALPINE_IMAGE" sh -c 'sh /install.sh; code=$?; test -x /tmp/.pu/bin/pu && test -x /tmp/.pu/bin/pu-engine && test ! -e /tmp/.pu/pointguard && exit $code' \
+            > "$RUNNER_TEMP/musl.log" 2>&1
+          CODE=$?
+          set -e
+          cat "$RUNNER_TEMP/musl.log"
+          [ "$CODE" -eq 3 ]
+          grep -F "glibc ≥ 2.28 required for phone access" "$RUNNER_TEMP/musl.log"
+
   release-archive:
     needs: changes
-    if: needs.changes.outputs.macos == 'true'
+    if: needs.changes.outputs.release_archive == 'true'
     uses: ./.github/workflows/release-proof.yml
 
   build-and-test:
     name: Build & Test
     if: always()
-    needs: [changes, macos, release-archive, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust]
+    needs: [changes, macos, release-archive, mobile-bridge, mobile-swift, runtime-package, runtime-universal, runtime-rust, runtime-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Require every applicable check to pass
         env:
           CI_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python3 .github/scripts/ci.py gate
-          python3 -c 'import json, os; r=json.loads(os.environ["CI_RESULTS"]); expected="success" if r["changes"]["outputs"]["mobile"]=="true" else "skipped"; assert all(r[j]["result"]==expected for j in ["runtime-package","runtime-universal","runtime-rust"]), {j:r[j] for j in ["runtime-package","runtime-universal","runtime-rust"]}'
+        run: python3 .github/scripts/ci.py gate

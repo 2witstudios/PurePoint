@@ -454,6 +454,82 @@ fn fs_list(
     }
 }
 
+/// Lists the subdirectories of `path` so a client can choose a folder to
+/// register as a project. Unlike `fs_list` it is not confined to registered
+/// roots — there is no root yet — so it never reports files, sizes or ignore
+/// state: only directory names, which the socket's owner can already reach.
+/// `~` (alone or as a `~/` prefix) names `home`.
+fn fs_browse(
+    path: &str,
+    include_hidden: bool,
+    max_entries: usize,
+    home: Option<&Path>,
+) -> Response {
+    let expanded = match (path.strip_prefix('~'), home) {
+        (Some(""), Some(home)) => home.to_path_buf(),
+        (Some(rest), Some(home)) if rest.starts_with('/') => {
+            home.join(rest.trim_start_matches('/'))
+        }
+        _ => PathBuf::from(path),
+    };
+    if !expanded.is_absolute() {
+        return fs_error(
+            "path_not_allowed",
+            format!("{path} is not an absolute path"),
+        );
+    }
+    let dir = match expanded.canonicalize() {
+        Ok(dir) => dir,
+        Err(e) => return io_error(&expanded, &e),
+    };
+    if !dir.is_dir() {
+        return fs_error(
+            "not_a_directory",
+            format!("{} is not a directory", dir.display()),
+        );
+    }
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return fs_error("io_error", format!("cannot read {}", dir.display()));
+    };
+    let mut children: Vec<_> = read.filter_map(Result::ok).collect();
+    children.sort_by_key(|e| e.file_name());
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    for child in children {
+        let name = child.file_name().to_string_lossy().into_owned();
+        if !include_hidden && name.starts_with('.') {
+            continue;
+        }
+        let child_path = child.path();
+        let Ok(link_meta) = std::fs::symlink_metadata(&child_path) else {
+            continue;
+        };
+        let is_symlink = link_meta.file_type().is_symlink();
+        // A symlink to a directory is a folder the user can open, as in a file dialog.
+        if !(link_meta.is_dir() || is_symlink && child_path.is_dir()) {
+            continue;
+        }
+        if entries.len() >= max_entries {
+            truncated = true;
+            break;
+        }
+        entries.push(FsEntry {
+            name,
+            path: path_string(&child_path),
+            is_dir: true,
+            is_symlink,
+            size: 0,
+            modified_ms: 0,
+            ignored: false,
+        });
+    }
+    Response::FsListResult {
+        path: path_string(&dir),
+        entries,
+        truncated,
+    }
+}
+
 fn fs_stat(path: &str, roots: &[PathBuf]) -> Response {
     let resolved = match resolve_confined(path, roots, true) {
         Ok(p) => p,
@@ -1182,9 +1258,22 @@ impl Engine {
         tokio::task::spawn_blocking(move || match request {
             Request::FsList {
                 path,
+                include_hidden,
+                max_entries,
+                directories_only: true,
+                ..
+            } => fs_browse(
+                &path,
+                include_hidden,
+                max_entries.min(FS_LIST_MAX_ENTRIES),
+                std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+            ),
+            Request::FsList {
+                path,
                 recursive,
                 include_hidden,
                 max_entries,
+                directories_only: false,
             } => fs_list(
                 &path,
                 &roots.all,

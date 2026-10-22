@@ -1,15 +1,24 @@
 import SwiftUI
 
+/// Matches `PaneTabBar.height`. Declared here, not referenced, so this file compiles without the pane grid.
+private let headerHeight: CGFloat = 30
+
 /// A pane-local sidebar. Native split views can grow beyond a grid cell's
 /// proposed width when their children have competing minimum sizes.
+///
+/// In split mode the rail runs the full height of the pane. Its header occupies the same
+/// row as `tabBar`, so the rail and the pane's tab strip read as one band.
 struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>: View {
     @Binding var isExpanded: Bool
     var compact = false
+    /// The pane's tab strip, drawn to the right of the rail's header.
+    var tabBar: AnyView = AnyView(EmptyView())
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let content: () -> Content
     @State private var preferredWidth: CGFloat = 210
     @State private var resizeStart: CGFloat?
+    @Environment(\.titlebarClearance) private var titlebarClearance
 
     var body: some View {
         if compact {
@@ -52,6 +61,16 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var railToggle: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            Image(systemName: "sidebar.left").frame(width: 24, height: 24)
+        }
+        .help("Toggle conversations (Command-Shift-S)")
+        .accessibilityLabel(isExpanded ? "Hide conversations" : "Show conversations")
+    }
+
     private var splitLayout: some View {
         GeometryReader { geometry in
             let available = max(0, geometry.size.width)
@@ -59,30 +78,42 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
             let width = isExpanded ? min(preferredWidth, max(36, available * 0.45), available) : min(36, available)
             let dividerWidth = min(isExpanded ? CGFloat(4) : 1, max(0, available - width))
             let headerPadding = min(isExpanded ? CGFloat(10) : 6, max(0, (width - 24) / 2))
+            // With the window's sidebar hidden the rail sits under the traffic lights, so the header's
+            // contents start past them; a rail too narrow for its toggle there drops it below the header.
+            let clearance = titlebarClearance.leading
+            let toggleInHeader = clearance == 0 || width >= clearance + 24 + headerPadding
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
-                        if isExpanded {
-                            if width >= 160 {
-                                Text("CONVERSATIONS").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                        if toggleInHeader {
+                            if isExpanded {
+                                if width - clearance >= 160 {
+                                    Text("CONVERSATIONS").font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
                             }
-                            Spacer(minLength: 0)
+                            railToggle
                         }
-                        Button {
-                            isExpanded.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.left").frame(width: 24, height: 24)
-                        }
-                        .help("Toggle conversations (Command-Shift-S)")
-                        .accessibilityLabel(isExpanded ? "Hide conversations" : "Show conversations")
                     }
                     .buttonStyle(.borderless)
-                    .padding(.horizontal, headerPadding)
-                    .padding(.vertical, 8)
+                    .padding(.leading, toggleInHeader ? max(headerPadding, clearance) : 0)
+                    .padding(.trailing, headerPadding)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    // Same height and color as the tab strip, so the header joins it.
+                    .frame(height: headerHeight)
+                    .background(Color(nsColor: Theme.tabBarBackground))
+                    .overlay(alignment: .bottom) { Divider() }
+                    .environment(\.colorScheme, .dark)
 
+                    if !toggleInHeader {
+                        railToggle
+                            .buttonStyle(.borderless)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: headerHeight)
+                    }
                     if isExpanded { sidebar() } else { Spacer(minLength: 0) }
                 }
                 .frame(width: width, height: geometry.size.height)
@@ -105,6 +136,13 @@ struct PointGuardConversationLayout<Actions: View, Sidebar: View, Content: View>
                     )
 
                 VStack(spacing: 0) {
+                    // The rail already covers part of the clearance; the strip clears the rest.
+                    tabBar
+                        .environment(
+                            \.titlebarClearance,
+                            TitlebarClearance(
+                                leading: max(0, clearance - width - dividerWidth), height: titlebarClearance.height)
+                        )
                     HStack {
                         Spacer(minLength: 0)
                         actions()

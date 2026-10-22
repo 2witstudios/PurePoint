@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Point Guard history</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#0E0E10}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+a{color:inherit;text-decoration:none}
+.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #18181B; color: #ECECEE; font-family: -apple-system, BlinkMacSystemFont, Inter, system-ui, sans-serif; font-size: 15px; display: flex; flex-direction: column">
+  <div style="height: 54px; flex-shrink: 0"></div>
+  <header style="display: flex; align-items: center; height: 44px; padding: 0 4px; flex-shrink: 0">
+    <a href="PointGuard.dc.html" aria-label="Back to Point Guard" style="width: 44px; height: 44px; display: grid; place-items: center; color: #FF8A3D"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></a>
+    <h1 style="flex: 1; margin: 0; text-align: center; font-size: 16px; font-weight: 600">History</h1>
+    <span style="width: 44px"></span>
+  </header>
+  <label style="display: flex; align-items: center; gap: 8px; height: 38px; margin: 6px 12px 8px; padding: 0 12px; border-radius: 10px; background: #222226; color: #A1A1AA">
+    <svg class="ico" style="width: 16px; height: 16px" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+    <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Find a conversation</span>
+    <input placeholder="Find a conversation" style="flex: 1; background: none; border: 0; color: #ECECEE; font: inherit; outline: none">
+  </label>
+  <main style="flex: 1; min-height: 0; overflow: hidden; padding: 0 8px">
+    <sc-for list="{{items}}" as="c" hint-placeholder-count="6">
+      <a href="HistoryBrowse.dc.html" style="display: flex; flex-direction: column; gap: 4px; padding: 12px 10px; border-bottom: 1px solid rgba(255,255,255,0.06)">
+        <span style="display: flex; align-items: baseline; gap: 8px">
+          <span class="clamp" style="flex: 1; font-weight: 600; font-size: 15px">{{c.title}}</span>
+          <span style="font-size: 12px; color: #A1A1AA; white-space: nowrap">{{c.date}}</span>
+        </span>
+        <span class="clamp" style="font-size: 13px; line-height: 1.4; color: #A1A1AA">{{c.preview}}</span>
+        <sc-if value="{{c.current}}" hint-placeholder-val="{{ false }}">
+          <span style="display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #FF8A3D"><span style="width: 6px; height: 6px; border-radius: 3px; background: #FF7A1A"></span>Current conversation</span>
+        </sc-if>
+      </a>
+    </sc-for>
+  </main>
+  <footer style="flex-shrink: 0; padding: 10px 12px 34px; border-top: 1px solid rgba(255,255,255,0.06)">
+    <a href="PointGuard.dc.html" style="display: flex; align-items: center; justify-content: center; gap: 8px; height: 50px; border-radius: 14px; background: #222226; font-weight: 600">
+      <svg class="ico" style="width: 16px; height: 16px" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>New conversation
+    </a>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { items: [
+      { title: 'Harden phone pairing', date: '2026-10-21', preview: 'Two workers are running in a new worktree. The implementation agent is asking to run the engine tests.', current: true },
+      { title: 'iPad sidebar polish', date: '2026-10-20', preview: 'Merged the outline view changes and opened a follow-up for keyboard focus.', current: false },
+      { title: 'Release fixes after merge pile-up', date: '2026-10-19', preview: 'Main builds again. Three PRs were re-queued in order.', current: false },
+      { title: 'Catch me up', date: '2026-10-18', preview: 'purepoint moved two PRs; pagespace is blocked on a migration review.', current: false },
+      { title: 'Tidy my desktop', date: '2026-10-16', preview: 'Grouped 48 files into Screenshots, Invoices and Notes.', current: false }
+    ] };
+  }
+}
+</script>
+</body>
+</html>

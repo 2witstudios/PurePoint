@@ -1,7 +1,7 @@
 import { openTrustStore } from "../bridge/trust.js";
 import { serve } from "../bridge/network.js";
 import { EventEmitter } from "node:events";
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 const directory = process.argv[2];
 if (!directory?.startsWith("/tmp/pg-mobile-trust-"))
@@ -15,6 +15,7 @@ let prompts = 0;
 controller.request = async (r) => {
   requests++;
   if (r.op === "send") prompts++;
+  if (r.op === "permissions") return { terminals: "off" };
   return {
     type: "snapshot",
     version: 1,
@@ -42,13 +43,20 @@ const device = await trust.enroll({
   enrollmentToken: JSON.parse(enrollment.payload).enrollmentToken,
   name: "Verification phone",
 });
+// Full access: chat sending follows Control and Workspace management.
+await trust.setTerminals(device.deviceId, "control");
+await trust.setWorkspaceManagement(device.deviceId, true);
 const record = {
   ...device,
   endpoint,
   certificateSHA256: trust.certificateSHA256,
 };
 for (const name of ["enrollment-a.json", "enrollment-b.json"]) {
-  await writeFile(path.join(directory, name), trust.createEnrollment({ endpoint }).payload, { mode: 0o600 });
+  await writeFile(
+    path.join(directory, name),
+    trust.createEnrollment({ endpoint }).payload,
+    { mode: 0o600 },
+  );
 }
 await writeFile(path.join(directory, "record.json"), JSON.stringify(record), {
   mode: 0o600,
@@ -80,6 +88,18 @@ const timer = setInterval(async () => {
     await trust.revokeDevice(device.deviceId);
     await writeFile(path.join(directory, "revoked"), "done");
   } catch {}
+  for (const chat of ["off", "read", "send"])
+    try {
+      await rm(path.join(directory, `chat-${chat}`));
+      const [terminals, management] = {
+        off: ["off", false],
+        read: ["view", false],
+        send: ["control", true],
+      }[chat];
+      await trust.setTerminals(device.deviceId, terminals);
+      await trust.setWorkspaceManagement(device.deviceId, management);
+      await writeFile(path.join(directory, `chat-${chat}-done`), "done");
+    } catch {}
 }, 20);
 timer.unref();
 console.log("ready");

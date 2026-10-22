@@ -80,6 +80,7 @@ impl Engine {
             plan_mode,
             no_trigger,
             trigger: trigger_param,
+            placement,
         } = params;
         let root_path = Path::new(&project_root);
 
@@ -156,7 +157,7 @@ impl Engine {
         }
 
         // When plan_mode is active, prefix the prompt with instructions to enter plan mode.
-        // This keeps bypass permissions as the base while guiding the agent into plan mode
+        // This keeps the configured launch args as the base while guiding the agent into plan mode
         // via its own tool (EnterPlanMode) rather than conflicting CLI flags.
         let prompt = if plan_mode {
             format!(
@@ -170,7 +171,7 @@ impl Engine {
         let prompt = &prompt;
 
         // When a terminal command is set, it becomes the PTY process directly
-        let (command, args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
+        let (command, mut args, session_id, inject_prompt_via_stdin) = if let Some(ref cmd) =
             terminal_command
         {
             let has_metacharacters = cmd.contains('|')
@@ -205,17 +206,9 @@ impl Engine {
             };
             let mut args = cmd_args;
 
-            // Add agent-type-specific launch args from config (or defaults).
-            // --no-auto skips only the built-in defaults; explicit user-configured
-            // launchArgs are always applied.
-            let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
-                Vec::new()
-            } else {
-                pu_core::types::resolved_launch_args(&agent_type, agent_cfg.launch_args.as_deref())
-            };
-            if launch_args.is_empty() && agent_cfg.launch_args.is_some() {
-                tracing::info!(agent_type, "auto-mode disabled via config (launchArgs: [])");
-            }
+            // Configured launch args: project, else machine-level, else none.
+            // --no-auto launches the bare command, ignoring all of them.
+            let launch_args = Self::spawn_launch_args(&agent_type, &agent_cfg, no_auto);
             Self::append_launch_args(&mut args, launch_args);
 
             // Append extra args from --agent-args (always applied, even with --no-auto)
@@ -319,6 +312,24 @@ impl Engine {
             };
             crate::read_source::resolve_exact(runtime, id, &cwd, &env).ok()
         });
+        let observation = if crate::signals::tracking_enabled().await {
+            crate::signals::prepare(
+                &project_root,
+                &cwd,
+                &agent_id,
+                worktree_id.clone(),
+                &agent_type,
+                session_id.as_deref(),
+                false,
+                &command,
+                &mut args,
+                &mut env,
+            )
+            .await
+        } else {
+            crate::signals::strip_inherited(&mut env);
+            None
+        };
         let read_cwd = cwd.clone();
         let read_type = agent_type.clone();
         let spawn_config = SpawnConfig {
@@ -424,6 +435,20 @@ impl Engine {
         handle.worktree_id = worktree_id.clone();
         let pid = handle.pid;
 
+        if let Some(observation) = observation {
+            observation
+                .with_output(handle.output_buffer.clone())
+                .activate_with_sources(
+                    &self.signal_states,
+                    &project_root,
+                    &handle.cwd,
+                    handle.pid,
+                    handle.exit_rx.clone(),
+                    self.status_channels.clone(),
+                    self.native_sources.clone(),
+                );
+        }
+
         // Store handle in session map BEFORE writing manifest.
         // ManifestWatcher in Swift fires on manifest write and immediately
         // tries to attach — the session must already be in the map.
@@ -477,6 +502,7 @@ impl Engine {
 
         // Update manifest
         let agent_entry = AgentEntry {
+            signal: None,
             id: agent_id.clone(),
             name: agent_name.clone(),
             agent_type,
@@ -499,7 +525,9 @@ impl Engine {
             trigger_total,
             gate_attempts: trigger_name.as_ref().map(|_| 0),
             no_trigger,
+            bare_launch: no_auto,
             trigger_name: trigger_name.clone(),
+            placement,
         };
 
         let wt_id_for_manifest = worktree_id.clone();
@@ -592,6 +620,17 @@ impl Engine {
             agent_id,
             status: AgentStatus::Running,
         }
+    }
+
+    pub(super) fn spawn_launch_args(
+        agent_type: &str,
+        agent_cfg: &pu_core::types::AgentConfig,
+        no_auto: bool,
+    ) -> Vec<String> {
+        if no_auto {
+            return Vec::new();
+        }
+        pu_core::types::resolved_launch_args(agent_type, agent_cfg.configured_launch_args())
     }
 
     fn append_launch_args(args: &mut Vec<String>, launch_args: Vec<String>) {

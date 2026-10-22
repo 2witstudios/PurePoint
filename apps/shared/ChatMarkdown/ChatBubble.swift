@@ -25,6 +25,11 @@ struct ChatBubble<Content: View>: View {
     let sender: ChatBubbleSender
     var compact = false
     var assistantFill = ChatBubbleStyle.assistantFill
+    var userFill = ChatBubbleStyle.userFill
+    /// Text on the user fill; must contrast with `userFill` in both appearances.
+    var userForeground = Color.white
+    /// Minimum gap left beside an assistant bubble; `nil` uses the default inset.
+    var assistantTrailingInset: CGFloat? = nil
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -33,13 +38,13 @@ struct ChatBubble<Content: View>: View {
             ChatBubbleHuggingLayout {
                 content
                     .padding(.horizontal, compact ? 13 : 15).padding(.vertical, compact ? 8 : 10)
-                    .foregroundStyle(sender == .user ? Color.white : Color.primary)
-                    .tint(sender == .user ? Color.white : Color.accentColor)
+                    .foregroundStyle(sender == .user ? userForeground : Color.primary)
+                    .tint(sender == .user ? userForeground : Color.accentColor)
                     .background(
-                        sender == .user ? ChatBubbleStyle.userFill : assistantFill,
+                        sender == .user ? userFill : assistantFill,
                         in: ChatBubbleStyle.shape(sender))
             }
-            if sender == .assistant { Spacer(minLength: compact ? 28 : 48) }
+            if sender == .assistant { Spacer(minLength: assistantTrailingInset ?? (compact ? 28 : 48)) }
         }
     }
 }
@@ -47,14 +52,19 @@ struct ChatBubble<Content: View>: View {
 /// Proposes the content's ideal width, capped by the space offered, so a one-line
 /// reply gets a snug bubble even though Markdown content fills any width it is given.
 struct ChatBubbleHuggingLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let content = subviews.first else { return .zero }
-        let ideal = content.sizeThatFits(.unspecified)
-        let width = min(ideal.width, proposal.width ?? ideal.width)
+    /// The unconstrained measurement is the expensive one; SwiftUI rebuilds this cache
+    /// whenever the content changes, so each layout pass measures the content only once.
+    func makeCache(subviews: Subviews) -> CGFloat? {
+        subviews.first?.sizeThatFits(.unspecified).width
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat?) -> CGSize {
+        guard let content = subviews.first, let ideal = cache else { return .zero }
+        let width = min(ideal, proposal.width ?? ideal)
         return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat?) {
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }

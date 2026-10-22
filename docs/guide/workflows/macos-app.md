@@ -95,7 +95,11 @@ Access via the settings panel:
 
 - **General**: Restore projects on launch, launch at login, command palette order. Use the up/down arrows to reorder built-in agents and custom commands from the Agents Hub in `Cmd+N`. The first entry is selected by default. Changes persist across launches; Reset restores the default order.
 - **Point Guard**: Connect Pi chat to the bridge; configure launch command and skip-permissions for Shell mode
-- **Agents**: Per-agent configuration (launch arguments for Claude, Codex, OpenCode)
+- **Agents**: Launch args for Claude, Codex and OpenCode. Each agent has one row: its command and a free-form launch args field. Agents launch with the bare command (no permission flags) unless you add args.
+  - **Machine Settings → Launch args for all projects** applies to every project on this Mac that doesn't set its own, e.g. `--dangerously-skip-permissions` for Claude if you want auto mode everywhere. Stored in `~/.pu/agent-settings.yaml`.
+  - **Launch Args for This Project** overrides the all-projects row for the open project. Leaving a field empty falls back to the all-projects args. To launch the bare command in one project regardless, set `launchArgs: ""` for that agent in `.pu/config.yaml`; the row then notes that it launches bare.
+  - For Codex full access with no command approvals, put `--dangerously-bypass-approvals-and-sandbox` in its launch args.
+  - See [Configuration](../configuration.md#customizing-launch-args) for the format and precedence.
 - **Hotkeys**: Rebind all keyboard shortcuts with live key recording and conflict detection
 - **Display**: Appearance preferences, terminal font size, grid gap
 - **About**: Version and updates (auto-update via Sparkle)

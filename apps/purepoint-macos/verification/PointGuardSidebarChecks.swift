@@ -4,6 +4,7 @@ import SwiftUI
 enum PaneSplitNode { enum Axis { case vertical, horizontal } }
 // The daemon/workspace environment and setup sheets are stubbed. The production
 // chat model, PointGuardView, conversation layout and pane splitter remain real.
+// The script also compiles the production AppState root-safety method.
 @MainActor @Observable final class AppState {
     var showSettings = false
     var pointGuardRoot: String? = "/fixture"
@@ -14,6 +15,8 @@ enum PaneSplitNode { enum Axis { case vertical, horizontal } }
     init(chat: PiChatModel) { pointGuardChat = chat }
     func activatePointGuardWorkspace() {}
     func projectState(forRoot root: String) -> ProjectFixture? { projects.first { $0.projectRoot == root } }
+    func pointGuardPrompts() async -> [PointGuardPrompt]? { [] }
+    func pointGuardPrompt(named name: String) async -> PointGuardPrompt? { nil }
 }
 struct ProjectFixture { let projectRoot: String }
 @MainActor final class ServiceFixture {
@@ -67,6 +70,8 @@ extension Notification.Name {
 @MainActor final class LayoutState: ObservableObject { @Published var expanded = true }
 @MainActor final class Probes {
     var views: [String: NSView] = [:]
+    /// The leading clearance the rail hands the tab strip beside it.
+    var tabClearance: CGFloat = -1
 }
 struct Probe: NSViewRepresentable {
     let name: String
@@ -78,11 +83,22 @@ struct Probe: NSViewRepresentable {
     }
     func updateNSView(_ view: NSView, context: Context) {}
 }
+/// Stands in for the pane tab strip and records the clearance the rail leaves it.
+struct TabClearanceProbe: View {
+    let probes: Probes
+    @Environment(\.titlebarClearance) private var clearance
+    var body: some View {
+        Color.gray.frame(height: 30)
+            .onChange(of: clearance.leading, initial: true) { _, leading in probes.tabClearance = leading }
+    }
+}
 struct Fixture: View {
     @ObservedObject var state: LayoutState
     let probes: Probes
     let split: Bool
     var ratio: CGFloat = 0.5
+    /// The window's left sidebar is hidden, so the rail sits under the traffic lights.
+    var clearance = TitlebarClearance.none
     var body: some View {
         NavigationSplitView {
             Probe(name: "navigation", probes: probes)
@@ -91,7 +107,9 @@ struct Fixture: View {
             DraggableSplit(axis: .vertical, ratio: split ? ratio : 1, onRatioChanged: { _ in }) {
                 VStack(spacing: 0) {
                     Color.gray.frame(height: 30)
-                    PointGuardConversationLayout(isExpanded: $state.expanded) {
+                    PointGuardConversationLayout(
+                        isExpanded: $state.expanded, tabBar: AnyView(TabClearanceProbe(probes: probes))
+                    ) {
                         Button {} label: { Label("New Chat", systemImage: "square.and.pencil") }
                             .background(Probe(name: "newChat", probes: probes))
                     } sidebar: {
@@ -99,6 +117,7 @@ struct Fixture: View {
                     } content: {
                         Probe(name: "transcript", probes: probes)
                     }
+                    .environment(\.titlebarClearance, clearance)
                 }
             } second: {
                 Probe(name: "sibling", probes: probes)
@@ -184,10 +203,10 @@ struct PaneGridView: View {
             let view = probes.views[name]!
             return view.convert(view.bounds, to: host)
         }
-        func clickToggle(atX x: CGFloat) {
+        func clickToggle(atX x: CGFloat, depth: CGFloat = 50) {
             // The pane strip is 30pt high; the sidebar header's center is 20pt below it.
             let grid = frame("grid")
-            let y = host.isFlipped ? grid.minY + 50 : grid.maxY - 50
+            let y = host.isFlipped ? grid.minY + depth : grid.maxY - depth
             let location = host.convert(NSPoint(x: x, y: y), to: nil)
             // Queue release first: AppKit's button tracking loop consumes it while
             // handling mouse-down. Sending release afterward would deadlock the test.
@@ -241,6 +260,21 @@ struct PaneGridView: View {
                 }
             }
         }
+        // With the window's sidebar hidden, the rail clears the traffic lights before the tab strip does.
+        window.setContentSize(NSSize(width: 1200, height: 600))
+        host.rootView = AnyView(
+            Fixture(state: state, probes: probes, split: false,
+                    clearance: TitlebarClearance(leading: 100, height: 28)))
+        state.expanded = false
+        settle()
+        precondition(abs(probes.tabClearance - 63) < 1, "Tab strip did not clear what the collapsed rail left: \(probes.tabClearance)")
+        // The collapsed rail is too narrow for its toggle past the traffic lights, so it sits below the header.
+        clickToggle(atX: frame("grid").minX + 18, depth: 75)
+        precondition(state.expanded, "Collapsed rail's toggle below the header did not reopen history")
+        precondition(abs(probes.tabClearance) < 1, "Expanded rail left clearance to the tab strip: \(probes.tabClearance)")
+        // The expanded rail has room, so its toggle stays at the header's trailing end.
+        clickToggle(atX: frame("history").maxX - 22)
+        precondition(!state.expanded, "Expanded rail's header toggle did not close history under the traffic lights")
         // The inspector gives either history or chat its entire width. Check
         // binding-driven presentation changes at every supported sidebar size.
         for width: CGFloat in [240, 360, 640] {
@@ -266,6 +300,8 @@ struct PaneGridView: View {
         let preference = "PP_pointGuardShowConversations"
         defaults.set(false, forKey: preference)
         let appState = AppState(chat: PiChatModel(defaults: defaults))
+        precondition(appState.isTooBroadProjectRoot("/"), "Production root guard must reject filesystem root")
+        precondition(!appState.isTooBroadProjectRoot("/fixture"), "Fixture root must remain usable")
         window.setContentSize(NSSize(width: 1200, height: 600))
         host.rootView = AnyView(
             ChatFixture(probes: probes, focusLeft: true).environment(appState).defaultAppStorage(defaults))
@@ -318,6 +354,7 @@ struct PaneGridView: View {
         precondition(defaults.bool(forKey: preference), "No-project chat fallback did not handle history shortcut")
         print("Point Guard sidebar layout checks passed (real toggle clicks, repeated open/close, narrow panes and sibling splits)")
         print("Production chat integration checks passed (local controls, two chats, focused terminal/file, hidden chat, no-project fallback)")
+        print("Hidden-sidebar clearance checks passed (tab strip leftover, relocated and header toggles)")
         print("Compact sidebar checks passed (240/360/640pt, full-width history/chat and repeated presentation changes)")
         window.contentView = nil
     }

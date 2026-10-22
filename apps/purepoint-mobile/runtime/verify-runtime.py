@@ -12,7 +12,7 @@ base = app / 'Contents/Resources/PointGuard'
 manifest = json.loads((base / 'runtime-manifest.json').read_text())
 arches = ['arm64', 'x64'] if manifest['architecture'] == 'universal' else [manifest['architecture']]
 assert manifest['schemaVersion'] == manifest['contractVersion'] == 1
-assert manifest['piVersion'] == '1.1.0'
+assert manifest['piVersion'] == '1.3.0'
 def verify(file, architectures):
     assert file.is_file(), f'Missing native runtime file: {file}'
     for architecture in architectures:
@@ -20,6 +20,5 @@ def verify(file, architectures):
 for name in ['node', 'pu', 'lockHelper']:
     verify((base / manifest['paths'][name]).resolve(), arches)
 for arch in arches:
-    verify(base / f'node_modules/@esbuild/darwin-{arch}/bin/esbuild', [arch])
     verify(base / f'node_modules/@earendil-works/pi-tui/native/darwin/prebuilds/darwin-{arch}/darwin-platform.node', [arch])
-print('PASS advertised helper, esbuild and Pi native addon architectures: ' + ','.join(arches))
+print('PASS advertised helper and Pi native addon architectures: ' + ','.join(arches))

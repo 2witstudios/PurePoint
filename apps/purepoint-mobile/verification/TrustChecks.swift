@@ -73,14 +73,36 @@ final class DelayedTrustStore: @unchecked Sendable {
         model.setForeground(true)
         for _ in 0..<200 where !model.connected { try await Task.sleep(nanoseconds: 10_000_000) }
         precondition(model.connected && model.draft == "Never replay this uncertain prompt" && model.submissions.contains { $0.id == "uncertain" && $0.recoverable }, "Foreground reconnect retains input; no prompt replay")
+        // Grant changes on the Mac apply to chat live: View keeps the transcript but cannot send,
+        // Off hides chat while the phone stays connected, and restoring access resyncs.
+        func setChat(_ level: String) async throws {
+            let done = directory + "/chat-\(level)-done"
+            try? FileManager.default.removeItem(atPath: done)
+            try Data(level.utf8).write(to: URL(fileURLWithPath: directory + "/chat-" + level))
+            for _ in 0..<300 where !FileManager.default.fileExists(atPath: done) { try await Task.sleep(nanoseconds: 10_000_000) }
+            precondition(FileManager.default.fileExists(atPath: done), "Fixture applied grants")
+        }
+        precondition(model.chatGrant == .send && model.canSend)
+        try await setChat("read")
+        for _ in 0..<300 where model.chatGrant != .read { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(model.chatGrant == .read && model.connected && model.snapshot != nil && !model.canSend, "Read-only chat keeps the transcript and blocks sending")
+        try await setChat("off")
+        for _ in 0..<300 where model.chatGrant != .off { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(model.connected && model.snapshot == nil && !model.canSend, "Chat Off hides the conversation without disconnecting")
+        model.setForeground(false); model.setForeground(true)
+        for _ in 0..<200 where !model.connected { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(model.connected && model.snapshot == nil && model.chatGrant == .off && model.error == nil, "A phone with chat Off still connects")
+        try await setChat("send")
+        for _ in 0..<300 where model.snapshot == nil { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(model.chatGrant == .send && model.snapshot != nil && model.canSend, "Restored chat resyncs the conversation")
         try Data("revoke".utf8).write(to: URL(fileURLWithPath: directory + "/revoke"))
-        for _ in 0..<300 where model.connectionStatus != "Re-pair with your Mac" { try await Task.sleep(nanoseconds: 10_000_000) }
-        precondition(!model.wantsConnectionForChecks && model.connectionStatus == "Re-pair with your Mac", "Revocation closes socket and stops retries until deliberate re-pair")
+        for _ in 0..<300 where model.connectionStatus != "Re-pair needed" { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(!model.wantsConnectionForChecks && model.connectionStatus == "Re-pair needed", "Revocation closes socket and stops retries until deliberate re-pair")
         model.disconnect(); model.setForeground(false); model.setForeground(true)
         precondition(!model.wantsConnectionForChecks && !model.connected, "User disconnect survives foreground")
         let legacy = ChatModel(defaults: defaults, trustLoader: { _ in nil }); legacy.connect()
-        for _ in 0..<100 where legacy.connectionStatus != "Re-pair with your Mac" { try await Task.sleep(nanoseconds: 10_000_000) }
-        precondition(!legacy.wantsConnectionForChecks && legacy.connectionStatus == "Re-pair with your Mac", "Lost/legacy trust never falls back or retries")
+        for _ in 0..<100 where legacy.connectionStatus != "Re-pair needed" { try await Task.sleep(nanoseconds: 10_000_000) }
+        precondition(!legacy.wantsConnectionForChecks && legacy.connectionStatus == "Re-pair needed", "Lost/legacy trust never falls back or retries")
         print("Trust checks passed: real TLS pin success/mismatch, authoritative identity, saved trust, delayed-save supersession, foreground reconnect and no replay.")
     }
 }

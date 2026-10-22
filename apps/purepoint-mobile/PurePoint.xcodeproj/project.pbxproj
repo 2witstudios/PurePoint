@@ -18,6 +18,13 @@
 		C0D67A4EB10BD088221C291D /* ChatDomainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83EDD2910EB5DE69EF1AD3C3 /* ChatDomainTests.swift */; };
 		C59583F7E18B4596597BEDDA /* ChatModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7478A76549FBF19ACA4DBFB2 /* ChatModel.swift */; };
 		DC70FFF4E06BDA5237F8DE31 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E57F277FE965A78320F0683F /* Assets.xcassets */; };
+		CC0200000000000000000000 /* AgentControlDomain.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100000000000000000000 /* AgentControlDomain.swift */; };
+		CC0200000000000000000001 /* AgentControlModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100000000000000000001 /* AgentControlModel.swift */; };
+		CC0200000000000000000002 /* AgentTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100000000000000000002 /* AgentTerminalView.swift */; };
+		CC0200000000000000000003 /* AgentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100000000000000000003 /* AgentsView.swift */; };
+		CC0200000000000000000004 /* AgentControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100000000000000000004 /* AgentControlTests.swift */; };
+		CC0300000000000000000001 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = CC0300000000000000000002 /* SwiftTerm */; };
+		CC0200000000000000000005 /* AgentControlScenarios.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100000000000000000005 /* AgentControlScenarios.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,6 +52,12 @@
 		AA1122334455667788990002 /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChatBubble.swift; path = ../shared/ChatMarkdown/ChatBubble.swift; sourceTree = SOURCE_ROOT; };
 		E57F277FE965A78320F0683F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F7EDD619AA16E0B012865022 /* PurePointApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurePointApp.swift; sourceTree = "<group>"; };
+		CC0100000000000000000000 /* AgentControlDomain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlDomain.swift; sourceTree = "<group>"; };
+		CC0100000000000000000001 /* AgentControlModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlModel.swift; sourceTree = "<group>"; };
+		CC0100000000000000000002 /* AgentTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTerminalView.swift; sourceTree = "<group>"; };
+		CC0100000000000000000003 /* AgentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsView.swift; sourceTree = "<group>"; };
+		CC0100000000000000000004 /* AgentControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlTests.swift; sourceTree = "<group>"; };
+		CC0100000000000000000005 /* AgentControlScenarios.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentControlScenarios.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +65,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CC0300000000000000000001 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -90,6 +104,10 @@
 			isa = PBXGroup;
 			children = (
 				273E7B0E984A3DD6E2D1A676 /* ChatDomain.swift */,
+				CC0100000000000000000003 /* AgentsView.swift */,
+				CC0100000000000000000002 /* AgentTerminalView.swift */,
+				CC0100000000000000000001 /* AgentControlModel.swift */,
+				CC0100000000000000000000 /* AgentControlDomain.swift */,
 				7478A76549FBF19ACA4DBFB2 /* ChatModel.swift */,
 				597949AACD9086B8CBE7C0AF /* ChatView.swift */,
 				A9011667ABD8DFEEFEECB394 /* PairingSecret.swift */,
@@ -105,6 +123,8 @@
 			isa = PBXGroup;
 			children = (
 				83EDD2910EB5DE69EF1AD3C3 /* ChatDomainTests.swift */,
+				CC0100000000000000000005 /* AgentControlScenarios.swift */,
+				CC0100000000000000000004 /* AgentControlTests.swift */,
 			);
 			path = PurePointTests;
 			sourceTree = "<group>";
@@ -143,6 +163,9 @@
 			dependencies = (
 			);
 			name = PurePoint;
+			packageProductDependencies = (
+				CC0300000000000000000002 /* SwiftTerm */,
+			);
 			productName = PurePoint;
 			productReference = A7221477E79F821CCE16BAD1 /* PurePoint.app */;
 			productType = "com.apple.product-type.application";
@@ -175,6 +198,9 @@
 			);
 			mainGroup = 452638CCE5B924A906BF0695;
 			productRefGroup = 49E15581A88655E81B8BC22E /* Products */;
+			packageReferences = (
+				CC0300000000000000000003 /* SwiftTerm */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -211,6 +237,10 @@
 				BB1122334455667788990002 /* ChatBubble.swift in Sources */,
 				BB1122334455667788990000 /* ChatMarkdown.swift in Sources */,
 				12D470CE39B24951FAF76E04 /* ChatDomain.swift in Sources */,
+				CC0200000000000000000003 /* AgentsView.swift in Sources */,
+				CC0200000000000000000002 /* AgentTerminalView.swift in Sources */,
+				CC0200000000000000000001 /* AgentControlModel.swift in Sources */,
+				CC0200000000000000000000 /* AgentControlDomain.swift in Sources */,
 				C59583F7E18B4596597BEDDA /* ChatModel.swift in Sources */,
 				7DBBAA5038C8CBDCAD663A2A /* ChatView.swift in Sources */,
 				03A1BD6E1882C4B943D28330 /* PairingSecret.swift in Sources */,
@@ -224,6 +254,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0D67A4EB10BD088221C291D /* ChatDomainTests.swift in Sources */,
+				CC0200000000000000000005 /* AgentControlScenarios.swift in Sources */,
+				CC0200000000000000000004 /* AgentControlTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -267,6 +299,7 @@
 				CLANG_ENABLE_OBJC_ARC = YES;
 				ENABLE_TESTABILITY = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -330,6 +363,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -337,6 +371,24 @@
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		CC0300000000000000000003 /* SwiftTerm */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.11.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+		CC0300000000000000000002 /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CC0300000000000000000003 /* SwiftTerm */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCConfigurationList section */
 		2CEEA6D5EDD6599398E4418C /* Build configuration list for PBXNativeTarget "PurePointTests" */ = {

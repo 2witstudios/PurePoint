@@ -41,75 +41,6 @@ enum AttachmentImport {
     }
 }
 
-struct ConversationSidebar: View {
-    @ObservedObject var model: ChatModel
-    let selection: Int
-    let close: () -> Void
-    let newConversation: () -> Void
-    let select: (Conversation) -> Void
-    let connection: () -> Void
-    @State private var search = ""
-    private var filtered: [Conversation] {
-        model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Button(action: close) { Image(systemName: "sidebar.left").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Close conversations sidebar")
-                Text("Chats").font(.headline)
-                Spacer()
-                Button(action: newConversation) { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
-                    .disabled(!model.connected || model.demo || model.changingSession)
-                    .accessibilityLabel("New conversation")
-            }.padding(.horizontal, 8).padding(.top, 4)
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.subheadline).foregroundStyle(.tertiary)
-                TextField("Search", text: $search).font(.subheadline).autocorrectionDisabled()
-                    .accessibilityLabel("Search conversations")
-            }.padding(.horizontal, 20).frame(height: 44).padding(.bottom, 8)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    if let error = model.error {
-                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                    }
-                    if filtered.isEmpty {
-                        Text(search.isEmpty ? "No conversations yet" : "No matches")
-                            .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.vertical, 16)
-                    }
-                    ForEach(filtered) { conversation in
-                        Button { select(conversation) } label: {
-                            Text(conversation.title).font(.subheadline).lineLimit(1)
-                                .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .background(conversation.id == model.snapshot?.sessionId ? Color(uiColor: .secondarySystemBackground) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                                .contentShape(Rectangle())
-                        }
-                        .accessibilityLabel(conversation.title)
-                        .accessibilityAddTraits(conversation.id == model.snapshot?.sessionId ? .isSelected : [])
-                    }
-                }.padding(.horizontal, 8).padding(.bottom, 12)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .refreshable { await model.loadConversations(selection: selection) }
-            Button(action: connection) {
-                HStack(spacing: 8) {
-                    Image("PurePointLogo").resizable().scaledToFit().frame(width: 20, height: 20).accessibilityHidden(true)
-                    Text("PurePoint").font(.subheadline.weight(.medium))
-                    Spacer()
-                    Image(systemName: "gearshape").font(.subheadline).foregroundStyle(.secondary)
-                }.padding(.horizontal, 20).frame(height: 52).contentShape(Rectangle())
-            }.accessibilityLabel("Connection settings")
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
-        .background(Color(uiColor: .systemBackground))
-        .accessibilityAction(.escape) { close() }
-    }
-}
-
 struct ConnectionView: View {
     @ObservedObject var model: ChatModel
     @Environment(\.dismiss) private var dismiss
@@ -122,66 +53,81 @@ struct ConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 12) {
-                        Image("PurePointLogo").resizable().scaledToFit().frame(width: 38, height: 38).accessibilityHidden(true)
-                        Text("PurePoint").font(.title2.weight(.semibold))
-                    }.padding(.vertical, 8)
-                }
+                    VStack(spacing: 10) {
+                        LogoRing(size: 64).padding(.top, 4)
+                        Text(model.selectedMachine?.name ?? "PurePoint").font(.title3.weight(.bold)).lineLimit(1)
+                        HStack(spacing: 6) {
+                            StatusDot(color: model.connected ? Theme.online : (model.connectionStatus.hasPrefix("Connecting") ? Color(hex: 0xFF9F0A) : Color(uiColor: .tertiaryLabel)))
+                            Text(model.connectionStatus).lineLimit(2).multilineTextAlignment(.center)
+                        }.font(.footnote).foregroundStyle(Theme.muted)
+                        if !model.endpoint.isEmpty {
+                            HStack(spacing: 8) {
+                                Button {
+                                    // connect() is a no-op while a socket exists; restart it explicitly.
+                                    if model.connected { model.disconnect(cancelPairing: false) }
+                                    model.connect()
+                                } label: { Label("Reconnect", systemImage: "arrow.clockwise").frame(maxWidth: .infinity, minHeight: 44) }
+                                    .foregroundStyle(Theme.ink).background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                                if model.connected {
+                                    Button(role: .destructive) { model.disconnect() } label: { Label("Disconnect", systemImage: "bolt.horizontal.circle").frame(maxWidth: .infinity, minHeight: 44) }
+                                        .foregroundStyle(Theme.danger).background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                                }
+                            }.font(.subheadline.weight(.semibold)).buttonStyle(.plain).padding(.top, 4)
+                        }
+                    }.frame(maxWidth: .infinity).accessibilityElement(children: .contain)
+                }.listRowBackground(Color.clear)
                 if !model.machines.isEmpty {
-                    Section("Your Macs") {
+                    Section("Your computers") {
                         ForEach(model.machines) { machine in
-                            HStack {
+                            let selected = model.selectedMachine?.id == machine.id
+                            HStack(spacing: 12) {
                                 Button { model.selectMachine(machine.id) } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(machine.name).foregroundStyle(.primary)
-                                            Text(machine.endpoint).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                            if model.selectedMachine?.id == machine.id { Text(model.connectionStatus).font(.caption).foregroundStyle(.secondary) }
+                                    HStack(spacing: 12) {
+                                        Image(systemName: HostCopy.symbol(machine.host.kind)).font(.body).foregroundStyle(selected ? Theme.accentText : Theme.muted).frame(width: 28).accessibilityHidden(true)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(machine.name).foregroundStyle(Theme.ink).lineLimit(1)
+                                            Text(machine.endpoint).font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.muted).lineLimit(1).truncationMode(.middle)
                                         }
                                         Spacer()
-                                        if model.selectedMachine?.id == machine.id { Image(systemName: "checkmark.circle.fill").accessibilityLabel("Selected Mac") }
-                                    }
+                                        if selected { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Theme.accentText).accessibilityLabel("Selected computer") }
+                                    }.contentShape(Rectangle()).frame(minHeight: 44)
                                 }.buttonStyle(.plain)
-                                Button { machineName = machine.name; renaming = machine } label: { Image(systemName: "pencil") }
+                                Button { machineName = machine.name; renaming = machine } label: { Image(systemName: "pencil").foregroundStyle(Theme.muted).frame(width: 32, height: 44) }
                                     .buttonStyle(.borderless).accessibilityLabel("Rename " + machine.name)
                             }
                         }
-                    }
+                    }.listRowBackground(Theme.surface)
                 }
-                Section("Connect another Mac") {
-                    Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder") }
+                Section {
+                    Button { Task { await openScanner() } } label: { Label("Scan pairing code", systemImage: "qrcode.viewfinder").font(.body.weight(.semibold)).foregroundStyle(Theme.accentText) }
                         .disabled(requestingCamera || model.pairing)
-                    DisclosureGroup("Paste Mac pairing code") {
-                        TextField("Enrollment QR contents", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Enrollment code")
-                        Button("Pair") {
-                            guard let code = PairingCode.parse(enrollment) else { model.pairingError = "Paste a current Mac enrollment code. Legacy pairing secrets are no longer supported."; return }
-                            model.pair(code)
-                        }.disabled(model.pairing)
-                    }
+                    Button { pasteFromClipboard() } label: { Label("Paste code", systemImage: "doc.on.clipboard").font(.body.weight(.medium)).foregroundStyle(Theme.ink) }
+                        .disabled(model.pairing)
+                    DisclosureGroup("Enter code manually") {
+                        TextField("purepoint-pair:…", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Pairing code")
+                        Button("Pair") { pairPasted(enrollment) }.disabled(model.pairing)
+                    }.tint(Theme.muted)
                     if model.pairing {
-                        ProgressView("Pairing with your Mac…")
+                        ProgressView("Pairing with your computer…")
                         Button("Cancel pairing", role: .cancel) { model.cancelPairing() }
                     }
-                    if let error = model.pairingError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                }
-                if let error = model.error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
-                if !model.endpoint.isEmpty {
-                    Section {
-                        if model.connected { Button("Disconnect", role: .destructive) { model.disconnect() } }
-                        Button("Reconnect") { model.connect() }
-                    }
-                }
+                    if let error = model.pairingError { Text(error).foregroundStyle(Theme.danger).textSelection(.enabled) }
+                } header: { Text(model.machines.isEmpty ? "Pair a computer" : "Pair another computer") } footer: {
+                    Text("On a Mac, open Connect phone in PurePoint. On Linux, run pu phone pair, or pu phone pair --text for a code to paste. Both devices must be on the same Tailscale network.")
+                }.listRowBackground(Theme.surface)
+                if let error = model.error { Section { Label { Text(error).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning) } }.listRowBackground(Theme.surface) }
             }
+            .scrollContentBackground(.hidden).background(Theme.ground)
             .navigationTitle("Connections").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelPairing(); dismiss() } } }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelPairing(); dismiss() }.fontWeight(.semibold) } }
             .onDisappear { model.cancelPairing() }
-            .alert("Mac name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            .alert("Computer name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $machineName)
+                Button("Cancel", role: .cancel) { renaming = nil }
                 Button("Save") { if let machine = renaming { model.renameMachine(machine.id, name: machineName) }; renaming = nil }
                     .disabled(SavedMachine.normalizedName(machineName).isEmpty)
-                Button("Cancel", role: .cancel) { renaming = nil }
             } message: {
-                Text("Choose a name to recognize this Mac on your iPhone. Up to 60 characters.")
+                Text("Choose a name to recognize this computer on your iPhone. Up to 60 characters.")
             }
             .sheet(isPresented: $showScanner) {
                 PairingScannerView { code in
@@ -190,13 +136,24 @@ struct ConnectionView: View {
             }
         }
     }
+    /// Paste and manual entry share the scanner's validation through `PairingCode.read`.
+    @MainActor private func pairPasted(_ text: String) {
+        switch PairingCode.read(text, from: .pasted) {
+        case .success(let code): enrollment = ""; model.pair(code)
+        case .failure(let failure): model.pairingError = failure.message
+        }
+    }
+    @MainActor private func pasteFromClipboard() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { model.pairingError = "The clipboard has no text. Copy the purepoint-pair: code, then tap Paste code."; return }
+        pairPasted(text)
+    }
     @MainActor private func openScanner() async {
-        guard DataScannerViewController.isSupported else { model.pairingError = "QR scanning is unavailable on this device. Paste the Mac enrollment code below (including in the simulator)."; return }
+        guard DataScannerViewController.isSupported else { model.pairingError = "QR scanning is unavailable on this device. Tap Paste code or enter the code manually (including in the simulator)."; return }
         requestingCamera = true
         defer { requestingCamera = false }
         let allowed = await AVCaptureDevice.requestAccess(for: .video)
-        guard allowed else { model.pairingError = "Allow camera access for PurePoint in iPhone Settings to scan, or paste the Mac enrollment code."; return }
-        guard DataScannerViewController.isAvailable else { model.pairingError = "The camera is unavailable. Try again or paste the Mac enrollment code."; return }
+        guard allowed else { model.pairingError = "Allow camera access for PurePoint in iPhone Settings to scan, or tap Paste code."; return }
+        guard DataScannerViewController.isAvailable else { model.pairingError = "The camera is unavailable. Try again or tap Paste code."; return }
         showScanner = true
     }
 }
@@ -209,12 +166,37 @@ private struct PairingScannerView: View {
         NavigationStack {
             QRScanner(onPair: onPair, onError: { error = $0 })
                 .ignoresSafeArea(edges: .bottom)
-                .safeAreaInset(edge: .bottom) {
-                    if let error { Text(error).font(.callout).padding(20).frame(maxWidth: .infinity).background(.regularMaterial) }
+                .overlay {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        Viewfinder().stroke(Theme.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round)).frame(width: 236, height: 236)
+                        Spacer()
+                        Text("Point at the pairing QR on your computer").font(.subheadline).foregroundStyle(Theme.ink).padding(.bottom, 36)
+                    }.allowsHitTesting(false).accessibilityHidden(true)
                 }
-                .navigationTitle("Pair with your Mac").navigationBarTitleDisplayMode(.inline)
+                .safeAreaInset(edge: .bottom) {
+                    if let error { Text(error).font(.callout).foregroundStyle(Theme.ink).padding(20).frame(maxWidth: .infinity, alignment: .leading).background(Theme.surface) }
+                }
+                .navigationTitle("Scan pairing code").navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(Theme.ground.opacity(0.92), for: .navigationBar).toolbarBackground(.visible, for: .navigationBar)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
         }
+    }
+}
+
+/// Four rounded corner brackets marking where to hold the QR code.
+private struct Viewfinder: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let arm: CGFloat = 40, radius: CGFloat = 14
+        for (corner, dx, dy) in [(CGPoint(x: rect.minX, y: rect.minY), 1.0, 1.0), (CGPoint(x: rect.maxX, y: rect.minY), -1.0, 1.0),
+                                 (CGPoint(x: rect.minX, y: rect.maxY), 1.0, -1.0), (CGPoint(x: rect.maxX, y: rect.maxY), -1.0, -1.0)] {
+            path.move(to: CGPoint(x: corner.x, y: corner.y + dy * arm))
+            path.addLine(to: CGPoint(x: corner.x, y: corner.y + dy * radius))
+            path.addQuadCurve(to: CGPoint(x: corner.x + dx * radius, y: corner.y), control: corner)
+            path.addLine(to: CGPoint(x: corner.x + dx * arm, y: corner.y))
+        }
+        return path
     }
 }
 
@@ -248,71 +230,113 @@ private struct QRScanner: UIViewControllerRepresentable {
         }
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            do { try scanner.startScanning() } catch { onError("Could not start the camera. Close this screen and try again, or paste the Mac enrollment code.") }
+            do { try scanner.startScanning() } catch { onError("Could not start the camera. Close this screen and try again, or tap Paste code.") }
         }
         override func viewWillDisappear(_ animated: Bool) { scanner.stopScanning(); super.viewWillDisappear(animated) }
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) { read(addedItems) }
         func dataScanner(_ dataScanner: DataScannerViewController, didUpdate updatedItems: [RecognizedItem], allItems: [RecognizedItem]) { read(updatedItems) }
         func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) { read([item]) }
-        func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) { onError("The camera is unavailable. Close this screen and try again, or paste the Mac enrollment code.") }
+        func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) { onError("The camera is unavailable. Close this screen and try again, or tap Paste code.") }
         private func read(_ items: [RecognizedItem]) {
             guard !finished else { return }
             for item in items {
                 guard case .barcode(let barcode) = item, let payload = barcode.payloadStringValue, payload != lastPayload else { continue }
                 lastPayload = payload
-                guard let code = PairingCode.parse(payload) else { onError("This code is expired or unsupported. Create a new Connect phone QR in PurePoint on your Mac."); continue }
+                guard case .success(let code) = PairingCode.read(payload, from: .scanned) else { onError("This code is expired or unsupported. Create a new pairing code on the computer."); continue }
                 finished = true; scanner.stopScanning(); onPair(code); return
             }
         }
     }
 }
+/// Point Guard history, pushed over the chat. Reading a past conversation keeps it read-only until resumed.
 struct ConversationView: View {
     @ObservedObject var model: ChatModel
     let selection: Int
+    var closeOverlay: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var confirmResume = false
+    @State private var confirmNew = false
     @State private var search = ""
     var body: some View {
-        NavigationStack {
-            Group {
-                if let history = model.browsing {
-                    ScrollView { LazyVStack(alignment: .leading, spacing: 24) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(20) }
-                        .safeAreaInset(edge: .bottom) {
-                            Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
-                                if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { dismiss() } } }
-                            }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession).padding().frame(maxWidth: .infinity).background(Color(uiColor: .systemBackground))
-                        }
-                } else {
-                    List {
-                        if model.conversations.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right") }
-                        ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
-                            Button { Task { await model.browse(conversation, selection: selection) } } label: {
-                                VStack(alignment: .leading, spacing: 6) { Text(conversation.title).foregroundStyle(.primary).lineLimit(2); if let date = conversation.date { Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary) } }.padding(.vertical, 6)
-                            }
-                        }
-                    }.searchable(text: $search, prompt: "Find a conversation").refreshable { await model.loadConversations(selection: selection) }
+        // A ZStack, not a Group: Group would apply onDisappear to each branch, so switching
+        // from the list to a transcript would clear `browsing` immediately.
+        ZStack {
+            if let history = model.browsing {
+                ScrollView { LazyVStack(alignment: .leading, spacing: 14) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(16) }
+                    .safeAreaInset(edge: .bottom) {
+                        Button(model.busy ? "Stop and resume this conversation" : "Resume this conversation") {
+                            if model.busy { confirmResume = true } else { Task { await model.changeSession(to: history.sessionId, selection: selection); if model.browsing == nil { finish() } } }
+                        }.buttonStyle(NeutralPrimaryButtonStyle()).disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend).padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity).background(Theme.ground.ignoresSafeArea(edges: .bottom))
+                    }
+            } else {
+                List {
+                    if model.conversations.isEmpty { ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right").listRowBackground(Color.clear) }
+                    ForEach(model.conversations.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { conversation in
+                        Button { Task { await model.browse(conversation, selection: selection) } } label: {
+                            HistoryRow(title: conversation.title, date: conversation.date.map { String($0.prefix(10)) }, preview: conversation.preview, current: conversation.id == model.snapshot?.sessionId)
+                        }.listRowBackground(Theme.ground).listRowSeparatorTint(Theme.line)
+                    }
+                }
+                .listStyle(.plain).scrollContentBackground(.hidden)
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a conversation").refreshable { await model.loadConversations(selection: selection) }
+                .safeAreaInset(edge: .bottom) {
+                    Button {
+                        if model.busy { confirmNew = true } else { Task { await model.changeSession(selection: selection); finish() } }
+                    } label: { Label("New conversation", systemImage: "square.and.pencil").font(.body.weight(.semibold)).foregroundStyle(Theme.ink).frame(maxWidth: .infinity, minHeight: 50).background(Theme.surface, in: RoundedRectangle(cornerRadius: 14)) }
+                        .buttonStyle(.plain).disabled(!model.connected || model.demo || model.changingSession || !model.chatGrant.canSend)
+                        .padding(.horizontal, 12).padding(.vertical, 10).background(Theme.ground.ignoresSafeArea(edges: .bottom))
                 }
             }
-            .safeAreaInset(edge: .top) { if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(12).frame(maxWidth: .infinity).background(.bar) } }
-            .navigationTitle(model.browsing?.title ?? "Conversations").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { if model.browsing != nil { Button("Back") { model.browsing = nil } } }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.browsing = nil; dismiss() } }
-            }
-            .confirmationDialog("Stop Point Guard and resume this conversation?", isPresented: $confirmResume, titleVisibility: .visible) {
-                Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true, selection: selection); if model.browsing == nil { dismiss() } } } }
-                Button("Keep working", role: .cancel) {}
-            } message: { Text("Queued messages will be recoverable. Delegated workers keep running.") }
         }
+        .background(Theme.ground)
+        .safeAreaInset(edge: .top) { if let error = model.error { NoticeBanner(text: error).padding(.horizontal, 12).padding(.vertical, 6).background(Theme.ground) } }
+        .navigationTitle(model.browsing?.title ?? "History").navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(model.browsing != nil)
+        .toolbar {
+            if model.browsing != nil {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { model.browsing = nil } label: { Image(systemName: "chevron.backward").fontWeight(.semibold) }.accessibilityLabel("Back to history")
+                }
+            }
+        }
+        .onDisappear { model.browsing = nil }
+        .confirmationDialog("Stop Point Guard before starting a new conversation?", isPresented: $confirmNew, titleVisibility: .visible) {
+            Button("Stop and start new", role: .destructive) { Task { await model.changeSession(stopFirst: true, selection: selection); finish() } }
+            Button("Keep working", role: .cancel) {}
+        } message: { Text("Queued messages remain recoverable. Delegated workers keep running.") }
+        .confirmationDialog("Stop Point Guard and resume this conversation?", isPresented: $confirmResume, titleVisibility: .visible) {
+            Button("Stop and resume", role: .destructive) { if let history = model.browsing { Task { await model.changeSession(to: history.sessionId, stopFirst: true, selection: selection); if model.browsing == nil { finish() } } } }
+            Button("Keep working", role: .cancel) {}
+        } message: { Text("Queued messages will be recoverable. Delegated workers keep running.") }
+    }
+    private func finish() { model.browsing = nil; if let closeOverlay { closeOverlay() } else { dismiss() } }
+}
+private struct HistoryRow: View {
+    let title: String
+    let date: String?
+    let preview: String?
+    let current: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title).font(.body.weight(.semibold)).foregroundStyle(Theme.ink).lineLimit(2)
+                Spacer(minLength: 4)
+                if let date { Text(date).font(.caption).foregroundStyle(Theme.muted).fixedSize() }
+            }
+            if let preview, !preview.isEmpty { Text(preview).font(.footnote).foregroundStyle(Theme.muted).lineLimit(2) }
+            if current {
+                HStack(spacing: 5) { StatusDot(color: Theme.accent, size: 6); Text("Current conversation") }.font(.caption.weight(.semibold)).foregroundStyle(Theme.accentText)
+            }
+        }.padding(.vertical, 6).accessibilityElement(children: .combine)
     }
 }
 struct NeutralPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.body.weight(.semibold))
-            .foregroundStyle(Color(uiColor: .systemBackground))
-            .padding(.horizontal, 18).padding(.vertical, 14).frame(maxWidth: .infinity)
-            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16))
+            .foregroundStyle(Theme.ground)
+            .padding(.horizontal, 18).padding(.vertical, 15).frame(maxWidth: .infinity)
+            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
             .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
     }
 }
@@ -325,25 +349,36 @@ struct ExtensionDialogView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let message = dialog.message, !message.isEmpty { Section { Text(message).textSelection(.enabled) } }
+                if let message = dialog.message, !message.isEmpty {
+                    Section {
+                        HStack(alignment: .top, spacing: 10) {
+                            LogoRing(size: 32)
+                            Text(message).textSelection(.enabled)
+                        }
+                    }.listRowBackground(Color.clear)
+                }
                 if dialog.method == "select" {
-                    Section { ForEach(Array((dialog.options ?? []).enumerated()), id: \.offset) { index, option in
+                    Section("Choose one") { ForEach(Array((dialog.options ?? []).enumerated()), id: \.offset) { index, option in
                         Button(option) {
                             if let ids = dialog.optionIds, ids.indices.contains(index) { answer(optionId: ids[index]) }
                             else if model.isSelected(selection) { model.error = "This dialog has no option ID. Refresh the conversation." }
-                        }.disabled(answering)
-                    } }
+                        }.foregroundStyle(Theme.ink).disabled(answering)
+                    } }.listRowBackground(Theme.surface)
                 } else if dialog.method == "confirm" {
-                    Section { Button("Allow") { answer(confirmed: true) }; Button("Decline", role: .cancel) { answer(confirmed: false) } }.disabled(answering)
+                    Section {
+                        Button("Allow") { answer(confirmed: true) }.fontWeight(.semibold).foregroundStyle(Theme.accentText)
+                        Button("Decline", role: .cancel) { answer(confirmed: false) }.foregroundStyle(Theme.muted)
+                    }.disabled(answering).listRowBackground(Theme.surface)
                 } else {
                     Section {
-                        if dialog.method == "editor" { TextEditor(text: $text).frame(minHeight: 240).accessibilityLabel(dialog.title ?? "Extension editor") }
+                        if dialog.method == "editor" { TextEditor(text: $text).frame(minHeight: 240).scrollContentBackground(.hidden).accessibilityLabel(dialog.title ?? "Extension editor") }
                         else { TextField(dialog.placeholder ?? "Your answer", text: $text).accessibilityLabel(dialog.title ?? "Extension input") }
-                        Button("Send answer") { answer(value: text) }.disabled(answering)
-                    }
+                        Button("Send answer") { answer(value: text) }.fontWeight(.semibold).foregroundStyle(Theme.accentText).disabled(answering)
+                    }.listRowBackground(Theme.surface)
                 }
             }
-            .safeAreaInset(edge: .top) { if let error = model.error { Text(error).font(.footnote).foregroundStyle(.red).padding(12).frame(maxWidth: .infinity).background(.bar) } }
+            .scrollContentBackground(.hidden).background(Theme.ground)
+            .safeAreaInset(edge: .top) { if let error = model.error { Text(error).font(.footnote).foregroundStyle(Theme.danger).padding(12).frame(maxWidth: .infinity).background(Theme.ground) } }
             .navigationTitle(dialog.title ?? "Point Guard needs your input").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { answer(cancelled: true) }.disabled(answering) } }
             .onAppear { text = dialog.prefill ?? "" }

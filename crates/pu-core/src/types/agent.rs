@@ -49,6 +49,15 @@ pub enum TriggerState {
     Failed,
 }
 
+/// The app tab an agent was spawned for. The daemon only stores it: every app watching the
+/// project places the agent in that tab instead of giving it a workspace of its own, so a
+/// split made on one Mac stays a split on every other Mac showing the same project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnPlacement {
+    pub workspace: String,
+    pub surface: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEntry {
@@ -90,10 +99,19 @@ pub struct AgentEntry {
     pub gate_attempts: Option<u32>,
     #[serde(default, skip_serializing_if = "crate::serde_defaults::is_false")]
     pub no_trigger: bool,
+    /// Spawned with `--no-auto`: resume also launches the bare command,
+    /// ignoring configured launch args.
+    #[serde(default, skip_serializing_if = "crate::serde_defaults::is_false")]
+    pub bare_launch: bool,
     /// Name of the trigger definition this agent is bound to.
     /// Set at spawn time so the sequence is stable across ticks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_name: Option<String>,
+    /// Live observation snapshot; never use persisted observations without reconciliation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<crate::signals::SignalSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<SpawnPlacement>,
 }
 
 impl<'de> Deserialize<'de> for AgentEntry {
@@ -130,7 +148,13 @@ impl<'de> Deserialize<'de> for AgentEntry {
             #[serde(default)]
             no_trigger: bool,
             #[serde(default)]
+            bare_launch: bool,
+            #[serde(default)]
             trigger_name: Option<String>,
+            #[serde(default)]
+            signal: Option<crate::signals::SignalSnapshot>,
+            #[serde(default)]
+            placement: Option<SpawnPlacement>,
         }
         let raw = Raw::deserialize(deserializer)?;
         // Backward compat: old manifests have suspended_at set but no suspended field.
@@ -157,7 +181,10 @@ impl<'de> Deserialize<'de> for AgentEntry {
             trigger_total: raw.trigger_total,
             gate_attempts: raw.gate_attempts,
             no_trigger: raw.no_trigger,
+            bare_launch: raw.bare_launch,
             trigger_name: raw.trigger_name,
+            signal: raw.signal,
+            placement: raw.placement,
         })
     }
 }
@@ -258,6 +285,9 @@ mod tests {
             gate_attempts: None,
             no_trigger: false,
             trigger_name: None,
+            signal: None,
+            bare_launch: false,
+            placement: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         // Should use camelCase per manifest compat
@@ -332,6 +362,9 @@ mod tests {
             gate_attempts: None,
             no_trigger: false,
             trigger_name: None,
+            signal: None,
+            bare_launch: false,
+            placement: None,
         };
 
         // when
@@ -416,5 +449,43 @@ mod tests {
         assert_eq!(entry.trigger_state, Some(TriggerState::Active));
         assert_eq!(entry.gate_attempts, Some(1));
         assert!(!entry.no_trigger);
+    }
+
+    #[test]
+    fn given_agent_entry_without_placement_should_deserialize_none() {
+        let json = r#"{
+            "id": "ag-old",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "running",
+            "prompt": null,
+            "startedAt": "2026-03-01T00:00:00Z"
+        }"#;
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.placement.is_none());
+        let out = serde_json::to_value(&entry).unwrap();
+        assert!(out.get("placement").is_none());
+    }
+
+    #[test]
+    fn given_agent_entry_with_placement_should_round_trip() {
+        let json = r#"{
+            "id": "ag-new",
+            "name": "claude",
+            "agentType": "claude",
+            "status": "running",
+            "prompt": null,
+            "startedAt": "2026-03-01T00:00:00Z",
+            "placement": {"workspace": "ws-ag-1", "surface": 3}
+        }"#;
+        let entry: AgentEntry = serde_json::from_str(json).unwrap();
+        let expected = SpawnPlacement {
+            workspace: "ws-ag-1".into(),
+            surface: 3,
+        };
+        assert_eq!(entry.placement, Some(expected.clone()));
+        let reparsed: AgentEntry =
+            serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+        assert_eq!(reparsed.placement, Some(expected));
     }
 }

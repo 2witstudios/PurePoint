@@ -1,3 +1,4 @@
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -77,3 +78,4 @@ enum PointGuardTailnet {
         return nil
     }
 }
+#endif

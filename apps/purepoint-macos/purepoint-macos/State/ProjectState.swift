@@ -27,17 +27,36 @@ final class ProjectState: Identifiable {
     /// A remote project kept in the sidebar while its machine is unreachable, because it has
     /// file tabs with unsaved edits. Nothing is watched until the daemon is back.
     var isUnavailable = false
+    /// Leaves suspended agents paused on the next open: a project another device or the CLI
+    /// added was not suspended by this app's quit, so its benched agents stay benched.
+    @ObservationIgnored var keepsSuspendedAgentsOnNextOpen = false
 
     let channel: ChannelState
 
     var rootAgents: [AgentModel] = []
     var worktrees: [WorktreeModel] = []
 
+    /// Whether a snapshot of this project's manifest has been applied at least once.
+    /// `worktrees` is empty both before that and for a project that genuinely has none, so a
+    /// caller that has to tell the two apart — the sidebar replaying which rows are closed —
+    /// reads this instead.
+    private(set) var hasLoadedWorktrees = false
+
+    /// Marks the snapshot as applied. Production sets it where the snapshot is read; tests
+    /// use this to stand in for the daemon, which unit tests cannot run.
+    func markWorktreesLoadedForTesting() {
+        hasLoadedWorktrees = true
+    }
+
     @ObservationIgnored weak var registry: WorkspaceRegistry?
     @ObservationIgnored weak var appState: AppState?
 
     @ObservationIgnored private let service: any WorkspaceService
+    #if os(macOS)
     @ObservationIgnored private var manifestWatcher: ManifestWatcher?
+    /// Watches this project's `.pu/workspaces.json`, which a Mac working on it over SSH writes too.
+    @ObservationIgnored private var layoutWatcher: ManifestWatcher?
+    #endif
     @ObservationIgnored private var gridSubscription: DaemonGridSubscription?
     @ObservationIgnored private var statusSubscription: DaemonStatusSubscription?
     @ObservationIgnored private var statusSubscriptionTask: Task<Void, Never>?
@@ -56,6 +75,7 @@ final class ProjectState: Identifiable {
     /// How long to keep retrying daemon start + init before surfacing an error.
     private static let daemonConnectBudget: Duration = .seconds(20)
 
+    #if os(macOS)
     init(
         projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil,
         endpoint: DaemonEndpoint = .local, host: any ProjectHost = LocalProjectHost.shared
@@ -77,21 +97,54 @@ final class ProjectState: Identifiable {
         self.service = service
         self.registry = registry
     }
+    #else
+    /// iOS has no local machine: every project names its machine endpoint and a
+    /// `DaemonProjectHost` on it.
+    init(
+        projectRoot: String, service: any WorkspaceService, registry: WorkspaceRegistry?, channel: ChannelState? = nil,
+        endpoint: DaemonEndpoint, host: any ProjectHost
+    ) {
+        let key = ProjectKey(machineId: endpoint.machineId, root: projectRoot)
+        let client = endpoint.makeClient()
+        self.projectRoot = projectRoot
+        self.key = key
+        self.endpoint = endpoint
+        self.client = client
+        self.host = host
+        self.git = host.isLocal ? GitService.shared : GitService(host: host)
+        self.remoteLayoutSaver = endpoint.isLocal ? nil : RemoteLayoutSaver(projectRoot: projectRoot, host: host)
+        self.channel =
+            channel
+            ?? (endpoint.isLocal
+                ? ChannelState(projectRoot: projectRoot)
+                : ChannelState(projectRoot: projectRoot, defaultsScope: key.id) { try await client.send($0) })
+        self.service = service
+        self.registry = registry
+    }
+    #endif
 
     // MARK: - Lifecycle
 
     func startWatching() {
+        #if os(macOS)
         guard endpoint.isLocal else {
             startWatchingRemote()
             return
         }
         let root = projectRoot
         let svc = service
+        let client = self.client
+        // One open only, whether or not it succeeds.
+        let keepsSuspendedAgents = keepsSuspendedAgentsOnNextOpen
+        keepsSuspendedAgentsOnNextOpen = false
 
         openTask?.cancel()
         refreshTask?.cancel()
         manifestWatcher?.stop()
         manifestWatcher = nil
+        layoutWatcher?.stop()
+        layoutWatcher = nil
+        hasLoadedWorktrees = false
 
         openTask = Task { [weak self] in
             // Retry with backoff: right after an update relaunch the previous
@@ -105,7 +158,7 @@ final class ProjectState: Identifiable {
             while true {
                 do {
                     try await DaemonLifecycle.ensureDaemon()
-                    let response = try await DaemonClient().send(.initProject(projectRoot: root))
+                    let response = try await client.send(.initProject(projectRoot: root))
                     if case .error(let code, let message) = response {
                         // At its connection limit: transient, so back off and retry.
                         if code == "BUSY" { throw DaemonClientError.busy }
@@ -133,6 +186,12 @@ final class ProjectState: Identifiable {
             self.manifestWatcher = ManifestWatcher(path: manifestPath) { [weak self] in
                 self?.refresh()
             }
+            let projectId = self.projectId
+            self.layoutWatcher = ManifestWatcher(
+                path: WorkspacePersistence.filePath(projectRoot: root)
+            ) { [weak self] in
+                self?.registry?.adoptLocalLayoutIfChanged(projectRoot: projectId)
+            }
 
             self.channel.startBackground()
             self.startGridSubscription()
@@ -144,14 +203,18 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard !Task.isCancelled else { return }
                 self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+                self.hasLoadedWorktrees = true
             } catch is CancellationError {
                 return
             } catch {
                 self.appState?.daemonError = error.localizedDescription
                 return
             }
-            self.resumeSuspendedAgents()
+            if !keepsSuspendedAgents { self.resumeSuspendedAgents() }
         }
+        #else
+        startWatchingRemote()
+        #endif
     }
 
     /// A remote daemon is never started or initialized from here (MACH-003): the machine's
@@ -164,8 +227,13 @@ final class ProjectState: Identifiable {
         openTask?.cancel()
         refreshTask?.cancel()
         resubscribeTask?.cancel()
+        #if os(macOS)
         manifestWatcher?.stop()
         manifestWatcher = nil
+        layoutWatcher?.stop()
+        layoutWatcher = nil
+        #endif
+        hasLoadedWorktrees = false
 
         startRemoteLayoutRestore()
 
@@ -178,6 +246,7 @@ final class ProjectState: Identifiable {
                 let snapshot = try await svc.loadWorkspace(projectRoot: root)
                 guard !Task.isCancelled else { return }
                 self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+                self.hasLoadedWorktrees = true
             } catch is CancellationError {
                 return
             } catch {
@@ -228,13 +297,15 @@ final class ProjectState: Identifiable {
                 let weakSaver = WeakSaverRef(saver)
                 saver.onConflict { document, modified in
                     Task { @MainActor in
-                        target.value?.adoptRemoteLayout(
+                        target.value?.adoptExternalLayout(
                             projectId, workspaces: WorkspacePersistence.workspaces(from: document, projectId: projectId))
                         weakSaver.value?.loaded(modifiedMs: modified)
                     }
                 }
                 registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in
-                    saver.save(workspaces, activeWorkspaceId: active)
+                    saver.save(workspaces, activeWorkspaceId: active) {
+                        Task { @MainActor in target.value?.layoutWritten(projectId, workspaces: workspaces) }
+                    }
                 }
                 return
             } catch {
@@ -247,6 +318,7 @@ final class ProjectState: Identifiable {
     }
 
     func stopWatching() {
+        invalidateSignals()
         channel.shutdown()
         openTask?.cancel()
         remoteLayoutTask?.cancel()
@@ -262,15 +334,45 @@ final class ProjectState: Identifiable {
         statusSubscription = nil
         Task { await currentGrid?.stop() }
         Task { await currentStatus?.stop() }
+        #if os(macOS)
         manifestWatcher?.stop()
         manifestWatcher = nil
+        layoutWatcher?.stop()
+        layoutWatcher = nil
+        #endif
     }
 
+    #if os(iOS)
+    /// Re-open the daemon streams and re-read status after the app was in the background,
+    /// where iOS suspends it and its SSH streams drop or stall. Nothing to do for a project
+    /// that is not being watched.
+    func resumeStreams() {
+        guard !isUnavailable, statusSubscription != nil || gridSubscription != nil else { return }
+        resubscribeTask?.cancel()
+        resubscribeTask = nil
+        startGridSubscription()
+        startStatusSubscription()
+        refresh()
+    }
+    #endif
+
     // MARK: - Data
+
+    private func invalidateSignals() {
+        rootAgents = rootAgents.map { var agent = $0; agent.signal = nil; return agent }
+        worktrees = worktrees.map { worktree in
+            var copy = worktree
+            copy.agents = copy.agents.map { var agent = $0; agent.signal = nil; return agent }
+            return copy
+        }
+    }
 
     func refresh() {
         let root = projectRoot
         let svc = service
+        #if os(macOS)
+        layoutWatcher?.retry()  // the layout file may not have existed when watching began
+        #endif
 
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
@@ -279,6 +381,7 @@ final class ProjectState: Identifiable {
                 guard let self, !Task.isCancelled else { return }
 
                 self.apply(rootAgents: snapshot.rootAgents, worktrees: snapshot.worktrees)
+                self.hasLoadedWorktrees = true
             } catch is CancellationError {
                 // Task was cancelled (new refresh started) — ignore
             } catch {
@@ -340,7 +443,8 @@ final class ProjectState: Identifiable {
     ///
     /// The tab is reserved before the request goes out, so whichever arrives first — the
     /// manifest write or the spawn response — the agent lands in this tab and never
-    /// surfaces as a workspace of its own.
+    /// surfaces as a workspace of its own. The request also names the tab, which the daemon
+    /// records on the agent, so any other Mac showing this project places it there too.
     func spawnAgentForSurface(
         agent: String, prompt: String, workspaceId: String, surfaceId: Int,
         name: String? = nil, command: String? = nil
@@ -350,12 +454,41 @@ final class ProjectState: Identifiable {
         let spawnWorktree = workspace.container.worktreeId
 
         registry.reserveSurface(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
+        let request = DaemonRequest.spawn(
+            projectRoot: projectRoot, prompt: prompt, agent: agent,
+            name: name, root: spawnWorktree == nil, worktree: spawnWorktree, command: command,
+            placement: SpawnPlacement(workspace: workspaceId, surface: surfaceId)
+        )
 
+        // Another Mac showing this project must see the new tab before the agent appears, or
+        // it has nowhere to put it: write the layout first.
+        registry.saveNow(projectRoot: root)
+        guard let saver = remoteLayoutSaver else {
+            sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)
+            return
+        }
+        Task {
+            // A save that met another Mac's write merges and queues the merge; write that too.
+            for _ in 0..<2 {
+                _ = await HostIO.value { saver.flush(until: .now() + 5) }
+                await Task.yield()
+                guard registry.hasPendingSave(projectRoot: root) else { break }
+                registry.saveNow(projectRoot: root)
+            }
+            // The tab may have been closed, or the project closed, while the layout was written.
+            guard registry.workspace(id: workspaceId)?.surface(id: surfaceId)?.content == .empty else {
+                registry.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
+                return
+            }
+            self.sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)
+        }
+    }
+
+    private func sendSurfaceSpawn(_ request: DaemonRequest, workspaceId: String, surfaceId: Int) {
+        let root = projectId
+        let registry = self.registry
         sendDaemonRequest(
-            .spawn(
-                projectRoot: projectRoot, prompt: prompt, agent: agent,
-                name: name, root: spawnWorktree == nil, worktree: spawnWorktree, command: command
-            ),
+            request,
             onFailure: { [weak registry] in
                 registry?.releaseReservation(projectRoot: root, workspaceId: workspaceId, surfaceId: surfaceId)
             }
@@ -562,11 +695,16 @@ final class ProjectState: Identifiable {
                 // resumes, so this project's agents come back on the new one.
                 onDaemonLost: {
                     guard let self else { return }
+                    self.invalidateSignals()
                     if self.isRemote {
                         // Never start a remote daemon; resubscribe once it answers again.
                         self.resubscribeTask?.cancel()
                         self.resubscribeTask = Task { [weak self] in
                             do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                            #if os(iOS)
+                            await AppActivity.shared.untilForeground()
+                            if Task.isCancelled { return }
+                            #endif
                             self?.startWatching()
                         }
                     } else {

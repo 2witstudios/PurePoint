@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Point Guard history rail — current vs proposed</title>
+<style>
+:root{
+  /* Shared app tokens (Theme.swift / TerminalTheme.swift) */
+  --tabbar:#141417;          /* Theme.tabBarBackground == Theme.chatRailBackground (0.08/0.08/0.09) */
+  --chat:#1c1c1f;            /* TerminalTheme.background, the chat surface */
+  --card:#232327;            /* Theme.composerBackground */
+  --bubble:#26262a;
+  --fg:#d9d9de;
+  --quiet:#8a8a94;
+  --hair:rgba(255,255,255,.06);
+  --sidebar:#1f1f22;
+  --radius:12px;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#0b0b0d;color:var(--fg);padding:28px 32px 60px}
+h1{font-size:18px;font-weight:600;margin:0 0 4px}
+.lede{color:#9a9aa4;font-size:13px;margin:0 0 18px;max-width:900px;line-height:1.5}
+.switch{display:inline-flex;background:#1b1b1e;border:1px solid #2a2a2f;border-radius:9px;padding:3px;margin-bottom:18px}
+.switch button{all:unset;cursor:pointer;font-size:12px;font-weight:500;padding:6px 14px;border-radius:6px;color:#9a9aa4}
+.switch button.on{background:#2c2c31;color:#ededf0}
+
+/* ---------- window ---------- */
+.window{width:1180px;height:640px;border-radius:var(--radius);overflow:hidden;display:flex;
+  box-shadow:0 0 0 1px rgba(255,255,255,.08),0 30px 80px rgba(0,0,0,.6);background:var(--sidebar)}
+.appside{width:220px;flex:none;background:var(--sidebar);border-right:1px solid var(--hair);padding:44px 10px 10px;font-size:12px;color:#c8c8ce;display:flex;flex-direction:column}
+.traffic{position:absolute;top:14px;left:14px;display:flex;gap:7px}
+.traffic i{width:12px;height:12px;border-radius:50%;display:block}
+.appside .row{padding:6px 8px;border-radius:6px;display:flex;align-items:center;gap:8px}
+.appside .row.sel{background:rgba(255,255,255,.07);color:#ededf0}
+.appside .sec{font-size:10px;letter-spacing:.06em;color:#6d6d76;padding:14px 8px 6px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green,#6fae78);display:inline-block;flex:none}
+
+.pane{flex:1;min-width:0;display:flex;flex-direction:column;position:relative;background:var(--chat)}
+
+/* Tab strip — the one band of chrome across the top of the pane */
+.tabs{height:36px;display:flex;align-items:stretch;background:var(--tabbar);border-bottom:1px solid var(--hair);flex:none}
+.tab{display:flex;align-items:center;gap:6px;padding:0 14px;font-size:12px;color:var(--quiet)}
+.tab.on{color:var(--fg);background:var(--chat);border-radius:8px 8px 0 0;margin-top:6px;padding-top:0}
+.tabs .spacer{flex:1}
+.ctl{display:flex;align-items:center;padding:0 12px;color:var(--quiet);font-size:13px;gap:10px}
+
+.surface{flex:1;min-height:0;display:flex}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--chat)}
+.actions{height:40px;display:flex;align-items:center;justify-content:flex-end;padding:0 12px;flex:none}
+.btn{font-size:12px;color:var(--quiet);padding:4px 8px;border-radius:6px}
+.scroll{flex:1;overflow:hidden;padding:8px 0}
+.col{width:min(640px,calc(100% - 48px));margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.user{align-self:flex-end;max-width:78%;background:var(--bubble);padding:9px 13px;border-radius:14px;font-size:13px;line-height:1.45}
+.asst{font-size:13px;line-height:1.55;color:var(--fg)}
+.asst p{margin:0 0 8px}
+.asst code{font:12px Menlo,monospace;background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px}
+.pill{align-self:flex-start;display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--quiet);background:rgba(255,255,255,.04);border:1px solid var(--hair);padding:4px 9px;border-radius:999px}
+.pill i{width:6px;height:6px;border-radius:50%;background:#6e9ce6;display:block}
+.composer-wrap{padding:0 24px 14px;flex:none}
+.composer{width:min(640px,100%);margin:0 auto;background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:12px 14px 10px;box-shadow:0 6px 18px rgba(0,0,0,.3)}
+.composer .ph{color:#6d6d76;font-size:13px;min-height:18px}
+.composer .bar{display:flex;justify-content:space-between;align-items:center;margin-top:10px;color:var(--quiet)}
+.send{width:26px;height:26px;border-radius:50%;background:#ededf0;color:#141417;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+.hint{text-align:center;font-size:10.5px;color:#5f5f68;margin-top:8px}
+
+/* ---------- PROPOSED rail: same band as the tab strip, full height ---------- */
+.p-head{display:flex;align-items:stretch;height:36px;background:var(--tabbar);border-bottom:1px solid var(--hair);flex:none}
+.p-rail-head{width:var(--rail-w,210px);flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 14px;border-right:1px solid var(--hair);font-size:11px;font-weight:600;letter-spacing:.05em;color:var(--quiet);text-transform:uppercase}
+.icon-btn{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--quiet);font-size:13px;text-transform:none;letter-spacing:0}
+.p-rail-body{width:var(--rail-w,210px);flex:none;background:var(--tabbar);border-right:1px solid var(--hair);display:flex;flex-direction:column;min-height:0}
+.p-body{flex:1;display:flex;min-height:0}
+.search{margin:10px 10px 6px;background:rgba(255,255,255,.05);border:1px solid var(--hair);border-radius:7px;padding:6px 9px;font-size:12px;color:#6d6d76}
+.conv{margin:1px 6px;padding:7px 9px;border-radius:7px;font-size:12.5px;color:#c8c8ce;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv.sel{background:rgba(255,255,255,.08);color:#ededf0}
+.conv small{display:block;font-size:10.5px;color:#6d6d76;margin-top:2px}
+.p-foot{margin-top:auto;border-top:1px solid var(--hair);display:flex;justify-content:space-between;padding:8px 10px;font-size:12px;color:var(--quiet)}
+.collapsed .p-rail-head,.collapsed .p-rail-body{width:36px}
+.collapsed .p-rail-head{justify-content:center;padding:0;border-right:1px solid var(--hair)}
+.collapsed .p-rail-body{display:none}
+.collapsed .p-rail-head .label{display:none}
+.collapsed .p-rail-body{display:none}
+
+/* ---------- CURRENT: the flat black card that floats below the strip ---------- */
+.c-surface{padding:0;position:relative}
+.c-rail{margin:8px 0 8px 8px;width:210px;flex:none;background:#0b0b0d;border-radius:10px;border:1px solid var(--hair);display:flex;flex-direction:column;overflow:hidden}
+.c-rail .head{display:flex;justify-content:space-between;align-items:center;padding:10px 10px 6px 12px;font-size:11px;font-weight:600;color:var(--quiet);letter-spacing:.05em;text-transform:uppercase}
+.c-rail .foot{margin-top:auto;display:flex;justify-content:space-between;padding:8px 10px;border-top:1px solid var(--hair);font-size:12px;color:var(--quiet)}
+.c-main{flex:1;display:flex;flex-direction:column;background:var(--chat)}
+
+/* ---------- toggle ---------- */
+.cmt{font-size:11px;color:#6d6d76}
+
+/* ---------- notes ---------- */
+.notes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:22px;max-width:1180px}
+.note{background:#141417;border:1px solid #232327;border-radius:10px;padding:14px 16px;font-size:12.5px;color:#9a9aa4;line-height:1.5}
+.note b{color:#ededf0;display:block;margin-bottom:4px;font-size:13px}
+.swatches{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.sw{display:flex;align-items:center;gap:6px;font:11px Menlo,monospace;color:#8a8a94}
+.sw i{width:16px;height:16px;border-radius:4px;display:block;border:1px solid rgba(255,255,255,.1)}
+</style>
+</head>
+<body>
+<h1>Point Guard history rail: current vs proposed</h1>
+<p class="lede">The rail is a separate black block that starts below the tab strip, with its own margin and rounded card. It never meets the top of the pane, so it reads as a floating panel rather than part of the chrome. The proposal makes the rail the same band as the tab strip. Both use one color, the header row sits at the tab strip's height, and the hairline runs the full pane height.</p>
+<div class="switch">
+  <button data-v="current">Current</button>
+  <button data-v="proposed" class="on">Proposed</button>
+  <button data-v="collapsed">Proposed · collapsed</button>
+</div>
+
+<div id="win" class="window proposed">
+  <div class="appside">
+    <div class="row sel">◎ Point Guard</div>
+    <div class="sec">PUREPOINT</div>
+    <div class="row"><span class="dot"></span>pu/new-tab-button</div>
+    <div class="row"><span class="dot" style="background:#c9ab66"></span>pu/loading</div>
+    <div class="row"><span class="dot" style="background:#555"></span>pu/review-pages</div>
+  </div>
+
+  <div class="pane">
+    <!-- CURRENT: tab strip spans the pane; rail is a card below it -->
+    <div class="tabs c-only">
+      <div class="tab on">◎ Point Guard</div>
+      <div class="spacer"></div>
+      <div class="ctl">● <span>⋯</span></div>
+    </div>
+
+    <!-- PROPOSED: rail header is the first segment of the tab strip -->
+    <div class="p-head p-only">
+      <div class="p-rail-head"><span class="label">Conversations</span><span class="icon-btn">▤</span></div>
+      <div class="tab on" style="flex:none;margin-top:6px;border-radius:8px 8px 0 0;align-self:stretch;padding-top:0">◎ Point Guard</div>
+      <div class="spacer" style="flex:1"></div>
+      <div class="ctl">● <span>⋯</span></div>
+    </div>
+
+    <div class="surface c-surface c-only">
+      <div class="c-rail">
+        <div class="head"><span>Conversations</span><span>▤</span></div>
+        <div class="search">Search conversations</div>
+        <div class="conv sel">Ship new-tab button fix<small>3 min ago</small></div>
+        <div class="conv">Review pages regression<small>yesterday</small></div>
+        <div class="conv">Swarm plan for loading states<small>Mon</small></div>
+        <div class="foot"><span>↻ Refresh</span><span>⚙</span></div>
+      </div>
+      <div class="c-main main">
+        <div class="actions"><span class="btn">✎ New Chat</span></div>
+        <div class="scroll"><div class="col">
+          <div class="user">Can you get the loading fix and the new tab button merged today? Run the tests first.</div>
+          <div class="pill"><i></i>3 tool calls · Working</div>
+          <div class="asst">
+            <p>Both branches are green. <code>pu/new-tab-button</code> passed CI and <code>pu/loading</code> finished locally with 142/142 engine tests.</p>
+            <p>I'll merge the new-tab button first, since loading touches the same tab strip. Want me to go ahead?</p>
+          </div>
+        </div></div>
+        <div class="composer-wrap">
+          <div class="composer"><div class="ph">Message Point Guard…</div><div class="bar"><span>+</span><span class="send">↑</span></div></div>
+          <div class="hint">Return to send · Shift-Return for a new line</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="p-body p-only">
+      <div class="p-rail-body">
+        <div class="search">Search conversations</div>
+        <div class="conv sel">Ship new-tab button fix<small>3 min ago</small></div>
+        <div class="conv">Review pages regression<small>yesterday</small></div>
+        <div class="conv">Swarm plan for loading states<small>Mon</small></div>
+        <div class="p-foot"><span>↻ Refresh</span><span>⚙</span></div>
+      </div>
+      <div class="main">
+        <div class="actions"><span class="btn">✎ New Chat</span></div>
+        <div class="scroll"><div class="col">
+          <div class="user">Can you get the loading fix and the new tab button merged today? Run the tests first.</div>
+          <div class="pill"><i></i>3 tool calls · Working</div>
+          <div class="asst">
+            <p>Both branches are green. <code>pu/new-tab-button</code> passed CI and <code>pu/loading</code> finished locally with 142/142 engine tests.</p>
+            <p>I'll merge the new-tab button first, since loading touches the same tab strip. Want me to go ahead?</p>
+          </div>
+        </div></div>
+        <div class="composer-wrap">
+          <div class="composer"><div class="ph">Message Point Guard…</div><div class="bar"><span>+</span><span class="send">↑</span></div></div>
+          <div class="hint">Return to send · Shift-Return for a new line</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div class="note"><b>1 · One band, not a floating card</b>The rail starts at the top of the pane and shares the tab strip's 36px row, so the strip and the rail read as one piece of chrome. Both use the tab-bar color (#141417). The rail's header is the first segment of the strip, which keeps the toggle on the same baseline as the tab.
+    <div class="swatches"><span class="sw"><i style="background:#141417"></i>#141417 strip + rail</span><span class="sw"><i style="background:#1c1c1f"></i>#1C1C1F chat</span></div></div>
+  <div class="note"><b>2 · Hairlines do the separating</b>The rail has no margin, no inner radius and no drop shadow. A single 1px divider at 6% white runs from the top of the pane to the bottom, and the footer's rule matches the strip's bottom edge. The rail's footer sits flush with the pane's bottom edge, not inside a rounded card.</div>
+  <div class="note"><b>3 · Collapsed keeps the same seam</b>When hidden, the rail shrinks to a 36px segment with only the toggle. It stays in the strip row, so the toggle never jumps. The chat still starts directly under the active tab, so the tab connects to the content the way a terminal tab does.</div>
+</div>
+
+<script>
+const win=document.getElementById('win');
+document.querySelectorAll('.switch button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.switch button').forEach(x=>x.classList.toggle('on',x===b));
+  win.className='window '+b.dataset.v;
+});
+</script>
+<style>
+/* State switch: show the matching DOM only */
+.window.current .p-only,.window.proposed .c-only,.window.collapsed .c-only{display:none!important}
+.window.current .c-only{display:flex!important}
+.window.collapsed .p-rail-body{display:none!important}
+.window.collapsed .p-rail-head{width:36px;justify-content:center;padding:0}
+.window.collapsed .p-rail-head .label{display:none}
+</style>
+</body>
+</html>

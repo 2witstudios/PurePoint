@@ -7,7 +7,10 @@ struct PointGuardView: View {
     @Environment(WorkspaceRegistry.self) private var registry
     @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
 
-    private var projectRoot: String? { appState.pointGuardRoot }
+    private var projectRoot: String? {
+        guard let root = appState.pointGuardRoot, !appState.isTooBroadProjectRoot(root) else { return nil }
+        return root
+    }
 
     private var workspace: Workspace? {
         projectRoot.flatMap { registry.workspacesByProject[$0]?.first(where: \.isPointGuard) }
@@ -30,24 +33,37 @@ struct PointGuardView: View {
             } else if let workspace {
                 PaneGridView(workspaceId: workspace.id)
             } else if projectRoot == nil {
-                VStack(spacing: 0) {
-                    PointGuardPaneControls(model: appState.pointGuardChat)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(8)
-                    PointGuardChatSurfaceView(isFocused: true)
-                }
-                .background(Color(nsColor: Theme.chatBackground))
+                PointGuardChatSurfaceView(isFocused: true, tabBar: AnyView(controlsStrip))
+                    .background(Color(nsColor: Theme.chatBackground))
             } else {
                 Color.clear
             }
         }
         .onAppear(perform: activateWorkspace)
         .onChange(of: projectRoot) { _, _ in activateWorkspace() }
+        // The iPad connects the chat to a paired Mac rather than starting a host (IPAD-8.1).
+        #if os(macOS)
         .task { appState.pointGuardService.start(chat: appState.pointGuardChat) }
+        #else
+        .task { appState.pointGuardChat.connect() }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: .toggleChatSidebar)) { _ in
             // The workspace owns this shared setting once, even when a terminal
             // or file sibling has focus. Background chat tabs don't handle it.
             if hasVisibleChat { showSidebar.toggle() }
         }
+    }
+
+    /// Without a workspace there is no pane tab strip, so the controls take its place beside the
+    /// conversation rail's header. A separate row above the chat would push the rail below the top edge.
+    private var controlsStrip: some View {
+        PointGuardPaneControls(model: appState.pointGuardChat)
+            .padding(.horizontal, 8)
+            // Matches PaneTabBar.height and the rail header, so the two read as one row.
+            .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .trailing)
+            .background(Color(nsColor: Theme.tabBarBackground))
+            .overlay(alignment: .bottom) { Divider() }
+            .environment(\.colorScheme, .dark)
     }
 
     private func activateWorkspace() {
@@ -57,10 +73,12 @@ struct PointGuardView: View {
 
 struct PointGuardChatSurfaceView: View {
     let isFocused: Bool
+    var tabBar: AnyView = AnyView(EmptyView())
     @Environment(AppState.self) private var appState
     @AppStorage("PP_pointGuardShowConversations") private var showSidebar = false
 
     var body: some View {
-        PiPointGuardChatView(model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused)
+        PiPointGuardChatView(
+            model: appState.pointGuardChat, showSidebar: $showSidebar, isFocused: isFocused, tabBar: tabBar)
     }
 }

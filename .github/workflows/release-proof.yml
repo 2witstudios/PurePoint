@@ -14,7 +14,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Record exact candidate and compiler
@@ -23,16 +23,27 @@ jobs:
           git rev-parse HEAD | tee "$RUNNER_TEMP/release-diagnostics/commit.txt"
           xcodebuild -version | tee "$RUNNER_TEMP/release-diagnostics/xcode.txt"
           xcrun swiftc --version | tee "$RUNNER_TEMP/release-diagnostics/swift.txt"
-      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: dtolnay/rust-toolchain@dc08e2af391d489dff6d14cf743e574f7d1229c5 # 1.94.0
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
       - name: Isolate archive Rust output
         run: printf 'CARGO_TARGET_DIR=%s/release-cargo\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      # Pinned release, checked against its SHA-256 instead of Homebrew's moving formula.
       - name: Install log formatter
-        run: brew install xcbeautify
+        env:
+          XCBEAUTIFY_VERSION: 3.2.1
+          XCBEAUTIFY_SHA256: 87fdbe786f71d7b2ee28c5c1ca97087587292f2c5c6f9e721cf02db8b2a3c241
+        run: |
+          ARCHIVE="$RUNNER_TEMP/xcbeautify.zip"
+          curl -fsSL --proto '=https' \
+            "https://github.com/cpisciotta/xcbeautify/releases/download/${XCBEAUTIFY_VERSION}/xcbeautify-${XCBEAUTIFY_VERSION}-universal-apple-macosx.zip" \
+            -o "$ARCHIVE"
+          echo "${XCBEAUTIFY_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          unzip -q "$ARCHIVE" -d "$RUNNER_TEMP/xcbeautify"
+          echo "$RUNNER_TEMP/xcbeautify/release" >> "$GITHUB_PATH"
       - name: Checkout pinned local tree-sitter packages
         run: bash .github/scripts/checkout-tree-sitter.sh
 
@@ -77,6 +88,7 @@ jobs:
             xcodebuild archive \
             -project apps/purepoint-macos/purepoint-macos.xcodeproj \
             -scheme purepoint-macos -configuration Release \
+            -onlyUsePackageVersionsFromResolvedFile \
             -destination 'generic/platform=macOS' \
             -derivedDataPath "$RUNNER_TEMP/release-derived" \
             -archivePath "$RUNNER_TEMP/PurePoint.xcarchive" \
@@ -90,9 +102,15 @@ jobs:
           done
           python3 apps/purepoint-mobile/runtime/verify-runtime.py --app "$app"
           /usr/bin/codesign --verify --deep --strict "$app"
+      # The release signing job re-signs the unsigned build with this script;
+      # an ad-hoc pass proves it covers every nested binary in the bundle.
+      - name: Re-sign archived app inside-out
+        run: |
+          bash .github/scripts/sign-macos-app.sh \
+            "$RUNNER_TEMP/PurePoint.xcarchive/Products/Applications/PurePoint.app" -
       - name: Retain Release compiler diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-archive-diagnostics
           path: ${{ runner.temp }}/release-diagnostics

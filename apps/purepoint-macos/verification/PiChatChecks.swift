@@ -26,7 +26,32 @@ extension ChatModel {
         }
         fatalError("Timed out: " + description)
     }
+    static func checkTranscriptWindow() {
+        struct Row: Identifiable { let id: String }
+        func rows(_ range: Range<Int>) -> [Row] { range.map { Row(id: "r\($0)") } }
+        func ids(_ slice: ArraySlice<Row>) -> [String] { slice.map(\.id) }
+        var window = PiTranscriptWindow()
+        precondition(ids(window.visible(rows(0..<12))) == ids(ArraySlice(rows(0..<12))))
+        var all = rows(0..<450)
+        precondition(window.visible(all).first?.id == "r250" && window.firstIndex(in: all) == 250)
+        // Unexpanded, the newest page follows new rows.
+        precondition(window.visible(rows(0..<451)).first?.id == "r251")
+        window.showEarlier(in: all)
+        precondition(window.visible(all).first?.id == "r50" && window.firstIndex(in: all) == 50)
+        // Expanded history stays put as rows arrive, and as the bridge trims the oldest rows.
+        all = rows(0..<460)
+        precondition(window.visible(all).first?.id == "r50" && window.visible(all).last?.id == "r459")
+        all = Array(all.dropFirst(10))
+        precondition(window.visible(all).first?.id == "r50" && window.firstIndex(in: all) == 40)
+        window.showEarlier(in: all)
+        precondition(window.firstIndex(in: all) == 0)
+        // If the anchor itself is trimmed away, fall back to the newest page.
+        precondition(window.firstIndex(in: rows(100..<500)) == 200)
+        window.reset()
+        precondition(window.visible(all).count == PiTranscriptWindow.page)
+    }
     @MainActor static func main() async throws {
+        checkTranscriptWindow()
         let env = ProcessInfo.processInfo.environment
         let home = env["CFFIXED_USER_HOME"]!
         precondition(
@@ -61,6 +86,17 @@ extension ChatModel {
             model.transcriptRows.contains {
                 if case .activity = $0 { return true }; return false
             })
+        // A court play sends its own prompt and leaves the half-typed draft alone.
+        model.draft = "Half-typed draft"
+        precondition(model.canSendPlay)
+        model.submit(play: "Catch me up on everything")
+        try await wait("play answered") {
+            let messages = model.snapshot?.messages ?? []
+            return model.submissions.last?.status == "Accepted" && !model.busy
+                && messages.contains { $0.role == "user" && $0.text == "Catch me up on everything" }
+                && messages.last?.role == "assistant"
+        }
+        precondition(model.draft == "Half-typed draft", "A play must not touch the draft")
         let userCount = model.snapshot!.messages.filter { $0.role == "user" }.count
         model.disconnect()
         await model.connectFixture(url, secret: env["POINTGUARD_FIXTURE_TOKEN"]!)
@@ -100,6 +136,7 @@ extension ChatModel {
         precondition(model.browsing?.messages.first?.text == "History is read-only.")
         model.draft = "Draft for the live conversation"
         precondition(!model.canSend, "Browsing history must not send into the live conversation")
+        precondition(!model.canSendPlay, "Browsing history must not run a play")
         let submissionsBeforeBrowseSend = model.submissions.count
         model.submit(mode: "send")
         precondition(model.submissions.count == submissionsBeforeBrowseSend)

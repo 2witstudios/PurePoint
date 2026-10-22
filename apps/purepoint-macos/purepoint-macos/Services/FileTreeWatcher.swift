@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Watches multiple directories for file system changes using GCD DispatchSource.
@@ -82,13 +83,14 @@ nonisolated final class FileTreeWatcher: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + Self.debounceInterval, execute: work)
     }
 
+    // The last reference can be dropped by a handler running on `queue`, so deinit
+    // must not `queue.sync` (libdispatch traps on that). Nothing else can reach
+    // `self` here, so the state is safe to touch directly.
     deinit {
-        queue.sync {
-            debounceWork?.cancel()
-            for (_, entry) in sources {
-                entry.source.cancel()
-            }
-            sources.removeAll()
+        debounceWork?.cancel()
+        for (_, entry) in sources {
+            entry.source.cancel()
         }
     }
 }
+#endif

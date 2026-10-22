@@ -31,7 +31,7 @@ final class AgentsHubState {
 
     @ObservationIgnored private let client: DaemonClient
 
-    init(client: DaemonClient = DaemonClient()) {
+    init(client: DaemonClient = DaemonEndpoint.local.makeClient()) {
         self.client = client
     }
 
@@ -150,6 +150,26 @@ final class AgentsHubState {
         } catch {
             self.error = "Failed to load prompt detail: \(error.localizedDescription)"
         }
+    }
+
+    /// Templates as listed from one root, without touching the hub's own list or selection.
+    /// Nil when the daemon can't be reached.
+    func listTemplates(root: String) async -> [SavedPrompt]? {
+        guard case .templateList(let templates)? = try? await client.send(.listTemplates(projectRoot: root)) else {
+            return nil
+        }
+        return templates.map(SavedPrompt.init(from:))
+    }
+
+    /// One template with its body, as resolved from `root`, without touching the hub's own list.
+    func template(root: String, name: String) async -> SavedPrompt? {
+        guard
+            case .templateDetail(let name, let description, let agent, let body, let source, let variables, let command)? =
+                try? await client.send(.getTemplate(projectRoot: root, name: name))
+        else { return nil }
+        return SavedPrompt(
+            name: name, description: description, agent: agent, body: body, source: source, variables: variables,
+            command: command)
     }
 
     func saveTemplate(

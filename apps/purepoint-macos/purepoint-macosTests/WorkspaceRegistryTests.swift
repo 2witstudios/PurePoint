@@ -196,6 +196,174 @@ struct WorkspaceRegistryTests {
         #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 1)
     }
 
+    // MARK: - Layout written by another Mac
+
+    /// Write `workspaces` as another Mac reaching this project over SSH would.
+    private func writeLayoutFromAnotherMac(_ workspaces: [Workspace], projectRoot: String) throws {
+        let path = WorkspacePersistence.filePath(projectRoot: projectRoot)
+        try FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let data = try #require(WorkspacePersistence.documentData(workspaces, activeWorkspaceId: nil))
+        // A distinct modification time, as a write from another process would have.
+        Thread.sleep(forTimeInterval: 0.01)
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    @Test func givenAnotherMacSplitAPaneShouldPlaceItsNewAgentInThatPane() throws {
+        let project = root + "-split"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        var theirs = try #require(registry.workspace(id: "ws-ag-a"))
+        theirs.split(leafId: 0, axis: .vertical)
+        let tab = try #require(theirs.focusedSurface).id
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+
+        var spawned = agent("ag-new")
+        spawned.placement = SpawnPlacement(workspace: "ws-ag-a", surface: tab)
+        registry.reconcile(projectRoot: project, rootAgents: [agent("ag-a"), spawned], worktrees: [])
+
+        #expect(registry.workspaces(forProject: project).map(\.id) == ["ws-ag-a"])
+        #expect(registry.workspace(id: "ws-ag-a")?.surface(id: tab)?.content == .agent("ag-new"))
+    }
+
+    @Test func givenAnotherMacWroteTheLayoutASaveShouldAdoptItNotOverwriteIt() throws {
+        let project = root + "-save"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        var theirs = try #require(registry.workspace(id: "ws-ag-a"))
+        theirs.split(leafId: 0, axis: .vertical)
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+        let written = try Data(contentsOf: URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: project)))
+
+        registry.saveAll()
+
+        #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 2)
+        let onDisk = try Data(contentsOf: URL(fileURLWithPath: WorkspacePersistence.filePath(projectRoot: project)))
+        #expect(onDisk == written)
+    }
+
+    @Test func givenLayoutFileDeletedASaveShouldWriteItAgain() throws {
+        let project = root + "-deleted"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        let path = WorkspacePersistence.filePath(projectRoot: project)
+        try FileManager.default.removeItem(atPath: path)
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+
+        registry.saveAll()
+
+        let restored = try WorkspacePersistence.loadForRegistry(projectRoot: project)
+        #expect(restored.first { $0.id == "ws-ag-a" }?.paneCount == 2)
+    }
+
+    @Test func givenAnotherMacChangedADifferentWorkspaceASaveShouldKeepBothChanges() throws {
+        let project = root + "-merge"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a", "ag-b"])
+        registry.saveAll()
+        var theirs = registry.workspaces(forProject: project)
+        let b = try #require(theirs.firstIndex { $0.id == "ws-ag-b" })
+        theirs[b].split(leafId: 0, axis: .vertical)
+        try writeLayoutFromAnotherMac(theirs, projectRoot: project)
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+
+        registry.saveAll()  // conflicts, merges
+        registry.saveAll()  // writes the merged layout
+
+        #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 2)
+        #expect(registry.workspace(id: "ws-ag-b")?.paneCount == 2)
+        let onDisk = try WorkspacePersistence.loadForRegistry(projectRoot: project)
+        #expect(onDisk.map(\.paneCount) == [2, 2])
+    }
+
+    @Test func givenBothMacsChangedTheSameWorkspaceOneSaveShouldKeepThisMacsNewTabOnDisk() throws {
+        let project = root + "-same"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        var theirs = registry.workspaces(forProject: project)
+        theirs[0].split(leafId: 0, axis: .horizontal)
+        try writeLayoutFromAnotherMac(theirs, projectRoot: project)
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+        let tab = try #require(registry.workspace(id: "ws-ag-a")?.focusedSurface).id
+
+        registry.saveNow(projectRoot: project)  // as a spawn does: conflicts, merges, writes
+
+        #expect(registry.workspace(id: "ws-ag-a")?.surface(id: tab)?.content == .empty)
+        let onDisk = try WorkspacePersistence.loadForRegistry(projectRoot: project)
+        #expect(onDisk.first?.surface(id: tab)?.content == .empty)
+        #expect(!registry.hasPendingSave(projectRoot: project))
+    }
+
+    @Test func givenAnotherMacsLayoutNamesAnAgentThisMacHasNotSeenYetItsTabShouldWaitForTheManifest() throws {
+        let project = root + "-unseen"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        var theirs = try #require(registry.workspace(id: "ws-ag-a"))
+        theirs.split(leafId: 0, axis: .vertical, content: .agent("ag-new"))
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)  // the file watcher, before the manifest
+
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-new"])
+        registry.reconcile(projectRoot: project, rootAgents: [agent("ag-a"), agent("ag-new")], worktrees: [])
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-new"])
+        // A manifest without it means the agent exited: its tab goes.
+        registry.reconcile(projectRoot: project, rootAgents: [agent("ag-a")], worktrees: [])
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a"])
+    }
+
+    @Test func givenAnotherMacSplitsAgainBeforeTheManifestCatchesUpItsNewTabShouldSurvive() throws {
+        let project = root + "-unseen-twice"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        var theirs = try #require(registry.workspace(id: "ws-ag-a"))
+        theirs.split(leafId: 0, axis: .vertical, content: .agent("ag-z"))
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)
+        // Before this Mac's manifest lists ag-z, the other Mac splits again for its next spawn.
+        theirs.split(leafId: theirs.focusedLeafId, axis: .horizontal)
+        let tab = try #require(theirs.focusedSurface).id
+        try writeLayoutFromAnotherMac([theirs], projectRoot: project)
+
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)
+
+        #expect(registry.workspace(id: "ws-ag-a")?.surface(id: tab)?.content == .empty)
+        #expect(registry.workspace(id: "ws-ag-a")?.agentIds == ["ag-a", "ag-z"])
+        #expect(!registry.hasPendingSave(projectRoot: project))
+    }
+
+    @Test func givenAgentSpawnedIntoPointGuardOnAnotherMacShouldLandInThisMacsPointGuard() throws {
+        let project = root + "-pg"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: [])
+        let pointGuard = try registry.ensurePointGuardWorkspace(projectRoot: project)
+        registry.split(workspaceId: pointGuard, leafId: 0, axis: .vertical)
+        let tab = try #require(registry.workspace(id: pointGuard)?.focusedSurface).id
+
+        var spawned = agent("ag-new")
+        spawned.placement = SpawnPlacement(workspace: "ws-point-guard:machine:other:" + project, surface: tab)
+        registry.reconcile(projectRoot: project, rootAgents: [spawned], worktrees: [])
+
+        #expect(registry.workspace(id: pointGuard)?.surface(id: tab)?.content == .agent("ag-new"))
+        #expect(registry.workspaceId(forAgent: "ag-new") == pointGuard)
+    }
+
+    @Test func givenOwnSavesShouldNotBeMistakenForAnotherMacs() throws {
+        let project = root + "-own"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a"])
+        registry.saveAll()
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+
+        registry.adoptLocalLayoutIfChanged(projectRoot: project)
+
+        #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 2)
+    }
+
     // MARK: - Remote commands
 
     @Test func remoteSplitAndCloseIgnoreUnknownLeaves() {

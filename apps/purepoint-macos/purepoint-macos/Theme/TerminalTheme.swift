@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftTerm
 
 enum TerminalTheme {
@@ -6,8 +10,18 @@ enum TerminalTheme {
     static let background = NSColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
     static let foreground = NSColor(red: 0.85, green: 0.85, blue: 0.87, alpha: 1)
 
+    #if os(macOS)
     static func ansiPalette(for appearance: NSAppearance) -> [SwiftTerm.Color] {
         let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return ansiPalette(isDark: isDark)
+    }
+    #else
+    static func ansiPalette(for traits: UITraitCollection) -> [SwiftTerm.Color] {
+        ansiPalette(isDark: traits.userInterfaceStyle == .dark)
+    }
+    #endif
+
+    private static func ansiPalette(isDark: Bool) -> [SwiftTerm.Color] {
         let palette: [(CGFloat, CGFloat, CGFloat)] =
             isDark
             ? [
@@ -64,6 +78,7 @@ enum TerminalTheme {
         return makeColor(red: r, green: g, blue: b)
     }
 
+    #if os(macOS)
     static func apply(to terminalView: TerminalView, appearance: NSAppearance) {
         let bg = background
         let fg = foreground
@@ -81,4 +96,23 @@ enum TerminalTheme {
         terminalView.needsDisplay = true
         terminalView.font = font
     }
+    #else
+    static func apply(to terminalView: TerminalView, traits: UITraitCollection) {
+        let bg = background
+        let fg = foreground
+        let term = terminalView.getTerminal()
+
+        term.backgroundColor = makeColor(from: bg)
+        term.foregroundColor = makeColor(from: fg)
+
+        terminalView.nativeBackgroundColor = bg
+        terminalView.nativeForegroundColor = fg
+        terminalView.installColors(ansiPalette(for: traits))
+        terminalView.layer.backgroundColor = bg.cgColor
+
+        term.refresh(startRow: 0, endRow: term.rows - 1)
+        terminalView.setNeedsDisplay()
+        terminalView.font = font
+    }
+    #endif
 }

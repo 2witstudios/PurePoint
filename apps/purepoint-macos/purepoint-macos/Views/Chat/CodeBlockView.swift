@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 struct CodeBlockView: View {
@@ -5,3 +6,4 @@ struct CodeBlockView: View {
     let code: String
     var body: some View { ChatMarkdownCodeView(language: language ?? "", code: code) }
 }
+#endif

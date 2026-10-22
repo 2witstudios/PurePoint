@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftTerm
 
@@ -10,9 +11,23 @@ import SwiftTerm
 class ScrollableTerminal: NSView, TerminalViewDelegate {
     let terminalView: TerminalView
     var attachSession: DaemonAttachSession?
+    /// Remote TUIs must not handle browser/clipboard gestures on their host.
+    var usesRemoteHost = false
+    /// The agent's daemon. Pasted images, and files dropped on a remote agent, are
+    /// uploaded to it so the agent reads them from its own machine.
+    var attachmentClient: DaemonClient?
+    var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    private var clickedLink: URL?
+    private var linkDragStarted = false
+    private var suppressDraggedLink = false
+    private(set) var localGridSize = (cols: 120, rows: 40)
+    private var reportedGridSize: (cols: Int, rows: Int)?
+    private var lastPhysicalFont: NSFont?
 
     private var scrollMonitor: Any?
     private var mouseMonitor: Any?
+    private var pasteMonitor: Any?
+    private var hoverMonitor: Any?
     private var dragAutoscrollTimer: DispatchSourceTimer?
     private var lastDragEvent: NSEvent?
     /// True only between a mouse-down that hit this terminal and the matching mouse-up,
@@ -52,8 +67,30 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         mouseMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
-            self?.handleMouseEvent(event)
+            if event.type == .leftMouseDown, let self,
+                self.window === event.window,
+                self.bounds.contains(self.convert(event.locationInWindow, from: nil))
+            {
+                let session = self.attachSession
+                Task { await session?.claimSize() }
+            }
+            if self?.handleMouseEvent(event) == true { return nil }
             return event
+        }
+
+        // SwiftTerm reports a buttonless hover in SGR mode as a left-button release
+        // (`CSI <32;x;y m`), so any-event TUIs like Claude Code click wherever the
+        // pointer passes. Its mouseMoved also ignores allowMouseReporting. The
+        // protocol is private, so a correct report can't be sent; drop hovers instead.
+        hoverMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            guard let self, self.isHoverReport(event) else { return event }
+            return nil
+        }
+
+        // SwiftTerm's paste only handles text; an image on the clipboard is uploaded instead.
+        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.handlePasteImage(event) else { return event }
+            return nil
         }
 
         // Accept file drops
@@ -66,13 +103,23 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     override func layout() {
         super.layout()
-        let currentSize = terminalView.frame.size
-        guard currentSize != lastKnownTerminalViewSize,
-            currentSize.width > 1,
-            currentSize.height > 1
-        else { return }
-        lastKnownTerminalViewSize = currentSize
-        terminalView.setFrameSize(currentSize)
+        refreshLocalGeometry(size: terminalView.frame.size)
+    }
+
+    /// Measure physical geometry independently of the daemon's rendering grid.
+    func refreshLocalGeometry(size: CGSize) {
+        guard size.width > 1, size.height > 1 else { return }
+        let changed = size != lastKnownTerminalViewSize || terminalView.font != lastPhysicalFont
+        guard changed else { return }
+        lastKnownTerminalViewSize = size
+        lastPhysicalFont = terminalView.font
+        terminalView.setFrameSize(size)
+        let term = terminalView.getTerminal()
+        localGridSize = (term.cols, term.rows)
+        if let reportedGridSize { renderGrid(reportedGridSize) }
+        let local = localGridSize
+        let session = attachSession
+        Task { await session?.sendResize(cols: local.cols, rows: local.rows) }
     }
 
     func tearDown() {
@@ -86,12 +133,31 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
             NSEvent.removeMonitor(mouseMonitor)
             self.mouseMonitor = nil
         }
+        if let hoverMonitor {
+            NSEvent.removeMonitor(hoverMonitor)
+            self.hoverMonitor = nil
+        }
         if let scrollMonitor {
             NSEvent.removeMonitor(scrollMonitor)
             self.scrollMonitor = nil
         }
+        if let pasteMonitor {
+            NSEvent.removeMonitor(pasteMonitor)
+            self.pasteMonitor = nil
+        }
         let session = attachSession
         Task { await session?.stop() }
+    }
+
+    func applyReportedSize(cols: Int, rows: Int) {
+        reportedGridSize = (cols, rows)
+        renderGrid((cols, rows))
+    }
+
+    private func renderGrid(_ size: (cols: Int, rows: Int)) {
+        terminalView.getTerminal().resize(cols: size.cols, rows: size.rows)
+        terminalView.getTerminal().updateFullScreen()
+        terminalView.needsDisplay = true
     }
 
     // MARK: - TerminalViewDelegate
@@ -103,8 +169,11 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        let session = attachSession
-        Task { await session?.sendResize(cols: newCols, rows: newRows) }
+        // Ignore reported model dimensions, including asynchronous callbacks.
+        // Only a changed physical frame/font can update desired local geometry.
+        if source.frame.size != lastKnownTerminalViewSize || source.font != lastPhysicalFont {
+            refreshLocalGeometry(size: source.frame.size)
+        }
     }
 
     func setTerminalTitle(source: TerminalView, title: String) {}
@@ -114,6 +183,42 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(content, forType: .string)
     }
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard !suppressDraggedLink, let url = URL(string: link), url.scheme != nil else { return }
+        openLink(url)
+    }
+
+    /// Resolve a link in the displayed cells, using the physical cell size even when
+    /// another attached client owns the daemon's grid dimensions.
+    func link(at point: NSPoint) -> URL? {
+        let term = terminalView.getTerminal()
+        let size = terminalView.getOptimalFrameSize().size
+        let cellWidth = (size.width - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / CGFloat(term.cols)
+        let cellHeight = size.height / CGFloat(term.rows)
+        guard cellWidth > 0, cellHeight > 0, terminalView.bounds.contains(point) else { return nil }
+        let col = Int(point.x / cellWidth)
+        let row = Int((terminalView.bounds.height - point.y) / cellHeight)
+        guard let cell = term.getCharData(col: col, row: row) else { return nil }
+        if let payload = cell.getPayload() as? String,
+            let separator = payload.firstIndex(of: ";"),
+            let url = URL(string: String(payload[payload.index(after: separator)...])),
+            url.scheme != nil
+        {
+            return url
+        }
+        // Plain web URLs are common in TUIs that do not emit OSC 8 hyperlinks.
+        var text = ""
+        var offset = 0
+        for column in 0..<term.cols {
+            guard let data = term.getCharData(col: column, row: row), data.width > 0 else { continue }
+            if column <= col { offset = text.utf16.count }
+            text.append(term.getCharacter(for: data))
+        }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        return detector.matches(in: text, range: NSRange(location: 0, length: text.utf16.count))
+            .first { NSLocationInRange(offset, $0.range) && ["http", "https"].contains($0.url?.scheme?.lowercased() ?? "") }?.url
+    }
+
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
     // MARK: - Theme
@@ -136,9 +241,7 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
                 let size = self.bounds.size
                 guard size.width > 1, size.height > 1 else { return }
                 self.terminalView.getTerminal().updateFullScreen()
-                self.lastKnownTerminalViewSize = .zero
-                self.terminalView.setFrameSize(size)
-                self.lastKnownTerminalViewSize = size
+                self.refreshLocalGeometry(size: size)
                 self.terminalView.needsDisplay = true
             }
         }
@@ -147,18 +250,61 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
     private func applyTheme(forceRefresh: Bool) {
         let appearance = window?.effectiveAppearance ?? NSApp.appearance ?? effectiveAppearance
         TerminalTheme.apply(to: terminalView, appearance: appearance)
+        refreshLocalGeometry(size: terminalView.frame.size)
+        if let reportedGridSize { renderGrid(reportedGridSize) }
         layer?.backgroundColor = TerminalTheme.background.cgColor
         guard forceRefresh else { return }
+    }
+
+    // MARK: - Attachments
+
+    /// Cmd-V with an image (and no text) on the clipboard uploads it as a PNG and
+    /// types its path on the agent's machine.
+    private func handlePasteImage(_ event: NSEvent) -> Bool {
+        guard AttachmentUpload.isCommandOnly(event.modifierFlags),
+            event.charactersIgnoringModifiers == "v",
+            let window, event.window === window, window.firstResponder === terminalView,
+            let client = attachmentClient,
+            let png = AttachmentUpload.pastedImage(from: .general)
+        else { return false }
+        typeUploadedPaths(of: [(png, AttachmentUpload.pastedImageName())], via: client)
+        return true
+    }
+
+    /// Uploads files in order, then types their remote paths as one shell-escaped
+    /// line without submitting, as a local drop does. Beeps if any upload fails
+    /// or the line cannot be typed.
+    private func typeUploadedPaths(of files: [(data: Data, name: String)], via client: DaemonClient) {
+        let session = attachSession
+        Task {
+            do {
+                var paths: [String] = []
+                for file in files {
+                    paths.append(try await AttachmentUpload.upload(file.data, name: file.name, via: client))
+                }
+                let line = paths.map(shellEscape).joined(separator: " ")
+                // The upload uses its own connections, so it can finish while the
+                // attach connection is reconnecting.
+                guard await session?.deliverInput(Data(line.utf8)) == true else {
+                    print("[Attachment] could not type the uploaded paths")
+                    await MainActor.run { NSSound.beep() }
+                    return
+                }
+            } catch {
+                print("[Attachment] upload failed: \(error.localizedDescription)")
+                await MainActor.run { NSSound.beep() }
+            }
+        }
     }
 
     // MARK: - Drag & Drop
 
     /// Dropping a file types its path. A remote agent's machine cannot see this Mac's
-    /// files, so its terminal refuses drops instead of pasting a meaningless local path.
-    var acceptsFileDrops = true
-
+    /// files, so for a remote agent the files are uploaded first.
     private func canAcceptDrop(_ sender: NSDraggingInfo) -> Bool {
-        acceptsFileDrops && sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        (!usesRemoteHost || attachmentClient != nil)
+            && sender.draggingPasteboard.canReadObject(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -189,6 +335,24 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         else {
             return false
         }
+        if usesRemoteHost, let client = attachmentClient {
+            // Reading a large file, or one on a slow volume, must not block the main thread.
+            Task {
+                let read = await Task.detached {
+                    Result {
+                        try urls.map { (data: try AttachmentUpload.readFile(at: $0), name: $0.lastPathComponent) }
+                    }
+                }.value
+                switch read {
+                case .success(let files):
+                    typeUploadedPaths(of: files, via: client)
+                case .failure(let error):
+                    print("[Attachment] cannot upload drop: \(error.localizedDescription)")
+                    NSSound.beep()  // a folder, unreadable or oversized file
+                }
+            }
+            return true
+        }
         let escaped = urls.map { shellEscape($0.path) }.joined(separator: " ")
         let session = attachSession
         let inputData = Data(escaped.utf8)
@@ -200,35 +364,70 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
 
     /// Decides who owns selection for each click gesture.
     ///
-    /// On the alternate screen with mouse tracking on (Claude Code fullscreen, OpenCode,
-    /// Codex) there is no scrollback, so native selection can only cover the visible
-    /// screen. Forward the mouse to the app instead: it selects across its own scrollback,
-    /// autoscrolls at the edges and copies via OSC 52 (see `clipboardCopy`). Holding Option
-    /// forces native selection. Everywhere else, native selection is used and we supply the
-    /// drag-past-the-edge autoscroll that SwiftTerm doesn't schedule.
-    private func handleMouseEvent(_ event: NSEvent) {
+    /// Local fullscreen TUIs own selection across their internal scrollback. Remote
+    /// terminals use native selection so copying writes this Mac's clipboard. Option
+    /// forces native selection locally and lets a remote TUI receive mouse gestures.
+    /// Command-click always stays local for SwiftTerm hyperlinks.
+    @discardableResult
+    func handleMouseEvent(_ event: NSEvent) -> Bool {
         switch event.type {
         case .leftMouseDown:
             nativeDragActive = false
+            clickedLink = nil
+            linkDragStarted = false
+            suppressDraggedLink = false
             guard let window = event.window,
                 let hit = window.contentView?.hitTest(event.locationInWindow),
                 hit === terminalView || hit.isDescendant(of: terminalView)
-            else { return }
+            else { return false }
+            if usesRemoteHost && !event.modifierFlags.contains(.option) {
+                clickedLink = link(at: terminalView.convert(event.locationInWindow, from: nil))
+            }
             let term = terminalView.getTerminal()
             let appOwnsSelection =
                 term.isCurrentBufferAlternate && term.mouseMode != .off
-                && !event.modifierFlags.contains(.option)
+                && (usesRemoteHost ? event.modifierFlags.contains(.option) : !event.modifierFlags.contains(.option))
+                && !event.modifierFlags.contains(.command)
             terminalView.allowMouseReporting = appOwnsSelection
             nativeDragActive = !appOwnsSelection
         case .leftMouseDragged:
-            guard nativeDragActive else { return }
+            linkDragStarted = true
+            guard nativeDragActive else { return false }
             updateDragAutoscroll(for: event)
         case .leftMouseUp:
+            // SwiftTerm must finish selection on mouse-up, but its Command-click
+            // callback does not distinguish a completed drag from a click.
+            suppressDraggedLink = nativeDragActive && linkDragStarted
+            var handledLink = false
+            if let clickedLink, event.window === terminalView.window,
+                !linkDragStarted,
+                clickedLink == link(at: terminalView.convert(event.locationInWindow, from: nil))
+            {
+                openLink(clickedLink)
+                handledLink = true
+            }
+            clickedLink = nil
             nativeDragActive = false
             stopDragAutoscroll()
+            // SwiftTerm also opens OSC links on Command-mouseUp. Consume a
+            // opened link so it cannot launch twice. Drags must finish in SwiftTerm.
+            return handledLink
         default:
             break
         }
+        return false
+    }
+
+    /// A pointer move over this terminal that SwiftTerm would report to the app.
+    /// Cached panes stay in the window hidden, so a hidden terminal must not claim
+    /// hovers over the visible one. Bounds, not hit-testing: SwiftTerm's tracking
+    /// area still reports moves under views that overlap the terminal.
+    private func isHoverReport(_ event: NSEvent) -> Bool {
+        guard event.window === terminalView.window,
+            !terminalView.isHiddenOrHasHiddenAncestor,
+            terminalView.getTerminal().mouseMode.sendMotionEvent()
+        else { return false }
+        return terminalView.bounds.contains(terminalView.convert(event.locationInWindow, from: nil))
     }
 
     private func updateDragAutoscroll(for event: NSEvent) {
@@ -362,3 +561,4 @@ class ScrollableTerminal: NSView, TerminalViewDelegate {
         }
     }
 }
+#endif

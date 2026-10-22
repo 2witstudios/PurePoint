@@ -1,5 +1,7 @@
 import Testing
+import AppKit
 import Foundation
+import SwiftTerm
 @testable import PurePoint
 
 struct DaemonClientParseTests {
@@ -70,6 +72,145 @@ struct DaemonClientParseTests {
         #expect(worktrees[0].agents.count == 1)
         #expect(worktrees[0].agents["ag-1"]?.name == "claude-1")
         #expect(agents.isEmpty)
+    }
+
+    @Test func testParsePtySizeOwnershipAndResync() {
+        let json = """
+            {"type":"pty_size","cols":100,"rows":30,"owner_client_id":"mac:test"}
+            """.data(using: .utf8)!
+        guard case .ptySize(let cols, let rows, let owner) = DaemonClient.parse(json) else {
+            Issue.record("expected PTY size")
+            return
+        }
+        #expect(cols == 100)
+        #expect(rows == 30)
+        #expect(owner == "mac:test")
+        guard case .resync = DaemonClient.parse(Data(#"{"type":"resync"}"#.utf8)) else {
+            Issue.record("expected resync")
+            return
+        }
+    }
+
+    @Test func testIdentifiedAttachOptsIntoSnapshotAndClaimIsExplicit() throws {
+        let request = DaemonRequest.attach(agentId: "ag-1", clientId: "mac:test")
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as! [String: Any]
+        #expect(object["client_id"] as? String == "mac:test")
+        #expect(object["replay"] as? String == "snapshot")
+        let claim =
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(DaemonRequest.claimSize(cols: 90, rows: 25)))
+            as! [String: Any]
+        #expect(claim["type"] as? String == "claim_size")
+    }
+
+    @MainActor @Test func testReportedSizeDoesNotReplaceLocalWindowDimensions() {
+        let view = ScrollableTerminal(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.layoutSubtreeIfNeeded()
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
+        let local = view.localGridSize
+        view.applyReportedSize(cols: 70, rows: 20)
+        // Also simulate a delayed model resize delegate callback.
+        view.sizeChanged(source: view.terminalView, newCols: 70, newRows: 20)
+        #expect(view.localGridSize.cols == local.cols)
+        #expect(view.localGridSize.rows == local.rows)
+        #expect(view.terminalView.getTerminal().cols == 70)
+        #expect(view.terminalView.getTerminal().rows == 20)
+        view.setFrameSize(NSSize(width: 1000, height: 600))
+        view.layoutSubtreeIfNeeded()
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
+        #expect(view.localGridSize.cols > local.cols)
+        #expect(view.terminalView.getTerminal().cols == 70)
+        let beforeFont = view.localGridSize.cols
+        view.terminalView.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .regular)
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
+        #expect(view.localGridSize.cols < beforeFont)
+        #expect(view.terminalView.getTerminal().cols == 70)
+        view.tearDown()
+    }
+
+    @MainActor @Test func testRemoteTerminalKeepsSelectionAndLinksOnViewingMac() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        let view = ScrollableTerminal(frame: window.contentView!.bounds)
+        window.contentView!.addSubview(view)
+        view.layoutSubtreeIfNeeded()
+        view.usesRemoteHost = true
+        view.terminalView.feed(text: "\u{1b}[?1049h\u{1b}[?1000hhttps://example.com/path?a=1&b=2")
+        let term = view.terminalView.getTerminal()
+        let size = view.terminalView.getOptimalFrameSize().size
+        let cellWidth = (size.width - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / CGFloat(term.cols)
+        let cellHeight = size.height / CGFloat(term.rows)
+        let point = NSPoint(x: cellWidth * 5.5, y: view.terminalView.bounds.height - cellHeight / 2)
+        let location = view.terminalView.convert(point, to: nil)
+        func event(_ type: NSEvent.EventType, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: location, modifierFlags: flags,
+                               timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                               eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        var opened: [URL] = []
+        view.openLink = { opened.append($0) }
+        view.handleMouseEvent(event(.leftMouseDown))
+        #expect(!view.terminalView.allowMouseReporting)
+        view.handleMouseEvent(event(.leftMouseUp))
+        #expect(opened.map(\.absoluteString) == ["https://example.com/path?a=1&b=2"])
+
+        view.handleMouseEvent(event(.leftMouseDown, flags: .command))
+        #expect(view.handleMouseEvent(event(.leftMouseUp, flags: .command)))
+        #expect(opened.count == 2)
+
+        // Dragging over a URL selects text without launching it.
+        view.handleMouseEvent(event(.leftMouseDown))
+        view.handleMouseEvent(event(.leftMouseDragged))
+        #expect(!view.handleMouseEvent(event(.leftMouseUp)))
+        #expect(opened.count == 2)
+
+        // SwiftTerm's Command-mouseUp callback must not open a dragged OSC link.
+        view.terminalView.feed(text: "\u{1b}[H\u{1b}]8;;https://example.com/target\u{1b}\\Link label\u{1b}]8;;\u{1b}\\")
+        view.handleMouseEvent(event(.leftMouseDown, flags: .command))
+        view.handleMouseEvent(event(.leftMouseDragged, flags: .command))
+        #expect(!view.handleMouseEvent(event(.leftMouseUp, flags: .command)))
+        view.requestOpenLink(source: view.terminalView, link: "https://example.com/target", params: [:])
+        #expect(opened.count == 2)
+        view.handleMouseEvent(event(.leftMouseDown, flags: .command))
+        #expect(view.handleMouseEvent(event(.leftMouseUp, flags: .command)))
+        #expect(opened.last?.absoluteString == "https://example.com/target")
+        #expect(opened.count == 3)
+
+        // Option explicitly restores the remote TUI's mouse handling.
+        view.handleMouseEvent(event(.leftMouseDown, flags: .option))
+        #expect(view.terminalView.allowMouseReporting)
+        view.handleMouseEvent(event(.leftMouseUp, flags: .option))
+        #expect(opened.count == 3)
+
+        // A local fullscreen TUI keeps its existing selection behavior.
+        view.usesRemoteHost = false
+        view.handleMouseEvent(event(.leftMouseDown))
+        #expect(view.terminalView.allowMouseReporting)
+        view.handleMouseEvent(event(.leftMouseUp))
+        view.handleMouseEvent(event(.leftMouseDown, flags: .command))
+        #expect(!view.terminalView.allowMouseReporting)
+        view.handleMouseEvent(event(.leftMouseUp, flags: .command))
+        view.tearDown()
+    }
+
+    @MainActor @Test func testTerminalLinkHitUsesPhysicalCellsAndPreservesOSCHyperlinks() {
+        let view = ScrollableTerminal(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.layoutSubtreeIfNeeded()
+        view.refreshLocalGeometry(size: view.terminalView.frame.size)
+        let term = view.terminalView.getTerminal()
+        let size = view.terminalView.getOptimalFrameSize().size
+        let cellWidth = (size.width - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / CGFloat(term.cols)
+        let cellHeight = size.height / CGFloat(term.rows)
+        // The link label is unrelated to the URL, and the URI contains a semicolon.
+        view.applyReportedSize(cols: 40, rows: 12)
+        view.terminalView.feed(text: "\u{1b}]8;;https://example.com/a;b?q=1%202\u{1b}\\Open page\u{1b}]8;;\u{1b}\\")
+        let point = NSPoint(x: cellWidth * 2.5, y: view.terminalView.bounds.height - cellHeight / 2)
+        #expect(view.link(at: point)?.absoluteString == "https://example.com/a;b?q=1%202")
+        #expect(view.link(at: NSPoint(x: -1, y: 1)) == nil)
+        var opened: URL?
+        view.openLink = { opened = $0 }
+        view.requestOpenLink(source: view.terminalView, link: "https://example.com/a;b?q=1%202", params: [:])
+        #expect(opened?.absoluteString == "https://example.com/a;b?q=1%202")
+        view.tearDown()
     }
 
     @Test func testParseAttachReady() {

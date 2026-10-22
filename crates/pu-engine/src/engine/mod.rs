@@ -1,4 +1,5 @@
 mod agent_lifecycle;
+mod attach_file;
 mod build_cache;
 mod channel;
 mod definitions;
@@ -6,6 +7,7 @@ mod fs_ops;
 mod helpers;
 mod inventory;
 mod pty_operations;
+pub(crate) use pty_operations::{AttachmentCursor, AttachmentUpdate, PtySize};
 mod read;
 mod scheduler;
 mod session_repair;
@@ -29,7 +31,7 @@ use tokio::sync::Mutex;
 use pu_core::config;
 use pu_core::paths;
 use pu_core::protocol::{AgentConfigInfo, GridCommand, PROTOCOL_VERSION, Request, Response};
-use pu_core::types::Manifest;
+use pu_core::types::{Manifest, format_launch_args};
 use tokio::sync::OnceCell;
 
 use crate::pty_manager::{
@@ -46,7 +48,7 @@ pub(super) struct SpawnParams {
     root: bool,
     worktree: Option<String>,
     terminal_command: Option<String>,
-    /// Skip auto-mode launch args for this spawn. One-off override;
+    /// Launch the bare command, ignoring configured launch args. One-off override;
     /// does not affect resume (resume always reads from config).
     no_auto: bool,
     /// Extra CLI args from --agent-args, appended after launch args.
@@ -55,6 +57,8 @@ pub(super) struct SpawnParams {
     no_trigger: bool,
     /// Name of trigger to bind (from --trigger flag)
     trigger: Option<String>,
+    /// The app tab the agent is for, stored on its manifest entry.
+    placement: Option<pu_core::types::SpawnPlacement>,
 }
 
 pub(super) struct SaveTriggerParams {
@@ -68,8 +72,13 @@ pub(super) struct SaveTriggerParams {
 }
 
 pub struct Engine {
+    sizes: Mutex<HashMap<String, pty_operations::SizeState>>,
+    signal_states: crate::signals::SignalStates,
+    native_sources: Arc<crate::signals::NativeSources>,
     project_registry_path: Option<std::path::PathBuf>,
     project_registry_updates: Arc<Mutex<()>>,
+    /// `$HOME` at startup. It, its ancestors and `/` are never projects.
+    home: Option<std::path::PathBuf>,
     start_time: Instant,
     pty_host: NativePtyHost,
     sessions: Arc<Mutex<HashMap<String, AgentHandle>>>,
@@ -82,8 +91,13 @@ pub struct Engine {
     grid_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<GridCommand>>>>,
     /// Per-project broadcast channels for status push updates.
     status_channels: Arc<Mutex<HashMap<String, tokio::sync::broadcast::Sender<()>>>>,
-    /// Projects that have been initialized or used — scheduler scans these.
-    registered_projects: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Projects added with `Init` and not removed since — scheduler scans these —
+    /// in the order clients show them.
+    registered_projects: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Signalled whenever a project is added, removed or reordered in the registry.
+    projects_changed: tokio::sync::broadcast::Sender<()>,
+    /// False from loading a registry until its removed projects are dropped.
+    registry_ready: tokio::sync::watch::Sender<bool>,
     /// Agents with a resume in progress, so two resumes of one agent can never
     /// both spawn `claude --resume` on the same transcript.
     resuming: Arc<std::sync::Mutex<HashSet<String>>>,
@@ -101,33 +115,92 @@ impl Default for Engine {
 
 /// Build a `ConfigReport` response from a loaded config.
 /// Filters out the terminal agent (no launch args to configure).
-fn config_to_report(cfg: &pu_core::types::Config) -> Response {
+fn config_to_report(
+    cfg: &pu_core::types::Config,
+    project_root: &Path,
+    env: &[(String, String)],
+) -> Response {
     let agents = cfg
         .agents
         .iter()
         .filter(|(name, _)| name.as_str() != "terminal")
         .map(|(name, ac)| {
-            let resolved = pu_core::types::resolved_launch_args(name, ac.launch_args.as_deref());
+            let resolved = pu_core::types::resolved_launch_args(name, ac.configured_launch_args());
+            let resolved_command = if resolved.is_empty() {
+                ac.command.clone()
+            } else {
+                format!("{} {}", ac.command, format_launch_args(&resolved))
+            };
             AgentConfigInfo {
+                id: Some(name.clone()),
+                available: Some(catalog_executable_available(ac, name, project_root, env)),
                 name: ac.name.clone(),
                 command: ac.command.clone(),
                 launch_args: ac.launch_args.clone(),
                 resolved_launch_args: resolved,
                 interactive: ac.interactive,
+                project_launch_args: ac.launch_args.as_deref().map(format_launch_args),
+                machine_launch_args: ac.machine_launch_args.as_deref().map(format_launch_args),
+                resolved_command: Some(resolved_command),
             }
         })
         .collect();
     Response::ConfigReport {
+        terminal_available: Some(
+            config::resolve_agent(cfg, "terminal")
+                .is_some_and(|ac| catalog_executable_available(ac, "terminal", project_root, env)),
+        ),
         default_agent: cfg.default_agent.clone(),
         agents,
     }
 }
 
+/// Root-cwd executable hint using Spawn parsing and login PATH, without running it.
+/// A worktree-relative command or its arguments may still fail at launch.
+fn catalog_executable_available(
+    ac: &pu_core::types::AgentConfig,
+    id: &str,
+    cwd: &Path,
+    env: &[(String, String)],
+) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok((command, _)) = Engine::parse_agent_command(ac, id) else {
+        return false;
+    };
+    let executable = |path: std::path::PathBuf| {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if command.contains('/') {
+        let path = Path::new(&command);
+        return executable(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        });
+    }
+    env.iter()
+        .find(|(key, _)| key == "PATH")
+        .is_some_and(|(_, path)| {
+            path.split(':').any(|dir| {
+                let dir = Path::new(dir);
+                executable(if dir.is_absolute() {
+                    dir.join(&command)
+                } else {
+                    cwd.join(dir).join(&command)
+                })
+            })
+        })
+}
+
 impl Engine {
     pub fn new() -> Self {
         Self {
+            sizes: Mutex::new(HashMap::new()),
+            signal_states: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            native_sources: Arc::default(),
             project_registry_path: None,
             project_registry_updates: Arc::new(Mutex::new(())),
+            home: std::env::var_os("HOME").map(std::path::PathBuf::from),
             start_time: Instant::now(),
             pty_host: NativePtyHost::new(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -137,7 +210,9 @@ impl Engine {
             reaped_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
             grid_channels: Arc::new(Mutex::new(HashMap::new())),
             status_channels: Arc::new(Mutex::new(HashMap::new())),
-            registered_projects: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            registered_projects: Arc::new(std::sync::Mutex::new(Vec::new())),
+            projects_changed: tokio::sync::broadcast::channel(16).0,
+            registry_ready: tokio::sync::watch::Sender::new(true),
             resuming: Arc::new(std::sync::Mutex::new(HashSet::new())),
             shutdown_killed: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
@@ -148,6 +223,7 @@ impl Engine {
     /// with no subscribers. Without this, HashMap entries leak.
     pub fn start_session_reaper(self: &Arc<Self>) {
         let sessions = self.sessions.clone();
+        let signal_states = self.signal_states.clone();
         let pending_initial_inputs = self.pending_initial_inputs.clone();
         let grid_channels = self.grid_channels.clone();
         let status_channels = self.status_channels.clone();
@@ -173,6 +249,7 @@ impl Engine {
                 if !dead_ids.is_empty() {
                     let mut pending_initial_inputs = pending_initial_inputs.lock().await;
                     for id in &dead_ids {
+                        signal_states.lock().unwrap().remove(id);
                         pending_initial_inputs.remove(id);
                     }
                     tracing::debug!(count = dead_ids.len(), "reaped dead session handles");
@@ -221,14 +298,14 @@ impl Engine {
         }
     }
 
+    pub(super) fn signal_snapshot(&self, id: &str) -> Option<pu_core::signals::SignalSnapshot> {
+        self.signal_states.lock().ok()?.get(id)?.snapshot()
+    }
+
     pub fn registered_projects(&self) -> Vec<String> {
         self.registered_projects
             .lock()
-            .map(|p| {
-                let mut roots: Vec<_> = p.iter().cloned().collect();
-                roots.sort();
-                roots
-            })
+            .map(|p| p.clone())
             .unwrap_or_default()
     }
 
@@ -336,6 +413,12 @@ impl Engine {
                 kind,
                 state,
             } => Response::Inventory(self.inventory(project_root, kind, state).await),
+            Request::ReorderProjects { project_roots } => {
+                match self.reorder_projects(project_roots).await {
+                    Ok(project_roots) => Response::ProjectOrder { project_roots },
+                    Err(response) => response,
+                }
+            }
             Request::ResolveAgent {
                 agent_id,
                 project_root,
@@ -349,17 +432,11 @@ impl Engine {
             },
             Request::Health => self.handle_health().await,
             Request::Init { project_root } => {
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
                 if fs_ops::is_too_broad_project_root(
                     std::path::Path::new(&project_root),
-                    home.as_deref(),
+                    self.home.as_deref(),
                 ) {
-                    return Response::Error {
-                        code: "project_root_not_allowed".into(),
-                        message: format!(
-                            "{project_root} is /, $HOME or an ancestor of $HOME; register a project directory instead"
-                        ),
-                    };
+                    return inventory::project_root_not_allowed(&project_root);
                 }
                 let response = self.handle_init(&project_root).await;
                 if matches!(response, Response::InitResult { .. })
@@ -369,6 +446,14 @@ impl Engine {
                 }
                 response
             }
+            Request::RemoveProject {
+                project_root,
+                suspend_agents,
+            } => {
+                self.handle_remove_project(&project_root, suspend_agents)
+                    .await
+            }
+            Request::SubscribeProjects => Response::ProjectsSubscribed,
             Request::Rename {
                 project_root,
                 agent_id,
@@ -384,8 +469,15 @@ impl Engine {
             }
             Request::GetConfig { project_root } => self.handle_get_config(&project_root).await,
             Request::GetGlobalAgentSettings => self.handle_global_agent_settings(None).await,
-            Request::UpdateGlobalAgentSettings { codex_yolo } => {
-                self.handle_global_agent_settings(Some(codex_yolo)).await
+            Request::UpdateGlobalAgentSettings {
+                launch_args,
+                agent_status_tracking,
+            } => {
+                self.handle_global_agent_settings(Some(config::GlobalAgentSettingsUpdate {
+                    agent_status_tracking,
+                    launch_args: launch_args.unwrap_or_default(),
+                }))
+                .await
             }
             Request::UpdateAgentConfig {
                 project_root,
@@ -415,6 +507,7 @@ impl Engine {
                 plan_mode,
                 no_trigger,
                 trigger,
+                placement,
             } => {
                 self.handle_spawn(SpawnParams {
                     project_root,
@@ -430,6 +523,7 @@ impl Engine {
                     plan_mode,
                     no_trigger,
                     trigger,
+                    placement,
                 })
                 .await
             }
@@ -468,17 +562,22 @@ impl Engine {
                 )
                 .await
             }
-            Request::Attach { agent_id } => self.handle_attach(&agent_id).await,
+            Request::Attach { agent_id, .. } => self.handle_attach(&agent_id).await,
             Request::Input {
                 agent_id,
                 data,
                 submit,
+                ..
             } => self.handle_input(&agent_id, &data, submit).await,
+            Request::ClaimSize { .. } => Response::Error {
+                code: "ATTACH_REQUIRED".into(),
+                message: "claim_size requires an attachment".into(),
+            },
             Request::Resize {
                 agent_id,
                 cols,
                 rows,
-            } => self.handle_resize(&agent_id, cols, rows).await,
+            } => self.handle_legacy_resize(&agent_id, cols, rows).await,
             Request::SubscribeGrid { project_root } => {
                 self.handle_subscribe_grid(&project_root).await
             }
@@ -722,6 +821,7 @@ impl Engine {
             | Request::FsDelete { .. }
             | Request::SubscribeFs { .. }
             | Request::GitExec { .. }) => self.handle_fs_request(request).await,
+            request @ Request::AttachFile { .. } => self.handle_attach_file(request).await,
         }
     }
 
@@ -819,15 +919,25 @@ impl Engine {
         })
     }
 
-    async fn handle_global_agent_settings(&self, codex_yolo: Option<bool>) -> Response {
+    /// Load the machine settings, or save `update` first when given.
+    async fn handle_global_agent_settings(
+        &self,
+        update: Option<config::GlobalAgentSettingsUpdate>,
+    ) -> Response {
         tokio::task::spawn_blocking(move || {
-            let result = match codex_yolo {
-                Some(enabled) => config::save_global_agent_settings(enabled),
+            let result = match update {
+                Some(update) => config::save_global_agent_settings(update),
                 None => config::load_global_agent_settings(),
             };
             match result {
                 Ok(settings) => Response::GlobalAgentSettingsReport {
-                    codex_yolo: settings.codex_yolo,
+                    codex_yolo: false,
+                    agent_status_tracking: settings.agent_status_tracking,
+                    launch_args: settings
+                        .launch_args
+                        .iter()
+                        .map(|(agent, args)| (agent.clone(), format_launch_args(&args.0)))
+                        .collect(),
                 },
                 Err(e) => Response::Error {
                     code: e.code().into(),
@@ -844,10 +954,11 @@ impl Engine {
 
     async fn handle_get_config(&self, project_root: &str) -> Response {
         let pr = project_root.to_string();
+        let env = self.agent_env().await;
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             match config::load_config_strict(root) {
-                Ok(cfg) => config_to_report(&cfg),
+                Ok(cfg) => config_to_report(&cfg, root, &env),
                 Err(e) => Response::Error {
                     code: e.code().into(),
                     message: e.to_string(),
@@ -869,10 +980,11 @@ impl Engine {
     ) -> Response {
         let pr = project_root.to_string();
         let name = agent_name.to_string();
+        let env = self.agent_env().await;
         tokio::task::spawn_blocking(move || {
             let root = Path::new(&pr);
             match config::update_agent_config(root, &name, launch_args) {
-                Ok(cfg) => config_to_report(&cfg),
+                Ok(cfg) => config_to_report(&cfg, root, &env),
                 Err(e) => Response::Error {
                     code: e.code().into(),
                     message: e.to_string(),
@@ -990,6 +1102,7 @@ mod tests {
                 plan_mode: false,
                 no_trigger: false,
                 trigger: None,
+                placement: None,
             })
             .await;
 
@@ -1016,6 +1129,65 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn given_spawn_with_placement_should_record_it_on_manifest_and_status() {
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let pr = project_root.to_string_lossy().to_string();
+        let placement = pu_core::types::SpawnPlacement {
+            workspace: "ws-ag-1".into(),
+            surface: 4,
+        };
+
+        let engine = Engine::new();
+        engine
+            .handle_request(Request::Init {
+                project_root: pr.clone(),
+            })
+            .await;
+        let resp = engine
+            .handle_request(Request::Spawn {
+                project_root: pr.clone(),
+                prompt: String::new(),
+                agent: "terminal".into(),
+                name: None,
+                base: None,
+                root: true,
+                worktree: None,
+                command: None,
+                no_auto: false,
+                extra_args: vec![],
+                plan_mode: false,
+                no_trigger: true,
+                trigger: None,
+                placement: Some(placement.clone()),
+            })
+            .await;
+        let agent_id = match resp {
+            Response::SpawnResult { agent_id, .. } => agent_id,
+            other => panic!("expected SpawnResult, got {other:?}"),
+        };
+
+        let m = pu_core::manifest::read_manifest(&project_root).unwrap();
+        let Some(pu_core::types::AgentLocation::Root(agent)) = m.find_agent(&agent_id) else {
+            panic!("agent missing from manifest");
+        };
+        assert_eq!(agent.placement, Some(placement.clone()));
+
+        let status = engine
+            .handle_request(Request::Status {
+                project_root: pr,
+                agent_id: Some(agent_id.clone()),
+            })
+            .await;
+        match status {
+            Response::AgentStatus(report) => assert_eq!(report.placement, Some(placement)),
+            other => panic!("expected AgentStatus, got {other:?}"),
+        }
+        engine.kill_agents(&[agent_id]).await;
     }
 
     #[test]
@@ -1060,65 +1232,98 @@ mod tests {
         );
     }
 
-    #[test]
-    fn given_claude_build_resume_with_default_launch_args_should_include_yolo() {
-        // given
-        let engine = Engine::new();
-        let agent_cfg = pu_core::types::AgentConfig {
-            name: "claude".into(),
-            command: "claude".into(),
+    fn agent_cfg(name: &str, launch_args: Option<Vec<String>>) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: name.into(),
+            command: name.into(),
             prompt_flag: None,
             interactive: true,
-            launch_args: None, // use defaults
+            launch_args,
+            machine_launch_args: None,
+        }
+    }
+
+    #[test]
+    fn given_project_and_machine_launch_args_should_report_both_and_resolve_project() {
+        // given
+        let mut cfg = pu_core::types::Config::default();
+        let codex = cfg.agents.get_mut("codex").unwrap();
+        codex.launch_args = Some(vec!["--search".into()]);
+        codex.machine_launch_args = Some(vec!["--sandbox".into(), "read-only".into()]);
+
+        // when
+        let Response::ConfigReport { agents, .. } = config_to_report(&cfg, Path::new("/"), &[])
+        else {
+            panic!("expected ConfigReport");
         };
+
+        // then
+        let codex = agents.iter().find(|a| a.name == "codex").unwrap();
+        assert_eq!(codex.project_launch_args.as_deref(), Some("--search"));
+        assert_eq!(
+            codex.machine_launch_args.as_deref(),
+            Some("--sandbox read-only")
+        );
+        assert_eq!(codex.resolved_launch_args, vec!["--search"]);
+    }
+
+    #[test]
+    fn given_claude_build_resume_without_launch_args_should_launch_bare() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = agent_cfg("claude", None);
 
         // when
         let (cmd, args, sid) = engine
             .build_resume_command("claude", &agent_cfg, Some("sess-123"))
             .unwrap();
 
-        // then
+        // then — no permission flags unless the user configured them
         assert_eq!(cmd, "claude");
-        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
-        assert!(args.contains(&"--resume".to_string()));
-        assert!(args.contains(&"sess-123".to_string()));
+        assert_eq!(args, vec!["--resume", "sess-123"]);
         assert_eq!(sid, Some("sess-123".to_string()));
     }
 
     #[test]
-    fn given_claude_build_resume_with_empty_launch_args_should_omit_yolo() {
-        // given: user configured launchArgs: [] to disable auto-mode
+    fn given_claude_build_resume_with_machine_launch_args_should_include_them() {
+        // given — the owner opted into auto mode for all projects
         let engine = Engine::new();
-        let agent_cfg = pu_core::types::AgentConfig {
-            name: "claude".into(),
-            command: "claude".into(),
-            prompt_flag: None,
-            interactive: true,
-            launch_args: Some(vec![]),
-        };
+        let mut agent_cfg = agent_cfg("claude", None);
+        agent_cfg.machine_launch_args = Some(vec!["--dangerously-skip-permissions".into()]);
 
         // when
-        let (cmd, args, _) = engine
+        let (_, args, _) = engine
             .build_resume_command("claude", &agent_cfg, Some("sess-456"))
             .unwrap();
 
         // then
-        assert_eq!(cmd, "claude");
-        assert!(!args.contains(&"--dangerously-skip-permissions".to_string()));
-        assert!(args.contains(&"--resume".to_string()));
+        assert_eq!(
+            args,
+            vec!["--dangerously-skip-permissions", "--resume", "sess-456"]
+        );
+    }
+
+    #[test]
+    fn given_claude_build_resume_with_empty_project_args_should_ignore_machine_args() {
+        // given
+        let engine = Engine::new();
+        let mut agent_cfg = agent_cfg("claude", Some(vec![]));
+        agent_cfg.machine_launch_args = Some(vec!["--dangerously-skip-permissions".into()]);
+
+        // when
+        let (_, args, _) = engine
+            .build_resume_command("claude", &agent_cfg, Some("sess-456"))
+            .unwrap();
+
+        // then
+        assert_eq!(args, vec!["--resume", "sess-456"]);
     }
 
     #[test]
     fn given_codex_build_resume_with_custom_launch_args_should_place_before_subcommand() {
         // given
         let engine = Engine::new();
-        let agent_cfg = pu_core::types::AgentConfig {
-            name: "codex".into(),
-            command: "codex".into(),
-            prompt_flag: None,
-            interactive: true,
-            launch_args: Some(vec!["--search".into()]),
-        };
+        let agent_cfg = agent_cfg("codex", Some(vec!["--search".into()]));
 
         // when
         let (cmd, args, _) = engine
@@ -1134,81 +1339,84 @@ mod tests {
     }
 
     #[test]
-    fn given_codex_build_resume_with_defaults_should_place_auto_args_before_subcommand() {
+    fn given_terminal_build_resume_with_machine_launch_args_should_include_them() {
+        // given — the owner configured a login shell for every project
+        let engine = Engine::new();
+        let mut agent_cfg = agent_cfg("terminal", None);
+        agent_cfg.command = "shell".into();
+        agent_cfg.machine_launch_args = Some(vec!["-l".into()]);
+
+        // when
+        let (cmd, args, sid) = engine
+            .build_resume_command("terminal", &agent_cfg, None)
+            .unwrap();
+
+        // then — resume restarts the shell with the same options as spawn
+        assert_eq!(cmd, crate::os::login_shell());
+        assert_eq!(args, vec!["-l"]);
+        assert_eq!(sid, None);
+    }
+
+    #[test]
+    fn given_terminal_build_resume_with_project_launch_args_should_prefer_them() {
         // given
         let engine = Engine::new();
-        let agent_cfg = pu_core::types::AgentConfig {
-            name: "codex".into(),
-            command: "codex".into(),
-            prompt_flag: None,
-            interactive: true,
-            launch_args: None, // use defaults
-        };
+        let mut agent_cfg = agent_cfg("terminal", Some(vec!["-i".into()]));
+        agent_cfg.command = "shell".into();
+        agent_cfg.machine_launch_args = Some(vec!["-l".into()]);
+
+        // when
+        let (cmd, args, _) = engine
+            .build_resume_command("terminal", &agent_cfg, None)
+            .unwrap();
+
+        // then
+        assert_eq!(cmd, crate::os::login_shell());
+        assert_eq!(args, vec!["-i"]);
+    }
+
+    #[test]
+    fn given_codex_build_resume_without_launch_args_should_add_no_permission_flags() {
+        // given
+        let engine = Engine::new();
+        let agent_cfg = agent_cfg("codex", None);
 
         // when
         let (cmd, args, _) = engine
             .build_resume_command("codex", &agent_cfg, Some("session-exact"))
             .unwrap();
 
-        // then — the auto-mode flags are top-level, they must come before `resume`
+        // then
         assert_eq!(cmd, "codex");
-        assert_eq!(
-            args,
-            vec![
-                "--sandbox",
-                "workspace-write",
-                "--ask-for-approval",
-                "on-request",
-                "--no-daemon",
-                "resume",
-                "session-exact"
-            ]
-        );
-    }
-
-    /// Test the no_auto + launch_args interaction logic used in handle_spawn.
-    /// When no_auto is true and launch_args is None (defaults), launch args should be empty.
-    /// When no_auto is true but launch_args is explicitly configured, they should be preserved.
-    #[test]
-    fn given_no_auto_with_default_launch_args_should_produce_empty() {
-        let agent_cfg = pu_core::types::AgentConfig {
-            name: "claude".into(),
-            command: "claude".into(),
-            prompt_flag: None,
-            interactive: true,
-            launch_args: None,
-        };
-        let no_auto = true;
-        let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
-            Vec::new()
-        } else {
-            pu_core::types::resolved_launch_args("claude", agent_cfg.launch_args.as_deref())
-        };
-        assert!(
-            launch_args.is_empty(),
-            "--no-auto should skip default launch args"
-        );
+        assert_eq!(args, vec!["--no-daemon", "resume", "session-exact"]);
     }
 
     #[test]
-    fn given_no_auto_with_explicit_launch_args_should_preserve_them() {
-        let agent_cfg = pu_core::types::AgentConfig {
-            name: "claude".into(),
-            command: "claude".into(),
-            prompt_flag: None,
-            interactive: true,
-            launch_args: Some(vec!["--verbose".into()]),
-        };
-        let no_auto = true;
-        let launch_args = if no_auto && agent_cfg.launch_args.is_none() {
-            Vec::new()
-        } else {
-            pu_core::types::resolved_launch_args("claude", agent_cfg.launch_args.as_deref())
-        };
+    fn given_no_auto_should_ignore_project_and_machine_launch_args() {
+        // given
+        let mut project = agent_cfg("claude", Some(vec!["--verbose".into()]));
+        let mut machine = agent_cfg("claude", None);
+        machine.machine_launch_args = Some(vec!["--dangerously-skip-permissions".into()]);
+        project.machine_launch_args = machine.machine_launch_args.clone();
+
+        // then
+        assert!(Engine::spawn_launch_args("claude", &project, true).is_empty());
+        assert!(Engine::spawn_launch_args("claude", &machine, true).is_empty());
+    }
+
+    #[test]
+    fn given_spawn_without_no_auto_should_use_configured_launch_args() {
+        let mut cfg = agent_cfg("claude", None);
+        assert!(Engine::spawn_launch_args("claude", &cfg, false).is_empty());
+        cfg.machine_launch_args = Some(vec!["--model".into(), "opus".into()]);
         assert_eq!(
-            launch_args,
-            vec!["--verbose"],
-            "--no-auto should not affect explicit launch args"
+            Engine::spawn_launch_args("claude", &cfg, false),
+            vec!["--model", "opus"]
+        );
+        cfg.launch_args = Some(vec!["--verbose".into()]);
+        assert_eq!(
+            Engine::spawn_launch_args("claude", &cfg, false),
+            vec!["--verbose"]
         );
     }
 
@@ -1307,38 +1515,8 @@ mod tests {
             prompt_flag: None,
             interactive: true,
             launch_args: None,
+            machine_launch_args: None,
         }
-    }
-
-    #[test]
-    fn given_claude_resume_should_use_bypass_and_resume() {
-        let engine = Engine::new();
-        let cfg = dummy_agent_cfg("claude");
-        let (cmd, args, sid) = engine
-            .build_resume_command("claude", &cfg, Some("sess-1"))
-            .unwrap();
-        assert_eq!(cmd, "claude");
-        assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
-        assert!(args.contains(&"--resume".to_string()));
-        assert!(args.contains(&"sess-1".to_string()));
-        assert_eq!(sid, Some("sess-1".to_string()));
-    }
-
-    #[test]
-    fn given_codex_resume_should_use_auto_mode_args() {
-        let engine = Engine::new();
-        let cfg = dummy_agent_cfg("codex");
-        let (cmd, args, _) = engine
-            .build_resume_command("codex", &cfg, Some("session-exact"))
-            .unwrap();
-        assert_eq!(cmd, "codex");
-        assert!(args.contains(&"--sandbox".to_string()));
-        assert!(args.contains(&"workspace-write".to_string()));
-        assert!(args.contains(&"--ask-for-approval".to_string()));
-        assert!(args.contains(&"on-request".to_string()));
-        assert!(args.contains(&"resume".to_string()));
-        assert!(args.contains(&"session-exact".to_string()));
-        assert!(!args.contains(&"--last".to_string()));
     }
 
     #[test]
@@ -1376,5 +1554,201 @@ mod tests {
         assert!(!repaired);
         // No backup file should be created
         assert!(!tmp.path().join("session.jsonl.bak").exists());
+    }
+}
+
+#[cfg(test)]
+mod workspace_catalog_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn agent(command: &str) -> pu_core::types::AgentConfig {
+        pu_core::types::AgentConfig {
+            name: "Friendly display label".into(),
+            command: command.into(),
+            prompt_flag: None,
+            interactive: true,
+            launch_args: None,
+            machine_launch_args: None,
+        }
+    }
+
+    #[test]
+    fn given_custom_labels_and_missing_binary_should_report_canonical_id_and_actual_availability() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cfg = pu_core::types::Config::default();
+        cfg.agents.clear();
+        cfg.agents.insert("canonical-id".into(), agent("/bin/sh"));
+        cfg.agents
+            .insert("missing-id".into(), agent("missing-purepoint-test-binary"));
+        cfg.agents.insert("terminal".into(), agent("/bin/sh"));
+        let Response::ConfigReport {
+            agents,
+            terminal_available,
+            ..
+        } = config_to_report(&cfg, root.path(), &[("PATH".into(), "/bin".into())])
+        else {
+            panic!("expected catalog");
+        };
+        assert_eq!(agents[0].id.as_deref(), Some("canonical-id"));
+        assert_eq!(agents[0].name, "Friendly display label");
+        assert_eq!(agents[0].available, Some(true));
+        assert_eq!(agents[1].available, Some(false));
+        assert_eq!(terminal_available, Some(true));
+        assert_eq!(agents.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn given_scoped_terminal_spawn_should_publish_root_and_worktree_inventory_membership() {
+        use pu_core::protocol::{InventoryKind, Request};
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "fixture",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&project)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let engine = Engine::with_project_registry(temp.path().join("registry.json")).unwrap();
+        engine
+            .login_env
+            .set(vec![("PATH".into(), "/usr/bin:/bin".into())])
+            .unwrap();
+        let root = project.to_string_lossy().into_owned();
+        assert!(matches!(
+            engine
+                .handle_request(Request::Init {
+                    project_root: root.clone()
+                })
+                .await,
+            Response::InitResult { .. }
+        ));
+        let Response::CreateWorktreeResult { worktree_id } = engine
+            .handle_request(Request::CreateWorktree {
+                project_root: root.clone(),
+                name: Some("terminal-fixture".into()),
+                base: None,
+            })
+            .await
+        else {
+            panic!("worktree fixture creation failed");
+        };
+        let mut ids = vec![];
+        for worktree in [None, Some(worktree_id.clone())] {
+            let request: Request = serde_json::from_value(serde_json::json!({"type":"spawn", "project_root":root, "agent":"terminal", "prompt":"", "root":worktree.is_none(), "worktree":worktree, "no_trigger":true})).unwrap();
+            let response = engine.handle_request(request).await;
+            let Response::SpawnResult { agent_id, .. } = response else {
+                engine.kill_all_sessions(Duration::from_millis(50)).await;
+                panic!("terminal launch failed: {response:?}");
+            };
+            ids.push(agent_id);
+        }
+        let Response::Inventory(agents) = engine
+            .handle_request(Request::Inventory {
+                project_root: None,
+                kind: InventoryKind::Agents,
+                state: None,
+            })
+            .await
+        else {
+            panic!("expected inventory");
+        };
+        engine.kill_all_sessions(Duration::from_millis(50)).await;
+        for (index, id) in ids.iter().enumerate() {
+            let agent = agents.agents.iter().find(|a| &a.id == id).unwrap();
+            assert_eq!(agent.project_root.as_deref(), Some(root.as_str()));
+            assert_eq!(
+                agent.worktree_id.as_deref(),
+                if index == 0 {
+                    None
+                } else {
+                    Some(worktree_id.as_str())
+                }
+            );
+        }
+        let Response::Inventory(worktrees) = engine
+            .handle_request(Request::Inventory {
+                project_root: None,
+                kind: InventoryKind::Worktrees,
+                state: None,
+            })
+            .await
+        else {
+            panic!("expected worktrees");
+        };
+        assert!(
+            worktrees
+                .worktrees
+                .iter()
+                .any(|w| w.id == worktree_id && w.agent_ids.contains(&ids[1]))
+        );
+    }
+
+    #[test]
+    fn given_login_path_and_root_relative_executables_should_probe_without_execution() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("tools")).unwrap();
+        let executable = root.path().join("tools/worker");
+        std::fs::write(&executable, "#!/bin/sh\nexit 99\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let env = [(
+            "PATH".into(),
+            root.path().join("tools").display().to_string(),
+        )];
+        assert!(catalog_executable_available(
+            &agent("worker --flag"),
+            "custom",
+            root.path(),
+            &env
+        ));
+        assert!(catalog_executable_available(
+            &agent("./tools/worker"),
+            "custom",
+            root.path(),
+            &[]
+        ));
+        assert!(catalog_executable_available(
+            &agent("worker"),
+            "custom",
+            &root.path().join("tools"),
+            &[("PATH".into(), "".into())]
+        ));
+        assert!(!catalog_executable_available(
+            &agent("./tools/worker"),
+            "custom",
+            &root.path().join("tools"),
+            &[]
+        ));
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!catalog_executable_available(
+            &agent("worker"),
+            "custom",
+            root.path(),
+            &env
+        ));
+        assert!(!catalog_executable_available(
+            &agent(""),
+            "custom",
+            root.path(),
+            &env
+        ));
     }
 }

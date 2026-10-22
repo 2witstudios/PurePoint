@@ -131,7 +131,7 @@ ScheduleTrigger (tagged enum):
   InlinePrompt { prompt: String, agent: String }
 ```
 
-**Config extension:** `defaultAgent` field on `.pu/config.yaml` — sets default agent type for spawning. Config also includes `agents` map (with per-agent `launchArgs` overrides) and `envFiles` list for environment file copying to worktrees.
+**Config extension:** `defaultAgent` field on `.pu/config.yaml` — sets default agent type for spawning. Config also includes `agents` map (with per-agent `launchArgs`, a free-form shell-style string; the legacy list form is still read) and `envFiles` list for environment file copying to worktrees.
 
 ```
 Config:
@@ -144,8 +144,15 @@ AgentConfig:
   command: String
   prompt_flag: Option<String>
   interactive: bool (default: true)
-  launch_args: Option<Vec<String>>
+  launch_args: Option<Vec<String>>        # YAML: shell-style string (or legacy list); None = unset
+  machine_launch_args: Option<Vec<String>> # not serialized; filled from ~/.pu/agent-settings.yaml
+
+GlobalAgentSettings (~/.pu/agent-settings.yaml):
+  agent_status_tracking: bool (default: true)
+  launch_args: IndexMap<String, LaunchArgs> (default: empty; agent type -> string)
 ```
+
+`AgentEntry.bare_launch` (manifest, default `false`) records a `--no-auto` spawn so resume also launches bare. Launch args resolve as `--no-auto` / `bare_launch` (bare) > project `launch_args` (when set, even empty) > machine `launch_args[agent]` > none. No agent type has built-in launch args.
 
 ## Open Questions
 

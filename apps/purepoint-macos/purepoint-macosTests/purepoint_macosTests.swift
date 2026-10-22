@@ -19,10 +19,10 @@ struct GlobalAgentSettingsTests {
                 switch request {
                 case .getGlobalAgentSettings:
                     calls.append("load")
-                    return .globalAgentSettingsReport(codexYolo: false)
-                case .updateGlobalAgentSettings(let enabled):
+                    return .globalAgentSettingsReport(agentStatusTracking: true)
+                case .updateGlobalAgentSettings(let tracking, _):
                     calls.append("save")
-                    return .globalAgentSettingsReport(codexYolo: enabled)
+                    return .globalAgentSettingsReport(agentStatusTracking: tracking ?? true)
                 default:
                     Issue.record("Unexpected project request")
                     return .error(code: "TEST", message: "Unexpected request")
@@ -31,8 +31,8 @@ struct GlobalAgentSettingsTests {
         )
         await state.loadGlobalSettings()
         #expect(state.globalSettingsLoaded)
-        await state.updateGlobalSettings(codexYolo: true, projectRoot: nil)
-        #expect(state.codexYolo)
+        await state.updateAgentStatusTracking(false)
+        #expect(!state.agentStatusTracking)
         #expect(calls == ["ensure", "load", "ensure", "save"])
     }
 
@@ -46,7 +46,7 @@ struct GlobalAgentSettingsTests {
             },
             sendRequest: { _ in
                 requests += 1
-                return .globalAgentSettingsReport(codexYolo: true)
+                return .globalAgentSettingsReport(agentStatusTracking: true)
             }
         )
         await state.loadGlobalSettings()
@@ -59,28 +59,105 @@ struct GlobalAgentSettingsTests {
         #expect(requests == 1)
     }
 
-    @Test func yoloSurvivesEditingModelAndSearch() {
-        var config = parseCodexLaunchArgs(["--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "-m", "custom", "--search"])
-        #expect(config.yolo)
-        config.model = "updated"
-        #expect(composeCodexLaunchArgs(config) == ["--dangerously-bypass-approvals-and-sandbox", "--no-daemon", "-m", "updated", "--search"])
-        config.yolo = false
-        #expect(!composeCodexLaunchArgs(config).contains("--dangerously-bypass-approvals-and-sandbox"))
-        #expect(composeCodexLaunchArgs(config).contains("workspace-write"))
+    @Test func projectLaunchArgsAreSentAsOneString() throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateAgentConfig(
+            projectRoot: "/p", agentName: "claude", launchArgs: "--model opus --append-system-prompt 'be terse'"))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["launch_args"] as? String == "--model opus --append-system-prompt 'be terse'")
+        let cleared = try JSONEncoder().encode(DaemonRequest.updateAgentConfig(projectRoot: "/p", agentName: "claude", launchArgs: nil))
+        let clearedJson = try #require(JSONSerialization.jsonObject(with: cleared) as? [String: Any])
+        #expect(clearedJson["launch_args"] is NSNull, "null clears the project value")
+    }
+
+    @Test func machineLaunchArgsSaveSendsOnlyThatAgent() async throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(launchArgs: ["claude": "--dangerously-skip-permissions"]))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["launch_args"] as? [String: String] == ["claude": "--dangerously-skip-permissions"])
+        #expect(json["codex_yolo"] == nil)
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { request in
+                guard case .updateGlobalAgentSettings(_, let launchArgs) = request else {
+                    return .error(code: "TEST", message: "Unexpected request")
+                }
+                return .globalAgentSettingsReport(agentStatusTracking: true, launchArgs: launchArgs ?? [:])
+            }
+        )
+        await state.updateMachineLaunchArgs(agentName: "claude", launchArgs: "--model opus", projectRoot: nil)
+        #expect(state.machineLaunchArgs == ["claude": "--model opus"])
+    }
+
+    @Test func oldDaemonMachineLaunchArgsSaveReportsUpdateNeeded() async {
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { request in
+                switch request {
+                case .getGlobalAgentSettings:
+                    return .globalAgentSettingsReport(agentStatusTracking: true, launchArgs: ["claude": "--model opus"])
+                default:
+                    // A protocol-v10 daemon ignores machine launch args and omits them from its report.
+                    return .globalAgentSettingsReport(agentStatusTracking: true)
+                }
+            }
+        )
+        await state.loadGlobalSettings()
+        await state.updateMachineLaunchArgs(agentName: "claude", launchArgs: "--model sonnet", projectRoot: nil)
+        #expect(state.globalError?.contains("Update the PurePoint daemon") == true)
+        #expect(state.machineLaunchArgs == ["claude": "--model opus"], "An old daemon's report must not wipe the field")
+    }
+
+    @Test func oldDaemonConfigReportReportsUpdateNeeded() async {
+        let oldAgent = AgentConfigPayload(name: "claude", command: "claude", launchArgs: nil, resolvedLaunchArgs: [], interactive: true)
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { _ in .configReport(defaultAgent: "claude", agents: [oldAgent]) }
+        )
+        await state.load(projectRoot: "/p")
+        #expect(state.error?.contains("Update the PurePoint daemon") == true)
+        await state.updateLaunchArgs(projectRoot: "/p", agentName: "claude", launchArgs: "--model opus")
+        #expect(state.error?.contains("Update the PurePoint daemon") == true)
+    }
+
+    @Test func configReportDecodesLaunchArgStrings() throws {
+        let json = #"{"type":"config_report","default_agent":"claude","agents":[{"name":"claude","command":"claude","launch_args":null,"resolved_launch_args":["--model","opus"],"interactive":true,"machine_launch_args":"--model opus","resolved_command":"claude --model opus"}]}"#
+        let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(json.utf8))
+        guard case .configReport(_, let agents) = response, let claude = agents.first else {
+            Issue.record("Expected config report")
+            return
+        }
+        #expect(claude.projectLaunchArgs == nil)
+        #expect(claude.machineLaunchArgs == "--model opus")
+        #expect(claude.resolvedCommand == "claude --model opus")
     }
 
     @Test func globalSettingsProtocolRoundTrip() throws {
-        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(codexYolo: true))
+        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(agentStatusTracking: true))
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["type"] as? String == "update_global_agent_settings")
-        #expect(json["codex_yolo"] as? Bool == true)
+        #expect(json["codex_yolo"] == nil)
         #expect(json["project_root"] == nil)
+        #expect(json["launch_args"] == nil)
+        // Daemons from before Codex YOLO was removed still send `codex_yolo`; it is ignored.
         let response = try JSONDecoder().decode(DaemonResponse.self, from: Data(#"{"type":"global_agent_settings_report","codex_yolo":true}"#.utf8))
-        guard case .globalAgentSettingsReport(let enabled) = response else {
+        guard case .globalAgentSettingsReport(let tracking, let launchArgs) = response else {
             Issue.record("Expected global settings response")
             return
         }
-        #expect(enabled)
+        #expect(tracking, "Older daemons always track status")
+        #expect(launchArgs == nil, "Older daemons have no machine launch args")
+    }
+
+    @Test func statusTrackingUpdateSendsOnlyItsOwnField() async throws {
+        let data = try JSONEncoder().encode(DaemonRequest.updateGlobalAgentSettings(agentStatusTracking: false))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["agent_status_tracking"] as? Bool == false)
+        #expect(json["codex_yolo"] == nil)
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { _ in .globalAgentSettingsReport(agentStatusTracking: false) }
+        )
+        await state.updateAgentStatusTracking(false)
+        #expect(!state.agentStatusTracking)
     }
 }
 
@@ -167,6 +244,54 @@ struct PaneSplitNodeTests {
             )
         )
         #expect(result == expected)
+    }
+
+    // MARK: Top-trailing leaf
+
+    @Test func singleLeafIsTopTrailing() {
+        #expect(PaneSplitNode.leaf(id: 3).topTrailingLeafId == 3)
+    }
+
+    @Test func rightPaneOfAVerticalSplitIsTopTrailing() {
+        let tree = PaneSplitNode.split(axis: .vertical, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        #expect(tree.topTrailingLeafId == 1)
+    }
+
+    @Test func topPaneOfAHorizontalSplitIsTopTrailing() {
+        let tree = PaneSplitNode.split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        #expect(tree.topTrailingLeafId == 0)
+    }
+
+    @Test func nestedGridResolvesTheTopRightPane() {
+        // Two columns; the right column is split into a top (2) and bottom (1) pane.
+        let tree = PaneSplitNode.split(
+            axis: .vertical, ratio: 0.5,
+            first: .leaf(id: 0),
+            second: .split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 2), second: .leaf(id: 1))
+        )
+        #expect(tree.topTrailingLeafId == 2)
+    }
+
+    // MARK: Top-leading leaf (the pane under the traffic lights while the sidebar is hidden)
+
+    @Test func leftPaneOfAVerticalSplitIsTopLeading() {
+        let tree = PaneSplitNode.split(axis: .vertical, ratio: 0.5, first: .leaf(id: 0), second: .leaf(id: 1))
+        #expect(tree.firstLeafId == 0)
+    }
+
+    @Test func topPaneOfAHorizontalSplitIsTopLeading() {
+        let tree = PaneSplitNode.split(axis: .horizontal, ratio: 0.5, first: .leaf(id: 1), second: .leaf(id: 0))
+        #expect(tree.firstLeafId == 1)
+    }
+
+    @Test func nestedGridResolvesTheTopLeftPane() {
+        // Two rows; the top row is split into a left (3) and right (2) pane.
+        let tree = PaneSplitNode.split(
+            axis: .horizontal, ratio: 0.5,
+            first: .split(axis: .vertical, ratio: 0.5, first: .leaf(id: 3), second: .leaf(id: 2)),
+            second: .leaf(id: 0)
+        )
+        #expect(tree.firstLeafId == 3)
     }
 
     // MARK: Row count / canSplit

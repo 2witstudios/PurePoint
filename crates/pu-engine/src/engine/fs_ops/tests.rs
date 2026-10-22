@@ -119,6 +119,7 @@ async fn given_unregistered_or_relative_path_should_refuse_it() {
                 recursive: false,
                 include_hidden: true,
                 max_entries: 10,
+                directories_only: false,
             })
             .await;
         assert_error(resp, "path_not_allowed");
@@ -404,6 +405,7 @@ async fn given_recursive_list_should_skip_git_contents_and_flag_ignored() {
             recursive: true,
             include_hidden: true,
             max_entries: 20_000,
+            directories_only: false,
         })
         .await;
     let Response::FsListResult {
@@ -441,6 +443,7 @@ async fn given_recursive_list_should_skip_git_contents_and_flag_ignored() {
             recursive: false,
             include_hidden: false,
             max_entries: 20_000,
+            directories_only: false,
         })
         .await;
     let Response::FsListResult { entries, .. } = resp else {
@@ -462,6 +465,7 @@ async fn given_more_entries_than_max_should_truncate() {
             recursive: true,
             include_hidden: false,
             max_entries: 3,
+            directories_only: false,
         })
         .await;
     match resp {
@@ -504,6 +508,97 @@ async fn given_directory_outside_any_repo_should_list_without_ignored_flags() {
     );
     assert_error(fs_delete(&p(&transcript), &roots), "path_not_allowed");
     assert_eq!(std::fs::read_to_string(&transcript).unwrap(), "{}");
+}
+
+// --- Folder browsing (directories_only) ---
+
+#[tokio::test(flavor = "current_thread")]
+async fn given_directories_only_should_list_folders_outside_registered_roots_without_files() {
+    let (engine, _tmp, _root, outside) = setup().await;
+    std::fs::create_dir_all(outside.join("b-dir")).unwrap();
+    std::fs::create_dir_all(outside.join("a-dir")).unwrap();
+    std::fs::create_dir_all(outside.join(".hidden-dir")).unwrap();
+    std::os::unix::fs::symlink(outside.join("a-dir"), outside.join("link-dir")).unwrap();
+    std::os::unix::fs::symlink(outside.join("secret.txt"), outside.join("link-file")).unwrap();
+    for (include_hidden, expected) in [
+        (true, vec![".hidden-dir", "a-dir", "b-dir", "link-dir"]),
+        (false, vec!["a-dir", "b-dir", "link-dir"]),
+    ] {
+        let resp = engine
+            .handle_request(Request::FsList {
+                path: p(&outside),
+                recursive: true,
+                include_hidden,
+                max_entries: 100,
+                directories_only: true,
+            })
+            .await;
+        match resp {
+            Response::FsListResult { path, entries, .. } => {
+                assert_eq!(path, p(&outside));
+                let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+                assert_eq!(names, expected);
+                assert!(
+                    entries
+                        .iter()
+                        .all(|e| e.is_dir && e.size == 0 && e.modified_ms == 0)
+                );
+                let link = entries.iter().find(|e| e.name == "link-dir").unwrap();
+                assert!(link.is_symlink);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn given_directories_only_should_expand_home_and_refuse_files_and_relative_paths() {
+    let home = TempDir::new().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    std::fs::create_dir_all(home.join("code/app")).unwrap();
+    std::fs::write(home.join("notes.txt"), "x").unwrap();
+    match fs_browse("~", true, 10, Some(&home)) {
+        Response::FsListResult { path, entries, .. } => {
+            assert_eq!(path, p(&home));
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, "code");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    match fs_browse("~/code", true, 10, Some(&home)) {
+        Response::FsListResult { path, entries, .. } => {
+            assert_eq!(path, p(&home.join("code")));
+            assert_eq!(entries[0].path, p(&home.join("code/app")));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_error(fs_browse("~", true, 10, None), "path_not_allowed");
+    assert_error(fs_browse("code", true, 10, Some(&home)), "path_not_allowed");
+    assert_error(
+        fs_browse(&p(&home.join("notes.txt")), true, 10, Some(&home)),
+        "not_a_directory",
+    );
+    assert_error(
+        fs_browse(&p(&home.join("missing")), true, 10, Some(&home)),
+        "not_found",
+    );
+}
+
+#[test]
+fn given_directories_only_over_max_should_truncate() {
+    let dir = TempDir::new().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::create_dir(dir.path().join(name)).unwrap();
+    }
+    match fs_browse(&p(dir.path()), true, 2, None) {
+        Response::FsListResult {
+            entries, truncated, ..
+        } => {
+            assert_eq!(entries.len(), 2);
+            assert!(truncated);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 #[test]
@@ -1066,21 +1161,44 @@ async fn given_git_exec_timeout_should_kill_spawned_helpers() {
         })
         .await;
     assert!(matches!(init, Response::InitResult { .. }), "{init:?}");
-    let resp = engine
-        .handle_request(Request::GitExec {
-            cwd: p(&root),
-            program: "git".into(),
-            args: strings(&["diff"]),
-            stdin_base64: None,
-            timeout_ms: 1_500,
-        })
-        .await;
-    assert_error(resp, "timeout");
-    let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // Keep process startup outside the execution deadline: a slow launcher
+    // must not let this fixture time out before it creates the helper.
+    tokio::time::pause();
+    let request = engine.handle_request(Request::GitExec {
+        cwd: p(&root),
+        program: "git".into(),
+        args: strings(&["diff"]),
+        stdin_base64: None,
+        timeout_ms: 1_500,
+    });
+    tokio::pin!(request);
+    let startup_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let pid: libc::pid_t = loop {
+        // A runnable yield loop prevents paused time auto-advancing while the
+        // OS schedules the wrapper. Poll the real request concurrently.
+        tokio::select! {
+            response = &mut request => panic!("git_exec finished before helper readiness: {response:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(
+            std::time::Instant::now() < startup_deadline,
+            "helper never became ready"
+        );
+    };
+    // SAFETY: signal 0 only checks existence; prove the assertion is not vacuous.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "helper must be alive before timeout"
+    );
+    tokio::time::advance(Duration::from_millis(1_500)).await;
+    assert_error(request.await, "timeout");
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         // SAFETY: signal 0 only checks for existence.
@@ -1441,6 +1559,7 @@ async fn given_planted_bare_repo_listing_should_not_run_its_fsmonitor() {
             recursive: false,
             include_hidden: true,
             max_entries: 100,
+            directories_only: false,
         })
         .await;
     assert!(matches!(resp, Response::FsListResult { .. }), "{resp:?}");

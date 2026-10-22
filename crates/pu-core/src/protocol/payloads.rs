@@ -172,6 +172,9 @@ impl From<GatePayload> for crate::trigger_def::GateDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AgentStatusReport {
+    /// Optional passive observation; absence means unknown, never idle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<Box<crate::signals::SignalSnapshot>>,
     pub id: String,
     pub name: String,
     pub agent_type: String,
@@ -193,6 +196,8 @@ pub struct AgentStatusReport {
     pub trigger_state: Option<crate::types::TriggerState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_total: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::types::SpawnPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,11 +217,24 @@ pub struct WorktreeDiffEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfigInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
     pub name: String,
     pub command: String,
     pub launch_args: Option<Vec<String>>,
     pub resolved_launch_args: Vec<String>,
     pub interactive: bool,
+    /// Project `launchArgs` as a shell-style string; `None` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_launch_args: Option<String>,
+    /// Machine-level launch args string from `~/.pu/agent-settings.yaml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_launch_args: Option<String>,
+    /// Preview of `command` plus the resolved launch args.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

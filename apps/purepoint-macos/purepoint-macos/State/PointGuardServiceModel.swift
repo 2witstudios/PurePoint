@@ -1,3 +1,4 @@
+#if os(macOS)
 import Combine
 import Foundation
 
@@ -17,6 +18,8 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
     @Published private(set) var auth: PiJSONValue = .null
     @Published private(set) var enrollment: PiJSONValue = .null
     @Published private(set) var devices: [PiJSONValue] = []
+    /// Devices with an access change or revoke in flight; their row stays disabled until it lands.
+    @Published private(set) var deviceUpdates: Set<String> = []
     @Published private(set) var restartRequired = false
     @Published private(set) var hasPendingAuthCleanup = false
     @Published private(set) var hasPendingEnrollmentCleanup = false
@@ -66,6 +69,10 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             defer { self.startTask = nil }
             do {
                 guard let resources = Bundle.main.resourceURL else { throw PiChatError("PurePoint bundle resources are unavailable.") }
+                // The bridge runs JavaScript from the bundle, so refuse to start it unless the
+                // bundle still matches the signature the app was launched with.
+                try await Task.detached(priority: .userInitiated) { try BundleSeal.verifyMainBundle() }.value
+                guard !Task.isCancelled else { return }
                 let manifestURL = resources.appendingPathComponent("PointGuard/runtime-manifest.json")
                 let runtime = try await Task.detached(priority: .userInitiated) { try PointGuardRuntime.load(manifestURL: manifestURL) }.value
                 guard !Task.isCancelled else { return }
@@ -76,6 +83,7 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
                 for name in ["PU_AGENT_ID", "PU_PROJECT_ROOT", "NODE_OPTIONS", "NODE_PATH", "PI_MOBILE_SESSION", "PI_MOBILE_TOKEN_FILE", "PI_MOBILE_PU_SKILL", "PI_MOBILE_CWD"] { environment.removeValue(forKey: name) }
                 environment["POINT_GUARD_STATE_DIR"] = self.stateDirectory.path
                 environment["POINT_GUARD_PU_PATH"] = runtime.pu.path
+                environment["POINT_GUARD_PU_HOME"] = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pu").path
                 environment["POINT_GUARD_LOCK_HELPER_PATH"] = runtime.lockHelper.path
                 environment["POINT_GUARD_INSTANCE_ID"] = self.instanceId
                 environment["POINT_GUARD_APP_LIFETIME"] = "stdin"
@@ -312,10 +320,6 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
             if enrollmentStatus == "consumed" { await refresh() }
         } catch { self.error = error.localizedDescription }
     }
-    func rotateDevice(_ id: String) async {
-        do { _ = try await request("devices.rotate", fields: ["deviceId": .string(id)]); await refresh() }
-        catch { self.error = error.localizedDescription }
-    }
     @discardableResult func retryEnrollmentCleanup() async -> Bool {
         let lifetime = runtimeGeneration
         for id in pendingEnrollmentCleanup.sorted() {
@@ -339,7 +343,30 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
         enrollment = .null; enrollmentStatus = ""
         _ = await retryEnrollmentCleanup()
     }
+    /// Moves a device to `level` from its stored grants. One change per device at a time.
+    func setAccess(_ id: String, to level: PointGuardPhoneAccess.Level) async {
+        guard !deviceUpdates.contains(id),
+              let device = devices.first(where: { $0["deviceId"].text == id }) else { return }
+        deviceUpdates.insert(id)
+        defer { deviceUpdates.remove(id) }
+        let stored: Bool = { if case .bool(let allowed) = device["workspaceManagement"] { return allowed }; return false }()
+        do {
+            for step in PointGuardPhoneAccess.steps(terminals: device["terminals"].text ?? "off", workspaceManagement: stored, to: level) {
+                switch step {
+                case .workspaceManagement(let allowed):
+                    _ = try await request("devices.workspaceManagement", fields: ["deviceId": .string(id), "workspaceManagement": .bool(allowed)])
+                case .terminals(let terminals):
+                    _ = try await request("devices.terminals", fields: ["deviceId": .string(id), "terminals": .string(terminals)])
+                }
+            }
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+    }
+
     func revokeDevice(_ id: String) async {
+        guard !deviceUpdates.contains(id) else { return }
+        deviceUpdates.insert(id)
+        defer { deviceUpdates.remove(id) }
         do { _ = try await request("devices.revoke", fields: ["deviceId": .string(id)]); await refresh() }
         catch { self.error = error.localizedDescription }
     }
@@ -428,3 +455,62 @@ private final class PointGuardHTTPDelegate: NSObject, URLSessionTaskDelegate, @u
 private extension PiJSONValue {
     var values: [PiJSONValue] { if case .array(let values) = self { return values }; return [] }
 }
+
+/// What a paired device's grants allow, including Point Guard chat, which follows them:
+/// Point Guard has a shell and the `pu` CLI, so sending to it is full control.
+enum PointGuardPhoneAccess {
+    /// The device grants as one choice. New devices pair with full access.
+    enum Level: String, CaseIterable, Identifiable {
+        case full, terminals, view, off
+        var id: String { rawValue }
+        init(terminals: String, workspaceManagement: Bool) {
+            switch terminals {
+            case "control": self = workspaceManagement ? .full : .terminals
+            case "view": self = .view
+            default: self = .off
+            }
+        }
+        var terminals: String {
+            switch self {
+            case .full, .terminals: return "control"
+            case .view: return "view"
+            case .off: return "off"
+            }
+        }
+        var workspaceManagement: Bool { self == .full }
+        var title: String {
+            switch self {
+            case .full: return "Full access"
+            case .terminals: return "Terminals only"
+            case .view: return "View only"
+            case .off: return "No access"
+            }
+        }
+    }
+    enum Step: Equatable { case workspaceManagement(Bool), terminals(String) }
+
+    /// The grant writes that move a device's stored grants to `level`. Works from the raw stored
+    /// values, so a legacy management grant hidden under View or Off is still cleared. Workspace
+    /// management requires Control, so it is dropped before terminals change and added after.
+    static func steps(terminals: String, workspaceManagement: Bool, to level: Level) -> [Step] {
+        var steps: [Step] = []
+        if workspaceManagement && !level.workspaceManagement { steps.append(.workspaceManagement(false)) }
+        if terminals != level.terminals { steps.append(.terminals(level.terminals)) }
+        if !workspaceManagement && level.workspaceManagement { steps.append(.workspaceManagement(true)) }
+        return steps
+    }
+
+    static func summary(terminals: String, workspaceManagement: Bool) -> String {
+        switch terminals {
+        case "control" where workspaceManagement:
+            return "Full control: agents, terminals, workspaces and chatting with Point Guard, which can run commands and manage agents on this Mac."
+        case "control":
+            return "Controls agent terminals and reads Point Guard chat. Sending to Point Guard also needs Workspace management."
+        case "view":
+            return "Views agents and terminals and reads Point Guard chat. Cannot type, manage workspaces or send to Point Guard."
+        default:
+            return "No access to agents, terminals or Point Guard chat."
+        }
+    }
+}
+#endif

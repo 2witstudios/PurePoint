@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 import AppKit
 import SwiftTerm
@@ -32,10 +33,13 @@ class TerminalPaneNSView: NSView {
     /// Set by `TerminalViewCache`.
     var onBackgroundOutput: (() -> Void)?
     /// The agent's daemon. Set by `TerminalViewCache`; remote agents attach over their machine.
-    var client = DaemonClient() {
-        didSet { terminal?.acceptsFileDrops = isLocalClient }
+    var client = DaemonEndpoint.local.makeClient() {
+        didSet {
+            terminal?.attachmentClient = client
+            terminal?.usesRemoteHost = !isLocalClient
+        }
     }
-    /// Local file paths only mean something to this Mac's daemon.
+    /// Local file paths only mean something to this Mac's daemon; remote agents get uploads.
     private var isLocalClient: Bool { client.socketPath == DaemonEndpoint.localSocketPath }
     /// A resize sends SIGWINCH, and full-screen programs answer by redrawing everything.
     /// That redraw is not new activity, so output until this moment does not count.
@@ -68,7 +72,8 @@ class TerminalPaneNSView: NSView {
         tv.layer?.masksToBounds = true
         tv.pinToEdges(of: self)
         tv.terminalView.hideCursor(source: tv.terminalView.getTerminal())
-        tv.acceptsFileDrops = isLocalClient
+        tv.attachmentClient = client
+        tv.usesRemoteHost = !isLocalClient
         terminal = tv
 
         // Show a small spinner while waiting for first output
@@ -116,8 +121,7 @@ class TerminalPaneNSView: NSView {
                 startHeartbeat()
                 // New panes should be immediately interactive.
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, !InlineRenameFocus.isActive else { return }
-                    self.window?.makeFirstResponder(tv.terminalView)
+                    self?.focusTerminal()
                 }
             } else if let task = attachTask, task.isCancelled || isAttachDone, canReattach {
                 // Session died — restart
@@ -156,6 +160,7 @@ class TerminalPaneNSView: NSView {
             // Every attach replays the daemon's whole buffer; only the first
             // one lands in an empty terminal.
             resetBeforeReplay: oldSession != nil,
+            localCols: tv.localGridSize.cols, localRows: tv.localGridSize.rows,
             onFirstOutput: { [weak self] in self?.removeSpinner() },
             onOutput: { [weak self] in self?.noteOutput() },
             client: client
@@ -195,7 +200,9 @@ class TerminalPaneNSView: NSView {
 
     func focusTerminal() {
         guard !InlineRenameFocus.isActive, let tv = terminal?.terminalView else { return }
-        window?.makeFirstResponder(tv)
+        guard let window, window.makeFirstResponder(tv) else { return }
+        let session = terminal?.attachSession
+        Task { await session?.claimSize() }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -241,3 +248,4 @@ class TerminalPaneNSView: NSView {
         terminal?.tearDown()
     }
 }
+#endif
