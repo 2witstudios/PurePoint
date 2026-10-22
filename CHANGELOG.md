@@ -5,9 +5,11 @@ All notable changes to PurePoint are documented here. Format follows [Keep a Cha
 ## [Unreleased]
 
 ### Added
+- Projects can be reordered, and every device shows the same order. Each machine's daemon saves the order of its projects. On the Mac, drag a project within its section or use Move Up / Move Down in its menu; on the iPad, use Move Up / Move Down; on the phone, long-press a machine and choose Reorder Projects…. Changes reach every device following that machine right away. `pu projects` lists projects in the same order. New projects are added at the end.
 - Paste an image (Cmd+V) into any agent's terminal, or drop files on a remote agent's terminal, and the macOS app uploads it to the agent's machine and types its path there, so remote agents can see screenshots. Uploads are kept in `~/.pu/attachments` on that machine for 7 days.
 
 ### Changed
+- The daemon protocol is now version 14, for the new `reorder_projects` request. Update PurePoint on every machine and restart its daemon.
 - Phones and iPads now pair with full access (agents, terminals, workspace management and Point Guard chat). Point Guard setup shows each device on one line with a single Access menu (Full access, Terminals only, View only, No access) and a Revoke button. Revoked devices are removed instead of lingering as "Revoked", and the redundant "Require re-pair" button is gone. Devices that are already paired keep their current access.
 - The daemon protocol is now version 12, for the new `attach_file` request. Update PurePoint on every machine and restart its daemon.
 - **Breaking: `scripts/install.sh` installs a Linux release only after verifying who built it.** Linux tarballs are signed with a PurePoint minisign key whose public half is embedded in the script, and releases carry GitHub build provenance attestations. The script checks the signature (with `minisign`, or OpenSSL 3 when minisign isn't installed) and, when the GitHub CLI is installed and signed in, runs `gh attestation verify`. If neither check can run, for example for releases published before signing started, it stops; set `PU_INSTALL_SKIP_VERIFY=1` to install anyway with a warning. A check that fails always stops the install.
