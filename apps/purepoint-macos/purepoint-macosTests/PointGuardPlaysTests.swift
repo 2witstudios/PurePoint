@@ -119,4 +119,46 @@ struct PointGuardPlaysTests {
         #expect(PointGuardCourtGeometry.tilt(toward: CGPoint(x: 1000, y: 0), in: size) == 8)
         #expect(PointGuardCourtGeometry.tilt(toward: CGPoint(x: 0, y: 0), in: size) == -8)
     }
+
+    // MARK: - Docked (iPad) court
+
+    @Test func aTallPaneRunsThePortraitCourtOnlyUnderADockedComposer() {
+        let portrait = CGSize(width: 500, height: 900)
+        #expect(PointGuardCourtGeometry.layout(for: portrait, compact: false, docked: true) == .portrait)
+        #expect(PointGuardCourtGeometry.layout(for: portrait, compact: false, docked: false) == .stacked)
+    }
+
+    @Test func aWidePaneKeepsTheWideCourt() {
+        let landscape = CGSize(width: 900, height: 700)
+        #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: true) == .wide)
+        #expect(PointGuardCourtGeometry.layout(for: landscape, compact: false, docked: false) == .wide)
+    }
+
+    @Test func smallAndCompactPanesStack() {
+        #expect(
+            PointGuardCourtGeometry.layout(for: CGSize(width: 320, height: 460), compact: false, docked: true)
+                == .stacked)
+        #expect(
+            PointGuardCourtGeometry.layout(for: CGSize(width: 500, height: 900), compact: true, docked: true)
+                == .stacked)
+    }
+
+    @Test func portraitPlaysSitOnTheirAnchorsUnderTheHeading() {
+        let positions = PointGuardCourtGeometry.portraitPositions(
+            in: CGSize(width: 500, height: 900), headingBottom: 300)
+        #expect(
+            positions == [
+                CGPoint(x: 105, y: 603), CGPoint(x: 395, y: 603), CGPoint(x: 165, y: 774), CGPoint(x: 335, y: 774),
+            ])
+    }
+
+    @Test func portraitPlaysStayInsideAShortNarrowPane() {
+        let size = CGSize(width: 360, height: 520)
+        let positions = PointGuardCourtGeometry.portraitPositions(in: size, headingBottom: 340)
+        #expect(positions[0] == CGPoint(x: 78, y: 388))
+        #expect(positions[1] == CGPoint(x: 282, y: 388))
+        #expect(positions[2].y == 480)
+        #expect(positions.allSatisfy { $0.x - PointGuardCourtGeometry.labelHalfWidth >= 0 })
+        #expect(positions.allSatisfy { $0.x + PointGuardCourtGeometry.labelHalfWidth <= size.width })
+    }
 }

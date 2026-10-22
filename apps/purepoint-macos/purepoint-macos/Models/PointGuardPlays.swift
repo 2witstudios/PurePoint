@@ -126,13 +126,51 @@ enum PointGuardCourtGeometry {
     /// Half a play's label width, which must stay clear of the centred column.
     static let labelHalfWidth: CGFloat = 70
 
-    static func logoPoint(in size: CGSize) -> CGPoint {
-        CGPoint(x: size.width * logo.x, y: size.height * logo.y)
+    static func logoPoint(in size: CGSize, portrait: Bool = false) -> CGPoint {
+        let logo = portrait ? portraitLogo : logo
+        return CGPoint(x: size.width * logo.x, y: size.height * logo.y)
     }
 
     /// Below this size the court can't hold the column and its plays, so they stack instead. The height leaves room
     /// for the low blocks under a composer with a two-line heading above it.
     static let minimumSize = CGSize(width: 680, height: 600)
+
+    enum Layout: Equatable { case wide, portrait, stacked }
+
+    /// Below this a tall pane can't hold the portrait court above a docked composer.
+    static let portraitMinimumSize = CGSize(width: 340, height: 480)
+
+    /// The court for a pane of `size`. A docked composer (the iPad's, under the court rather than in its column)
+    /// lets a tall pane run the portrait court; the composer's own slot is never part of this choice.
+    static func layout(for size: CGSize, compact: Bool, docked: Bool) -> Layout {
+        if compact { return .stacked }
+        if docked && size.height > size.width && size.width >= portraitMinimumSize.width
+            && size.height >= portraitMinimumSize.height
+        {
+            return .portrait
+        }
+        return size.width >= minimumSize.width && size.height >= minimumSize.height ? .wide : .stacked
+    }
+
+    /// The portrait court: the logo at the top of the key, wings outside the arc, low blocks inside it.
+    static let portraitLogo = CGPoint(x: 0.5, y: 0.28)
+    static let portraitAnchors = [
+        CGPoint(x: 0.21, y: 0.67), CGPoint(x: 0.79, y: 0.67),
+        CGPoint(x: 0.33, y: 0.86), CGPoint(x: 0.67, y: 0.86),
+    ]
+
+    /// Every play stays under the logo and heading, inside the pane, and its label clear of the side lines.
+    static func portraitPositions(in size: CGSize, headingBottom: CGFloat) -> [CGPoint] {
+        let belowHeading = headingBottom + 48
+        let inset = labelHalfWidth + 8
+        return portraitAnchors.enumerated().map { index, anchor in
+            // The blocks keep a row's gap under the wings, as far as the pane allows.
+            let floor = index < 2 ? belowHeading : belowHeading + 96
+            let y = min(max(size.height * anchor.y, floor), size.height - 40)
+            let x = min(max(size.width * anchor.x, inset), size.width - inset)
+            return CGPoint(x: x, y: y)
+        }
+    }
 
     /// No play may sit on the composer. Wings beside it drop below it once the centred column would reach their
     /// labels, and the low blocks always stay below it, as far as the pane's height allows.
