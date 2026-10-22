@@ -123,6 +123,8 @@ enum PointGuardCourtGeometry {
     ]
     /// How close the pointer must be for a play to light up.
     static let reach: CGFloat = 150
+    /// How close a ball dragged off the logo must be to a play to pass to it.
+    static let touchReach: CGFloat = 72
     /// Half a play's label width, which must stay clear of the centred column.
     static let labelHalfWidth: CGFloat = 70
 
@@ -144,20 +146,13 @@ enum PointGuardCourtGeometry {
         static let docksComposer = false
     #endif
 
-    /// Below this a tall pane can't hold the portrait court above a docked composer.
-    static let portraitMinimumSize = CGSize(width: 340, height: 480)
-
-    /// The court for a pane of `size`. A docked composer (the iPad's, under the court rather than in its column)
-    /// lets a tall pane run the portrait court; the composer's own slot is never part of this choice. `resting` is
-    /// the pane without the keyboard, so raising the keyboard over a portrait court never turns it wide.
-    static func layout(for size: CGSize, resting: CGSize? = nil, compact: Bool, docked: Bool) -> Layout {
+    /// The court for a pane of `size`. The iPad always runs a court, whatever the pane: a tall or narrow pane runs the
+    /// portrait court, any other the wide one. Its composer docks under the court, so `size` is the court's own space
+    /// without the keyboard and the composer's slot is never part of this choice. The Mac stacks a pane too small for
+    /// the wide court, or a compact (sidebar) one.
+    static func layout(for size: CGSize, compact: Bool, docked: Bool) -> Layout {
+        if docked { return size.height > size.width || size.width < minimumSize.width ? .portrait : .wide }
         if compact { return .stacked }
-        let tall = resting.map { $0.height > $0.width } ?? (size.height > size.width)
-        if docked && tall && size.width >= portraitMinimumSize.width
-            && size.height >= portraitMinimumSize.height
-        {
-            return .portrait
-        }
         return size.width >= minimumSize.width && size.height >= minimumSize.height ? .wide : .stacked
     }
 
@@ -200,7 +195,7 @@ enum PointGuardCourtGeometry {
         }
     }
 
-    static func nearestSlot(to point: CGPoint, among positions: [CGPoint]) -> Int? {
+    static func nearestSlot(to point: CGPoint, among positions: [CGPoint], reach: CGFloat = reach) -> Int? {
         positions.indices
             .map { ($0, hypot(positions[$0].x - point.x, positions[$0].y - point.y)) }
             .filter { $0.1 < reach }
