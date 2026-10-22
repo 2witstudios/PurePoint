@@ -48,6 +48,8 @@ final class MachineState: Identifiable {
 
     /// How often the project list is re-read while the daemon is up.
     static let refreshInterval: Duration = .seconds(30)
+    /// Bumped by each local move, so a project list fetched before it can't undo it.
+    @ObservationIgnored private var orderRevision = 0
 
     var endpoint: DaemonEndpoint { .machine(machine.id) }
     var isConnectedOrConnecting: Bool { state != .disconnected }
@@ -322,6 +324,7 @@ final class MachineState: Identifiable {
     /// Discover the daemon's registered projects (`inventory`, kind projects, all roots).
     func refreshProjects() async {
         let client = endpoint.makeClient()
+        let revision = orderRevision
         let response: DaemonResponse
         do {
             response = try await client.send(.inventory(kind: "projects"))
@@ -335,6 +338,8 @@ final class MachineState: Identifiable {
         switch response {
         case .inventory(let report):
             actionError = nil
+            // Listed before a move this app made: the next refresh brings the saved order.
+            guard revision == orderRevision else { return }
             setProjects(roots: report.projects.map(\.projectRoot))
         case .error(_, let message):
             actionError = "Could not list projects on \(machine.name): \(message)"
@@ -384,6 +389,7 @@ final class MachineState: Identifiable {
     func moveProject(root: String, to index: Int) {
         guard let next = ProjectOrder.moving(root, to: index, in: projects) else { return }
         projects = next
+        orderRevision += 1
         let roots = next.map(\.projectRoot)
         let client = endpoint.makeClient()
         Task { [weak self] in

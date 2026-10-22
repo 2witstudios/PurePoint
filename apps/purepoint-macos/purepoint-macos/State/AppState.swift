@@ -114,6 +114,8 @@ final class AppState {
     @ObservationIgnored private var machineRegistryWatcher: MachineRegistryWatcher?
     #if os(macOS)
     @ObservationIgnored private var localProjectOrderTask: Task<Void, Never>?
+    /// Bumped by each local move, so an order fetched before it can't undo it.
+    @ObservationIgnored private var localOrderRevision = 0
     #endif
 
     private static let openProjectsKey = "PurePointOpenProjects"
@@ -315,6 +317,7 @@ final class AppState {
         guard let next = ProjectOrder.moving(project.projectRoot, to: index, in: projects) else { return }
         projects = next
         persistOpenProjects()
+        localOrderRevision += 1
         let roots = next.map(\.projectRoot)
         Task { [weak self] in
             let response = try? await DaemonEndpoint.local.makeClient().send(.reorderProjects(projectRoots: roots))
@@ -338,9 +341,10 @@ final class AppState {
         guard localProjectOrderTask == nil else { return }
         localProjectOrderTask = Task { [weak self] in
             while !Task.isCancelled {
+                let revision = self?.localOrderRevision
                 let response = try? await DaemonEndpoint.local.makeClient().send(.inventory(kind: "projects"))
-                if case .inventory(let report) = response {
-                    self?.applyProjectOrder(report.projects.map(\.projectRoot))
+                if case .inventory(let report) = response, let self, self.localOrderRevision == revision {
+                    self.applyProjectOrder(report.projects.map(\.projectRoot))
                 }
                 do { try await Task.sleep(for: MachineState.refreshInterval) } catch { return }
             }
