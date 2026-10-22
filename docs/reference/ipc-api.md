@@ -109,7 +109,9 @@ Forget a project on this daemon, for every client. Its files, including `.pu/`, 
 
 **Request**: `{"type": "remove_project", "project_root": "/path/to/project", "suspend_agents": true}`
 
-**Response**: `{"type": "project_removed", "project_root": "/path/to/project", "removed": true, "suspended": ["ag-abc"]}`
+**Response**: `{"type": "project_removed", "project_root": "/path/to/project", "removed": true, "suspended": ["ag-abc"], "killed": []}`
+
+`killed` lists live sessions in the folder that the manifest did not record; they are stopped and cannot be resumed. A daemon loading its registry drops, in the background, registered folders that exist without a manifest; `subscribe_projects` sends its first list only after that.
 
 ### Shutdown
 
