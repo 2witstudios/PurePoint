@@ -60,7 +60,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 |---|---|---|
 | Data Model | DM | EXPLORING |
 | CLI | CLI | DECIDED |
-| Daemon | DMN | EXPLORING |
+| Daemon | DMN | CONVERGING |
 | Agent Lifecycle | AL | CONVERGING |
 | Worktree Management | WT | SEED |
 | Orchestration | ORCH | SEED |
