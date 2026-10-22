@@ -257,6 +257,42 @@ struct WorkspaceRegistryTests {
         #expect(restored.first { $0.id == "ws-ag-a" }?.paneCount == 2)
     }
 
+    @Test func givenAnotherMacChangedADifferentWorkspaceASaveShouldKeepBothChanges() throws {
+        let project = root + "-merge"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: ["ag-a", "ag-b"])
+        registry.saveAll()
+        var theirs = registry.workspaces(forProject: project)
+        let b = try #require(theirs.firstIndex { $0.id == "ws-ag-b" })
+        theirs[b].split(leafId: 0, axis: .vertical)
+        try writeLayoutFromAnotherMac(theirs, projectRoot: project)
+        registry.split(workspaceId: "ws-ag-a", leafId: 0, axis: .vertical)
+
+        registry.saveAll()  // conflicts, merges
+        registry.saveAll()  // writes the merged layout
+
+        #expect(registry.workspace(id: "ws-ag-a")?.paneCount == 2)
+        #expect(registry.workspace(id: "ws-ag-b")?.paneCount == 2)
+        let onDisk = try WorkspacePersistence.loadForRegistry(projectRoot: project)
+        #expect(onDisk.map(\.paneCount) == [2, 2])
+    }
+
+    @Test func givenAgentSpawnedIntoPointGuardOnAnotherMacShouldLandInThisMacsPointGuard() throws {
+        let project = root + "-pg"
+        defer { try? FileManager.default.removeItem(atPath: project) }
+        let registry = makeRegistry(root: project, agents: [])
+        let pointGuard = try registry.ensurePointGuardWorkspace(projectRoot: project)
+        registry.split(workspaceId: pointGuard, leafId: 0, axis: .vertical)
+        let tab = try #require(registry.workspace(id: pointGuard)?.focusedSurface).id
+
+        var spawned = agent("ag-new")
+        spawned.placement = SpawnPlacement(workspace: "ws-point-guard:machine:other:" + project, surface: tab)
+        registry.reconcile(projectRoot: project, rootAgents: [spawned], worktrees: [])
+
+        #expect(registry.workspace(id: pointGuard)?.surface(id: tab)?.content == .agent("ag-new"))
+        #expect(registry.workspaceId(forAgent: "ag-new") == pointGuard)
+    }
+
     @Test func givenOwnSavesShouldNotBeMistakenForAnotherMacs() throws {
         let project = root + "-own"
         defer { try? FileManager.default.removeItem(atPath: project) }

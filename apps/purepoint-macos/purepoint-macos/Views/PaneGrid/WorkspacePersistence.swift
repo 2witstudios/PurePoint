@@ -524,18 +524,22 @@ nonisolated final class RemoteLayoutSaver: @unchecked Sendable {
         queue.async { self.knownModifiedMs = modifiedMs }
     }
 
-    func save(_ workspaces: [Workspace], activeWorkspaceId: String?) {
+    /// Queue a write of `workspaces`; `onWritten` runs (off the main thread) once it lands.
+    func save(
+        _ workspaces: [Workspace], activeWorkspaceId: String?, onWritten: (@Sendable () -> Void)? = nil
+    ) {
         guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: activeWorkspaceId) else { return }
-        enqueue(data)
+        enqueue(data, onWritten: onWritten)
     }
 
-    func enqueue(_ data: Data) {
+    func enqueue(_ data: Data, onWritten: (@Sendable () -> Void)? = nil) {
         let group = self.group
         group.enter()
         queue.async {
             switch self.write(data, self.knownModifiedMs) {
             case .written(let modified):
                 self.knownModifiedMs = modified
+                onWritten?()
             case .conflict(let document, let modified):
                 // The stamp advances only once the document is adopted (`loaded`).
                 self.conflictLock.lock()

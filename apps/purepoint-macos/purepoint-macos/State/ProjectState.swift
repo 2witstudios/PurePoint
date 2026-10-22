@@ -297,7 +297,9 @@ final class ProjectState: Identifiable {
                     }
                 }
                 registry.registerRemoteProject(projectId, restored: layout.workspaces) { workspaces, active in
-                    saver.save(workspaces, activeWorkspaceId: active)
+                    saver.save(workspaces, activeWorkspaceId: active) {
+                        Task { @MainActor in target.value?.layoutWritten(projectId, workspaces: workspaces) }
+                    }
                 }
                 return
             } catch {
@@ -452,13 +454,13 @@ final class ProjectState: Identifiable {
             placement: SpawnPlacement(workspace: workspaceId, surface: surfaceId)
         )
 
+        // Another Mac showing this project must see the new tab before the agent appears, or
+        // it has nowhere to put it: write the layout first.
+        registry.saveNow(projectRoot: root)
         guard let saver = remoteLayoutSaver else {
             sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)
             return
         }
-        // The machine's app (if one has this project open) must see the new tab before the
-        // agent appears, or it has nowhere to put it: write the layout first.
-        registry.saveNow(projectRoot: root)
         Task {
             _ = await HostIO.value { saver.flush(until: .now() + 5) }
             self.sendSurfaceSpawn(request, workspaceId: workspaceId, surfaceId: surfaceId)

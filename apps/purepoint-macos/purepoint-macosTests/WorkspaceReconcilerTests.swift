@@ -421,4 +421,54 @@ struct WorkspaceReconcilerTests {
         let entry = try JSONDecoder().decode(AgentEntry.self, from: Data(json.utf8))
         #expect(AgentModel(from: entry).placement == SpawnPlacement(workspace: "ws-ag-a", surface: 2))
     }
+
+    // MARK: - Layout merge
+
+    @Test func givenEachMacChangedADifferentWorkspaceMergeShouldKeepBothChanges() {
+        let base = [
+            Workspace.adopting(agentId: "ag-a", container: .projectRoot),
+            .adopting(agentId: "ag-b", container: .projectRoot),
+        ]
+        var ours = base
+        ours[0].split(leafId: 0, axis: .vertical)
+        var theirs = base
+        theirs[1].split(leafId: 0, axis: .horizontal)
+
+        let merged = WorkspaceLayoutMerge.merge(base: base, ours: ours, theirs: theirs)
+
+        #expect(merged == [ours[0], theirs[1]])
+    }
+
+    @Test func givenBothMacsChangedTheSameWorkspaceMergeShouldTakeTheirs() {
+        let base = [Workspace.adopting(agentId: "ag-a", container: .projectRoot)]
+        var ours = base
+        ours[0].split(leafId: 0, axis: .vertical)
+        var theirs = base
+        theirs[0].split(leafId: 0, axis: .horizontal)
+
+        #expect(WorkspaceLayoutMerge.merge(base: base, ours: ours, theirs: theirs) == theirs)
+    }
+
+    @Test func givenWorkspacesAddedAndRemovedMergeShouldApplyEachSidesChange() {
+        let a = Workspace.adopting(agentId: "ag-a", container: .projectRoot)
+        let b = Workspace.adopting(agentId: "ag-b", container: .projectRoot)
+        let mine = Workspace.adopting(agentId: "ag-mine", container: .projectRoot)
+        let theirsNew = Workspace.adopting(agentId: "ag-theirs", container: .projectRoot)
+        // We removed b and added mine; they removed a and added theirsNew.
+        let merged = WorkspaceLayoutMerge.merge(base: [a, b], ours: [a, mine], theirs: [b, theirsNew])
+
+        #expect(merged.map(\.id) == [theirsNew.id, mine.id])
+    }
+
+    @Test func givenPointGuardPlacementFromAnotherMacShouldBeRekeyedToThisApp() {
+        let agent = LiveAgent(
+            id: "ag-new", container: .projectRoot,
+            placement: SpawnPlacement(workspace: "ws-point-guard:machine:abc:/srv/app", surface: 3))
+
+        let rekeyed = agent.placementRekeyed(projectRoot: "/srv/app")
+
+        #expect(
+            rekeyed.placement == SpawnPlacement(workspace: Workspace.pointGuardId(projectRoot: "/srv/app"), surface: 3))
+        #expect(LiveAgent(id: "ag-x", container: .projectRoot).placementRekeyed(projectRoot: "/p").placement == nil)
+    }
 }

@@ -71,6 +71,9 @@ final class WorkspaceRegistry {
     /// or wrote it (nil: there was none). A Mac reaching this one over SSH writes the same
     /// file, so a different time on disk is a change to adopt, never to overwrite.
     @ObservationIgnored private var localLayoutStamps: [String: Int64?] = [:]
+    /// Each project's layout document as this app last read or wrote it, in its decoded form:
+    /// the base for merging a document another Mac wrote (`WorkspaceLayoutMerge`).
+    @ObservationIgnored private var layoutBases: [String: [Workspace]] = [:]
 
     init(loadWorkspaces: @escaping (String) throws -> [Workspace] = { try WorkspacePersistence.loadForRegistry(projectRoot: $0) }) {
         self.loadWorkspaces = loadWorkspaces
@@ -91,24 +94,47 @@ final class WorkspaceRegistry {
         loadedProjects.insert(projectId)
         layoutErrorsByProject[projectId] = nil
         workspacesByProject[projectId] = restored
+        layoutBases[projectId] = restored
         if let live = liveByProject[projectId] {
             publish(projectRoot: projectId, stored: restored, live: live)
         }
     }
 
     /// The project's layout document changed under this app (a conditional save hit a
-    /// conflict, or another Mac wrote this Mac's file): adopt it instead of overwriting it,
-    /// then fold in the live agents.
+    /// conflict, or another Mac wrote this Mac's file): merge it with this app's layout instead
+    /// of overwriting it, fold in the live agents, and write back whatever this app adds.
     func adoptExternalLayout(_ projectId: String, workspaces: [Workspace]) {
         guard loadedProjects.contains(projectId) else { return }
         saveWorkItems[projectId]?.cancel()
         saveWorkItems[projectId] = nil
         pendingSaves.remove(projectId)
-        workspacesByProject[projectId] = workspaces
+        let merged = WorkspaceLayoutMerge.merge(
+            base: layoutBases[projectId] ?? [],
+            ours: decoded(workspacesByProject[projectId] ?? [], projectId: projectId),
+            theirs: workspaces)
+        layoutBases[projectId] = workspaces
+        workspacesByProject[projectId] = merged
         pruneActiveSelection()
         if let live = liveByProject[projectId] {
-            publish(projectRoot: projectId, stored: workspaces, live: live)
+            publish(projectRoot: projectId, stored: merged, live: live)
         }
+        if decoded(workspacesByProject[projectId] ?? [], projectId: projectId) != workspaces {
+            scheduleSave(projectRoot: projectId)
+        }
+    }
+
+    /// A save of `workspaces` through the project's machine succeeded: it is now the base.
+    func layoutWritten(_ projectId: String, workspaces: [Workspace]) {
+        guard loadedProjects.contains(projectId) else { return }
+        layoutBases[projectId] = decoded(workspaces, projectId: projectId)
+    }
+
+    /// `workspaces` as a document read back would give them, so they compare with one.
+    private func decoded(_ workspaces: [Workspace], projectId: String) -> [Workspace] {
+        guard let data = WorkspacePersistence.documentData(workspaces, activeWorkspaceId: nil) else {
+            return workspaces
+        }
+        return WorkspacePersistence.workspaces(from: data, projectId: projectId)
     }
 
     /// A remote layout read failed (anything but a missing file). Nothing is published or
@@ -152,10 +178,13 @@ final class WorkspaceRegistry {
         guard !loadedProjects.contains(projectRoot) else { return false }
         guard !ProjectKey(id: projectRoot).isRemote else { throw RemoteLayoutPending() }
         do {
+            // Stamped before the read: a write landing in between then shows as a change.
+            let stamp = WorkspacePersistence.localModifiedMs(projectRoot: projectRoot)
             let restored = try loadWorkspaces(projectRoot)
             workspacesByProject[projectRoot] = restored
             loadedProjects.insert(projectRoot)
-            localLayoutStamps[projectRoot] = WorkspacePersistence.localModifiedMs(projectRoot: projectRoot)
+            localLayoutStamps[projectRoot] = stamp
+            layoutBases[projectRoot] = restored
             layoutErrorsByProject[projectRoot] = nil
             return true
         } catch {
@@ -228,6 +257,7 @@ final class WorkspaceRegistry {
     /// read back, so every restart silently dissolved the grouping.
     func reconcile(projectRoot: String, rootAgents: [AgentModel], worktrees: [WorktreeModel]) {
         let live = WorkspaceReconciler.liveAgents(rootAgents: rootAgents, worktrees: worktrees)
+            .map { $0.placementRekeyed(projectRoot: projectRoot) }
         // A failed restore must still retain the current manifest for a later Retry.
         liveByProject[projectRoot] = live
         if isAwaitingRemoteLayout(projectRoot) {
@@ -628,6 +658,7 @@ final class WorkspaceRegistry {
         switch WorkspacePersistence.saveLocal(data, projectRoot: projectRoot, expectedModifiedMs: expected) {
         case .written(let modified):
             localLayoutStamps[projectRoot] = modified
+            layoutBases[projectRoot] = decoded(workspaces, projectId: projectRoot)
         case .conflict(let document, let modified):
             localLayoutStamps[projectRoot] = modified
             adoptExternalLayout(
@@ -669,6 +700,7 @@ final class WorkspaceRegistry {
         loadedProjects.remove(projectRoot)
         remoteSavers[projectRoot] = nil
         localLayoutStamps[projectRoot] = nil
+        layoutBases[projectRoot] = nil
         pruneActiveSelection()
     }
 }
