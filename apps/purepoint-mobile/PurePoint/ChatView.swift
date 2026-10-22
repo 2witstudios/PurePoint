@@ -414,8 +414,20 @@ struct PlaysHero: View {
     ]
     /// How close the ball must be for a play to light up.
     private static let reach: CGFloat = 72
+    /// Below this height (landscape) the court can't hold the logo, heading and plays, so they stack instead.
+    private static let minimumCourtHeight: CGFloat = 400
 
     var body: some View {
+        GeometryReader { geometry in
+            if geometry.size.height < Self.minimumCourtHeight { stacked(height: geometry.size.height) } else { court }
+        }
+        .ignoresSafeArea(.keyboard)
+        .sensoryFeedback(trigger: target) { _, new in new == nil ? nil : .selection }
+        .sensoryFeedback(trigger: passed) { _, new in new == nil ? nil : .impact(weight: .light) }
+        .onDisappear { passTask?.cancel() }
+    }
+
+    private var court: some View {
         // Fills the screen under the toolbar and composer so the court lines run edge to edge; the plays stay in the open space between.
         GeometryReader { geometry in
             let size = geometry.size
@@ -483,10 +495,22 @@ struct PlaysHero: View {
             .coordinateSpace(name: "court")
         }
         .ignoresSafeArea(.container, edges: .vertical)
-        .ignoresSafeArea(.keyboard)
-        .sensoryFeedback(trigger: target) { _, new in new == nil ? nil : .selection }
-        .sensoryFeedback(trigger: passed) { _, new in new == nil ? nil : .impact(weight: .light) }
-        .onDisappear { passTask?.cancel() }
+    }
+
+    private func stacked(height: CGFloat) -> some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                LogoRing(size: 56)
+                Text("What play do you want to run?").font(.system(size: 22, weight: .bold)).tracking(-0.4)
+                    .multilineTextAlignment(.center).foregroundStyle(Color(hex: 0xF4F4F5))
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible())], spacing: 8) {
+                    ForEach(Self.plays.indices, id: \.self) { index in pill(index, lit: index == passed) }
+                }
+                .frame(maxWidth: 440)
+            }
+            .padding(16).frame(maxWidth: .infinity, minHeight: height)
+        }
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
@@ -502,6 +526,19 @@ struct PlaysHero: View {
             guard (try? await Task.sleep(for: .milliseconds(450))) != nil, !Task.isCancelled else { return }
             ball = nil; passTask = nil; call(prompt)
         }
+    }
+    private func pill(_ index: Int, lit: Bool) -> some View {
+        let play = Self.plays[index]
+        return Button { pass(index, to: .zero) } label: {
+            Label(play.label, systemImage: play.icon).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                .foregroundStyle(lit ? Theme.ground : Theme.muted)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(lit ? Theme.accent : Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.white.opacity(lit ? 0 : 0.09)) }
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain).disabled(!enabled)
+        .accessibilityLabel(play.label).accessibilityHint(play.prompt)
     }
     private func spot(_ index: Int, lit: Bool, action: @escaping () -> Void) -> some View {
         let play = Self.plays[index]
