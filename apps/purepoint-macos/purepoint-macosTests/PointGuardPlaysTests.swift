@@ -119,4 +119,21 @@ struct PointGuardPlaysTests {
         #expect(PointGuardCourtGeometry.tilt(toward: CGPoint(x: 1000, y: 0), in: size) == 8)
         #expect(PointGuardCourtGeometry.tilt(toward: CGPoint(x: 0, y: 0), in: size) == -8)
     }
+
+    @Test func logoFacesATargetClearlyToOneSide() {
+        #expect(PointGuardCourtGeometry.facesLeft(toward: CGPoint(x: 100, y: 400), logoX: 500, current: false))
+        #expect(!PointGuardCourtGeometry.facesLeft(toward: CGPoint(x: 900, y: 400), logoX: 500, current: true))
+    }
+
+    @Test func logoKeepsItsFacingNearTheCentreOrWithoutATarget() {
+        #expect(PointGuardCourtGeometry.facesLeft(toward: CGPoint(x: 510, y: 400), logoX: 500, current: true))
+        #expect(!PointGuardCourtGeometry.facesLeft(toward: CGPoint(x: 490, y: 400), logoX: 500, current: false))
+        #expect(PointGuardCourtGeometry.facesLeft(toward: nil, logoX: 500, current: true))
+    }
+
+    @Test func aLogoMovedPastAStillTargetTurnsAround() {
+        let pointer = CGPoint(x: 400, y: 300)
+        #expect(PointGuardCourtGeometry.facesLeft(toward: pointer, logoX: 500, current: false))
+        #expect(!PointGuardCourtGeometry.facesLeft(toward: pointer, logoX: 300, current: true))
+    }
 }
