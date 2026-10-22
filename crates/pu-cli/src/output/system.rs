@@ -97,6 +97,9 @@ mod tests {
             project_launch_args: project.map(str::to_owned),
             machine_launch_args: machine.map(str::to_owned),
             resolved_command: None,
+            project_command: None,
+            inherited_command: None,
+            origin: None,
         }
     }
 

@@ -2145,6 +2145,8 @@ fn given_update_agent_config_request_with_args_should_round_trip() {
         project_root: "/test".into(),
         agent_name: "claude".into(),
         launch_args: Some(vec!["--verbose".into(), "--model".into(), "opus".into()]),
+        command: Some("scripts/wrap.sh claude".into()),
+        remove: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -2153,10 +2155,14 @@ fn given_update_agent_config_request_with_args_should_round_trip() {
             project_root,
             agent_name,
             launch_args,
+            command,
+            remove,
         } => {
             assert_eq!(project_root, "/test");
             assert_eq!(agent_name, "claude");
             assert_eq!(launch_args.unwrap(), vec!["--verbose", "--model", "opus"]);
+            assert_eq!(command.as_deref(), Some("scripts/wrap.sh claude"));
+            assert!(!remove);
         }
         _ => panic!("expected UpdateAgentConfig"),
     }
@@ -2196,13 +2202,28 @@ fn given_update_global_agent_settings_with_launch_args_should_round_trip() {
             .into_iter()
             .collect(),
         ),
+        commands: Some(
+            [("aider".to_string(), "aider".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        remove_agents: Some(vec!["goose".into()]),
     };
     let json = serde_json::to_string(&req).unwrap();
     match serde_json::from_str::<Request>(&json).unwrap() {
-        Request::UpdateGlobalAgentSettings { launch_args, .. } => assert_eq!(
-            launch_args.unwrap()["claude"],
-            "--dangerously-skip-permissions"
-        ),
+        Request::UpdateGlobalAgentSettings {
+            launch_args,
+            commands,
+            remove_agents,
+            ..
+        } => {
+            assert_eq!(
+                launch_args.unwrap()["claude"],
+                "--dangerously-skip-permissions"
+            );
+            assert_eq!(commands.unwrap()["aider"], "aider");
+            assert_eq!(remove_agents.unwrap(), ["goose"]);
+        }
         _ => panic!("expected UpdateGlobalAgentSettings"),
     }
 }
@@ -2215,9 +2236,13 @@ fn given_legacy_update_global_agent_settings_with_codex_yolo_should_ignore_it() 
         Request::UpdateGlobalAgentSettings {
             agent_status_tracking,
             launch_args,
+            commands,
+            remove_agents,
         } => {
             assert_eq!(agent_status_tracking, Some(false));
             assert!(launch_args.is_none());
+            assert!(commands.is_none());
+            assert!(remove_agents.is_none());
         }
         _ => panic!("expected UpdateGlobalAgentSettings"),
     }
@@ -2229,6 +2254,7 @@ fn given_global_agent_settings_report_should_still_send_codex_yolo_false_for_pro
         codex_yolo: false,
         agent_status_tracking: true,
         launch_args: IndexMap::new(),
+        commands: Some(IndexMap::new()),
     };
     let json = serde_json::to_value(&report).unwrap();
     assert_eq!(json["codex_yolo"], serde_json::Value::Bool(false));
@@ -2238,7 +2264,14 @@ fn given_global_agent_settings_report_should_still_send_codex_yolo_false_for_pro
 fn given_legacy_global_agent_settings_report_should_default_launch_args() {
     let json = r#"{"type":"global_agent_settings_report","codex_yolo":false}"#;
     match serde_json::from_str::<Response>(json).unwrap() {
-        Response::GlobalAgentSettingsReport { launch_args, .. } => assert!(launch_args.is_empty()),
+        Response::GlobalAgentSettingsReport {
+            launch_args,
+            commands,
+            ..
+        } => {
+            assert!(launch_args.is_empty());
+            assert!(commands.is_none());
+        }
         _ => panic!("expected GlobalAgentSettingsReport"),
     }
 }
@@ -2276,6 +2309,8 @@ fn given_update_agent_config_request_with_none_should_round_trip() {
         project_root: "/test".into(),
         agent_name: "codex".into(),
         launch_args: None,
+        command: None,
+        remove: false,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: Request = serde_json::from_str(&json).unwrap();
@@ -2304,6 +2339,9 @@ fn given_config_report_response_should_round_trip() {
                 project_launch_args: Some("--verbose".into()),
                 machine_launch_args: None,
                 resolved_command: Some("claude --verbose".into()),
+                project_command: None,
+                inherited_command: Some("claude".into()),
+                origin: Some("builtin".into()),
             },
             AgentConfigInfo {
                 id: None,
@@ -2316,6 +2354,9 @@ fn given_config_report_response_should_round_trip() {
                 project_launch_args: None,
                 machine_launch_args: Some("--sandbox workspace-write".into()),
                 resolved_command: None,
+                project_command: None,
+                inherited_command: None,
+                origin: None,
             },
         ],
     };

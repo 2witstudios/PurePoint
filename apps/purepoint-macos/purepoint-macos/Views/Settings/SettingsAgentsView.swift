@@ -18,28 +18,9 @@ struct SettingsAgentsView: View {
                     ))
                     .toggleStyle(.switch)
                     .disabled(!state.globalSettingsLoaded || state.isSavingGlobalSettings)
-                    Text("Show whether Claude Code, Codex, OpenCode and Pi agents are working, idle or waiting on you. Works with any version of those tools. Applies to new and resumed sessions.")
+                    Text("Show whether Claude Code, Codex, OpenCode and Point Guard agents are working, idle or waiting on you. Works with any version of those tools. Applies to new and resumed sessions.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    Divider()
-                    Text("Launch args for all projects")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("Appended to the command in every project on this Mac that doesn't set its own. Agents launch with the bare command when this is empty.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    ForEach(launchArgsAgents, id: \.self) { agent in
-                        LaunchArgsRow(
-                            command: state.agentConfig(named: agent)?.command ?? agent,
-                            stored: state.machineLaunchArgs[agent] ?? "",
-                            placeholder: launchArgsPlaceholder(for: agent)
-                        ) { text in
-                            Task {
-                                await state.updateMachineLaunchArgs(
-                                    agentName: agent, launchArgs: text, projectRoot: appState.activeLocalProjectRoot)
-                            }
-                        }
-                        .disabled(!state.globalSettingsLoaded || state.isSavingGlobalSettings)
-                    }
                     if let error = state.globalError {
                         Text(error).font(.system(size: 12)).foregroundStyle(.red)
                         Button("Retry") { Task { await state.loadGlobalSettings() } }
@@ -54,13 +35,46 @@ struct SettingsAgentsView: View {
                 #endif
             }
             .groupBoxStyle(SettingsGroupBoxStyle())
+
+            GroupBox {
+                AgentLaunchTable(
+                    caption: "What runs in the terminal: launch command, then arguments.",
+                    rows: state.machineAgentNames.map { name in
+                        AgentLaunchRowModel(
+                            agentType: name,
+                            command: state.machineCommands[name] ?? "",
+                            launchArgs: state.machineLaunchArgs[name] ?? "",
+                            commandHint: name,
+                            launchArgsHint: "",
+                            removable: !AgentLaunchDefaults.builtIns.contains(name))
+                    },
+                    onSave: { row, command, args in
+                        await state.updateMachineAgent(
+                            agentName: row.agentType, command: command, launchArgs: args,
+                            projectRoot: appState.activeLocalProjectRoot)
+                    },
+                    onAdd: { command, args in
+                        await state.addMachineAgent(
+                            command: command, launchArgs: args, projectRoot: appState.activeLocalProjectRoot)
+                    },
+                    onRemove: { row in
+                        await state.removeMachineAgent(
+                            agentName: row.agentType, projectRoot: appState.activeLocalProjectRoot)
+                    }
+                )
+                .disabled(!state.globalSettingsLoaded || state.isSavingGlobalSettings)
+            } label: {
+                Label("Agents — All Projects", systemImage: "desktopcomputer")
+            }
+            .groupBoxStyle(SettingsGroupBoxStyle())
+
             if let projectRoot = appState.activeLocalProjectRoot {
                 SettingsAgentsContentView(projectRoot: projectRoot)
             } else {
                 ContentUnavailableView(
                     "No Project Open",
                     systemImage: "folder.badge.questionmark",
-                    description: Text("Open a project to configure agent launch settings.")
+                    description: Text("Open a project to set its agents.")
                 )
             }
         }
@@ -95,38 +109,23 @@ struct SettingsAgentsContentView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Appended to the command for this project. Leave empty to use the launch args for all projects. To launch the bare command here regardless, set launchArgs: \"\" for the agent in .pu/config.yaml.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        ForEach(launchArgsAgents, id: \.self) { agent in
-                            if let payload = state.agentConfig(named: agent) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    LaunchArgsRow(
-                                        command: payload.command,
-                                        stored: payload.projectLaunchArgs
-                                            ?? payload.launchArgs?.joined(separator: " ") ?? "",
-                                        placeholder: payload.projectLaunchArgs == ""
-                                            ? "" : payload.machineLaunchArgs ?? launchArgsPlaceholder(for: agent)
-                                    ) { text in
-                                        Task {
-                                            await state.updateLaunchArgs(
-                                                projectRoot: projectRoot, agentName: agent,
-                                                launchArgs: text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text)
-                                        }
-                                    }
-                                    if payload.projectLaunchArgs == "" {
-                                        Text("Set to empty in .pu/config.yaml: launches the bare command, ignoring the launch args for all projects.")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    resolvedCommandView(payload)
-                                }
-                            }
+                    AgentLaunchTable(
+                        caption: "Empty fields use the All Projects value, shown in grey.",
+                        rows: state.agents.map(projectRow),
+                        onSave: { row, command, args in
+                            await state.updateProjectAgent(
+                                projectRoot: projectRoot, agentName: row.agentType, command: command,
+                                launchArgs: args)
+                        },
+                        onAdd: { command, args in
+                            await state.addProjectAgent(projectRoot: projectRoot, command: command, launchArgs: args)
+                        },
+                        onRemove: { row in
+                            await state.removeProjectAgent(projectRoot: projectRoot, agentName: row.agentType)
                         }
-                    }
+                    )
                 } label: {
-                    Label("Launch Args for This Project", systemImage: "terminal")
+                    Label("Agents — This Project", systemImage: "folder")
                 }
                 .groupBoxStyle(SettingsGroupBoxStyle())
             }
@@ -135,68 +134,163 @@ struct SettingsAgentsContentView: View {
             await state.load(projectRoot: projectRoot)
         }
     }
-}
 
-// MARK: - Launch Args
-
-/// Agent types whose launch args can be configured. PurePoint knows only their
-/// base commands; extra args are a free-form string the user owns.
-private let launchArgsAgents = ["claude", "codex", "opencode"]
-
-/// An example flag each CLI accepts, shown when the field is empty.
-private func launchArgsPlaceholder(for agent: String) -> String {
-    switch agent {
-    case "claude": "--model opus"
-    case "codex": "--search"
-    case "opencode": "--auto"
-    default: ""
+    /// A project row's grey hints are exactly what runs when its field is left empty.
+    private func projectRow(_ payload: AgentConfigPayload) -> AgentLaunchRowModel {
+        // An explicit empty `launchArgs` in .pu/config.yaml launches the bare command.
+        let launchArgsHint = payload.projectLaunchArgs == "" ? "" : payload.machineLaunchArgs ?? ""
+        return AgentLaunchRowModel(
+            agentType: payload.agentType,
+            command: payload.projectCommand ?? "",
+            launchArgs: payload.projectLaunchArgs ?? "",
+            commandHint: payload.inheritedCommand ?? payload.command,
+            launchArgsHint: launchArgsHint,
+            removable: payload.origin == "project")
     }
 }
 
-/// One agent's launch args: the read-only base command and a free-form text field.
-struct LaunchArgsRow: View {
-    let command: String
-    let stored: String
-    let placeholder: String
-    let onSave: (String) -> Void
+// MARK: - Launch table
 
-    @State private var text = ""
+/// One agent in a launch table: what is stored at this level, and what runs when it is empty.
+struct AgentLaunchRowModel: Identifiable {
+    let agentType: String
+    let command: String
+    let launchArgs: String
+    let commandHint: String
+    let launchArgsHint: String
+    let removable: Bool
+
+    var id: String { agentType }
+}
+
+/// Launch command and arguments, one row per agent, plus rows for new agents.
+struct AgentLaunchTable: View {
+    let caption: String
+    let rows: [AgentLaunchRowModel]
+    let onSave: @MainActor (AgentLaunchRowModel, String, String) async -> Void
+    let onAdd: @MainActor (String, String) async -> Void
+    let onRemove: @MainActor (AgentLaunchRowModel) async -> Void
+
+    /// New rows not saved yet: an agent exists once its command is entered.
+    @State private var drafts: [UUID] = []
 
     var body: some View {
-        LabeledContent {
-            HStack(spacing: 6) {
-                TextField(placeholder, text: $text)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12, design: .monospaced))
-                    .onSubmit { save() }
-                Button("Save") { save() }
-                    .controlSize(.small)
-                    .disabled(text == stored)
-            }
-        } label: {
-            Text(command)
-                .font(.system(size: 12, design: .monospaced))
+        VStack(alignment: .leading, spacing: 8) {
+            Text(caption)
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 70, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                ForEach(rows) { row in savedRow(row) }
+                ForEach(drafts, id: \.self) { draft in draftRow(draft) }
+            }
+            Button {
+                drafts.append(UUID())
+            } label: {
+                Label("Add agent", systemImage: "plus")
+            }
+            .controlSize(.small)
         }
-        .onAppear { text = stored }
-        .onChange(of: stored) { text = stored }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Launch command").frame(width: AgentLaunchRowView.commandWidth, alignment: .leading)
+            Text("Arguments").frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: AgentLaunchRowView.removeWidth, height: 1)
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.secondary)
+    }
+
+    private func savedRow(_ row: AgentLaunchRowModel) -> AgentLaunchRowView {
+        var remove: (@MainActor () async -> Void)?
+        if row.removable {
+            remove = { await onRemove(row) }
+        }
+        return AgentLaunchRowView(
+            command: row.command, launchArgs: row.launchArgs,
+            commandHint: row.commandHint, launchArgsHint: row.launchArgsHint,
+            onSave: { command, args in await onSave(row, command, args) },
+            onRemove: remove)
+    }
+
+    private func draftRow(_ draft: UUID) -> AgentLaunchRowView {
+        AgentLaunchRowView(
+            command: "", launchArgs: "", commandHint: "command", launchArgsHint: "",
+            onSave: { command, args in
+                guard !command.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                drafts.removeAll { $0 == draft }
+                await onAdd(command, args)
+            },
+            onRemove: { drafts.removeAll { $0 == draft } })
+    }
+}
+
+/// Two text fields, saved together when either is submitted or loses focus.
+private struct AgentLaunchRowView: View {
+    let command: String
+    let launchArgs: String
+    let commandHint: String
+    let launchArgsHint: String
+    let onSave: @MainActor (String, String) async -> Void
+    /// Nil for agents that can't be removed at this level.
+    let onRemove: (@MainActor () async -> Void)?
+
+    static let commandWidth: CGFloat = 200
+    static let removeWidth: CGFloat = 20
+
+    private enum Field { case command, launchArgs }
+
+    @State private var commandText = ""
+    @State private var argsText = ""
+    @FocusState private var focus: Field?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            field(.command, hint: commandHint, text: $commandText, label: "Launch command")
+                .frame(width: Self.commandWidth)
+            field(.launchArgs, hint: launchArgsHint, text: $argsText, label: "Arguments")
+                .frame(maxWidth: .infinity)
+            if let onRemove {
+                Button {
+                    Task { await onRemove() }
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Remove agent")
+                .frame(width: Self.removeWidth)
+            } else {
+                Color.clear.frame(width: Self.removeWidth, height: 1)
+            }
+        }
+        .onAppear {
+            commandText = command
+            argsText = launchArgs
+        }
+        .onChange(of: command) { commandText = command }
+        .onChange(of: launchArgs) { argsText = launchArgs }
+        // Moving between the row's two fields keeps focus in the row; leaving it saves.
+        .onChange(of: focus) { if focus == nil { save() } }
+    }
+
+    private func field(_ which: Field, hint: String, text: Binding<String>, label: String) -> some View {
+        TextField(label, text: text, prompt: Text(hint))
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 12, design: .monospaced))
+            .autocorrectionDisabled()
+            #if os(iOS)
+            .textInputAutocapitalization(.never)
+            #endif
+            .focused($focus, equals: which)
+            .onSubmit { save() }
     }
 
     private func save() {
-        guard text != stored else { return }
-        onSave(text)
+        guard commandText != command || argsText != launchArgs else { return }
+        let (command, args) = (commandText, argsText)
+        Task { await onSave(command, args) }
     }
-}
-
-// MARK: - Shared
-
-private func resolvedCommandView(_ payload: AgentConfigPayload) -> some View {
-    Text(payload.resolvedCommand ?? ([payload.command] + payload.resolvedLaunchArgs).joined(separator: " "))
-        .font(.system(size: 11, design: .monospaced))
-        .foregroundStyle(.tertiary)
-        .textSelection(.enabled)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .frame(maxWidth: .infinity, alignment: .leading)
 }

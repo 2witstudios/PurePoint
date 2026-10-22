@@ -355,10 +355,17 @@ nonisolated enum DaemonRequest: Encodable {
     case deleteTrigger(projectRoot: String, name: String, scope: String)
     case getConfig(projectRoot: String)
     case getGlobalAgentSettings
-    /// `launchArgs` maps agent type to its machine-level launch args string; a blank string removes it.
-    case updateGlobalAgentSettings(agentStatusTracking: Bool? = nil, launchArgs: [String: String]? = nil)
+    /// `commands` and `launchArgs` map agent type to its machine-level command and launch args
+    /// string; a blank string removes it. A type that is not built in adds that agent.
+    /// `removeAgents` drops both values for each type.
+    case updateGlobalAgentSettings(
+        agentStatusTracking: Bool? = nil, launchArgs: [String: String]? = nil,
+        commands: [String: String]? = nil, removeAgents: [String]? = nil)
     /// `launchArgs` is the free-form launch args string; `nil` clears the project value.
-    case updateAgentConfig(projectRoot: String, agentName: String, launchArgs: String?)
+    /// `command` nil keeps the project command, blank clears it. `remove` drops the agent.
+    case updateAgentConfig(
+        projectRoot: String, agentName: String, launchArgs: String?, command: String? = nil,
+        remove: Bool = false)
     case shutdown
     /// The daemon's registered projects; no project root means all of them.
     case inventory(kind: String, projectRoot: String? = nil)
@@ -611,16 +618,20 @@ nonisolated enum DaemonRequest: Encodable {
             try container.encode(projectRoot, forKey: .key("project_root"))
         case .getGlobalAgentSettings:
             try container.encode("get_global_agent_settings", forKey: .key("type"))
-        case .updateGlobalAgentSettings(let agentStatusTracking, let launchArgs):
+        case .updateGlobalAgentSettings(let agentStatusTracking, let launchArgs, let commands, let removeAgents):
             try container.encode("update_global_agent_settings", forKey: .key("type"))
             try container.encodeIfPresent(agentStatusTracking, forKey: .key("agent_status_tracking"))
             try container.encodeIfPresent(launchArgs, forKey: .key("launch_args"))
-        case .updateAgentConfig(let projectRoot, let agentName, let launchArgs):
+            try container.encodeIfPresent(commands, forKey: .key("commands"))
+            try container.encodeIfPresent(removeAgents, forKey: .key("remove_agents"))
+        case .updateAgentConfig(let projectRoot, let agentName, let launchArgs, let command, let remove):
             try container.encode("update_agent_config", forKey: .key("type"))
             try container.encode(projectRoot, forKey: .key("project_root"))
             try container.encode(agentName, forKey: .key("agent_name"))
             // Encode null explicitly to signal "reset to defaults" vs omitting the key
             try container.encode(launchArgs, forKey: .key("launch_args"))
+            try container.encodeIfPresent(command, forKey: .key("command"))
+            if remove { try container.encode(true, forKey: .key("remove")) }
         case .shutdown:
             try container.encode("shutdown", forKey: .key("type"))
         case .inventory(let kind, let projectRoot):
@@ -717,8 +728,10 @@ nonisolated enum DaemonResponse: Decodable {
     case triggerList(triggers: [TriggerInfoPayload])
     case triggerDetail(trigger: TriggerInfoPayload)
     case configReport(defaultAgent: String, agents: [AgentConfigPayload])
-    /// `launchArgs` is nil when the daemon predates machine-level launch args (protocol < 11).
-    case globalAgentSettingsReport(agentStatusTracking: Bool, launchArgs: [String: String]? = nil)
+    /// `launchArgs` is nil when the daemon predates machine-level launch args (protocol < 11);
+    /// `commands` is nil when it predates machine-level commands.
+    case globalAgentSettingsReport(
+        agentStatusTracking: Bool, launchArgs: [String: String]? = nil, commands: [String: String]? = nil)
     case inventory(InventoryReportPayload)
     /// The registered projects in their saved order.
     case projectOrder(projectRoots: [String])
@@ -845,7 +858,8 @@ nonisolated enum DaemonResponse: Decodable {
         case "global_agent_settings_report":
             let p = try GlobalAgentSettingsPayload(from: decoder)
             self = .globalAgentSettingsReport(
-                agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs)
+                agentStatusTracking: p.agentStatusTracking ?? true, launchArgs: p.launchArgs,
+                commands: p.commands)
         case "inventory":
             self = .inventory(try InventoryReportPayload(from: decoder))
         case "project_order":
@@ -903,14 +917,28 @@ nonisolated struct AgentConfigPayload: Decodable {
     var machineLaunchArgs: String? = nil
     /// Command line preview: base command plus resolved launch args.
     var resolvedCommand: String? = nil
+    /// Project command; `nil` when the project leaves it unset.
+    var projectCommand: String? = nil
+    /// The command used when the project leaves it unset. `nil` from daemons that predate
+    /// editable commands.
+    var inheritedCommand: String? = nil
+    /// Where the agent is defined: `builtin`, `machine` or `project`.
+    var origin: String? = nil
+    /// The agent's key in the config; spawn takes it as the agent type.
+    var id: String? = nil
+
+    /// The agent type to spawn and to save settings under.
+    var agentType: String { id ?? name }
 
     enum CodingKeys: String, CodingKey {
-        case name, command, interactive
+        case id, name, command, interactive, origin
         case launchArgs = "launch_args"
         case resolvedLaunchArgs = "resolved_launch_args"
         case projectLaunchArgs = "project_launch_args"
         case machineLaunchArgs = "machine_launch_args"
         case resolvedCommand = "resolved_command"
+        case projectCommand = "project_command"
+        case inheritedCommand = "inherited_command"
     }
 }
 
@@ -1010,9 +1038,12 @@ private nonisolated struct GlobalAgentSettingsPayload: Decodable {
     let agentStatusTracking: Bool?
     /// Absent from daemons that predate machine-level launch args.
     let launchArgs: [String: String]?
+    /// Absent from daemons that predate machine-level commands.
+    let commands: [String: String]?
     enum CodingKeys: String, CodingKey {
         case agentStatusTracking = "agent_status_tracking"
         case launchArgs = "launch_args"
+        case commands
     }
 }
 
