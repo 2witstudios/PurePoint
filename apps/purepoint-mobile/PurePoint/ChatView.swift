@@ -42,7 +42,7 @@ struct ChatView: View {
         .tint(Theme.accentText)
         .sheet(isPresented: $showConnection, onDismiss: presentPendingDialog) { ConnectionView(model: model) }
         .sheet(item: dialogBinding) { dialog in ExtensionDialogView(model: model, dialog: dialog, selection: dialogSelection) }
-        .sheet(item: $actions.review) { launch in LaunchStatusSheet(model: model.agentControl, actions: actions, launch: launch) }
+        .sheet(item: $actions.review, onDismiss: presentPendingDialog) { launch in LaunchStatusSheet(model: model.agentControl, actions: actions, launch: launch) }
         .onChange(of: model.snapshot?.dialogs.first?.id) { _, _ in
             if model.snapshot?.dialogs.first != nil && (showPhotos || showFiles) {
                 showPhotos = false; showFiles = false
@@ -58,7 +58,8 @@ struct ChatView: View {
             presentedDialog = nil; showPhotos = false; showFiles = false; path = []
         }
         .onChange(of: path) { _, _ in updateInventoryVisibility() }
-        .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
+        // Only a real background pauses; .inactive (Notification Center, sheets, app switcher) keeps the agent open.
+        .onChange(of: scenePhase) { _, phase in guard phase != .inactive else { return }; model.setForeground(phase == .active); model.agentControl.setInventoryForeground(phase == .active) }
         .task {
             while !Task.isCancelled {
                 model.agentControl.updateSignalBadge()
@@ -98,7 +99,7 @@ struct ChatView: View {
         Task { await model.loadConversations(selection: token) }
     }
     private func presentPendingDialog() {
-        // Read-only phones cannot answer extension requests; the Mac or a Send phone does.
+        // Read-only phones cannot answer extension requests; the computer or a Send phone does.
         guard model.chatGrant.canSend else { presentedDialog = nil; return }
         guard !showConnection, !showPhotos, !showFiles, actions.review == nil else { return }
         dialogSelection = model.selectionToken; presentedDialog = model.snapshot?.dialogs.first

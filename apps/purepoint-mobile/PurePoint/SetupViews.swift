@@ -77,19 +77,19 @@ struct ConnectionView: View {
                     }.frame(maxWidth: .infinity).accessibilityElement(children: .contain)
                 }.listRowBackground(Color.clear)
                 if !model.machines.isEmpty {
-                    Section("Your Macs") {
+                    Section("Your computers") {
                         ForEach(model.machines) { machine in
                             let selected = model.selectedMachine?.id == machine.id
                             HStack(spacing: 12) {
                                 Button { model.selectMachine(machine.id) } label: {
                                     HStack(spacing: 12) {
-                                        Image(systemName: "desktopcomputer").font(.body).foregroundStyle(selected ? Theme.accentText : Theme.muted).frame(width: 28).accessibilityHidden(true)
+                                        Image(systemName: HostCopy.symbol(machine.host.kind)).font(.body).foregroundStyle(selected ? Theme.accentText : Theme.muted).frame(width: 28).accessibilityHidden(true)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(machine.name).foregroundStyle(Theme.ink).lineLimit(1)
                                             Text(machine.endpoint).font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.muted).lineLimit(1).truncationMode(.middle)
                                         }
                                         Spacer()
-                                        if selected { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Theme.accentText).accessibilityLabel("Selected Mac") }
+                                        if selected { Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Theme.accentText).accessibilityLabel("Selected computer") }
                                     }.contentShape(Rectangle()).frame(minHeight: 44)
                                 }.buttonStyle(.plain)
                                 Button { machineName = machine.name; renaming = machine } label: { Image(systemName: "pencil").foregroundStyle(Theme.muted).frame(width: 32, height: 44) }
@@ -99,22 +99,21 @@ struct ConnectionView: View {
                     }.listRowBackground(Theme.surface)
                 }
                 Section {
-                    Button { Task { await openScanner() } } label: { Label("Scan Mac QR code", systemImage: "qrcode.viewfinder").font(.body.weight(.semibold)).foregroundStyle(Theme.accentText) }
+                    Button { Task { await openScanner() } } label: { Label("Scan pairing code", systemImage: "qrcode.viewfinder").font(.body.weight(.semibold)).foregroundStyle(Theme.accentText) }
                         .disabled(requestingCamera || model.pairing)
-                    DisclosureGroup("Paste Mac pairing code") {
-                        TextField("Enrollment QR contents", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Enrollment code")
-                        Button("Pair") {
-                            guard let code = PairingCode.parse(enrollment) else { model.pairingError = "Paste a current Mac enrollment code. Legacy pairing secrets are no longer supported."; return }
-                            model.pair(code)
-                        }.disabled(model.pairing)
+                    Button { pasteFromClipboard() } label: { Label("Paste code", systemImage: "doc.on.clipboard").font(.body.weight(.medium)).foregroundStyle(Theme.ink) }
+                        .disabled(model.pairing)
+                    DisclosureGroup("Enter code manually") {
+                        TextField("purepoint-pair:…", text: $enrollment, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Pairing code")
+                        Button("Pair") { pairPasted(enrollment) }.disabled(model.pairing)
                     }.tint(Theme.muted)
                     if model.pairing {
-                        ProgressView("Pairing with your Mac…")
+                        ProgressView("Pairing with your computer…")
                         Button("Cancel pairing", role: .cancel) { model.cancelPairing() }
                     }
                     if let error = model.pairingError { Text(error).foregroundStyle(Theme.danger).textSelection(.enabled) }
-                } header: { Text(model.machines.isEmpty ? "Connect your Mac" : "Connect another Mac") } footer: {
-                    Text("Open Connect phone in PurePoint on your Mac, on the same Tailscale network.")
+                } header: { Text(model.machines.isEmpty ? "Pair a computer" : "Pair another computer") } footer: {
+                    Text("On a Mac, open Connect phone in PurePoint. On Linux, run pu phone pair, or pu phone pair --text for a code to paste. Both devices must be on the same Tailscale network.")
                 }.listRowBackground(Theme.surface)
                 if let error = model.error { Section { Label { Text(error).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning) } }.listRowBackground(Theme.surface) }
             }
@@ -122,13 +121,13 @@ struct ConnectionView: View {
             .navigationTitle("Connections").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { model.cancelPairing(); dismiss() }.fontWeight(.semibold) } }
             .onDisappear { model.cancelPairing() }
-            .alert("Mac name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            .alert("Computer name", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Name", text: $machineName)
                 Button("Cancel", role: .cancel) { renaming = nil }
                 Button("Save") { if let machine = renaming { model.renameMachine(machine.id, name: machineName) }; renaming = nil }
                     .disabled(SavedMachine.normalizedName(machineName).isEmpty)
             } message: {
-                Text("Choose a name to recognize this Mac on your iPhone. Up to 60 characters.")
+                Text("Choose a name to recognize this computer on your iPhone. Up to 60 characters.")
             }
             .sheet(isPresented: $showScanner) {
                 PairingScannerView { code in
@@ -137,13 +136,24 @@ struct ConnectionView: View {
             }
         }
     }
+    /// Paste and manual entry share the scanner's validation through `PairingCode.read`.
+    @MainActor private func pairPasted(_ text: String) {
+        switch PairingCode.read(text, from: .pasted) {
+        case .success(let code): enrollment = ""; model.pair(code)
+        case .failure(let failure): model.pairingError = failure.message
+        }
+    }
+    @MainActor private func pasteFromClipboard() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { model.pairingError = "The clipboard has no text. Copy the purepoint-pair: code, then tap Paste code."; return }
+        pairPasted(text)
+    }
     @MainActor private func openScanner() async {
-        guard DataScannerViewController.isSupported else { model.pairingError = "QR scanning is unavailable on this device. Paste the Mac enrollment code below (including in the simulator)."; return }
+        guard DataScannerViewController.isSupported else { model.pairingError = "QR scanning is unavailable on this device. Tap Paste code or enter the code manually (including in the simulator)."; return }
         requestingCamera = true
         defer { requestingCamera = false }
         let allowed = await AVCaptureDevice.requestAccess(for: .video)
-        guard allowed else { model.pairingError = "Allow camera access for PurePoint in iPhone Settings to scan, or paste the Mac enrollment code."; return }
-        guard DataScannerViewController.isAvailable else { model.pairingError = "The camera is unavailable. Try again or paste the Mac enrollment code."; return }
+        guard allowed else { model.pairingError = "Allow camera access for PurePoint in iPhone Settings to scan, or tap Paste code."; return }
+        guard DataScannerViewController.isAvailable else { model.pairingError = "The camera is unavailable. Try again or tap Paste code."; return }
         showScanner = true
     }
 }
@@ -161,13 +171,13 @@ private struct PairingScannerView: View {
                         Spacer()
                         Viewfinder().stroke(Theme.accent, style: StrokeStyle(lineWidth: 4, lineCap: .round)).frame(width: 236, height: 236)
                         Spacer()
-                        Text("Point at the QR in Connect phone on your Mac").font(.subheadline).foregroundStyle(Theme.ink).padding(.bottom, 36)
+                        Text("Point at the pairing QR on your computer").font(.subheadline).foregroundStyle(Theme.ink).padding(.bottom, 36)
                     }.allowsHitTesting(false).accessibilityHidden(true)
                 }
                 .safeAreaInset(edge: .bottom) {
                     if let error { Text(error).font(.callout).foregroundStyle(Theme.ink).padding(20).frame(maxWidth: .infinity, alignment: .leading).background(Theme.surface) }
                 }
-                .navigationTitle("Pair with your Mac").navigationBarTitleDisplayMode(.inline)
+                .navigationTitle("Scan pairing code").navigationBarTitleDisplayMode(.inline)
                 .toolbarBackground(Theme.ground.opacity(0.92), for: .navigationBar).toolbarBackground(.visible, for: .navigationBar)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
         }
@@ -220,19 +230,19 @@ private struct QRScanner: UIViewControllerRepresentable {
         }
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            do { try scanner.startScanning() } catch { onError("Could not start the camera. Close this screen and try again, or paste the Mac enrollment code.") }
+            do { try scanner.startScanning() } catch { onError("Could not start the camera. Close this screen and try again, or tap Paste code.") }
         }
         override func viewWillDisappear(_ animated: Bool) { scanner.stopScanning(); super.viewWillDisappear(animated) }
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) { read(addedItems) }
         func dataScanner(_ dataScanner: DataScannerViewController, didUpdate updatedItems: [RecognizedItem], allItems: [RecognizedItem]) { read(updatedItems) }
         func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) { read([item]) }
-        func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) { onError("The camera is unavailable. Close this screen and try again, or paste the Mac enrollment code.") }
+        func dataScanner(_ dataScanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) { onError("The camera is unavailable. Close this screen and try again, or tap Paste code.") }
         private func read(_ items: [RecognizedItem]) {
             guard !finished else { return }
             for item in items {
                 guard case .barcode(let barcode) = item, let payload = barcode.payloadStringValue, payload != lastPayload else { continue }
                 lastPayload = payload
-                guard let code = PairingCode.parse(payload) else { onError("This code is expired or unsupported. Create a new Connect phone QR in PurePoint on your Mac."); continue }
+                guard case .success(let code) = PairingCode.read(payload, from: .scanned) else { onError("This code is expired or unsupported. Create a new pairing code on the computer."); continue }
                 finished = true; scanner.stopScanning(); onPair(code); return
             }
         }

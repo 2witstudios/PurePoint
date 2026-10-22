@@ -152,7 +152,7 @@ export async function nativeSessions() {
       const info = await session(id);
       if ((await stat(info.path)).size > 16 * 1024 * 1024)
         throw new Error(
-          "This conversation is too large for mobile history. Resume it or inspect it on your Mac.",
+          "This conversation is too large for mobile history. Resume it or inspect it on the host.",
         );
       const records = (await readFile(info.path, "utf8"))
         .split("\n")

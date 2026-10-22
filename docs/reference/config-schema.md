@@ -19,7 +19,6 @@ agents:
 ## Machine settings (`~/.pu/agent-settings.yaml`)
 
 ```yaml
-codexYolo: false
 agentStatusTracking: true
 launchArgs:
   claude: "--dangerously-skip-permissions"
@@ -27,7 +26,6 @@ launchArgs:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `codexYolo` | bool | `false` | Codex YOLO for all projects; see below |
 | `agentStatusTracking` | bool | `true` | Report working/idle/question status through native adapters |
 | `launchArgs` | map of agent type → string (or string[]) | `{}` | Launch args for every project that leaves `launchArgs` unset |
 
@@ -39,24 +37,16 @@ config error; it never falls back to permission flags. The keys under
 
 ## Machine-wide Codex permissions
 
-Settings → Agents → **YOLO for all projects** stores this preference in
-`~/.pu/agent-settings.yaml`:
+There is no dedicated setting. To give Codex full access with no command
+approvals in every project, put the flag in its machine-level launch args:
 
 ```yaml
-codexYolo: true
+launchArgs:
+  codex: "--dangerously-bypass-approvals-and-sandbox"
 ```
 
-The default is `false`. When enabled, the daemon resolves Codex configuration
-with `--dangerously-bypass-approvals-and-sandbox --no-daemon`, replacing sandbox
-and approval options in `command` and the effective launch args (project, else
-machine-level). Wrapper prefixes and other
-arguments, including model and search, are preserved.
-For an encapsulated wrapper with no explicit `codex` executable token, the full
-command is preserved and only `launchArgs` are normalized. Claude and OpenCode are
-unaffected. This preference applies on every spawn and resume, including projects
-created later, without rewriting project files or requiring a sync action.
-Running agents need a restart. Turning it off restores each project's own
-configuration. Malformed global settings produce a config error.
+A `codexYolo` key left by an older version is ignored and removed the next time
+the file is saved.
 
 ## Fields
 

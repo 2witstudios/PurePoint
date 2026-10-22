@@ -13,6 +13,10 @@ nonisolated enum Theme {
     /// (drawn in the terminal's color) reads as attached to the content below it. Not
     /// adaptive: the terminal is dark in both appearances, and the strip belongs to it.
     static let tabBarBackground = NSColor(srgbRed: 0.08, green: 0.08, blue: 0.09, alpha: 1.0)
+    /// The iPad's status-bar band above the detail column. In dark mode it continues the tab
+    /// strip below it, as the Mac's strip reaches its title bar; the window's own dark fill
+    /// (`systemBackground`) is pure black and reads as a bar between the sidebars.
+    static let statusBarBand = darkOnly((0.08, 0.08, 0.09), light: .windowBackgroundColor)
 
     // MARK: - Point Guard Chat
     /// In dark mode the chat sits on the terminal's color so its active tab reads as attached,
@@ -22,6 +26,8 @@ nonisolated enum Theme {
     static let composerBackground = darkOnly((0.137, 0.137, 0.153), light: NSColor.black.withAlphaComponent(0.045))
     static let composerShadow = darkOnly((0, 0, 0), alpha: 0.3, light: .clear)
     static let userBubbleBackground = darkOnly((0.149, 0.149, 0.165), light: NSColor.black.withAlphaComponent(0.055))
+    /// The court's ball orange; deeper in light mode so lit play labels keep 4.5:1 on white.
+    static let pointGuardAccent = adaptive(dark: (1.0, 0.478, 0.102, 1.0), light: (0.74, 0.31, 0.0, 1.0))
 
     // MARK: - App Sidebar
     /// The project sidebar is a flush column beside the detail, not a floating panel.

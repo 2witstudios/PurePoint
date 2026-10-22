@@ -684,7 +684,11 @@ async fn given_point_guard_folder_without_git_should_spawn_split_agents_in_that_
         };
         let recorded = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                if let Ok(cwd) = std::fs::read_to_string(root.join(format!("{id}.cwd"))) {
+                // `>` creates the file before `pwd` writes it; wait for the full line.
+                if let Some(cwd) = std::fs::read_to_string(root.join(format!("{id}.cwd")))
+                    .ok()
+                    .filter(|cwd| cwd.ends_with('\n'))
+                {
                     break cwd;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;

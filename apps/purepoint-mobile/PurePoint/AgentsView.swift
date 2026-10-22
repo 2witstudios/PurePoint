@@ -156,7 +156,14 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
     var agentId: String? = nil
     var state = "pending"
     var message: String? = nil
+    /// Set once the person refreshed the authoritative workspace after an uncertain outcome.
+    var reviewed = false
     var opensAgent: Bool { kind == "spawn" || kind == "terminal" }
+    /// Launches that create work; an unconfirmed one must be reviewed before another runs in the same place.
+    var createsWork: Bool { opensAgent || kind == "createWorktree" }
+    /// Succeeded or failed are final; anything else may still have committed on the computer.
+    var settled: Bool { state == "succeeded" || state == "failed" }
+    var clearable: Bool { settled || reviewed }
     var where_: String { [machineName, projectName, branch ?? "root"].joined(separator: " / ") }
     var title: String {
         switch kind {
@@ -197,11 +204,19 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.key), let saved = try? JSONDecoder().decode([QuickLaunch].self, from: data) {
             // A launch still pending at relaunch was never confirmed.
-            launches = saved.map { var launch = $0; if launch.state == "pending" { launch.state = "uncertain"; launch.message = "PurePoint closed before your Mac confirmed." }; return launch }
+            launches = saved.map { var launch = $0; if launch.state == "pending" { launch.state = "uncertain"; launch.message = "PurePoint closed before the computer confirmed." }; return launch }
         }
     }
 
+    /// Opens the review sheet after any sheet or alert that triggered it has finished closing.
+    func presentReview(_ launch: QuickLaunch) {
+        Task { try? await Task.sleep(nanoseconds: 450_000_000); review = launches.first { $0.id == launch.id } }
+    }
     var unresolved: [QuickLaunch] { launches.filter { $0.state != "pending" } }
+    /// The in-flight or unreviewed request that blocks another launch at this place, if any.
+    func blocking(_ target: WorkspaceTarget) -> QuickLaunch? {
+        launches.first { $0.createsWork && !$0.clearable && $0.host == target.host && $0.machine == target.machine && $0.project == target.project && $0.worktree == target.worktree }
+    }
     func starting(machine: String, project: String, worktree: String?) -> [QuickLaunch] {
         launches.filter { $0.state == "pending" && $0.opensAgent && $0.machine == machine && $0.project == project && $0.worktree == worktree }
     }
@@ -223,7 +238,11 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
 
     func run(_ launch: QuickLaunch, model: AgentControlModel, open: @escaping (AgentMachine, ControlledAgent) -> Void) {
         guard model.canManage, model.bridgeIdentity == launch.host else {
-            failure = "Launching, renaming and stopping need Control and workspace management in Connect phone on your Mac."; return
+            failure = "Launching, renaming and stopping need Full access for this phone, set on the computer you paired with."; return
+        }
+        if launch.createsWork, let blocker = blocking(WorkspaceTarget(host: launch.host, machine: launch.machine, machineName: launch.machineName, project: launch.project, projectName: launch.projectName, worktree: launch.worktree)) {
+            if blocker.state == "pending" { failure = "\(blocker.title) is still in progress here." } else { presentReview(blocker) }
+            return
         }
         launches.append(launch)
         guard save() else {
@@ -255,6 +274,15 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
             update(result)
             review = result
         }
+    }
+
+    /// Refreshes the authoritative workspace; only a complete refresh lets the person clear the request.
+    func reviewWorkspace(_ launch: QuickLaunch, model: AgentControlModel) async {
+        guard await model.refreshWorkspaceForReview(machine: launch.machine, project: launch.project) else {
+            failure = "A complete, current workspace could not be loaded. Reconnect or retry before launching here again."; return
+        }
+        var updated = launch; updated.reviewed = true
+        update(updated); if review?.id == launch.id { review = updated }
     }
 
     func checkStatus(_ launch: QuickLaunch, model: AgentControlModel) async {
@@ -353,8 +381,13 @@ struct LaunchDialog: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if let error { NoticeBanner(text: error, actionTitle: "Retry") { Task { await load() } }.padding(.horizontal, 12).padding(.top, 10) }
+                    if let blocker = actions.blocking(target) {
+                        NoticeBanner(text: blocker.state == "pending" ? "\(blocker.title) is still in progress here." : "\(blocker.title) here couldn't be confirmed. Review it before launching here again.", systemImage: "questionmark.circle.fill", actionTitle: blocker.state == "pending" ? nil : "Review") {
+                            dismiss(); actions.presentReview(blocker)
+                        }.padding(.horizontal, 12).padding(.top, 10)
+                    }
                     if !model.canManage {
-                        NoticeBanner(text: "Launching needs Control and workspace management in Connect phone on your Mac.", systemImage: "lock.fill", tint: Theme.muted).padding(.horizontal, 12).padding(.top, 10)
+                        NoticeBanner(text: "Launching needs Full access for this phone, set on the computer you paired with.", systemImage: "lock.fill", tint: Theme.muted).padding(.horizontal, 12).padding(.top, 10)
                     }
                     if loading && catalog == nil { ProgressView().frame(maxWidth: .infinity).padding(.top, 30) }
                     if let catalog {
@@ -423,7 +456,7 @@ struct LaunchDialog: View {
                 Spacer()
             }.padding(.horizontal, 14).frame(minHeight: 54).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).disabled(!model.canManage)
+        .buttonStyle(.plain).disabled(!model.canManage || actions.blocking(target) != nil)
         .overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, 58) }
     }
 }
@@ -447,14 +480,16 @@ struct LaunchStatusSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(launch.state.capitalized, systemImage: launch.state == "succeeded" ? "checkmark.circle" : "exclamationmark.circle")
                             .font(.subheadline.weight(.semibold)).foregroundStyle(launch.state == "succeeded" ? Theme.online : Theme.warning)
-                        Text(launch.message ?? "Your Mac hasn't confirmed this yet. Check status and the sidebar before starting anything else.").font(.subheadline).textSelection(.enabled)
+                        Text(launch.message ?? "The computer hasn't confirmed this yet. Check status and refresh the workspace before starting anything else.").font(.subheadline).textSelection(.enabled)
                         Text("Operation \(launch.id)").font(Theme.mono).foregroundStyle(Theme.muted).textSelection(.enabled)
                     }.padding(.vertical, 4)
                     Button("Check operation status") { busy = true; Task { await actions.checkStatus(launch, model: model); busy = false } }.disabled(busy)
-                    Button("Refresh workspace") { Task { await model.refresh() } }
-                    Button("Dismiss", role: .destructive) { actions.dismiss(launch); dismiss() }
+                    Button(launch.reviewed ? "Workspace refreshed" : "Refresh workspace") { busy = true; Task { await actions.reviewWorkspace(launch, model: model); busy = false } }
+                        .disabled(busy || launch.reviewed)
+                    Button(launch.createsWork ? "Clear and allow new launches here" : "Clear", role: .destructive) { actions.dismiss(launch); dismiss() }
+                        .disabled(!launch.clearable)
                 }.listRowBackground(Theme.surface)
-                Section { } footer: { Text("Nothing is resent after reconnecting. An unknown status doesn't mean it failed.") }
+                Section { } footer: { Text("Nothing is resent after reconnecting. An unknown status doesn't mean it failed: check status or refresh the workspace before clearing it, so a launch that did commit isn't started twice.") }
             }
             .scrollContentBackground(.hidden).background(Theme.ground)
             .navigationTitle(launch.title).navigationBarTitleDisplayMode(.inline)
@@ -488,7 +523,7 @@ struct HomeView: View {
                     sectionHeader("MACHINES")
                     ForEach(model.machines) { machine in machineTree(machine) }
                     if model.machines.isEmpty && !model.loading && model.connected {
-                        Text("No machines. Register a project with pu on your Mac.").font(.footnote).foregroundStyle(Theme.muted).padding(.horizontal, 12).padding(.vertical, 10)
+                        Text("No machines. Pull to refresh, or register a project with pu on your computer.").font(.footnote).foregroundStyle(Theme.muted).padding(.horizontal, 12).padding(.vertical, 10)
                     }
                     if model.loading && model.machines.isEmpty { ProgressView().frame(maxWidth: .infinity).padding(.top, 30) }
                 }
@@ -531,7 +566,7 @@ struct HomeView: View {
             VStack(spacing: 10) {
                 Image(systemName: "lock").font(.title2).foregroundStyle(Theme.muted)
                     .frame(width: 56, height: 56).background(Color(hex: 0x1F1F23), in: Circle())
-                Text("Agents and terminals are off for this phone. Enable View or Control in Connect phone on your Mac.")
+                Text("Terminal access is off. Enable it on the computer you paired with (Connect phone on a Mac, pu phone on Linux).")
                     .font(.subheadline).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
             }.frame(maxWidth: .infinity).padding(.horizontal, 32).padding(.top, 48).accessibilityElement(children: .combine)
         }
@@ -862,7 +897,7 @@ private struct AgentControlBar: View {
                 composerRow(token)
                 if model.rawTyping && model.controlEnabled { rawRow(token) }
             } else {
-                Label(model.sendExplanation ?? "Terminal access is view only. Enable control on your Mac.", systemImage: "eye")
+                Label(model.sendExplanation ?? "Terminal access is view only. Enable control on the computer you paired with.", systemImage: "eye")
                     .font(.footnote).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                     .padding(.horizontal, 12).background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
             }

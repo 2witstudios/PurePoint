@@ -72,6 +72,7 @@ What PurePoint does. Each domain captures behavior, requirements, and interfaces
 | Point Guard Setup | PGSET | SPECIFIED |
 | Configuration | CFG | SEED |
 | Machines | MACH | SPECIFIED |
+| Linux Phone Host | LPH | SPECIFIED |
 | iPad App | IPAD | SPECIFIED |
 
 ### Reference (Inventory)

@@ -328,10 +328,19 @@ test("a live grant downgrade stops broadcasts, rejects further chat ops and noti
     phone.ws.close();
   }));
 
+test("a freshly paired device has full access, including sending to Point Guard chat", async () =>
+  chatHarness(async ({ pair }) => {
+    const phone = await pair();
+    const granted = (await phone.call("permissions")).data;
+    assert.equal(granted.terminals, "control");
+    assert.equal(granted.workspaceManagement, true);
+    assert.equal(granted.chat, "send");
+    phone.ws.close();
+  }));
+
 test("a device with agents and terminals Off cannot reach agents through Point Guard chat", async () =>
   chatHarness(async ({ dispatched, pair }) => {
-    // A freshly paired device with no grant changes: terminals off, no management.
-    const phone = await pair();
+    const phone = await pair("off");
     const granted = (await phone.call("permissions")).data;
     assert.equal(granted.terminals, "off");
     assert.equal(granted.workspaceManagement, false);

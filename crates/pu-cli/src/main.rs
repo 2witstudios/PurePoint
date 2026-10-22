@@ -4,6 +4,7 @@ mod daemon_ctrl;
 mod error;
 mod machine_target;
 mod output;
+mod phone;
 mod service;
 mod signal_helper;
 mod skill;
@@ -194,6 +195,11 @@ enum Commands {
     Daemon {
         #[command(subcommand)]
         action: commands::daemon::DaemonAction,
+    },
+    /// Pair phones directly with this Linux host and manage them
+    Phone {
+        #[command(subcommand)]
+        action: commands::phone::PhoneAction,
     },
     /// Check daemon health
     Health {
@@ -896,6 +902,7 @@ async fn async_main() {
         } => commands::logs::run(&socket, &agent_id, tail, json).await,
         Commands::Health { json } => commands::health::run(&socket, json).await,
         Commands::Daemon { action } => commands::daemon::run(&socket, custom_socket, action).await,
+        Commands::Phone { action } => commands::phone::run(action).await,
         Commands::Prompt { action } => match action {
             PromptAction::List { json } => commands::prompt::run_list(&socket, json).await,
             PromptAction::Show { name, json } => {
