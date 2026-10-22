@@ -202,7 +202,8 @@ final class WorkspaceRegistry {
             let restored = try loadWorkspaces(projectRoot)
             workspacesByProject[projectRoot] = restored
             loadedProjects.insert(projectRoot)
-            localLayoutStamps[projectRoot] = stamp
+            // `updateValue` records a missing document as a nil stamp; `= nil` would drop the key.
+            localLayoutStamps.updateValue(stamp, forKey: projectRoot)
             layoutBases[projectRoot] = restored
             layoutErrorsByProject[projectRoot] = nil
             return true
