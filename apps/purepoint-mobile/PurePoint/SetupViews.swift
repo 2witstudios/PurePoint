@@ -258,7 +258,9 @@ struct ConversationView: View {
     @State private var confirmNew = false
     @State private var search = ""
     var body: some View {
-        Group {
+        // A ZStack, not a Group: Group would apply onDisappear to each branch, so switching
+        // from the list to a transcript would clear `browsing` immediately.
+        ZStack {
             if let history = model.browsing {
                 ScrollView { LazyVStack(alignment: .leading, spacing: 14) { ForEach(TranscriptRows.make(messages: history.messages, tools: [])) { TranscriptRowView(row: $0) } }.frame(maxWidth: 720, alignment: .leading).frame(maxWidth: .infinity).padding(16) }
                     .safeAreaInset(edge: .bottom) {

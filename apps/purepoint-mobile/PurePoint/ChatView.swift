@@ -23,7 +23,7 @@ struct ChatView: View {
         NavigationStack(path: $path) {
             HomeView(
                 model: model.agentControl, actions: actions,
-                pointGuardStatus: headerStatus, pointGuardTone: headerTone,
+                pointGuardStatus: model.statusLabel, pointGuardTone: model.statusTone,
                 openPointGuard: { path = [.pointGuard] },
                 openAgent: openAgent,
                 openConnections: { showConnection = true })
@@ -70,20 +70,6 @@ struct ChatView: View {
         .task { guard !model.demo else { return }; if model.endpoint.isEmpty { showConnection = true } else { model.connect() } }
     }
 
-    private var headerTone: Color {
-        if model.connected { return model.busy ? Color(hex: 0x0A84FF) : Theme.online }
-        return model.connectionStatus.hasPrefix("Connecting") ? Color(hex: 0xFF9F0A) : Color(uiColor: .tertiaryLabel)
-    }
-    private var headerStatus: String {
-        if model.connected { return model.demo ? "Preview" : model.busy ? "Working" : "Connected" }
-        if model.connectionStatus.hasPrefix("Connecting") { return "Connecting" }
-        if model.connectionStatus.hasPrefix("Re-pair") { return "Re-pair" }
-        if model.connectionStatus.hasPrefix("Paused") { return "Paused" }
-        if model.connectionStatus.hasPrefix("Waiting") { return "No network" }
-        if model.connectionStatus.hasPrefix("Reconnect paused") { return "Retry paused" }
-        if model.connectionStatus.hasPrefix("Connection lost") { return "Offline" }
-        return "Not connected"
-    }
     // Inventory polls while the sidebar or an agent is on screen, not under Point Guard.
     private func updateInventoryVisibility() { model.agentControl.setInventoryVisible(path.last == nil || path.last == .agent) }
     private func openAgent(_ machine: AgentMachine, _ agent: ControlledAgent) {
@@ -111,6 +97,24 @@ struct ChatView: View {
             presentedDialog = newValue
             if newValue == nil, let previous, model.snapshot?.dialogs.contains(where: { $0.id == previous.id }) == true { Task { await model.answer(previous, cancelled: true, selection: token) } }
         })
+    }
+}
+
+/// One connection summary for the sidebar's Point Guard row and the Point Guard toolbar.
+extension ChatModel {
+    var statusTone: Color {
+        if connected { return busy ? Color(hex: 0x0A84FF) : Theme.online }
+        return connectionStatus.hasPrefix("Connecting") ? Color(hex: 0xFF9F0A) : Color(uiColor: .tertiaryLabel)
+    }
+    var statusLabel: String {
+        if connected { return demo ? "Preview" : busy ? "Working" : "Connected" }
+        if connectionStatus.hasPrefix("Connecting") { return "Connecting" }
+        if connectionStatus.hasPrefix("Re-pair") { return "Re-pair" }
+        if connectionStatus.hasPrefix("Paused") { return "Paused" }
+        if connectionStatus.hasPrefix("Waiting") { return "No network" }
+        if connectionStatus.hasPrefix("Reconnect paused") { return "Retry paused" }
+        if connectionStatus.hasPrefix("Connection lost") { return "Offline" }
+        return "Not connected"
     }
 }
 
@@ -158,9 +162,9 @@ struct PointGuardScreen: View {
                     VStack(spacing: 1) {
                         Text("Point Guard").font(.headline).foregroundStyle(Theme.ink)
                         HStack(spacing: 4) {
-                            StatusDot(color: headerTone, size: 6)
+                            StatusDot(color: model.statusTone, size: 6)
                             if let machine = model.selectedMachine { Text(machine.name).lineLimit(1).truncationMode(.middle); Text("·") }
-                            Text(headerStatus).fixedSize(horizontal: true, vertical: false)
+                            Text(model.statusLabel).fixedSize(horizontal: true, vertical: false)
                         }.font(.caption2).foregroundStyle(Theme.muted)
                     }.frame(minHeight: 44)
                 }
@@ -212,16 +216,6 @@ struct PointGuardScreen: View {
         }
     }
 
-    private var headerTone: Color {
-        if model.connected { return model.busy ? Color(hex: 0x0A84FF) : Theme.online }
-        return model.connectionStatus.hasPrefix("Connecting") ? Color(hex: 0xFF9F0A) : Color(uiColor: .tertiaryLabel)
-    }
-    private var headerStatus: String {
-        if model.connected { return model.demo ? "Preview" : model.busy ? "Working" : "Connected" }
-        if model.connectionStatus.hasPrefix("Connecting") { return "Connecting" }
-        if model.connectionStatus.hasPrefix("Connection lost") { return "Offline" }
-        return "Not connected"
-    }
     private var composerStatus: String? {
         var parts: [String] = []
         if let receipt = model.submissions.last, !receipt.recoverable, receipt.status != "Accepted" {
