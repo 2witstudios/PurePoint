@@ -87,7 +87,18 @@ struct ContentView: View {
             }
 
             DetailView(selection: $selection)
+                #if os(macOS)
+                // With the sidebar hidden the detail runs to the leading edge; only its top strip
+                // moves aside for the traffic lights and the toggle. A full-height gutter would read
+                // as a sidebar that never closed.
+                .environment(
+                    \.titlebarClearance,
+                    sidebarVisible
+                        ? .none : TitlebarClearance(leading: hiddenSidebarLeadingInset, height: trafficLightInset)
+                )
+                #else
                 .padding(.leading, sidebarVisible ? 0 : hiddenSidebarLeadingInset)
+                #endif
                 #if os(iOS)
                 // With the sidebar hidden, its gutter keeps the sidebar's fill, top to bottom, so
                 // it reads as a thin sidebar rather than the window's pure black in dark mode.

@@ -774,7 +774,8 @@ struct HomeView: View {
             }.buttonStyle(.plain).disabled(!model.connected || model.permission == .off).accessibilityLabel("Refresh")
         }
         .padding(.horizontal, 16).padding(.top, 2)
-        .background(Theme.ground.overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 1) })
+        // Fill down through the home-indicator area so rows don't scroll visibly beneath the footer.
+        .background(Theme.ground.ignoresSafeArea(edges: .bottom).overlay(alignment: .top) { Rectangle().fill(Theme.line).frame(height: 1) })
     }
 }
 
