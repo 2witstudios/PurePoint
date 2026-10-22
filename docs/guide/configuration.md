@@ -109,7 +109,7 @@ launchArgs:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | (required) | Agent type identifier |
-| `command` | string | (required) | CLI binary to run (`claude`, `codex`, `opencode`, `shell`) |
+| `command` | string | machine command, else built-in, else agent name | CLI to run plus any words before the launch args (`claude`, `scripts/agent-launch.sh codex`); optional |
 | `launchArgs` | string (or legacy string[]) | unset | Extra args appended to the command |
 | `promptFlag` | string | `"-p"` | Flag used to pass the prompt text to the agent CLI |
 | `interactive` | bool | `true` | Whether the agent is interactive (affects PTY allocation) |

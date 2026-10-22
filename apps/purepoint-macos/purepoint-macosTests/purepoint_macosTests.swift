@@ -162,6 +162,24 @@ struct GlobalAgentSettingsTests {
         #expect(removedJson["command"] == nil, "Left out, the project command is kept")
     }
 
+    @Test func blankProjectArgsKeepAnExplicitBareLaunch() async {
+        let bare = AgentConfigPayload(
+            name: "claude", command: "claude", launchArgs: [], resolvedLaunchArgs: [], interactive: true,
+            projectLaunchArgs: "", machineLaunchArgs: "--dangerously-skip-permissions", resolvedCommand: "claude",
+            inheritedCommand: "claude", origin: "builtin", id: "claude")
+        let inherits = AgentConfigPayload(
+            name: "codex", command: "codex", launchArgs: nil, resolvedLaunchArgs: [], interactive: true,
+            resolvedCommand: "codex", inheritedCommand: "codex", origin: "builtin", id: "codex")
+        let state = AgentConfigState(
+            ensureDaemon: {},
+            sendRequest: { _ in .configReport(defaultAgent: "claude", agents: [bare, inherits]) }
+        )
+        await state.load(projectRoot: "/p")
+        #expect(state.projectLaunchArgs(agentName: "claude", text: " ") == "", "Editing only the command keeps the bare launch")
+        #expect(state.projectLaunchArgs(agentName: "codex", text: "") == nil, "A blank field inherits")
+        #expect(state.projectLaunchArgs(agentName: "codex", text: " --search ") == "--search")
+    }
+
     @Test func addedMachineAgentIsNamedAfterItsCommandAndOffered() async {
         var sent: DaemonRequest?
         let state = AgentConfigState(

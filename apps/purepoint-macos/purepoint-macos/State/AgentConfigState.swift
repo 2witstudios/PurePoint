@@ -146,11 +146,18 @@ final class AgentConfigState {
     /// Save one agent's project command and launch args; a blank value clears it so the
     /// All Projects value applies.
     func updateProjectAgent(projectRoot: String, agentName: String, command: String, launchArgs: String) async {
-        let args = launchArgs.trimmingCharacters(in: .whitespaces)
         await sendProjectUpdate(
             .updateAgentConfig(
-                projectRoot: projectRoot, agentName: agentName, launchArgs: args.isEmpty ? nil : args,
-                command: command))
+                projectRoot: projectRoot, agentName: agentName,
+                launchArgs: projectLaunchArgs(agentName: agentName, text: launchArgs), command: command))
+    }
+
+    /// The project launch args to store for a blank or typed field. A stored `launchArgs: ""`
+    /// launches the bare command and looks blank in Settings, so a blank field keeps it.
+    func projectLaunchArgs(agentName: String, text: String) -> String? {
+        let args = text.trimmingCharacters(in: .whitespaces)
+        guard args.isEmpty else { return args }
+        return agentConfig(named: agentName)?.projectLaunchArgs == "" ? "" : nil
     }
 
     /// Add an agent to this project only; its type is named after the command.

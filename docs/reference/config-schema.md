@@ -69,7 +69,7 @@ Each entry in `agents` configures a specific agent type.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | (required) | Agent type identifier |
-| `command` | string | (required) | Binary to execute |
+| `command` | string | machine command, else built-in, else agent name | Program to run plus any words before the launch args; optional |
 | `promptFlag` | string | `null` | CLI flag for prompt injection (e.g., `"--prompt"`) |
 | `interactive` | bool | `true` | Whether the agent runs in an interactive PTY |
 | `launchArgs` | string, string[] or null | `null` | Extra CLI arguments; see resolution logic below |
