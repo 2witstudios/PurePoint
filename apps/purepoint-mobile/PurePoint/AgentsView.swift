@@ -277,8 +277,13 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
     }
 
     /// Refreshes the authoritative workspace; only a complete refresh lets the person clear the request.
+    /// Status and inventory come from the connected bridge, so they only describe a request made through it.
+    static let otherHostMessage = "This request was made through another paired computer. Select it in Connections to review it."
+
     func reviewWorkspace(_ launch: QuickLaunch, model: AgentControlModel) async {
-        guard await model.refreshWorkspaceForReview(machine: launch.machine, project: launch.project) else {
+        guard model.bridgeIdentity == launch.host else { failure = Self.otherHostMessage; return }
+        guard await model.refreshWorkspaceForReview(machine: launch.machine, project: launch.project),
+              model.bridgeIdentity == launch.host else {
             failure = "A complete, current workspace could not be loaded. Reconnect or retry before launching here again."; return
         }
         var updated = launch; updated.reviewed = true
@@ -286,8 +291,10 @@ struct QuickLaunch: Codable, Identifiable, Equatable {
     }
 
     func checkStatus(_ launch: QuickLaunch, model: AgentControlModel) async {
+        guard model.bridgeIdentity == launch.host else { failure = Self.otherHostMessage; return }
         do {
             let status = try await model.operationStatus(launch.id)
+            guard model.bridgeIdentity == launch.host else { failure = Self.otherHostMessage; return }
             var updated = launch; updated.state = status.state; updated.message = status.message
             update(updated); if review?.id == launch.id { review = updated }
         } catch { failure = error.localizedDescription }
@@ -477,15 +484,18 @@ struct LaunchStatusSheet: View {
                     if let name = launch.name { LabeledContent("Name") { Text(name) } }
                 }.listRowBackground(Theme.surface)
                 Section("Status") {
+                    if model.bridgeIdentity != launch.host {
+                        Text(WorkspaceActions.otherHostMessage).font(.subheadline).foregroundStyle(Theme.warning)
+                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Label(launch.state.capitalized, systemImage: launch.state == "succeeded" ? "checkmark.circle" : "exclamationmark.circle")
                             .font(.subheadline.weight(.semibold)).foregroundStyle(launch.state == "succeeded" ? Theme.online : Theme.warning)
                         Text(launch.message ?? "The computer hasn't confirmed this yet. Check status and refresh the workspace before starting anything else.").font(.subheadline).textSelection(.enabled)
                         Text("Operation \(launch.id)").font(Theme.mono).foregroundStyle(Theme.muted).textSelection(.enabled)
                     }.padding(.vertical, 4)
-                    Button("Check operation status") { busy = true; Task { await actions.checkStatus(launch, model: model); busy = false } }.disabled(busy)
+                    Button("Check operation status") { busy = true; Task { await actions.checkStatus(launch, model: model); busy = false } }.disabled(busy || model.bridgeIdentity != launch.host)
                     Button(launch.reviewed ? "Workspace refreshed" : "Refresh workspace") { busy = true; Task { await actions.reviewWorkspace(launch, model: model); busy = false } }
-                        .disabled(busy || launch.reviewed)
+                        .disabled(busy || launch.reviewed || model.bridgeIdentity != launch.host)
                     Button(launch.createsWork ? "Clear and allow new launches here" : "Clear", role: .destructive) { actions.dismiss(launch); dismiss() }
                         .disabled(!launch.clearable)
                 }.listRowBackground(Theme.surface)
